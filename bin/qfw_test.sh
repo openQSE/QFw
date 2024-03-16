@@ -23,6 +23,8 @@ qfw_setup.sh
 #filtered_env=$(env | grep "SLURM_JOB_NODELIST_HET_GROUP_1")
 #./run_application.sh $filtered_env
 
+#qfw_teardown.sh
+
 echo "# RC=$?"
 echo "#########"
 
