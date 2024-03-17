@@ -3,6 +3,7 @@
 module use /sw/frontier/qhpc/modules/
 module load quantum/qsim
 
+hostname=$(hostname)
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_AGENT_NAME=qfw_setup
@@ -32,8 +33,9 @@ source $HOME/QFwTmp/venv/bin/activate
 #  - The Application side Interface
 #     - QTM
 
-hostname=$(hostname)
 het_groups=$(env | grep "SLURM_JOB_NODELIST_HET_GROUP_")
+
+echo $DEFW_LOG_DIR
 
 # we need to propagate the environment to the other nodes. That's why
 # we're explicitly using srun. We can't run the dvm with srun, so we

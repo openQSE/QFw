@@ -6,6 +6,7 @@ hostname=$(hostname)
 export DEFW_AGENT_NAME=qfw_setup_phase_1
 export DEFW_LOG_DIR=$HOME/QFwTmp/${DEFW_AGENT_NAME}_${hostname}
 
-python3 $QFW_PATH/bin/qfw_setup.py --groups "$1"
+python3 $QFW_PATH/bin/qfw_setup.py --groups "$1" \
+	--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim" \
+	--python-env "$HOME/QFwTmp/venv/bin/activate"
 
-sleep 300
