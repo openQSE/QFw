@@ -1,24 +1,40 @@
 #!/bin/bash
 
-# By creating an environment using defwp I basically make python3 an alias
-# to defwp
-defwp -m venv venv
-source venv/bin/activate
-pip3 install -r requirements.txt
+echo "Activating QFw Virtual Environment"
+source $HOME/QFwTmp/venv/bin/activate
+
+echo "RUNNING APPLICATION"
 
 hostname=$(hostname)
-resmgr_node=$(echo "$1" | cut -d',' -f1)
-
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
-export DEFW_AGENT_NAME=qtm_$hostname
-export DEFW_LISTEN_PORT=9100
+export DEFW_SHELL_TYPE=cmdline
+export DEFW_AGENT_NAME=ExtractInfo
+export DEFW_LISTEN_PORT=10095
 export DEFW_AGENT_TYPE=agent
-export DEFW_PARENT_HOSTNAME=$resmgr_node
+export DEFW_LOG_LEVEL=all
+export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}_${hostname}
+export DEFW_LOAD_NO_INIT=svc_launcher
+export DEFW_ONLY_LOAD_MODULE=svc_resmgr
+export DEFW_DISABLE_RESMGR=yes
+
+output=$(python3 $QFW_PATH/bin/extract_head_node.py $1)
+
+node=$(echo "$output" | tr '\n' ' ' | \
+	/usr/bin/python3 -c "import sys;print(sys.stdin.read().split()[0])")
+
+echo "resource manager is located on: ****$node****"
+
+export DEFW_AGENT_NAME=qtm_$hostname
+export DEFW_LISTEN_PORT=9600
+export DEFW_PARENT_HOSTNAME=$node
 export DEFW_PARENT_PORT=8090
 export DEFW_PARENT_NAME=resmgr
+export DEFW_AGENT_TYPE=agent
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LOG_LEVEL=all
-export DEFW_LOG_DIR=$HOME/tmp/$DEFW_AGENT_NAME
+export DEFW_LOG_DIR=/tmp/$DEFW_AGENT_NAME
 export DEFW_ONLY_LOAD_MODULE=api_qpm
+export DEFW_DISABLE_RESMGR=no
 
-mpirun python3 /sw/frontier/qhpc/QFw/qtm/qtm.py
+srun --het-group=0 python3 $QFW_PATH/qtm/qtm.py
+

@@ -8,6 +8,7 @@ from defw_cmd import defw_exec_remote_cmd
 
 def cleanup_system(targets):
 	for target in targets:
+		defw_exec_remote_cmd("pterm", target, deamonize=True)
 		defw_exec_remote_cmd("pkill -9 prte", target, deamonize=True)
 		defw_exec_remote_cmd("pkill -9 prted", target, deamonize=True)
 		defw_exec_remote_cmd("rm -Rf /tmp/prte*", target, deamonize=True)
@@ -17,12 +18,19 @@ def start_dvm(node_list, use, modules):
 	# Start the DVM on the second node in the Simulation Environment
 	# because currently MPI can not co-exist on the DVM's head node.
 	# Our launcher will live on node 0
-	cmd = ''
+	if 'QFW_DVM_URI_PATH' in os.environ:
+		uri = os.environ['QFW_DVM_URI_PATH']
+	else:
+		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+					 'prte_dvm', 'dvm-uri')
+	cmd = f'mkdir -p {os.path.split(uri)[0]};'
 	for u in use.split(':'):
 		cmd += f"module use {u};"
 	for m in modules.split(':'):
 		cmd += f"module load {m};"
-	cmd += f'prte --host {",".join(node_list)}'
+	cmd += f'prte --host {",".join(f"{node}:*" for node in node_list)} ' \
+		   f'--report-uri {uri}'
+	#cmd += f'prte --host {",".join(node_list)}'
 	out, err = defw_exec_remote_cmd(cmd, node_list[1], deamonize=True)
 	logging.debug(f"out: {out}\nerror: {err}")
 
@@ -40,9 +48,9 @@ def start_resmgr(target, launcher):
 			'DEFW_PARENT_NAME': resmgr,
 			'DEFW_LOG_LEVEL': "all",
 			'DEFW_DISABLE_RESMGR': "no",
-			'DEFW_LOG_DIR': os.path.join('/tmp', resmgr),
-#			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-#							resmgr),
+#			'DEFW_LOG_DIR': os.path.join('/tmp', resmgr),
+			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+							resmgr),
 			'DEFW_PARENT_HOSTNAME': target}
 
 	pid = launcher.launch('python3 -d', env=env)
@@ -63,9 +71,9 @@ def start_launcher(resmgr, target, launcher, listen_port,
 			'DEFW_PARENT_NAME': resmgr,
 			'DEFW_LOG_LEVEL': "all",
 			'DEFW_DISABLE_RESMGR': "no",
-#			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-#							name),
-			'DEFW_LOG_DIR': os.path.join('/tmp', name),
+			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+							name),
+#			'DEFW_LOG_DIR': os.path.join('/tmp', name),
 			'DEFW_PARENT_HOSTNAME': resmgr}
 
 	pid = launcher.launch('python3 -d', env=env, target=target,
@@ -87,14 +95,17 @@ def start_qpm(resmgr, target, node_list, launcher):
 			'DEFW_PARENT_NAME': 'resmgr'+resmgr,
 			'DEFW_LOG_LEVEL': "all",
 			'DEFW_DISABLE_RESMGR': "no",
-#			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-#								qpm),
-			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
+			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+								qpm),
+#			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
 			'QFW_BASE_QRC_PORT': str(9100),
 			'QFW_NUM_QRC': str(1),
 			'QFW_QRC_BIN_PATH': 'python3 -d',
 			'QFW_QPM_ASSIGNED_HOSTS': node_list,
 		}
+
+	if 'QFW_DVM_URI_PATH' in os.environ:
+		env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
 
 	pid = launcher.launch('python3 -d', env=env, target=target)
 	return pid, env['DEFW_LOG_DIR']
@@ -213,7 +224,7 @@ if __name__ == '__main__':
 	g0_node_list, g1_node_list = extract_group_node_lists(groups)
 	hostname = socket.gethostname()
 	# only run on node 0
-	if hostname != g1_node_list[0]:
+	if hostname != g1_node_list[0] and not dvm:
 		me.exit()
 
 	if hostname == g1_node_list[0] and not dvm and not shutdown:
