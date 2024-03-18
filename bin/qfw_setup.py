@@ -31,7 +31,7 @@ def start_dvm(node_list, use, modules):
 	cmd += f'prte --host {",".join(f"{node}:*" for node in node_list)} ' \
 		   f'--report-uri {uri}'
 	#cmd += f'prte --host {",".join(node_list)}'
-	out, err = defw_exec_remote_cmd(cmd, node_list[1], deamonize=True)
+	out, err = defw_exec_remote_cmd(cmd, node_list[0], deamonize=True)
 	logging.debug(f"out: {out}\nerror: {err}")
 
 def start_resmgr(target, launcher):
@@ -95,9 +95,9 @@ def start_qpm(resmgr, target, node_list, launcher):
 			'DEFW_PARENT_NAME': 'resmgr'+resmgr,
 			'DEFW_LOG_LEVEL': "all",
 			'DEFW_DISABLE_RESMGR': "no",
-			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-								qpm),
-#			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
+#			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+#								qpm),
+			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
 			'QFW_BASE_QRC_PORT': str(9100),
 			'QFW_NUM_QRC': str(1),
 			'QFW_QRC_BIN_PATH': 'python3 -d',
