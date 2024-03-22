@@ -1,12 +1,15 @@
-import os, sys, logging, socket, traceback, getopt, psutil
+import subprocess, os, sys, logging, socket, traceback, getopt, psutil
 from time import sleep
 import svc_launcher, cdefw_global
-from defw_util import expand_host_list
+from defw_util import expand_host_list, prformat, fg, bg
 from defw_exception import DEFwExecutionError
 from defw import me
 from defw_cmd import defw_exec_remote_cmd
 
+# TODO: we can use prun to run all the processes instead of using the python launcher
+
 def cleanup_system(targets):
+	prformat(fg.red+fg.bold, f"Shutting down targets: {targets}")
 	for target in targets:
 		defw_exec_remote_cmd("pterm", target, deamonize=True)
 		defw_exec_remote_cmd("pkill -9 prte", target, deamonize=True)
@@ -14,7 +17,79 @@ def cleanup_system(targets):
 		defw_exec_remote_cmd("rm -Rf /tmp/prte*", target, deamonize=True)
 		defw_exec_remote_cmd("pkill -9 -f 'python3 -d -x'", target, deamonize=True)
 
+def execute_ssh_command(host, command, daemonize=False):
+	ssh_command = f"ssh {host} '{command}'"
+	if daemonize:
+		ssh_command += " &"
+	prformat(fg.green+fg.bold, f"Running: {ssh_command}")
+	try:
+		process = subprocess.Popen(ssh_command, shell=True,
+				stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+		stdout, stderr = process.communicate()
+		return_code = process.returncode
+		prformat(fg.red+fg.bold, "BACK FROM THE Popen")
+		return return_code, stdout, stderr
+	except Exception as e:
+		return -1, '', str(e)
+
+def expand_dictionary_to_exports(dictionary):
+	exports = []
+	for key, value in dictionary.items():
+		export_str = f"export {key}={value}"
+		exports.append(export_str)
+	return ';'.join(exports)
+
+def start_qfw(host, use, modules, hetgroups):
+	name = 'qfw_base_setup'
+	if 'QFW_DVM_URI_PATH' in os.environ:
+		uri = os.environ['QFW_DVM_URI_PATH']
+	else:
+		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+					 'prte_dvm', 'dvm-uri')
+
+	env =  {'DEFW_AGENT_NAME': name,
+			'DEFW_CONFIG_PATH': os.environ['DEFW_CONFIG_PATH'],
+			'DEFW_LISTEN_PORT': str(8095),
+			'DEFW_ONLY_LOAD_MODULE': 'svc_resmgr',
+			'DEFW_LOAD_NO_INIT': 'svc_launcher',
+			'DEFW_SHELL_TYPE': 'daemon',
+			'DEFW_AGENT_TYPE': 'agent',
+			'DEFW_PARENT_PORT': str(8090),
+			'DEFW_PARENT_NAME': resmgr,
+			'DEFW_LOG_LEVEL': "all",
+			'DEFW_DISABLE_RESMGR': "yes",
+			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+							name)
+			}
+	for u in use.split(':'):
+		cmd = f"module use {u};"
+	for m in modules.split(':'):
+		cmd += f"module load {m};"
+	#cmd += expand_dictionary_to_exports(env) + ';'
+	cmd += f'prun -np 1 --dvm file:{uri} qfw_run_setup.sh "{hetgroups}"'
+	execute_ssh_command(host, cmd, daemonize=True)
+
 def start_dvm(node_list, use, modules):
+	# get the job id of the head node
+	job_id = os.environ['SLURM_JOB_ID']
+	host_list = ",".join(f"{node}:*" for node in node_list)
+	if 'QFW_DVM_URI_PATH' in os.environ:
+		uri = os.environ['QFW_DVM_URI_PATH']
+	else:
+		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+					 'prte_dvm', 'dvm-uri')
+	cmd = ''
+	for u in use.split(':'):
+		cmd += f"module use {u};"
+	for m in modules.split(':'):
+		cmd += f"module load {m};"
+	cmd += f'run_prte.sh {os.path.split(uri)[0]} "{host_list}" {job_id}'
+	rc, out, err = execute_ssh_command(node_list[0], cmd)
+	logging.debug(f"rc = {rc}\nout: {out}\nerror: {err}")
+	#out, err = defw_exec_remote_cmd(cmd, node_list[0], deamonize=False)
+	return
+
+	cmd = f'export SLURM_JOBID={job_id};export SLURM_JOB_ID={job_id};'
 	# Start the DVM on the second node in the Simulation Environment
 	# because currently MPI can not co-exist on the DVM's head node.
 	# Our launcher will live on node 0
@@ -23,14 +98,27 @@ def start_dvm(node_list, use, modules):
 	else:
 		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 					 'prte_dvm', 'dvm-uri')
-	cmd = f'mkdir -p {os.path.split(uri)[0]};'
+	cmd += f'mkdir -p {os.path.split(uri)[0]};'
 	for u in use.split(':'):
 		cmd += f"module use {u};"
 	for m in modules.split(':'):
 		cmd += f"module load {m};"
+	# The end goal of the below parameters is to ensure that
+	# SLINGSHOT_VNIS are available for the MPI processes being run by this
+	# DVM
+	#
+	# ras ^slurm: tells it to use the host information passed on the
+	#			  command line instead of SLURM's information
+	# -prtemca plm slurm: forces it to use SLURM as the process launcher. In
+	#					  effect use srun
+	# plm_slurm_args "--het-group 1": passes this to the srun arg list which
+	#				is need to tell srun to run on a specific het group
 	cmd += f'prte --host {",".join(f"{node}:*" for node in node_list)} ' \
-		   f'--report-uri {uri}'
-	#cmd += f'prte --host {",".join(node_list)}'
+		   f'--report-uri {uri} '										 \
+		   f'-x SLURM_JOB_ID -x SLURM_JOB_ID '							 \
+		   f'--prtemca ras ^slurm '										 \
+		   f'--prtemca plm slurm '										 \
+		   f'--prtemca plm_slurm_args "--het-group 1"'
 	out, err = defw_exec_remote_cmd(cmd, node_list[0], deamonize=True)
 	logging.debug(f"out: {out}\nerror: {err}")
 
@@ -191,11 +279,11 @@ if __name__ == '__main__':
 	logging.debug(f"Running on {socket.gethostname()} with args {sys.argv}")
 	argv = sys.argv[1:]
 	try:
-		options, args = getopt.getopt(argv, "g:u:o:p:dsh",
+		options, args = getopt.getopt(argv, "g:u:o:p:rdsh",
 		 ["groups=", "use=", "mods=", "python-env=",
-		  "dvm", "shutdown", "help"])
+		  "prun", "dvm", "shutdown", "help"])
 	except:
-		print("bad command line arguments")
+		prformat(fg.red+fg.bold, f"bad command line arguments")
 		me.exit()
 
 	groups = ''
@@ -204,6 +292,7 @@ if __name__ == '__main__':
 	modules = ''
 	python_env = ''
 	shutdown = False
+	prun = False
 	for name, value in options:
 			if name in ['-g', '--groups']:
 				groups = value
@@ -215,16 +304,24 @@ if __name__ == '__main__':
 				python_env = value
 			elif name in ['-d', '--dvm']:
 				dvm = True
+			elif name in ['-r', '--prun']:
+				prun = True
 			elif name in ['-s', '--shutdown']:
 				shutdown = True
 			else:
-				print(f"Unknown parameters {name}:{value}")
+				prformat(fg.red+fg.bold, f"Unknown parameters {name}:{value}")
 				me.exit()
 
 	g0_node_list, g1_node_list = extract_group_node_lists(groups)
 	hostname = socket.gethostname()
+
+	if prun:
+		start_qfw(g1_node_list[0], use_path, modules, groups)
+		me.exit()
+
 	# only run on node 0
-	if hostname != g1_node_list[0] and not dvm:
+	if hostname != g1_node_list[0] and not dvm and not shutdown:
+		prformat(fg.red+fg.bold, f"This operation needs to run on {g1_node_list[0]}")
 		me.exit()
 
 	if hostname == g1_node_list[0] and not dvm and not shutdown:
@@ -232,6 +329,8 @@ if __name__ == '__main__':
 		launcher = svc_launcher.Launcher()
 
 	try:
+		# TODO: As part of the shutdown we need to collect all artifacts if they
+		# were in the /tmp directories
 		if shutdown:
 			cleanup_system(g0_node_list+g1_node_list)
 			me.exit()

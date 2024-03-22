@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# This should've been done by the calling script, but have it here as
+# well, in case we need to test this script standalone
+module use /sw/frontier/qhpc/modules/
+module load quantum/qsim
+
 echo "Activating QFw Virtual Environment"
 source $HOME/QFwTmp/venv/bin/activate
 

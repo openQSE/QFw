@@ -1,12 +1,19 @@
 # This script is designed to run via the DEFw framework
 import defw, logging, yaml
-from defw_exception import DEFwCommError
+from defw_exception import DEFwCommError, DEFwInProgress, DEFwNotReady
+from defw_util import prformat, fg, bg
 from time import sleep
 import supermarq, random
 
+req_timeout = 20
+system_up_timeout = 40
+circuit_run_timeout = 100
+
 def get_first_qpm():
+	global system_up_timeout
+
 	wait = 0
-	while wait < 40:
+	while wait < system_up_timeout:
 		res = defw.resmgr.get_services('QPM')
 		if res and len(res) > 0:
 			break
@@ -32,32 +39,105 @@ def get_first_qpm():
 
 	return qpm_api
 
-def run_circuit(api):
+def async_run_circuit2(api, itr=30):
+	global circuit_run_timeout
+
+	start_qubits = 2
+	for x in range(0, itr):
+		ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=start_qubits)
+		cir = ghz.circuit()
+		qasm = cir.to_qasm()
+
+		start_qubits += 1
+
+		wait = 0
+		info = {}
+		info['qasm'] = qasm
+		info['num_qubits'] = start_qubits
+		info['num_shots'] = 1
+		info['compiler'] = 'staq'
+		try:
+			cid = api.create_circuit(info)
+			api.async_run(cid)
+		except Exception as e:
+			logging.critical(f"Got an exception {e} of type: {type(e)}")
+			logging.critical(e)
+			raise e
+
+	total_circuits_completed = 0
+	while (wait < circuit_run_timeout and total_circuits_completed != itr):
+		try:
+			r = api.read_cq()
+			prformat(fg.green+fg.bold, f"finished with result {r['cid']}:")
+			prformat(fg.green+fg.bold, f"{r['result'].decode('utf-8')}")
+			total_circuits_completed += 1
+		except Exception as e:
+			if type(e) == DEFwInProgress:
+				prformat(fg.red+fg.bold, f"{cid} has not completed yet")
+				wait += 1
+				sleep(1)
+				continue
+			else:
+				raise e
+
+def async_run_circuit(api, num_qubits):
+	global circuit_run_timeout
+
+	ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=num_qubits)
+	cir = ghz.circuit()
+	qasm = cir.to_qasm()
+
+	wait = 0
+	info = {}
+	info['qasm'] = qasm
+	info['num_qubits'] = num_qubits
+	info['num_shots'] = 1
+	info['compiler'] = 'staq'
+	try:
+		cid = api.create_circuit(info)
+		api.async_run(cid)
+		while wait < circuit_run_timeout:
+			try:
+				r = api.read_cq(cid)
+				prformat(fg.green+fg.bold, f"{cid} finished with result {r}")
+				break
+			except Exception as e:
+				if type(e) == DEFwInProgress:
+					prformat(fg.red+fg.bold, f"{cid} has not completed yet")
+					wait += 1
+					sleep(1)
+					continue
+				else:
+					raise e
+	except Exception as e:
+		logging.critical(f"Got an exception {e} of type: {type(e)}")
+		logging.critical(e)
+
+def run_circuit(api, num_qubits):
 #	phasecode_list = [random.randint(0, 1) for _ in range(40)]
 #	c = supermarq.benchmarks.phase_code.PhaseCode(40, 1, phasecode_list)
 #	cir = c.circuit()
 #	qasm = cir.to_qasm()
-	ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=3)
+	ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=num_qubits)
 	cir = ghz.circuit()
 	qasm = cir.to_qasm()
 
 	info = {}
 	info['qasm'] = qasm
-	info['num_qubits'] = 3
+	info['num_qubits'] = num_qubits
 	info['num_shots'] = 1
 	info['compiler'] = 'staq'
-	for x in range(0, 10):
-		try:
-			cid = api.create_circuit(info)
-			rc, output = api.sync_run(cid)
-			logging.debug(f"type(output) = {type(output)}")
-			if type(output) == bytes:
-				logging.debug(output.decode('utf-8'))
-			else:
-				logging.debug(output)
-		except Exception as e:
-			logging.critical(f"Got an exception {e} of type: {type(e)}")
-			logging.critical(e)
+	try:
+		cid = api.create_circuit(info)
+		rc, output, stats = api.sync_run(cid)
+		logging.debug(f"type(output) = {type(output)}")
+		if type(output) == bytes:
+			logging.debug(f"output: {output.decode('utf-8')}")
+		else:
+			logging.debug(f"output: {output}")
+	except Exception as e:
+		logging.critical(f"Got an exception {e} of type: {type(e)}")
+		logging.critical(e)
 
 def run_circuit2(api):
 	for x in range(3, 20):
@@ -88,8 +168,33 @@ def test_qpm(qpm_api):
 	logging.debug(qpm_api.test())
 
 if __name__ == "__main__":
+	req_timeout = 20
+	circuit_run_timeout = 100
+	system_up_timeout = 40
+
+	if len(sys.argv) >= 2:
+		argv = sys.argv[1:]
+
+		try:
+			options, args = getopt.getopt(argv, "u:c:t:h",
+			["system-up-timeout=", "circuit-run-timeout=", "timeout=", "help"])
+		except:
+			prformat(fg.red+fg.bold, f"bad command line arguments")
+			me.exit()
+
+		for name, value in options:
+				if name in ['-u', '--system-up-timeout']:
+					system_up_timeout = int(value)
+				if name in ['-c', '--circuit-run-timeout']:
+					circuit_run_timeout = int(value)
+				if name in ['-t', '--timeout']:
+					req_timeout = int(value)
+				else:
+					prformat(fg.red+fg.bold, f"Unknown parameters {name}:{value}")
+					me.exit()
+
 	wait = 0
-	while wait < 20:
+	while wait < system_up_timeout:
 		resmgr = defw.get_resmgr()
 		if resmgr:
 			break
@@ -106,17 +211,24 @@ if __name__ == "__main__":
 	qpm = get_first_qpm()
 
 	wait = 0
-	while wait < 20:
-		if qpm.is_ready():
+	while wait < system_up_timeout:
+		try:
+			qpm.is_ready()
 			break
-		logging.debug("QPM not ready yet")
-		wait += 1
-		sleep(1)
+		except Exception as e:
+			if type(e) == DEFwNotReady:
+				logging.debug("QPM not ready yet")
+				wait += 1
+				sleep(1)
+			else:
+				raise e
 
 	try:
 		test_qpm(qpm)
 
-		run_circuit2(qpm)
+		async_run_circuit2(qpm, itr=2)
+		#run_circuit(qpm, 20)
+		#run_circuit2(qpm)
 		qpm.shutdown()
 	except Exception as e:
 		logging.debug(f"QTM ran into an exception {e}")
