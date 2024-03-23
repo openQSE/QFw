@@ -1,5 +1,6 @@
 #!/bin/bash
 
+echo "Welcome to the Quantum Framework"
 # This should've been done by the calling script, but have it here as
 # well, in case we need to test this script standalone
 module use /sw/frontier/qhpc/modules/

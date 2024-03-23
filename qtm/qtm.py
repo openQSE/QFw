@@ -42,7 +42,7 @@ def get_first_qpm():
 def async_run_circuit2(api, itr=30):
 	global circuit_run_timeout
 
-	start_qubits = 2
+	start_qubits = 20
 	for x in range(0, itr):
 		ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=start_qubits)
 		cir = ghz.circuit()
@@ -139,8 +139,8 @@ def run_circuit(api, num_qubits):
 		logging.critical(f"Got an exception {e} of type: {type(e)}")
 		logging.critical(e)
 
-def run_circuit2(api):
-	for x in range(3, 20):
+def run_circuit2(api, start, end):
+	for x in range(start, end):
 		ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=x)
 		cir = ghz.circuit()
 		qasm = cir.to_qasm()
@@ -226,9 +226,9 @@ if __name__ == "__main__":
 	try:
 		test_qpm(qpm)
 
-		async_run_circuit2(qpm, itr=2)
+		async_run_circuit2(qpm, itr=3)
 		#run_circuit(qpm, 20)
-		#run_circuit2(qpm)
+		#run_circuit2(qpm, 3, 10)
 		qpm.shutdown()
 	except Exception as e:
 		logging.debug(f"QTM ran into an exception {e}")
