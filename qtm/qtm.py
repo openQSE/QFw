@@ -39,10 +39,9 @@ def get_first_qpm():
 
 	return qpm_api
 
-def async_run_circuit2(api, itr=30):
+def async_run_circuit2(api, start_qubits=20, itr=30):
 	global circuit_run_timeout
 
-	start_qubits = 20
 	for x in range(0, itr):
 		ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=start_qubits)
 		cir = ghz.circuit()
@@ -68,8 +67,9 @@ def async_run_circuit2(api, itr=30):
 	while (wait < circuit_run_timeout and total_circuits_completed != itr):
 		try:
 			r = api.read_cq()
-			prformat(fg.green+fg.bold, f"finished with result {r['cid']}:")
-			prformat(fg.green+fg.bold, f"{r['result'].decode('utf-8')}")
+			prformat(fg.green+fg.bold, f"finished {r['cid']}:")
+			prformat(fg.green+fg.bold, f"{yaml.dump(r['result'])}")
+			#prformat(fg.green+fg.bold, f"{r['result'].decode('utf-8')}")
 			total_circuits_completed += 1
 		except Exception as e:
 			if type(e) == DEFwInProgress:
@@ -99,7 +99,8 @@ def async_run_circuit(api, num_qubits):
 		while wait < circuit_run_timeout:
 			try:
 				r = api.read_cq(cid)
-				prformat(fg.green+fg.bold, f"{cid} finished with result {r}")
+				prformat(fg.green+fg.bold, f"finished {r['cid']}:")
+				prformat(fg.green+fg.bold, f"{yaml.dump(r['result'])}")
 				break
 			except Exception as e:
 				if type(e) == DEFwInProgress:
@@ -129,10 +130,13 @@ def run_circuit(api, num_qubits):
 	info['compiler'] = 'staq'
 	try:
 		cid = api.create_circuit(info)
-		rc, output, stats = api.sync_run(cid)
+		rc, output = api.sync_run(cid)
+		#rc, output, stats = api.sync_run(cid)
 		logging.debug(f"type(output) = {type(output)}")
 		if type(output) == bytes:
 			logging.debug(f"output: {output.decode('utf-8')}")
+		elif type(output) == dict:
+			logging.debug(f"{yaml.dump(output)}")
 		else:
 			logging.debug(f"output: {output}")
 	except Exception as e:
@@ -226,8 +230,9 @@ if __name__ == "__main__":
 	try:
 		test_qpm(qpm)
 
-		async_run_circuit2(qpm, itr=3)
-		#run_circuit(qpm, 20)
+		#async_run_circuit2(qpm, start_qubits=3, itr=3)
+		#async_run_circuit2(qpm, start_qubits=20, itr=2)
+		run_circuit(qpm, 20)
 		#run_circuit2(qpm, 3, 10)
 		qpm.shutdown()
 	except Exception as e:
