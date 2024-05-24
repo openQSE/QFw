@@ -2,7 +2,7 @@
 import defw, logging, yaml
 from defw_exception import DEFwCommError, DEFwInProgress, DEFwNotReady
 from defw_util import prformat, fg, bg
-from time import sleep
+from time import sleep, time
 import supermarq, random
 
 req_timeout = 20
@@ -39,7 +39,7 @@ def get_first_qpm():
 
 	return qpm_api
 
-def async_run_circuit2(api, start_qubits=20, itr=30):
+def async_run_circuit2(api, start_qubits=20, itr=30, increase=True):
 	global circuit_run_timeout
 
 	for x in range(0, itr):
@@ -47,7 +47,8 @@ def async_run_circuit2(api, start_qubits=20, itr=30):
 		cir = ghz.circuit()
 		qasm = cir.to_qasm()
 
-		start_qubits += 1
+		if increase:
+			start_qubits += 1
 
 		wait = 0
 		info = {}
@@ -230,9 +231,20 @@ if __name__ == "__main__":
 	try:
 		test_qpm(qpm)
 
+		async_run_circuit2(qpm, start_qubits=20, itr=16, increase=False)
 		#async_run_circuit2(qpm, start_qubits=3, itr=3)
 		#async_run_circuit2(qpm, start_qubits=20, itr=2)
-		run_circuit(qpm, 20)
+		# Run a circuit with 20 qubits 20 times asynchronously.
+		# With 5 nodes in the environment we should see all five nodes
+		# being used
+		#start_time = time()
+		#async_run_circuit2(qpm, itr=8, increase=False)
+		#prformat(fg.orange+fg.bold, f"****Eight 20 qubit circuits completed in {time() - start_time}")
+		#start_time = time()
+		#async_run_circuit2(qpm, itr=1, increase=False)
+		#prformat(fg.orange+fg.bold, f"****One 20 qubit circuits completed in {time() - start_time}")
+
+		#run_circuit(qpm, 20)
 		#run_circuit2(qpm, 3, 10)
 		qpm.shutdown()
 	except Exception as e:

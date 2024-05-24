@@ -28,6 +28,7 @@ def execute_ssh_command(host, command, daemonize=False):
 		stdout, stderr = process.communicate()
 		return_code = process.returncode
 		prformat(fg.red+fg.bold, "BACK FROM THE Popen")
+		prformat(fg.red+fg.bold, f"Command return: {stdout}\n{stderr}\n{rc}\n-----------")
 		return return_code, stdout, stderr
 	except Exception as e:
 		return -1, '', str(e)
@@ -345,14 +346,18 @@ if __name__ == '__main__':
 		pid = start_resmgr(g1_node_list[0], launcher)
 		logging.debug(f"RESMGR STARTED: {pid}")
 
-		# Start the Launcher
+		# Start one Launcher
 		listen_port = 8190
-		for node in g1_node_list:
-			logging.debug(f"Starting launcher on {node}")
-			pid = start_launcher(g1_node_list[0], node, launcher, listen_port,
-						use_path, modules, python_env)
-			listen_port += 2
-			logging.debug(f"LAUNCHER STARTED: {pid}")
+		logging.debug(f"Starting launcher on {g1_node_list[0]}")
+		pid = start_launcher(g1_node_list[0], g1_node_list[0], launcher, listen_port,
+					use_path, modules, python_env)
+		logging.debug(f"LAUNCHER STARTED: {pid}")
+#		for node in g1_node_list:
+#			logging.debug(f"Starting launcher on {node}")
+#			pid = start_launcher(g1_node_list[0], node, launcher, listen_port,
+#						use_path, modules, python_env)
+#			listen_port += 2
+#			logging.debug(f"LAUNCHER STARTED: {pid}")
 
 		# Start the QPM
 		qpm_pid, qpm_log_dir  = start_qpm(g1_node_list[0], g1_node_list[0],

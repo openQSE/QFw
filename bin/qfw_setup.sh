@@ -79,8 +79,9 @@ export DEFW_LOG_DIR=$HOME/QFwTmp/${DEFW_AGENT_NAME}_${hostname}
 
 # NOTE: We can't run this with srun, because within this script we start
 # a PRTE DVM and it conflicts with srun
-echo "*******START PHASE ONE SETUP: PRTE*******"
 #srun --het-group 1 -N 1 -n 1 qfw_run_setup_p2.sh "$het_groups"
+
+echo "*******START PHASE ONE SETUP: PRTE*******"
 python3 $QFW_PATH/bin/qfw_setup.py --dvm --groups "$het_groups" \
 		--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim"
 if [ $? -ne 0 ]; then
