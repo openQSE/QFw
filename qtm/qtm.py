@@ -42,6 +42,8 @@ def get_first_qpm():
 def async_run_circuit2(api, start_qubits=20, itr=30, increase=True):
 	global circuit_run_timeout
 
+	start_time = time()
+
 	for x in range(0, itr):
 		ghz = supermarq.benchmarks.ghz.GHZ(num_qubits=start_qubits)
 		cir = ghz.circuit()
@@ -80,6 +82,7 @@ def async_run_circuit2(api, start_qubits=20, itr=30, increase=True):
 				continue
 			else:
 				raise e
+	prformat(fg.orange+fg.bold, f"****{itr} {start_qubits} qubit circuits completed in {time() - start_time}")
 
 def async_run_circuit(api, num_qubits):
 	global circuit_run_timeout
