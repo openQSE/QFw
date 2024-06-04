@@ -20,7 +20,8 @@ set -xe
 
 qfw_setup.sh
 
-run_application.sh "$QFW_PATH/qtm/qtm.py"
+run_application.sh "$QFW_PATH/qtm/qtm.py" qtm
+#run_application.sh "$QFW_PATH/qlstm/Examples/qlstm_imdb_classifier.py" qlstm
 
 qfw_teardown.sh
 

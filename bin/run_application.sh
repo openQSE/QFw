@@ -30,7 +30,7 @@ node=$(echo "$output" | tr '\n' ' ' | \
 
 echo "resource manager is located on: ****$node****"
 
-export DEFW_AGENT_NAME=qtm_$hostname
+export DEFW_AGENT_NAME=$2_$hostname
 export DEFW_LISTEN_PORT=9600
 export DEFW_PARENT_HOSTNAME=$node
 export DEFW_PARENT_PORT=8090
