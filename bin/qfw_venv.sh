@@ -1,6 +1,9 @@
 #!/bin/bash
 
-echo "Welcome to the Quantum Framework"
+if [ "$1" == "print_intro" ]; then
+	echo "Welcome to the Quantum Framework"
+fi
+
 module use /sw/frontier/qhpc/modules/
 module load quantum/qsim
 

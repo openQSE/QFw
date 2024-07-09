@@ -159,13 +159,17 @@ def run_circuit2(api, start, end):
 		info['num_shots'] = 1
 		info['compiler'] = 'staq'
 		try:
-			cid = api.create_circuit(info)
+			#cid = api.create_circuit(info)
 			#rc, output = api.sync_run(cid)
 			#print(f"{output.decode('utf-8')}")
-			rc, circ_result, stats = api.sync_run(cid)
+			#prformat(fg.cyan+fg.bold, f"running {cid}")
+			#logging.debug(f"running {cid}")
+			#rc, circ_result = api.sync_run(cid)
+			rc, circ_result = api.sync_run(1)
 			logging.debug(yaml.dump(circ_result, sort_keys=False))
-			for s in stats:
-				logging.debug(yaml.dump(s, sort_keys=False))
+			prformat(fg.green+fg.bold,yaml.dump(circ_result, sort_keys=False))
+			#for s in stats:
+			#	logging.debug(yaml.dump(s, sort_keys=False))
 		except Exception as e:
 			logging.critical(f"Got an exception {e} of type: {type(e)}")
 			logging.critical(e)
@@ -234,7 +238,7 @@ if __name__ == "__main__":
 	try:
 		test_qpm(qpm)
 
-		async_run_circuit2(qpm, start_qubits=20, itr=16, increase=False)
+		#async_run_circuit2(qpm, start_qubits=4, itr=4, increase=False)
 		#async_run_circuit2(qpm, start_qubits=3, itr=3)
 		#async_run_circuit2(qpm, start_qubits=20, itr=2)
 		# Run a circuit with 20 qubits 20 times asynchronously.
@@ -248,7 +252,7 @@ if __name__ == "__main__":
 		#prformat(fg.orange+fg.bold, f"****One 20 qubit circuits completed in {time() - start_time}")
 
 		#run_circuit(qpm, 20)
-		#run_circuit2(qpm, 3, 10)
+		run_circuit2(qpm, 3, 6)
 		qpm.shutdown()
 	except Exception as e:
 		logging.debug(f"QTM ran into an exception {e}")

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source $QFW_PATH/bin/qfw_venv.sh
+source $QFW_PATH/bin/qfw_venv.sh print_intro
 
 # Startup:
 #  - The Simulation Environment Components
@@ -58,14 +58,14 @@ export DEFW_LOG_DIR=$HOME/QFwTmp/${DEFW_AGENT_NAME}_${hostname}
 # a PRTE DVM and it conflicts with srun
 #srun --het-group 1 -N 1 -n 1 qfw_run_setup_p2.sh "$het_groups"
 
-echo "*******START PHASE ONE SETUP: PRTE*******"
-python3 $QFW_PATH/bin/qfw_setup.py --dvm --groups "$het_groups" \
-		--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim"
-if [ $? -ne 0 ]; then
-	echo "Failed to setup Quantum Framework"
-	exit -1
-fi
-echo "*******COMPLETED PHASE ONE SETUP: PRTE*******"
+#echo "*******START PHASE ONE SETUP: PRTE*******"
+#python3 $QFW_PATH/bin/qfw_setup.py --dvm --groups "$het_groups" \
+#		--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim"
+#if [ $? -ne 0 ]; then
+#	echo "Failed to setup Quantum Framework"
+#	exit -1
+#fi
+#echo "*******COMPLETED PHASE ONE SETUP: PRTE*******"
 
 echo "*******START PHASE TWO SETUP*******"
 export DEFW_AGENT_NAME=qfw_setup_phase_2
