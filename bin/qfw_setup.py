@@ -33,13 +33,6 @@ def execute_ssh_command(host, command, daemonize=False):
 	except Exception as e:
 		return -1, '', str(e)
 
-def expand_dictionary_to_exports(dictionary):
-	exports = []
-	for key, value in dictionary.items():
-		export_str = f"export {key}={value}"
-		exports.append(export_str)
-	return ';'.join(exports)
-
 def start_qfw(host, use, modules, hetgroups):
 	name = 'qfw_base_setup'
 	if 'QFW_DVM_URI_PATH' in os.environ:
@@ -48,27 +41,31 @@ def start_qfw(host, use, modules, hetgroups):
 		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 					 'prte_dvm', 'dvm-uri')
 
-	env =  {'DEFW_AGENT_NAME': name,
-			'DEFW_CONFIG_PATH': os.environ['DEFW_CONFIG_PATH'],
-			'DEFW_LISTEN_PORT': str(8095),
-			'DEFW_ONLY_LOAD_MODULE': 'svc_resmgr',
-			'DEFW_LOAD_NO_INIT': 'svc_launcher',
-			'DEFW_SHELL_TYPE': 'daemon',
-			'DEFW_AGENT_TYPE': 'agent',
-			'DEFW_PARENT_PORT': str(8090),
-			'DEFW_PARENT_NAME': resmgr,
-			'DEFW_LOG_LEVEL': "all",
-			'DEFW_DISABLE_RESMGR': "yes",
-			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-							name)
-			}
+	# Using mpirun or prun to spin up the QFw infrastructure seems to lead
+	# to a situation where mpirun calls to run the application eventually
+	# fail with 195 return code. After debugging it appears like:
+	#	prun_common.c:defhandler() is being called setting the status to -61
+	#		-61 = PMIX_ERR_LOST_CONNECTION
+	#	Eventually: prun_common() fails when it checks the status here:
+	#	/* if we lost connection to the server, then we are done */
+	#	(PMIX_ERR_LOST_CONNECTION == rc || PMIX_ERR_UNREACH == rc) {
+	#		print_current_time(date);
+	#		fprintf(logging, "%s:%s:%d:%d\n", date, __FILE__, __LINE__, rc);
+	#		goto DONE;
+	#	}
+	# To avoid this issue use defw_exec_remote_cmd() to startup the
+	# infrastructure processes. This is done via paramiko
+	#
+	#cmd += f'mpirun -np 1 --dvm file:{uri} qfw_run_setup.sh "{hetgroups}"'
+	#execute_ssh_command(host, cmd, daemonize=True)
+
 	for u in use.split(':'):
 		cmd = f"module use {u};"
 	for m in modules.split(':'):
 		cmd += f"module load {m};"
-	#cmd += expand_dictionary_to_exports(env) + ';'
-	cmd += f'prun -np 1 --dvm file:{uri} qfw_run_setup.sh "{hetgroups}"'
-	execute_ssh_command(host, cmd, daemonize=True)
+	cmd += f'nohup qfw_run_setup.sh "{hetgroups}" >& /tmp/qfw_run_setup.out'
+	prformat(fg.cyan+fg.bold, f"Starting QFW: {cmd}")
+	defw_exec_remote_cmd(cmd, host, deamonize=True)
 
 def start_dvm(node_list, use, modules):
 	# get the job id of the head node
@@ -270,12 +267,17 @@ def wait_for_qpm_completion(qpm_log_dir):
 				retries += 1
 				continue
 		logging.debug(f"Waiting for QPM {proc.pid}")
+		rc = -666
 		try:
-			proc.wait(timeout=5)
+			rc = proc.wait(timeout=5)
 		except psutil.TimeoutExpired as e:
+			logging.debug(f"Expired because of timeout")
 			continue
+		except Exception as e:
+			logging.debug(f"Exception waiting on qpm: {e}")
 		break
- 
+	logging.debug(f"QPM is done {rc}")
+
 if __name__ == '__main__':
 	logging.debug(f"Running on {socket.gethostname()} with args {sys.argv}")
 	argv = sys.argv[1:]
