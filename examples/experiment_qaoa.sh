@@ -18,10 +18,17 @@ echo "##################################"
 
 set -xe
 
+timestamp=$(date +"%Y%m%d_%H%M%S")
+random_string=$(uuidgen | tr '[:upper:]' '[:lower:]' | head -c 8)
+dir_name="qfwtmp_${timestamp}_${random_string}"
+export QFW_TMP_DIR_PATH=$QFW_TMP_PATH/${dir_name}
+
+echo $QFW_TMP_DIR_PATH
+
 qfw_setup.sh
 
-run_application.sh "$QFW_PATH/qtm/qtm.py" qtm
-#run_application.sh "$QFW_PATH/qlstm/Examples/qlstm_imdb_classifier.py" qlstm
+echo "Running with $2"
+run_application.sh $QFW_PATH/../applications/dr_kim_qaoa/qaoa.py $2 $3 $4
 
 qfw_teardown.sh
 

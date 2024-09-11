@@ -6,7 +6,7 @@ module use /sw/frontier/qhpc/modules/
 module load quantum/qsim
 
 echo "Activating QFw Virtual Environment"
-source $HOME/QFwTmp/venv/bin/activate
+source $QFW_TMP_PATH/venv/bin/activate
 
 echo "RUNNING APPLICATION"
 
@@ -23,7 +23,7 @@ export DEFW_ONLY_LOAD_MODULE=svc_resmgr
 export DEFW_DISABLE_RESMGR=yes
 
 filtered_env=$(env | grep "SLURM_JOB_NODELIST_HET_GROUP_1")
-output=$(python3 $QFW_PATH/bin/extract_head_node.py $filtered_env)
+output=$(python3 $QFW_SETUP_PATH/extract_head_node.py $filtered_env)
 
 node=$(echo "$output" | tr '\n' ' ' | \
 	/usr/bin/python3 -c "import sys;print(sys.stdin.read().split()[0])")
@@ -42,5 +42,6 @@ export DEFW_LOG_DIR=/tmp/$DEFW_AGENT_NAME
 export DEFW_ONLY_LOAD_MODULE=api_qpm
 export DEFW_DISABLE_RESMGR=no
 
-srun --het-group=0 python3 $1
+set -xe
+srun --het-group=0 python3 $@
 

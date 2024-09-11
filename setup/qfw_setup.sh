@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source $QFW_PATH/bin/qfw_venv.sh print_intro
+source $QFW_SETUP_PATH/qfw_venv.sh print_intro
 
 # Startup:
 #  - The Simulation Environment Components
@@ -48,18 +48,12 @@ echo $DEFW_LOG_DIR
 #  under the launcher, and the launcher should have the correct
 #  environment; therefore, the QRC will have the correct inherited
 #  environment as well.
-export QFW_DVM_URI_PATH=$HOME/QFwTmp/prte_dvm/dvm-uri
+export QFW_DVM_URI_PATH=$QFW_TMP_PATH/prte_dvm/dvm-uri
 export DEFW_AGENT_NAME=qfw_setup_phase_1
-export DEFW_LOG_DIR=$HOME/QFwTmp/${DEFW_AGENT_NAME}_${hostname}
-#srun --het-group=1 qfw_run_setup.sh "$het_groups" &
-#srun --het-group=1 dump_info.sh
-
-# NOTE: We can't run this with srun, because within this script we start
-# a PRTE DVM and it conflicts with srun
-#srun --het-group 1 -N 1 -n 1 qfw_run_setup_p2.sh "$het_groups"
+export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 
 echo "*******START PHASE ONE SETUP: PRTE*******"
-python3 $QFW_PATH/bin/qfw_setup.py --dvm --groups "$het_groups" \
+python3 $QFW_SETUP_PATH/qfw_setup.py --dvm --groups "$het_groups" \
 		--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim"
 if [ $? -ne 0 ]; then
 	echo "Failed to setup Quantum Framework"
@@ -69,8 +63,8 @@ echo "*******COMPLETED PHASE ONE SETUP: PRTE*******"
 
 echo "*******START PHASE TWO SETUP*******"
 export DEFW_AGENT_NAME=qfw_setup_phase_2
-export DEFW_LOG_DIR=$HOME/QFwTmp/${DEFW_AGENT_NAME}_${hostname}
-python3 $QFW_PATH/bin/qfw_setup.py --prun --groups "$het_groups" \
+export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
+python3 $QFW_SETUP_PATH/qfw_setup.py --prun --groups "$het_groups" \
 			--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim" &
 echo "*******COMPLETED PHASE TWO SETUP*******"
 
