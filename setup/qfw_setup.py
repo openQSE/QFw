@@ -27,8 +27,8 @@ def execute_ssh_command(host, command, daemonize=False):
 				stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 		stdout, stderr = process.communicate()
 		return_code = process.returncode
-		prformat(fg.red+fg.bold, "BACK FROM THE Popen")
-		prformat(fg.red+fg.bold, f"Command return: {stdout}\n{stderr}\n{rc}\n-----------")
+		#prformat(fg.red+fg.bold, "BACK FROM THE Popen")
+		#prformat(fg.red+fg.bold, f"Command return: {stdout}\n{stderr}\n{rc}\n-----------")
 		return return_code, stdout, stderr
 	except Exception as e:
 		return -1, '', str(e)
