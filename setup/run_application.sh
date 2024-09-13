@@ -32,7 +32,7 @@ echo "resource manager is located on: ****$node****"
 
 filename=$(basename "$1" | cut -f 1 -d '.')
 
-export DEFW_AGENT_NAME=$filename_$hostname
+export DEFW_AGENT_NAME=${filename}_${hostname}
 export DEFW_LISTEN_PORT=9600
 export DEFW_PARENT_HOSTNAME=$node
 export DEFW_PARENT_PORT=8090
@@ -40,7 +40,7 @@ export DEFW_PARENT_NAME=resmgr
 export DEFW_AGENT_TYPE=agent
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LOG_LEVEL=all
-export DEFW_LOG_DIR=/tmp/$DEFW_AGENT_NAME
+export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}
 export DEFW_ONLY_LOAD_MODULE=api_qpm
 export DEFW_DISABLE_RESMGR=no
 
