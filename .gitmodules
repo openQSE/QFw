@@ -1,0 +1,4 @@
+[submodule "DEFw"]
+	path = DEFw
+	url = git@github.com:amirshehataornl/DEFw.git
+	branch = master
