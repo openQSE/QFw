@@ -33,7 +33,7 @@ module list
 
 echo "##################################"
 
-./qfw_test.sh
+./qfw_supermarq.sh async 1 20 0 ghz
 
 echo "# RC=$?"
 echo "#########"
