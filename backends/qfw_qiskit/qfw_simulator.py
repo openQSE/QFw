@@ -18,14 +18,19 @@ from qiskit import qobj as qobj_module
 
 from .qfw_job import QFWJob
 from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwNotFound
-from . import qpm_api
-
+from .qfw_lookup_service import get_qpm
 
 # parts of this are inspired from https://github.com/pnnl/NWQ-Sim/blob/main/qiskit/qiskit_nwqsim_provider/nwqsim_simulator.py; Thank you Dr. Ang Li.
 # and from https://github.com/Qiskit/qiskit-aer/blob/main/qiskit_aer/backends/aerbackend.py; Thank you Qiskit-Aer
 
-class QFWSimulator(BackendV2):
+qpm = None
+
+class QFWBackend(BackendV2):
 	def __init__(self, simulator = "nwqsim", target = None, properties = None):
+		global qpm
+
+		qpm = get_qpm()
+
 		super().__init__(name="QFW Simulator")
 		# self._target = Target(description="QFW Simulator Target", num_qubits=40)
 		self._target = target
@@ -86,6 +91,8 @@ class QFWSimulator(BackendV2):
 		return Options(shots=1024, seed=334)
 	
 	def run_experiment_sync(self, circuit, experiment, options):
+		global qpm
+
 		self.start_time = time.time()
 
 		# print("1 ", type(experiment))
@@ -120,8 +127,8 @@ class QFWSimulator(BackendV2):
 			"compiler": "staq", # only for tnqvm, it is not used by nwqsim, TODO: need to think of a cleaner way..
 		}
 		try:
-			cid = qpm_api.create_circuit(info)
-			rc, output = qpm_api.sync_run(cid)
+			cid = qpm.create_circuit(info)
+			rc, output = qpm.sync_run(cid)
 			if rc == 0:
 				output = {"counts": output, "statevector": [], "memory": self.get_memory_from_counts(output)} # TODO: print statevector and memory (per shot) in nwqsim's executable/run,
 				# output = {"counts": output, "statevector": []}
@@ -210,6 +217,8 @@ class QFWSimulator(BackendV2):
 	
 	# ASYNC	
 	def run_experiment_async(self, circuit, experiment, options):
+		global qpm
+
 		self.start_time = time.time()
 		# get qasm string from experiment
 		qasm_string = qasm2.dumps(circuit)
@@ -224,8 +233,8 @@ class QFWSimulator(BackendV2):
 			"compiler": "staq", # only for tnqvm, it is not used by nwqsim, TODO: need to think of a cleaner way..
 		}
 		try:
-			cid = qpm_api.create_circuit(info)
-			qpm_api.async_run(cid)
+			cid = qpm.create_circuit(info)
+			qpm.async_run(cid)
 			return cid
 		except Exception as e:
 			print("Error! = ", str(e))
@@ -235,6 +244,8 @@ class QFWSimulator(BackendV2):
 
 	# ASYNC
 	def _run_async_job(self, job_id, circuits, options):
+		global qpm
+
 		if isinstance(circuits, qobj_module.QasmQobj):
 			qobj = circuits
 		elif isinstance(circuits, QuantumCircuit):
@@ -259,12 +270,12 @@ class QFWSimulator(BackendV2):
 		# TODO: run to take a call back (1-batch_call_back gets called when entire batch is complete, 2- single_call_back is similar for single circuit). then don't poll.
 
 		for each_cid in ran_cid_list:
-			res = qpm_api.read_cq(qrc_type=self.simulator)
+			res = qpm.read_cq(qrc_type=self.simulator)
 
 			while True:
 				try:
 					time.sleep(5)
-					res = qpm_api.read_cq(qrc_type=self.simulator)
+					res = qpm.read_cq(qrc_type=self.simulator)
 					break
 				except DEFwInProgress as e:
 					continue
@@ -333,7 +344,7 @@ class QFWSimulator(BackendV2):
 		# for key, value in meta_info.items():
 		# 	print(f"{key}: {value}")
 		# print("--")
-		print("INDIVIDUAL CIRCUIT Time Taken by QFWSimulator = ", out["time_taken"])
+		print("INDIVIDUAL CIRCUIT Time Taken by QFWBackend = ", out["time_taken"])
 
 		return Result.from_dict(result)
 
