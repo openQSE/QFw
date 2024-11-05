@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# job component 1
+#SBATCH -A stf008
+#SBATCH -N 1
+#SBATCH --partition=compute
+#SBATCH --ntasks 1
+#SBATCH --ntasks-per-node=1
+#SBATCH --threads-per-core 1
+#SBATCH -t 1:00:00
+
+#SBATCH hetjob
+
+# Heterogeneous job definition for the QC node
+#SBATCH --partition=quantum          # Partition for QC resources
+#SBATCH --nodes=1                    # Request 1 QC node
+#SBATCH --ntasks=1                   # Typically, a QC node would handle one task at a time
+#SBATCH --gres=qc:QB:1               # Request 1 superconducting QC node
+#SBATCH --time=01:00:00              # Job time limit for QC tasks (1 hour)
+
+uname -a
+echo "# START-TIME: $(date)"
+echo "#            SLURM_NNODES: $SLURM_NNODES"
+echo "#            SLURM_NPROCS: $SLURM_NPROCS"
+echo "#             SLURM_JOBID: $SLURM_JOBID"
+echo "# SLURM_JOB_CPUS_PER_NODE: $SLURM_JOB_CPUS_PER_NODE"
+echo "#  SLURM_THREADS_PER_CORE: $SLURM_THREADS_PER_CORE"
+echo "#----"
+
+module list
+
+echo "##################################"
+
+./qfw_supermarq.sh asyn 4 20 0
+
+echo "# RC=$?"
+echo "#########"
+
+echo "# END-TIME: $(date)"
+

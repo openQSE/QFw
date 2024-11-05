@@ -1,4 +1,5 @@
 import defw, logging
+from defw_app_util import defw_get_resource_mgr, defw_reserve_service_by_name
 from time import sleep
 from defw_exception import DEFwNotReady
 
@@ -15,25 +16,18 @@ def get_qpm():
 	if qpm_api:
 		return qpm_api
 
-	qpm_api = defw.get_first_service('QPM', system_up_timeout)
+	#Grab a qpm if one exists
+	rmgr = defw_get_resource_mgr()
+	qpm_api = defw_reserve_service_by_name(rmgr, 'QPM')[0]
 
-	wait = 0
-	while wait < system_up_timeout:
-		try:
-			qpm_api.is_ready()
-			break
-		except Exception as e:
-			if type(e) == DEFwNotReady:
-				logging.debug("QPM not ready yet")
-				wait += 1
-				sleep(1)
-			else:
-				raise e
+	logging.debug(f"got the qpm {qpm_api}")
 
 	try:
 		test_qpm(qpm_api)
 	except Exception as e:
-		logging.debug(f"QTM ran into an exception {e}")
+		logging.debug(f"QPM ran into an exception {e}")
 		qpm_api.shutdown()
+
+	return qpm_api
 
 
