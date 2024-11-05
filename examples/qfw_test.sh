@@ -9,7 +9,7 @@ set -xe
 
 qfw_setup.sh
 
-qfw_run.sh "$QFW_PATH/../applications/test_supermarq.py" --run $1 --iterations $2 --startqbit $3 --increase $4 --method $5
+qfw_run.sh "$QFW_PATH/../applications/test_qfw_init.py"
 
 qfw_teardown.sh
 

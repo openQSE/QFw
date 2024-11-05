@@ -25,7 +25,7 @@ export QFW_TMP_DIR_PATH=$QFW_TMP_PATH/${dir_name}
 
 qfw_setup.sh
 
-run_application.sh $QFW_PATH/../applications/QCNO/tests/main_vac_osc_qfw_latest.py $@
+qfw_run.sh $QFW_PATH/../applications/QCNO/tests/main_vac_osc_qfw_latest.py $@
 
 qfw_teardown.sh
 

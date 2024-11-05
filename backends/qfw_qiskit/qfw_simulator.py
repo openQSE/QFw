@@ -1,6 +1,4 @@
-import uuid
-import time
-import copy
+import uuid, time, copy, logging
 
 from qiskit.providers import BackendV2, Options
 from qiskit.providers import convert_to_target
@@ -26,13 +24,12 @@ from .qfw_lookup_service import get_qpm
 qpm = None
 
 class QFWBackend(BackendV2):
-	def __init__(self, simulator = "nwqsim", target = None, properties = None):
+	def __init__(self, backend = "nwqsim", target = None, properties = None):
 		global qpm
 
 		qpm = get_qpm()
 
-		super().__init__(name="QFW Simulator")
-		# self._target = Target(description="QFW Simulator Target", num_qubits=40)
+		super().__init__(name="QFw Backend")
 		self._target = target
 		self._properties = properties
 		
@@ -41,7 +38,7 @@ class QFWBackend(BackendV2):
 		self._options_properties = {}
 
 		self.options.set_validator("shots", (1, 65536))
-		self.simulator = simulator
+		self.backend = backend
 		# TODO: API to get supported gates at the backend.
 		self._configuration_dict = {
 			"backend_name": "qfw",
@@ -122,7 +119,7 @@ class QFWBackend(BackendV2):
 		info = {
 			"qasm": qasm_string,
 			"num_qubits": num_qubits,
-			"simulator": self.simulator,
+			"simulator": self.backend,
 			"num_shots": options["shots"],
 			"compiler": "staq", # only for tnqvm, it is not used by nwqsim, TODO: need to think of a cleaner way..
 		}
@@ -228,7 +225,7 @@ class QFWBackend(BackendV2):
 		info = {
 			"qasm": qasm_string,
 			"num_qubits": num_qubits,
-			"simulator": self.simulator,
+			"simulator": self.backend,
 			"num_shots": options["shots"],
 			"compiler": "staq", # only for tnqvm, it is not used by nwqsim, TODO: need to think of a cleaner way..
 		}
@@ -270,12 +267,12 @@ class QFWBackend(BackendV2):
 		# TODO: run to take a call back (1-batch_call_back gets called when entire batch is complete, 2- single_call_back is similar for single circuit). then don't poll.
 
 		for each_cid in ran_cid_list:
-			res = qpm.read_cq(qrc_type=self.simulator)
+			res = qpm.read_cq(qrc_type=self.backend)
 
 			while True:
 				try:
 					time.sleep(5)
-					res = qpm.read_cq(qrc_type=self.simulator)
+					res = qpm.read_cq(qrc_type=self.backend)
 					break
 				except DEFwInProgress as e:
 					continue

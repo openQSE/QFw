@@ -69,7 +69,10 @@ def start_qfw(host, use, modules, hetgroups):
 
 def start_dvm(node_list, use, modules):
 	# get the job id of the head node
-	job_id = os.environ['SLURM_JOB_ID']
+	try:
+		job_id = os.environ['QFW_JOB_ID']
+	except:
+		job_id = -1
 	host_list = ",".join(f"{node}:*" for node in node_list)
 	if 'QFW_DVM_URI_PATH' in os.environ:
 		uri = os.environ['QFW_DVM_URI_PATH']
@@ -81,44 +84,15 @@ def start_dvm(node_list, use, modules):
 		cmd += f"module use {u};"
 	for m in modules.split(':'):
 		cmd += f"module load {m};"
-	cmd += f'run_prte.sh {os.path.split(uri)[0]} "{host_list}" {job_id}'
+	if job_id != -1 and 'QFW_HET_GROUP' in os.environ:
+		cmd += f'qfw_run_prte.sh {os.path.split(uri)[0]} "{host_list}" {job_id}'
+	else:
+		cmd += f'qfw_run_dev_prte.sh {os.path.split(uri)[0]} "{host_list}"'
 	rc, out, err = execute_ssh_command(node_list[0], cmd)
 	logging.debug(f"rc = {rc}\nout: {out}\nerror: {err}")
-	#out, err = defw_exec_remote_cmd(cmd, node_list[0], deamonize=False)
-	return
-
-	cmd = f'export SLURM_JOBID={job_id};export SLURM_JOB_ID={job_id};'
-	# Start the DVM on the second node in the Simulation Environment
-	# because currently MPI can not co-exist on the DVM's head node.
-	# Our launcher will live on node 0
-	if 'QFW_DVM_URI_PATH' in os.environ:
-		uri = os.environ['QFW_DVM_URI_PATH']
-	else:
-		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-					 'prte_dvm', 'dvm-uri')
-	cmd += f'mkdir -p {os.path.split(uri)[0]};'
-	for u in use.split(':'):
-		cmd += f"module use {u};"
-	for m in modules.split(':'):
-		cmd += f"module load {m};"
-	# The end goal of the below parameters is to ensure that
-	# SLINGSHOT_VNIS are available for the MPI processes being run by this
-	# DVM
-	#
-	# ras ^slurm: tells it to use the host information passed on the
-	#			  command line instead of SLURM's information
-	# -prtemca plm slurm: forces it to use SLURM as the process launcher. In
-	#					  effect use srun
-	# plm_slurm_args "--het-group 1": passes this to the srun arg list which
-	#				is need to tell srun to run on a specific het group
-	cmd += f'prte --host {",".join(f"{node}:*" for node in node_list)} ' \
-		   f'--report-uri {uri} '										 \
-		   f'-x SLURM_JOB_ID -x SLURM_JOB_ID '							 \
-		   f'--prtemca ras ^slurm '										 \
-		   f'--prtemca plm slurm '										 \
-		   f'--prtemca plm_slurm_args "--het-group 1"'
-	out, err = defw_exec_remote_cmd(cmd, node_list[0], deamonize=True)
-	logging.debug(f"out: {out}\nerror: {err}")
+	if rc:
+		raise DEFwExecutionError(f"Failed to start DVM. rc = {rc}")
+	return rc
 
 def start_resmgr(target, launcher):
 	resmgr = f"resmgr_{target}"
@@ -172,7 +146,7 @@ def start_qpm(resmgr, target, node_list, launcher):
 	env =  {'DEFW_AGENT_NAME': qpm,
 			'DEFW_LISTEN_PORT': str(8290),
 			'DEFW_TELNET_PORT': str(8291),
-			'DEFW_ONLY_LOAD_MODULE': 'svc_qpm,api_launcher,api_qrc',
+			'DEFW_ONLY_LOAD_MODULE': 'svc_qpm,api_launcher',
 			'DEFW_LOAD_NO_INIT': '',
 			'DEFW_SHELL_TYPE': 'daemon',
 			'DEFW_AGENT_TYPE': 'service',
@@ -184,9 +158,6 @@ def start_qpm(resmgr, target, node_list, launcher):
 			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 								qpm),
 #			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
-			'QFW_BASE_QRC_PORT': str(9100),
-			'QFW_NUM_QRC': str(1),
-			'QFW_QRC_BIN_PATH': 'python3 -d',
 			'QFW_QPM_ASSIGNED_HOSTS': node_list,
 		}
 
@@ -194,6 +165,7 @@ def start_qpm(resmgr, target, node_list, launcher):
 		env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
 
 	pid = launcher.launch('python3 -d', env=env, target=target)
+	logging.debug(f"QPM STARTED: with pid {pid} on {target}")
 	return pid, env['DEFW_LOG_DIR']
 
 def start_qtm(resmgr, head_node, launcher):
@@ -218,14 +190,16 @@ def start_qtm(resmgr, head_node, launcher):
 	pid = launcher.launch("python3 -d", env=env, target=head_node)
 
 def extract_group_node_lists(env):
-	info = env.split("\n")
+	if not env:
+		return [], []
+	info = env.split(":")
 	if len(info) != 2:
 		raise DEFwExecutionError(f"Unexpected group parameters: {env}")
 
 	node_lists = []
 	for line in info:
 		key, value = line.split('=', 1)
-		pos = int(key.split("SLURM_JOB_NODELIST_HET_GROUP_")[1])
+		pos = int(key.split("GROUP_")[1])
 		nl = expand_host_list(value)
 		node_lists.insert(pos, nl)
 
@@ -256,6 +230,7 @@ def wait_for_qpm_completion(qpm_log_dir):
 	file_path = os.path.join(qpm_log_dir, "pid")
 	proc = None
 	retries = 0
+	rc = 0
 	while True:
 		if not proc:
 			proc = get_qpm_proc(file_path)
@@ -278,13 +253,69 @@ def wait_for_qpm_completion(qpm_log_dir):
 		break
 	logging.debug(f"QPM is done {rc}")
 
+def list_combine(l1, l2):
+	if len(l1) == 0:
+		return l2
+	if len(l2) == 0:
+		return l1
+	for l in l2:
+		if l not in l1:
+			l1.append(l)
+	return l1
+
+def start(g0, g1, launcher, shutdown, dvm):
+	try:
+		# TODO: As part of the shutdown we need to collect all artifacts if they
+		# were in the /tmp directories
+		if shutdown:
+			cleanup_system(list_combine(g0, g1))
+			me.exit()
+
+		if dvm:
+			# Start PRTE DVM
+			start_dvm(g1, use_path, modules)
+			logging.debug("DVM STARTED")
+			me.exit()
+
+		# Start the Resource Manager
+		pid = start_resmgr(g1[0], launcher)
+		logging.debug(f"RESMGR STARTED: {pid}")
+
+		# Start one Launcher
+		#listen_port = 8190
+		#logging.debug(f"Starting launcher on {g1[0]}")
+		#pid = start_launcher(g1[0], g1[0], launcher, listen_port,
+		#			use_path, modules, python_env)
+		#logging.debug(f"LAUNCHER STARTED: {pid}")
+
+		# Start the QPM
+		qpm_pid, qpm_log_dir  = start_qpm(g1[0], g1[0],
+						",".join(g1), launcher)
+
+	except Exception as e:
+		logging.critical(f"Hit an exception. Cleaning up system: {e}")
+		print_stacktrace()
+		cleanup_system(list_combine(g0, g1))
+		if launcher:
+			launcher.shutdown()
+		raise e
+
+	logging.debug("FINISHED QFW FRAMEWORK STARTUP")
+	logging.debug("Wait until the QPM exits");
+	wait_for_qpm_completion(qpm_log_dir)
+	cleanup_system(list_combine(g0, g1))
+	if launcher:
+		launcher.shutdown()
+	logging.debug("Job Finished")
+	me.exit()
+
 if __name__ == '__main__':
 	logging.debug(f"Running on {socket.gethostname()} with args {sys.argv}")
 	argv = sys.argv[1:]
 	try:
-		options, args = getopt.getopt(argv, "g:u:o:p:rdsh",
+		options, args = getopt.getopt(argv, "g:u:o:p:rdsxh",
 		 ["groups=", "use=", "mods=", "python-env=",
-		  "prun", "dvm", "shutdown", "help"])
+		  "prun", "dvm", "shutdown", "dev-run", "help"])
 	except:
 		prformat(fg.red+fg.bold, f"bad command line arguments")
 		me.exit()
@@ -296,6 +327,8 @@ if __name__ == '__main__':
 	python_env = ''
 	shutdown = False
 	prun = False
+	dev_run = False
+	launcher = None
 	for name, value in options:
 			if name in ['-g', '--groups']:
 				groups = value
@@ -311,11 +344,15 @@ if __name__ == '__main__':
 				prun = True
 			elif name in ['-s', '--shutdown']:
 				shutdown = True
+			elif name in ['x', '--dev-run']:
+				dev_run = True
 			else:
 				prformat(fg.red+fg.bold, f"Unknown parameters {name}:{value}")
 				me.exit()
 
 	g0_node_list, g1_node_list = extract_group_node_lists(groups)
+	if (not g0_node_list or not g1_node_list) and not dev_run:
+		raise DEFwExecutionError(f"Unexpected group parameters: {groups}")
 	hostname = socket.gethostname()
 
 	if prun:
@@ -323,62 +360,17 @@ if __name__ == '__main__':
 		me.exit()
 
 	# only run on node 0
-	if hostname != g1_node_list[0] and not dvm and not shutdown:
+	if hostname != g1_node_list[0] and not dvm and not shutdown and not dev_run:
 		prformat(fg.red+fg.bold, f"This operation needs to run on {g1_node_list[0]}")
 		me.exit()
 
-	if hostname == g1_node_list[0] and not dvm and not shutdown:
-		# get a launcher object
+	if dev_run:
 		launcher = svc_launcher.Launcher()
+		start(g0_node_list, g1_node_list, launcher, False, None)
+	else:
+		if hostname == g1_node_list[0] and not dvm and not shutdown:
+			# get a launcher object
+			launcher = svc_launcher.Launcher()
+		start(g0_node_list, g1_node_list, launcher, shutdown, dvm)
 
-	try:
-		# TODO: As part of the shutdown we need to collect all artifacts if they
-		# were in the /tmp directories
-		if shutdown:
-			cleanup_system(g0_node_list+g1_node_list)
-			me.exit()
 
-		if dvm:
-			# Start PRTE DVM
-			start_dvm(g1_node_list, use_path, modules)
-			logging.debug("DVM STARTED")
-			me.exit()
-
-		# Start the Resource Manager
-		pid = start_resmgr(g1_node_list[0], launcher)
-		logging.debug(f"RESMGR STARTED: {pid}")
-
-		# Start one Launcher
-		listen_port = 8190
-		logging.debug(f"Starting launcher on {g1_node_list[0]}")
-		pid = start_launcher(g1_node_list[0], g1_node_list[0], launcher, listen_port,
-					use_path, modules, python_env)
-		logging.debug(f"LAUNCHER STARTED: {pid}")
-#		for node in g1_node_list:
-#			logging.debug(f"Starting launcher on {node}")
-#			pid = start_launcher(g1_node_list[0], node, launcher, listen_port,
-#						use_path, modules, python_env)
-#			listen_port += 2
-#			logging.debug(f"LAUNCHER STARTED: {pid}")
-
-		# Start the QPM
-		qpm_pid, qpm_log_dir  = start_qpm(g1_node_list[0], g1_node_list[0],
-						",".join(g1_node_list), launcher)
-		logging.debug(f"QPM STARTED: {qpm_pid}")
-
-		# Start the QTM
-		#start_qtm(g0_node_list[0], launcher)
-		#logging.debug("QTM STARTED")
-	except Exception as e:
-		logging.critical(f"Hit an exception. Cleaning up system: {e}")
-		print_stacktrace()
-		cleanup_system(g0_node_list+g1_node_list)
-		launcher.shutdown()
-		raise e
-
-	logging.debug("FINISHED QFW PROCESS STARTUP")
-	logging.debug("Wait until the QPM exits");
-	wait_for_qpm_completion(qpm_log_dir)
-	cleanup_system(g0_node_list+g1_node_list)
-	launcher.shutdown()
-	logging.debug("Job Finished")

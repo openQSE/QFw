@@ -1,0 +1,71 @@
+#!/bin/bash
+
+#SBATCH --output=/ccs/home/shehataa/batch/hetero_comp01.out
+
+# job component 1
+#SBATCH -A stf008
+#SBATCH -N 1
+#SBATCH --ntasks 1
+#SBATCH --ntasks-per-node=1
+#SBATCH --threads-per-core 1
+#SBATCH -t 1:00:00
+
+#SBATCH hetjob
+
+# job component 2
+#SBATCH -A stf008
+#SBATCH -N 2
+#SBATCH --ntasks 1
+#SBATCH --ntasks-per-node=1
+#SBATCH --threads-per-core 1
+#SBATCH -t 1:00:00
+
+uname -a
+echo "# START-TIME: $(date)"
+echo "#            SLURM_NNODES: $SLURM_NNODES"
+echo "#            SLURM_NPROCS: $SLURM_NPROCS"
+echo "#             SLURM_JOBID: $SLURM_JOBID"
+echo "# SLURM_JOB_CPUS_PER_NODE: $SLURM_JOB_CPUS_PER_NODE"
+echo "#  SLURM_THREADS_PER_CORE: $SLURM_THREADS_PER_CORE"
+echo "#----"
+
+module use /sw/frontier/qhpc/modules/
+module load quantum/qsim
+
+module list
+
+echo "##################################"
+
+set -xe
+
+qfw_setup.sh
+
+qfw_run.sh "$QFW_PATH/../applications/test_supermarq.py"     \
+               --run $1 --iterations $2 --startqbit $3       \
+               --increase $4 --method $5
+
+qfw_teardown.sh
+
+echo "# RC=$?"
+echo "#########"
+
+echo "# END-TIME: $(date)"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

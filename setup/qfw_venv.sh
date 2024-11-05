@@ -8,6 +8,22 @@ module use /sw/frontier/qhpc/modules/
 module load quantum/qsim
 
 hostname=$(hostname)
+
+# Loop through all environment variables
+for var in "${!SLURM_JOB_NODELIST_HET_GROUP_@}"; do
+	export QFW_HET_GROUP=1
+	break
+done
+
+# Check if SLURM_JOB_ID is set
+if [ -n "${SLURM_JOB_ID}" ]; then
+	# If SLURM_JOB_ID is set, assign it to QFW_JOB_ID
+	export QFW_JOB_ID=$SLURM_JOB_ID
+else
+	# If SLURM_JOB_ID is not set, assign -1 to QFW_JOB_ID
+	export QFW_JOB_ID=-1
+fi
+
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_AGENT_NAME=qfw_setup
