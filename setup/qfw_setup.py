@@ -146,7 +146,7 @@ def start_qpm(resmgr, target, node_list, launcher):
 	env =  {'DEFW_AGENT_NAME': qpm,
 			'DEFW_LISTEN_PORT': str(8290),
 			'DEFW_TELNET_PORT': str(8291),
-			'DEFW_ONLY_LOAD_MODULE': 'svc_qpm,api_launcher',
+			'DEFW_ONLY_LOAD_MODULE': 'svc_tnqvm_qpm,api_launcher',
 			'DEFW_LOAD_NO_INIT': '',
 			'DEFW_SHELL_TYPE': 'daemon',
 			'DEFW_AGENT_TYPE': 'service',
