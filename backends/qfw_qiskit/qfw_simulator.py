@@ -17,28 +17,31 @@ from qiskit import qobj as qobj_module
 from .qfw_job import QFWJob
 from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwNotFound
 from .qfw_lookup_service import get_qpm
+from enum import IntFlag
+from api_qpm import QPMType, QPMCapability
+
+# This is a mirror of QPMType and QPMCapability. And they always need to
+# match. The point here is not to expose QPM specific information to the
+# application as they should always be abstracted away by the backend.
+QFwBackendType = IntFlag('QFwBackendType', {name.replace("QPM_", "QFW_"): member for name, member in QPMType.__members__.items()})
+QFwBackendCapability = IntFlag('QFwBackendCapability', {name.replace("QPM_", "QFW_"): member for name, member in QPMCapability.__members__.items()})
 
 # parts of this are inspired from https://github.com/pnnl/NWQ-Sim/blob/main/qiskit/qiskit_nwqsim_provider/nwqsim_simulator.py; Thank you Dr. Ang Li.
 # and from https://github.com/Qiskit/qiskit-aer/blob/main/qiskit_aer/backends/aerbackend.py; Thank you Qiskit-Aer
 
-qpm = None
-
 class QFWBackend(BackendV2):
-	def __init__(self, backend = "nwqsim", target = None, properties = None):
-		global qpm
-
-		qpm = get_qpm()
+	def __init__(self, betype=-1, capability=-1, target = None, properties = None):
+		self.qpm = get_qpm(betype, capability)
 
 		super().__init__(name="QFw Backend")
 		self._target = target
 		self._properties = properties
-		
+
 		# Custom option values for config, properties
 		self._options_configuration = {}
 		self._options_properties = {}
 
 		self.options.set_validator("shots", (1, 65536))
-		self.backend = backend
 		# TODO: API to get supported gates at the backend.
 		self._configuration_dict = {
 			"backend_name": "qfw",
@@ -61,7 +64,7 @@ class QFWBackend(BackendV2):
 
 	def properties(self):
 		return BackendProperties.from_dict(self._options_properties)
-	
+
 	def get_memory_from_counts(self, counts):
 		# return [] # uncomment when you don't need later!
 		m = []
@@ -86,10 +89,8 @@ class QFWBackend(BackendV2):
 	@classmethod
 	def _default_options(cls):
 		return Options(shots=1024, seed=334)
-	
-	def run_experiment_sync(self, circuit, experiment, options):
-		global qpm
 
+	def run_experiment_sync(self, circuit, experiment, options):
 		self.start_time = time.time()
 
 		# print("1 ", type(experiment))
@@ -119,13 +120,12 @@ class QFWBackend(BackendV2):
 		info = {
 			"qasm": qasm_string,
 			"num_qubits": num_qubits,
-			"simulator": self.backend,
 			"num_shots": options["shots"],
 			"compiler": "staq", # only for tnqvm, it is not used by nwqsim, TODO: need to think of a cleaner way..
 		}
 		try:
-			cid = qpm.create_circuit(info)
-			rc, output = qpm.sync_run(cid)
+			cid = self.qpm.create_circuit(info)
+			rc, output = self.qpm.sync_run(cid)
 			if rc == 0:
 				output = {"counts": output, "statevector": [], "memory": self.get_memory_from_counts(output)} # TODO: print statevector and memory (per shot) in nwqsim's executable/run,
 				# output = {"counts": output, "statevector": []}
@@ -211,11 +211,9 @@ class QFWBackend(BackendV2):
 			"memory": True,
 		}
 		return Result.from_dict(result)
-	
+
 	# ASYNC	
 	def run_experiment_async(self, circuit, experiment, options):
-		global qpm
-
 		self.start_time = time.time()
 		# get qasm string from experiment
 		qasm_string = qasm2.dumps(circuit)
@@ -225,13 +223,12 @@ class QFWBackend(BackendV2):
 		info = {
 			"qasm": qasm_string,
 			"num_qubits": num_qubits,
-			"simulator": self.backend,
 			"num_shots": options["shots"],
 			"compiler": "staq", # only for tnqvm, it is not used by nwqsim, TODO: need to think of a cleaner way..
 		}
 		try:
-			cid = qpm.create_circuit(info)
-			qpm.async_run(cid)
+			cid = self.qpm.create_circuit(info)
+			self.qpm.async_run(cid)
 			return cid
 		except Exception as e:
 			print("Error! = ", str(e))
@@ -241,8 +238,6 @@ class QFWBackend(BackendV2):
 
 	# ASYNC
 	def _run_async_job(self, job_id, circuits, options):
-		global qpm
-
 		if isinstance(circuits, qobj_module.QasmQobj):
 			qobj = circuits
 		elif isinstance(circuits, QuantumCircuit):
@@ -267,12 +262,12 @@ class QFWBackend(BackendV2):
 		# TODO: run to take a call back (1-batch_call_back gets called when entire batch is complete, 2- single_call_back is similar for single circuit). then don't poll.
 
 		for each_cid in ran_cid_list:
-			res = qpm.read_cq(qrc_type=self.backend)
+			res = self.qpm.read_cq()
 
 			while True:
 				try:
 					time.sleep(5)
-					res = qpm.read_cq(qrc_type=self.backend)
+					res = self.qpm.read_cq()
 					break
 				except DEFwInProgress as e:
 					continue
