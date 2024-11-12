@@ -1,5 +1,6 @@
-import subprocess, os, sys, logging, socket, traceback, getopt, psutil
-from time import sleep
+import subprocess, os, sys, logging, socket, traceback, \
+		getopt, psutil, threading, yaml
+from time import sleep, time
 import svc_launcher, cdefw_global
 from defw_util import expand_host_list, prformat, fg, bg
 from defw_exception import DEFwExecutionError
@@ -15,7 +16,7 @@ def cleanup_system(targets):
 		defw_exec_remote_cmd("pkill -9 prte", target, deamonize=True)
 		defw_exec_remote_cmd("pkill -9 prted", target, deamonize=True)
 		defw_exec_remote_cmd("rm -Rf /tmp/prte*", target, deamonize=True)
-		defw_exec_remote_cmd("pkill -9 -f 'python3 -d -x'", target, deamonize=True)
+		defw_exec_remote_cmd("pkill -9 -f  'python3 -d -x'", target, deamonize=True)
 
 def execute_ssh_command(host, command, daemonize=False):
 	ssh_command = f"ssh {host} '{command}'"
@@ -141,53 +142,49 @@ def start_launcher(resmgr, target, launcher, listen_port,
 	return pid
 
 def start_qpm(resmgr, target, node_list, launcher):
-	qpm = f"qpm_{resmgr}"
+	with open(os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_qpm_services.yaml'), 'r') as f:
+		cy = yaml.load(f, Loader=yaml.FullLoader)
 
-	env =  {'DEFW_AGENT_NAME': qpm,
-			'DEFW_LISTEN_PORT': str(8290),
-			'DEFW_TELNET_PORT': str(8291),
-			'DEFW_ONLY_LOAD_MODULE': 'svc_tnqvm_qpm,api_launcher',
-			'DEFW_LOAD_NO_INIT': '',
-			'DEFW_SHELL_TYPE': 'daemon',
-			'DEFW_AGENT_TYPE': 'service',
-			'DEFW_PARENT_HOSTNAME': resmgr,
-			'DEFW_PARENT_PORT': str(8090),
-			'DEFW_PARENT_NAME': 'resmgr'+resmgr,
-			'DEFW_LOG_LEVEL': "all",
-			'DEFW_DISABLE_RESMGR': "no",
-			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-								qpm),
-#			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
-			'QFW_QPM_ASSIGNED_HOSTS': node_list,
-		}
+	qpm_names = cy['QPM']
 
-	if 'QFW_DVM_URI_PATH' in os.environ:
-		env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
+	listen_port = 8290
+	telnet_port = 8291
+	pids = []
+	dirs = []
 
-	pid = launcher.launch('python3 -d', env=env, target=target)
-	logging.debug(f"QPM STARTED: with pid {pid} on {target}")
-	return pid, env['DEFW_LOG_DIR']
+	for n in qpm_names:
+		qpm = f"qpm_{n}_{resmgr}"
 
-def start_qtm(resmgr, head_node, launcher):
-	qtm = f"qtm_{head_node}"
+		env =  {'DEFW_AGENT_NAME': qpm,
+				'DEFW_LISTEN_PORT': str(listen_port),
+				'DEFW_TELNET_PORT': str(telnet_port),
+				'DEFW_ONLY_LOAD_MODULE': f'svc_{n}_qpm,api_launcher',
+				'DEFW_LOAD_NO_INIT': '',
+				'DEFW_SHELL_TYPE': 'daemon',
+				'DEFW_AGENT_TYPE': 'service',
+				'DEFW_PARENT_HOSTNAME': resmgr,
+				'DEFW_PARENT_PORT': str(8090),
+				'DEFW_PARENT_NAME': 'resmgr'+resmgr,
+				'DEFW_LOG_LEVEL': "all",
+				'DEFW_DISABLE_RESMGR': "no",
+				'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+									qpm),
+	#			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
+				'QFW_QPM_ASSIGNED_HOSTS': node_list,
+			}
 
-	env =  {'DEFW_AGENT_NAME': qtm,
-			'DEFW_LISTEN_PORT': str(8390),
-			'DEFW_TELNET_PORT': str(8391),
-			'DEFW_ONLY_LOAD_MODULE': 'api_qpm',
-			'DEFW_LOAD_NO_INIT': '',
-			'DEFW_SHELL_TYPE': 'daemon',
-			'DEFW_AGENT_TYPE': 'service',
-			'DEFW_PARENT_HOSTNAME': resmgr,
-			'DEFW_PARENT_PORT': str(8090),
-			'DEFW_PARENT_NAME': resmgr,
-			'DEFW_LOG_LEVEL': "all",
-			'DEFW_DISABLE_RESMGR': "no",
-			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-							qtm),
-		}
+		if 'QFW_DVM_URI_PATH' in os.environ:
+			env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
 
-	pid = launcher.launch("python3 -d", env=env, target=head_node)
+		pid = launcher.launch('python3 -d', env=env, target=target)
+		pids.append(pid)
+		dirs.append(env['DEFW_LOG_DIR'])
+		listen_port += 100
+		telnet_port += 100
+
+		logging.debug(f"QPM {qpm} STARTED: with pid {pid} on {target}")
+
+	return pids, dirs
 
 def extract_group_node_lists(env):
 	if not env:
@@ -219,39 +216,67 @@ def get_qpm_proc(file_path):
 	if os.path.exists(file_path):
 		with open(file_path, "r") as file:
 			pid = int(file.read())
+			logging.debug(f"{file_path} - {pid}")
 		try:
 			proc = psutil.Process(pid)
-		except:
+		except Exception as e:
+			logging.debug(e)
 			proc = None
 			pass
 	return proc
 
-def wait_for_qpm_completion(qpm_log_dir):
-	file_path = os.path.join(qpm_log_dir, "pid")
-	proc = None
-	retries = 0
-	rc = 0
-	while True:
-		if not proc:
-			proc = get_qpm_proc(file_path)
-			if not proc:
-				if retries > 20:
-					break
-				logging.debug(f"Waiting for QPM {file_path} to get created")
-				sleep(1)
-				retries += 1
-				continue
-		logging.debug(f"Waiting for QPM {proc.pid}")
-		rc = -666
+def wait_for_qpm_service(proc):
+	while proc.is_running():
 		try:
-			rc = proc.wait(timeout=5)
+			logging.debug(f"waiting on {proc}")
+			proc.wait(timeout=5)
 		except psutil.TimeoutExpired as e:
 			logging.debug(f"Expired because of timeout")
 			continue
 		except Exception as e:
 			logging.debug(f"Exception waiting on qpm: {e}")
-		break
-	logging.debug(f"QPM is done {rc}")
+			break
+
+def wait_for_qpm_completion(qpm_log_dirs):
+	num_qpms = len(qpm_log_dirs)
+	file_paths = []
+	procs = []
+	for d in qpm_log_dirs:
+		file_paths.append(os.path.join(d, "pid"))
+	try:
+		wtimeout = os.environ['QFW_STARTUP_TIMEOUT']
+	except:
+		wtimeout = 40
+
+	logging.debug(f"qpm file paths = {file_paths}")
+
+	start_time = time()
+	while (time() - start_time) <= wtimeout:
+		# wait for all the QPM processes to start
+		for file_path in file_paths:
+			proc = get_qpm_proc(file_path)
+			if proc:
+				procs.append(proc)
+				logging.debug(f"Waiting for QPM {proc.pid}")
+				file_paths.remove(file_path)
+		if len(file_paths) == 0:
+			break
+		sleep(1)
+
+	logging.debug(f"qpm procs= {procs} num_qpms = {num_qpms}")
+	if len(procs) != num_qpms:
+		raise DEFwExecutionError("QPM services did not start properly")
+
+	threads = []
+	for proc in procs:
+		logging.debug(f"Starting thread to wait for qpm: {proc}")
+		thread = threading.Thread(target=wait_for_qpm_service, args=(proc,))
+		threads.append(thread)
+		thread.start()
+
+	for thread in threads:
+		logging.debug("Waiting on thread to finish")
+		thread.join()
 
 def list_combine(l1, l2):
 	if len(l1) == 0:
@@ -289,7 +314,7 @@ def start(g0, g1, launcher, shutdown, dvm):
 		#logging.debug(f"LAUNCHER STARTED: {pid}")
 
 		# Start the QPM
-		qpm_pid, qpm_log_dir  = start_qpm(g1[0], g1[0],
+		qpm_pid, qpm_log_dirs  = start_qpm(g1[0], g1[0],
 						",".join(g1), launcher)
 
 	except Exception as e:
@@ -302,7 +327,7 @@ def start(g0, g1, launcher, shutdown, dvm):
 
 	logging.debug("FINISHED QFW FRAMEWORK STARTUP")
 	logging.debug("Wait until the QPM exits");
-	wait_for_qpm_completion(qpm_log_dir)
+	wait_for_qpm_completion(qpm_log_dirs)
 	cleanup_system(list_combine(g0, g1))
 	if launcher:
 		launcher.shutdown()
