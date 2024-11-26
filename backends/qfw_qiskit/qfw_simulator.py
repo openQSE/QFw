@@ -59,6 +59,9 @@ class QFWBackend(BackendV2):
 			"gates": []
 		}
 
+	def shutdown(self):
+		self.qpm.shutdown()
+
 	def configuration(self):
 		return BackendConfiguration.from_dict(self._configuration_dict)
 
