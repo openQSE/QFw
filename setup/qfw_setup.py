@@ -16,7 +16,7 @@ def cleanup_system(targets):
 		defw_exec_remote_cmd("pkill -9 prte", target, deamonize=True)
 		defw_exec_remote_cmd("pkill -9 prted", target, deamonize=True)
 		defw_exec_remote_cmd("rm -Rf /tmp/prte*", target, deamonize=True)
-		defw_exec_remote_cmd("pkill -9 -f  'python3 -d -x'", target, deamonize=True)
+		defw_exec_remote_cmd("pkill -9 -f  'defwp -d -x'", target, deamonize=True)
 
 def execute_ssh_command(host, command, daemonize=False):
 	ssh_command = f"ssh {host} '{command}'"
@@ -114,7 +114,7 @@ def start_resmgr(target, launcher):
 							resmgr),
 			'DEFW_PARENT_HOSTNAME': target}
 
-	pid = launcher.launch('python3 -d', env=env)
+	pid = launcher.launch('defwp -d', env=env)
 	return pid
 
 def start_launcher(resmgr, target, launcher, listen_port,
@@ -137,7 +137,7 @@ def start_launcher(resmgr, target, launcher, listen_port,
 #			'DEFW_LOG_DIR': os.path.join('/tmp', name),
 			'DEFW_PARENT_HOSTNAME': resmgr}
 
-	pid = launcher.launch('python3 -d', env=env, target=target,
+	pid = launcher.launch('defwp -d', env=env, target=target,
 			muse=muse, modules=modules, python_env=python_env)
 	return pid
 
@@ -176,7 +176,7 @@ def start_qpm(resmgr, target, node_list, launcher):
 		if 'QFW_DVM_URI_PATH' in os.environ:
 			env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
 
-		pid = launcher.launch('python3 -d', env=env, target=target)
+		pid = launcher.launch('defwp -d', env=env, target=target)
 		pids.append(pid)
 		dirs.append(env['DEFW_LOG_DIR'])
 		listen_port += 100
