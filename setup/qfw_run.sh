@@ -16,7 +16,7 @@ export DEFW_SHELL_TYPE=cmdline
 export DEFW_AGENT_NAME=ExtractInfo
 export DEFW_LISTEN_PORT=10095
 export DEFW_AGENT_TYPE=agent
-export DEFW_LOG_LEVEL=all
+export DEFW_LOG_LEVEL=error
 export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_LOAD_NO_INIT=svc_launcher
 export DEFW_ONLY_LOAD_MODULE=svc_resmgr
@@ -39,11 +39,10 @@ export DEFW_PARENT_PORT=8090
 export DEFW_PARENT_NAME=resmgr
 export DEFW_AGENT_TYPE=agent
 export DEFW_SHELL_TYPE=cmdline
-export DEFW_LOG_LEVEL=all
+export DEFW_LOG_LEVEL=error
 export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}
 export DEFW_ONLY_LOAD_MODULE=api_qpm
 export DEFW_DISABLE_RESMGR=no
 
 set -xe
 srun --het-group=0 python3 $1 "${@:2}"
-
