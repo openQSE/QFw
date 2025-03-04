@@ -107,7 +107,7 @@ def start_resmgr(target, launcher):
 			'DEFW_AGENT_TYPE': 'resmgr',
 			'DEFW_PARENT_PORT': str(8090),
 			'DEFW_PARENT_NAME': resmgr,
-			'DEFW_LOG_LEVEL': "all",
+			'DEFW_LOG_LEVEL': "error",
 			'DEFW_DISABLE_RESMGR': "no",
 #			'DEFW_LOG_DIR': os.path.join('/tmp', resmgr),
 			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
@@ -130,7 +130,7 @@ def start_launcher(resmgr, target, launcher, listen_port,
 			'DEFW_AGENT_TYPE': 'service',
 			'DEFW_PARENT_PORT': str(8090),
 			'DEFW_PARENT_NAME': resmgr,
-			'DEFW_LOG_LEVEL': "all",
+			'DEFW_LOG_LEVEL': "error",
 			'DEFW_DISABLE_RESMGR': "no",
 			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 							name),
@@ -165,7 +165,7 @@ def start_qpm(resmgr, target, node_list, launcher):
 				'DEFW_PARENT_HOSTNAME': resmgr,
 				'DEFW_PARENT_PORT': str(8090),
 				'DEFW_PARENT_NAME': 'resmgr'+resmgr,
-				'DEFW_LOG_LEVEL': "all",
+				'DEFW_LOG_LEVEL': "error",
 				'DEFW_DISABLE_RESMGR': "no",
 				'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 									qpm),
@@ -293,7 +293,8 @@ def start(g0, g1, launcher, shutdown, dvm):
 		# TODO: As part of the shutdown we need to collect all artifacts if they
 		# were in the /tmp directories
 		if shutdown:
-			cleanup_system(list_combine(g0, g1))
+			#cleanup_system(list_combine(g0, g1))
+			cleanup_system(g1)
 			me.exit()
 
 		if dvm:

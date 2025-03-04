@@ -239,6 +239,20 @@ class QFWBackend(BackendV2):
 			# output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)]}
 			return None
 
+	def dump_statistics(self, res):
+		start_duration = res['launch_time'] - res['creation_time']
+		execution_duration = res['completion_time'] - res['exec_time']
+		processing_duration = res['exec_time'] - res['resources_consumed_time']
+		enqueue_duration = res['cq_dequeue_time'] - res['cq_enqueue_time']
+		cid = res['cid']
+		info = {'cid': cid,
+				'circuit info': {
+					'start_duration': start_duration,
+					'processing_duration': processing_duration,
+					'execution_duration': execution_duration,
+					'enqueue_duration': enqueue_duration} }
+		logging.debug(f'QPM Statistics: {info}')
+
 	# ASYNC
 	def _run_async_job(self, job_id, circuits, options):
 		if isinstance(circuits, qobj_module.QasmQobj):
@@ -249,11 +263,12 @@ class QFWBackend(BackendV2):
 		else:
 			qobj = assemble(circuits)
 
-		ran_cid_list = []
+		cid_list = []
 
 		start = time.time()
 		for (circuit,experiment) in zip(circuits, qobj.experiments):
-			ran_cid_list.append(self.run_experiment_async(circuit, experiment, options))
+			cid_list.append({self.run_experiment_async(circuit, experiment, options):
+						{'exp': experiment, 'status': 0}})
 		trigerring_time_taken = time.time() - start
 
 		# instead of returning here, collect all the results, wait here!
@@ -264,28 +279,45 @@ class QFWBackend(BackendV2):
 		# TODO: qfw_run_status currently calls read_cq for each cid, maybe we can have one call that returns all (read_all_cq: return all that is currently cmopleted) once completed in one go.
 		# TODO: run to take a call back (1-batch_call_back gets called when entire batch is complete, 2- single_call_back is similar for single circuit). then don't poll.
 
-		for each_cid in ran_cid_list:
-			res = self.qpm.read_cq()
-
-			while True:
+		#TODO: When running multiple experiments, we're not associating a circuit with an
+		# experiment, therefore, we endup using the same experiment to
+		# report all the results, which causes the higher level stack to
+		# get confused. What we need to do is we need to create a
+		# dictionary of cide to experiment, so that we're able to report
+		# results correctly.
+		logging.debug(f"Checking for completion of following cids: {cid_list}")
+		qpm_results = []
+		while True:
+			for entry in cid_list:
+				cid = list(entry.keys())[0]
+				if entry[cid]['status'] == 1:
+					continue
+				logging.debug(f"Checking cid: {cid}")
 				try:
-					time.sleep(5)
-					res = self.qpm.read_cq()
-					break
+					res = self.qpm.read_cq(cid=cid)
+					qpm_results.append({'cid': cid, 'res': res, 'exp': entry[cid]['exp']})
+					entry[cid]['status'] = 1
+					logging.debug(f"got result for experiment {entry[cid]['exp'].header.name}.\nAnd has value {res}")
 				except DEFwInProgress as e:
 					continue
 				except Exception as e:
 					raise e
+			if len(qpm_results) == len(cid_list):
+				logging.debug(f"Got all the results: {len(qpm_results)}, expected {len(cid_list)}")
+				break
+			time.sleep(0.0001)
 
-			print(f"got result of type {type(res)}")
-
-			# print("res = ", res)
+		for qr in qpm_results:
+			res = qr['res']
+			self.dump_statistics(res)
 			output = res.get("result", {})
 			polling_time_taken = time.time() - polling_start
+			logging.debug(f"output={output}\npolling time taken={polling_time_taken}")
 
 			# print("output = ", output)
-			out = {"counts": output, "statevector": [], "memory": self.get_memory_from_counts(output), "time_taken": res["time_taken"]}
+			out = {"counts": output, "statevector": [], "memory": self.get_memory_from_counts(output), "time_taken": res['completion_time'] - res['exec_time']}
 
+			experiment = qr['exp']
 			result_dict = {
 				"header": {
 					"name": experiment.header.name,
@@ -339,7 +371,7 @@ class QFWBackend(BackendV2):
 		# for key, value in meta_info.items():
 		# 	print(f"{key}: {value}")
 		# print("--")
-		print("INDIVIDUAL CIRCUIT Time Taken by QFWBackend = ", out["time_taken"])
+		logging.debug(f"INDIVIDUAL CIRCUIT Time Taken by QFWBackend = {out['time_taken']}")
 
 		return Result.from_dict(result)
 
