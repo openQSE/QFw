@@ -16,7 +16,7 @@ def cleanup_system(targets):
 		defw_exec_remote_cmd("pkill -9 prte", target, deamonize=True)
 		defw_exec_remote_cmd("pkill -9 prted", target, deamonize=True)
 		defw_exec_remote_cmd("rm -Rf /tmp/prte*", target, deamonize=True)
-		defw_exec_remote_cmd("pkill -9 -f  'defwp -d -x'", target, deamonize=True)
+		defw_exec_remote_cmd("pkill -6 -f  'defwp -d -x'", target, deamonize=True)
 
 def execute_ssh_command(host, command, daemonize=False):
 	ssh_command = f"ssh {host} '{command}'"
