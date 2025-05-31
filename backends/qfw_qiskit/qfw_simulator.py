@@ -1,4 +1,5 @@
-import uuid, time, copy, logging
+import uuid, time, copy, logging, threading, yaml, sys
+from collections import deque
 
 from qiskit.providers import BackendV2, Options
 from qiskit.providers import convert_to_target
@@ -15,7 +16,8 @@ from qiskit import qasm2, QuantumCircuit
 from qiskit import qobj as qobj_module
 
 from .qfw_job import QFWJob
-from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwNotFound
+from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwNotFound, DEFwDumper
+from defw import me
 from .qfw_lookup_service import get_qpm
 from enum import IntFlag
 from api_qpm import QPMType, QPMCapability
@@ -28,6 +30,44 @@ QFwBackendCapability = IntFlag('QFwBackendCapability', {name.replace("QPM_", "QF
 
 # parts of this are inspired from https://github.com/pnnl/NWQ-Sim/blob/main/qiskit/qiskit_nwqsim_provider/nwqsim_simulator.py; Thank you Dr. Ang Li.
 # and from https://github.com/Qiskit/qiskit-aer/blob/main/qiskit_aer/backends/aerbackend.py; Thank you Qiskit-Aer
+
+class CircuitMetrics:
+	def __init__(self, window_size=4096):
+		self.lock = threading.Lock()
+		self.window_size = window_size
+		self.db = {}
+
+	def add_timing_locked(self, send_time, recv_time, db):
+		rtt = recv_time - send_time
+		db['total'] += 1
+		db['window'].append(rtt)
+		window_len = len(db['window'])
+		if window_len > 0:
+			db['avg'] = sum(db['window']) / window_len
+		if rtt > db['max']:
+			db['max'] = rtt
+		if rtt < db['min']:
+			db['min'] = rtt
+
+	def add_time(self, start_time, end_time, label):
+		with self.lock:
+			if label not in self.db:
+				self.db[label] = {'window': deque(maxlen=self.window_size),
+												 'avg': 0.0, 'min': sys.maxsize, 'max': 0.0,
+												 'total': 0}
+			self.add_timing_locked(start_time, end_time, self.db[label])
+
+	def dump(self):
+		import copy
+
+		dbcopy = copy.deepcopy(self.db)
+		for k, v in dbcopy.items():
+			del(v['window'])
+		logging.critical("QFw Backend statistics")
+		logging.critical(yaml.dump(dbcopy,
+						 Dumper=DEFwDumper, indent=2, sort_keys=False))
+
+g_circ_metrics = CircuitMetrics()
 
 class QFWBackend(BackendV2):
 	def __init__(self, betype=-1, capability=-1, target = None, properties = None):
@@ -60,7 +100,9 @@ class QFWBackend(BackendV2):
 		}
 
 	def shutdown(self):
+		g_circ_metrics.dump()
 		self.qpm.shutdown()
+		me.exit()
 
 	def configuration(self):
 		return BackendConfiguration.from_dict(self._configuration_dict)
@@ -239,19 +281,11 @@ class QFWBackend(BackendV2):
 			# output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)]}
 			return None
 
-	def dump_statistics(self, res):
-		start_duration = res['launch_time'] - res['creation_time']
-		execution_duration = res['completion_time'] - res['exec_time']
-		processing_duration = res['exec_time'] - res['resources_consumed_time']
-		enqueue_duration = res['cq_dequeue_time'] - res['cq_enqueue_time']
-		cid = res['cid']
-		info = {'cid': cid,
-				'circuit info': {
-					'start_duration': start_duration,
-					'processing_duration': processing_duration,
-					'execution_duration': execution_duration,
-					'enqueue_duration': enqueue_duration} }
-		logging.debug(f'QPM Statistics: {info}')
+	def log_statistics(self, res):
+		g_circ_metrics.add_time(res['creation_time'], res['launch_time'], "creation->launch")
+		g_circ_metrics.add_time(res['resources_consumed_time'], res['exec_time'], "resources->exec")
+		g_circ_metrics.add_time(res['exec_time'], res['completion_time'], "exec->completion")
+		g_circ_metrics.add_time(res['cq_enqueue_time'], res['cq_dequeue_time'], "enqueue->dequeue")
 
 	# ASYNC
 	def _run_async_job(self, job_id, circuits, options):
@@ -309,7 +343,7 @@ class QFWBackend(BackendV2):
 
 		for qr in qpm_results:
 			res = qr['res']
-			self.dump_statistics(res)
+			self.log_statistics(res)
 			output = res.get("result", {})
 			polling_time_taken = time.time() - polling_start
 			logging.debug(f"output={output}\npolling time taken={polling_time_taken}")
