@@ -1,4 +1,4 @@
-import uuid, time, copy, logging, threading, yaml, sys
+import uuid, time, copy, logging, threading, yaml, sys, select
 from collections import deque
 
 from qiskit.providers import BackendV2, Options
@@ -21,6 +21,8 @@ from defw import me
 from .qfw_lookup_service import get_qpm
 from enum import IntFlag
 from api_qpm import QPMType, QPMCapability
+from defw_event_baseapi import BaseEventAPI
+from defw_common_def import g_rpc_metrics
 
 # This is a mirror of QPMType and QPMCapability. And they always need to
 # match. The point here is not to expose QPM specific information to the
@@ -63,15 +65,23 @@ class CircuitMetrics:
 		dbcopy = copy.deepcopy(self.db)
 		for k, v in dbcopy.items():
 			del(v['window'])
-		logging.critical("QFw Backend statistics")
-		logging.critical(yaml.dump(dbcopy,
+		logging.defw_app("QFw Backend statistics")
+		logging.defw_app(yaml.dump(dbcopy,
 						 Dumper=DEFwDumper, indent=2, sort_keys=False))
 
 g_circ_metrics = CircuitMetrics()
 
+EVENT_TYPE_CIRC_RESULT = 1
+
 class QFWBackend(BackendV2):
 	def __init__(self, betype=-1, capability=-1, target = None, properties = None):
+		self.log_time = time.time()
 		self.qpm = get_qpm(betype, capability)
+		# register for events with the qpm
+		self.event_api = BaseEventAPI()
+		self.event_api.register_external()
+		self.qpm.register_event_notification(me.my_endpoint(),
+							EVENT_TYPE_CIRC_RESULT, self.event_api.class_id())
 
 		super().__init__(name="QFw Backend")
 		self._target = target
@@ -272,20 +282,53 @@ class QFWBackend(BackendV2):
 			"compiler": "staq", # only for tnqvm, it is not used by nwqsim, TODO: need to think of a cleaner way..
 		}
 		try:
-			cid = self.qpm.create_circuit(info)
-			self.qpm.async_run(cid)
+			cid = self.qpm.async_run(info)
 			return cid
 		except Exception as e:
-			print("Error! = ", str(e))
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
-			# output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)]}
-			return None
+			logging.defw_app(f"Error occurred: {output}")
+			raise e
 
 	def log_statistics(self, res):
 		g_circ_metrics.add_time(res['creation_time'], res['launch_time'], "creation->launch")
 		g_circ_metrics.add_time(res['resources_consumed_time'], res['exec_time'], "resources->exec")
 		g_circ_metrics.add_time(res['exec_time'], res['completion_time'], "exec->completion")
 		g_circ_metrics.add_time(res['cq_enqueue_time'], res['cq_dequeue_time'], "enqueue->dequeue")
+
+	def result_reader(self, cid_list):
+		circuit_run_timeout = 200
+		total_circ = len(cid_list)
+		total_circuits_completed = 0
+		results = []
+		qpm_results = []
+
+		start = time.time()
+		logging.defw_app(f"result reader start time: {start}")
+		event_fd = self.event_api.fileno()
+		while (time.time() - start < circuit_run_timeout and \
+			total_circuits_completed != total_circ):
+			readable, _, _ = select.select([event_fd], [], [], 1)
+			if len(readable) > 0 and event_fd not in readable:
+				raise DEFwError("Something wrong with select")
+			if len(readable) > 0:
+				r = self.event_api.get()
+				results += r
+				total_circuits_completed += len(r)
+
+		logging.defw_app(f"Result reader thread ending. Events: {total_circuits_completed}. Expected: {total_circ}. Time: {time.time()}")
+		for r in results:
+			res = r.get_event()
+			#logging.defw_app(f"{yaml.dump(res)}")
+			exp = None
+			for entry in cid_list:
+				cid = res['cid']
+				if cid == list(entry.keys())[0]:
+					exp = entry[cid]['exp']
+			if not exp:
+				raise DEFwError(f"Couldn't find {res['cid']} in {cid_list}")
+			qpm_results.append({'cid': res['cid'], 'res': res, 'exp': exp})
+
+		return qpm_results
 
 	# ASYNC
 	def _run_async_job(self, job_id, circuits, options):
@@ -308,7 +351,7 @@ class QFWBackend(BackendV2):
 		# instead of returning here, collect all the results, wait here!
 		result_list = []
 
-		polling_start = time.time()
+		#polling_start = time.time()
 
 		# TODO: qfw_run_status currently calls read_cq for each cid, maybe we can have one call that returns all (read_all_cq: return all that is currently cmopleted) once completed in one go.
 		# TODO: run to take a call back (1-batch_call_back gets called when entire batch is complete, 2- single_call_back is similar for single circuit). then don't poll.
@@ -319,34 +362,37 @@ class QFWBackend(BackendV2):
 		# get confused. What we need to do is we need to create a
 		# dictionary of cide to experiment, so that we're able to report
 		# results correctly.
-		logging.debug(f"Checking for completion of following cids: {cid_list}")
-		qpm_results = []
-		while True:
-			for entry in cid_list:
-				cid = list(entry.keys())[0]
-				if entry[cid]['status'] == 1:
-					continue
-				logging.debug(f"Checking cid: {cid}")
-				try:
-					res = self.qpm.read_cq(cid=cid)
-					qpm_results.append({'cid': cid, 'res': res, 'exp': entry[cid]['exp']})
-					entry[cid]['status'] = 1
-					logging.debug(f"got result for experiment {entry[cid]['exp'].header.name}.\nAnd has value {res}")
-				except DEFwInProgress as e:
-					continue
-				except Exception as e:
-					raise e
-			if len(qpm_results) == len(cid_list):
-				logging.debug(f"Got all the results: {len(qpm_results)}, expected {len(cid_list)}")
-				break
-			time.sleep(0.0001)
+		#logging.defw_app(f"Checking for completion of following cids: {cid_list}")
+
+		res_wait_start = time.time()
+		qpm_results = self.result_reader(cid_list)
+		total_wait_time = time.time() - res_wait_start
+#		while True:
+#			for entry in cid_list:
+#				cid = list(entry.keys())[0]
+#				if entry[cid]['status'] == 1:
+#					continue
+#				logging.defw_app(f"Checking cid: {cid}")
+#				try:
+#					res = self.qpm.read_cq(cid=cid)
+#					qpm_results.append({'cid': cid, 'res': res, 'exp': entry[cid]['exp']})
+#					entry[cid]['status'] = 1
+#					logging.defw_app(f"got result for experiment {entry[cid]['exp'].header.name}.\nAnd has value {res}")
+#				except DEFwInProgress as e:
+#					continue
+#				except Exception as e:
+#					raise e
+#			if len(qpm_results) == len(cid_list):
+#				logging.defw_app(f"Got all the results: {len(qpm_results)}, expected {len(cid_list)}")
+#				break
+#			time.sleep(0.0001)
 
 		for qr in qpm_results:
 			res = qr['res']
 			self.log_statistics(res)
 			output = res.get("result", {})
-			polling_time_taken = time.time() - polling_start
-			logging.debug(f"output={output}\npolling time taken={polling_time_taken}")
+			#polling_time_taken = time.time() - polling_start
+			#logging.defw_app(f"polling time taken={polling_time_taken}")
 
 			# print("output = ", output)
 			out = {"counts": output, "statevector": [], "memory": self.get_memory_from_counts(output), "time_taken": res['completion_time'] - res['exec_time']}
@@ -377,7 +423,7 @@ class QFWBackend(BackendV2):
 			"results": result_list,
 			"status": "COMPLETED",
 			"success": True,
-			"overall_time_taken": (trigerring_time_taken + polling_time_taken),
+			"overall_time_taken": (trigerring_time_taken + total_wait_time),
 			"time_taken": out["time_taken"],
 			"memory": True,
 		}
@@ -405,7 +451,13 @@ class QFWBackend(BackendV2):
 		# for key, value in meta_info.items():
 		# 	print(f"{key}: {value}")
 		# print("--")
-		logging.debug(f"INDIVIDUAL CIRCUIT Time Taken by QFWBackend = {out['time_taken']}")
+		logging.defw_app(f"INDIVIDUAL CIRCUIT Time Taken by QFWBackend = {out['time_taken']}")
+		logging.defw_app(f"overall_time_taken: {trigerring_time_taken}+{total_wait_time}")
+
+		if time.time() - self.log_time > 30:
+			g_circ_metrics.dump()
+			g_rpc_metrics.dump()
+			self.log_time = time.time()
 
 		return Result.from_dict(result)
 

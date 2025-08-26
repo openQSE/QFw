@@ -112,6 +112,7 @@ def start_resmgr(target, launcher):
 #			'DEFW_LOG_DIR': os.path.join('/tmp', resmgr),
 			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 							resmgr),
+			'DEFW_PREF_PATH': "/ccs/home/shehataa/QFwTmp/defw_resmgr_pref.yaml",
 			'DEFW_PARENT_HOSTNAME': target}
 
 	pid = launcher.launch('defwp -d', env=env)
@@ -171,6 +172,7 @@ def start_qpm(resmgr, target, node_list, launcher):
 									qpm),
 	#			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
 				'QFW_QPM_ASSIGNED_HOSTS': node_list,
+				'DEFW_PREF_PATH': "/ccs/home/shehataa/QFwTmp/defw_qpm_pref.yaml"
 			}
 
 		if 'QFW_DVM_URI_PATH' in os.environ:
