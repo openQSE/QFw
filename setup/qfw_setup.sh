@@ -1,7 +1,5 @@
 #!/bin/bash
 
-source $QFW_SETUP_PATH/qfw_venv.sh print_intro
-
 # Startup:
 #  - The Simulation Environment Components
 #     - PRTE DVM
@@ -12,9 +10,9 @@ source $QFW_SETUP_PATH/qfw_venv.sh print_intro
 #  - The Application side Interface
 #     - QTM
 
-het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh)
+source $QFW_SETUP_PATH/qfw_venv.sh
 
-echo $DEFW_LOG_DIR
+het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh)
 
 # we need to propagate the environment to the other nodes. That's why
 # we're explicitly using srun. We can't run the dvm with srun, so we
@@ -57,6 +55,7 @@ python3 $QFW_SETUP_PATH/qfw_setup.py --dvm --groups "$het_groups" \
 		--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim"
 if [ $? -ne 0 ]; then
 	echo "Failed to setup Quantum Framework"
+	$QFW_SETUP_PATH/qfw_restore_venv.sh
 	exit -1
 fi
 echo "*******COMPLETED PHASE ONE SETUP: PRTE*******"

@@ -5,10 +5,9 @@
 module use /sw/frontier/qhpc/modules/
 module load quantum/qsim
 
-echo "Activating QFw Virtual Environment"
-source $QFW_TMP_PATH/venv/bin/activate
-
 echo "RUNNING APPLICATION"
+
+source $QFW_SETUP_PATH/qfw_lib_path.sh
 
 hostname=$(hostname)
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
