@@ -64,6 +64,7 @@ def start_qfw(host, use, modules, hetgroups):
 		cmd = f"module use {u};"
 	for m in modules.split(':'):
 		cmd += f"module load {m};"
+	cmd += f"export QFW_VENV_PATH={os.environ.get('QFW_VENV_PATH', '')};"
 	cmd += f'nohup qfw_run_setup.sh "{hetgroups}" >& /tmp/qfw_run_setup.out'
 	prformat(fg.cyan+fg.bold, f"Starting QFW: {cmd}")
 	defw_exec_remote_cmd(cmd, host, deamonize=True)
@@ -95,7 +96,7 @@ def start_dvm(node_list, use, modules):
 		raise DEFwExecutionError(f"Failed to start DVM. rc = {rc}")
 	return rc
 
-def start_resmgr(target, launcher):
+def start_resmgr(target, launcher, env_dict):
 	resmgr = f"resmgr_{target}"
 
 	env =  {'DEFW_AGENT_NAME': resmgr,
@@ -115,34 +116,12 @@ def start_resmgr(target, launcher):
 			'DEFW_PREF_PATH': "/ccs/home/shehataa/QFwTmp/defw_resmgr_pref.yaml",
 			'DEFW_PARENT_HOSTNAME': target}
 
+	env.update(env_dict)
+
 	pid = launcher.launch('defwp -d', env=env)
 	return pid
 
-def start_launcher(resmgr, target, launcher, listen_port,
-				   muse, modules, python_env):
-	name = f"launcher_{target}_{listen_port}"
-
-	env =  {'DEFW_AGENT_NAME': name,
-			'DEFW_LISTEN_PORT': str(listen_port),
-			'DEFW_TELNET_PORT': str(listen_port+1),
-			'DEFW_ONLY_LOAD_MODULE': 'svc_launcher',
-			'DEFW_LOAD_NO_INIT': '',
-			'DEFW_SHELL_TYPE': 'daemon',
-			'DEFW_AGENT_TYPE': 'service',
-			'DEFW_PARENT_PORT': str(8090),
-			'DEFW_PARENT_NAME': resmgr,
-			'DEFW_LOG_LEVEL': "error",
-			'DEFW_DISABLE_RESMGR': "no",
-			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-							name),
-#			'DEFW_LOG_DIR': os.path.join('/tmp', name),
-			'DEFW_PARENT_HOSTNAME': resmgr}
-
-	pid = launcher.launch('defwp -d', env=env, target=target,
-			muse=muse, modules=modules, python_env=python_env)
-	return pid
-
-def start_qpm(resmgr, target, node_list, launcher):
+def start_qpm(resmgr, target, node_list, launcher, env_dict):
 	with open(os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_qpm_services.yaml'), 'r') as f:
 		cy = yaml.load(f, Loader=yaml.FullLoader)
 
@@ -177,6 +156,8 @@ def start_qpm(resmgr, target, node_list, launcher):
 
 		if 'QFW_DVM_URI_PATH' in os.environ:
 			env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
+
+		env.update(env_dict)
 
 		pid = launcher.launch('defwp -d', env=env, target=target)
 		pids.append(pid)
@@ -290,7 +271,7 @@ def list_combine(l1, l2):
 			l1.append(l)
 	return l1
 
-def start(g0, g1, launcher, shutdown, dvm):
+def start(g0, g1, launcher, shutdown, dvm, env_dict):
 	try:
 		# TODO: As part of the shutdown we need to collect all artifacts if they
 		# were in the /tmp directories
@@ -306,19 +287,12 @@ def start(g0, g1, launcher, shutdown, dvm):
 			me.exit()
 
 		# Start the Resource Manager
-		pid = start_resmgr(g1[0], launcher)
+		pid = start_resmgr(g1[0], launcher, env_dict)
 		logging.debug(f"RESMGR STARTED: {pid}")
-
-		# Start one Launcher
-		#listen_port = 8190
-		#logging.debug(f"Starting launcher on {g1[0]}")
-		#pid = start_launcher(g1[0], g1[0], launcher, listen_port,
-		#			use_path, modules, python_env)
-		#logging.debug(f"LAUNCHER STARTED: {pid}")
 
 		# Start the QPM
 		qpm_pid, qpm_log_dirs  = start_qpm(g1[0], g1[0],
-						",".join(g1), launcher)
+						",".join(g1), launcher, env_dict)
 
 	except Exception as e:
 		logging.critical(f"Hit an exception. Cleaning up system: {e}")
@@ -337,12 +311,20 @@ def start(g0, g1, launcher, shutdown, dvm):
 	logging.debug("Job Finished")
 	me.exit()
 
+def parse_env_vars(env):
+	env_list = env.split(',')
+	env_dict = {}
+	for e in env_list:
+		l = e.split('=')
+		env_dict[l[0]] = l[1]
+	return env_dict
+
 if __name__ == '__main__':
 	logging.debug(f"Running on {socket.gethostname()} with args {sys.argv}")
 	argv = sys.argv[1:]
 	try:
 		options, args = getopt.getopt(argv, "g:u:o:p:rdsxh",
-		 ["groups=", "use=", "mods=", "python-env=",
+		 ["groups=", "use=", "mods=", "env=",
 		  "prun", "dvm", "shutdown", "dev-run", "help"])
 	except:
 		prformat(fg.red+fg.bold, f"bad command line arguments")
@@ -352,7 +334,7 @@ if __name__ == '__main__':
 	dvm = False
 	use_path = ''
 	modules = ''
-	python_env = ''
+	env_vars = ''
 	shutdown = False
 	prun = False
 	dev_run = False
@@ -364,8 +346,8 @@ if __name__ == '__main__':
 				use_path = value
 			elif name in ['-o', '--mods']:
 				modules = value
-			elif name in ['-p', '--python-env']:
-				python_env = value
+			elif name in ['-p', '--env']:
+				env_vars = value
 			elif name in ['-d', '--dvm']:
 				dvm = True
 			elif name in ['-r', '--prun']:
@@ -392,12 +374,16 @@ if __name__ == '__main__':
 		prformat(fg.red+fg.bold, f"This operation needs to run on {g1_node_list[0]}")
 		me.exit()
 
+	env_dict = {}
+	if env_vars:
+		env_dict = parse_env_vars(env_vars)
+
 	if dev_run:
 		launcher = svc_launcher.Launcher()
-		start(g0_node_list, g1_node_list, launcher, False, None)
+		start(g0_node_list, g1_node_list, launcher, False, None, env_dict)
 	else:
 		if hostname == g1_node_list[0] and not dvm and not shutdown:
 			# get a launcher object
 			launcher = svc_launcher.Launcher()
-		start(g0_node_list, g1_node_list, launcher, shutdown, dvm)
+		start(g0_node_list, g1_node_list, launcher, shutdown, dvm, env_dict)
 

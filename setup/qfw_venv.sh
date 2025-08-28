@@ -7,6 +7,20 @@ fi
 module use /sw/frontier/qhpc/modules/
 module load quantum/qsim
 
+# check if QFW_VENV_PATH is set. If not, then setup a VENV and set the
+# environment variable to point to it.
+
+if [[ -z "${QFW_VENV_PATH:-}" ]]; then
+    QFW_VENV_PATH="$QFW_TMP_PATH/qfw_venv"
+    echo "QFW_VENV_PATH not set. Creating venv at: $QFW_VENV_PATH"
+
+    # Create the virtual environment
+    python3 -m venv "$QFW_VENV_PATH"
+
+    # Optionally export it for later use
+    export QFW_VENV_PATH
+fi
+
 hostname=$(hostname)
 
 # Loop through all environment variables
@@ -35,11 +49,12 @@ export DEFW_LOAD_NO_INIT=svc_launcher
 export DEFW_ONLY_LOAD_MODULE=svc_resmgr
 export DEFW_DISABLE_RESMGR=yes
 
-# By creating an environment using defwp I basically make python3 an alias
-# to defwp
-echo "Creating QFw Virtual Environment"
-defwp -m venv --without-pip $QFW_TMP_PATH/venv
-echo "Activating QFw Virtual Environment"
-source $QFW_TMP_PATH/venv/bin/activate
+source $QFW_SETUP_PATH/qfw_lib_path.sh
 
+PYTHONPATH=$PYTHONPATH:$QFW_SETUP_PATH python3 -c "from qfw_venv import setup_qfw_symlinks; setup_qfw_symlinks()"
+
+if [[ $? -ne 0 ]]; then
+	echo "Command failed, exiting."
+	exit 1
+fi
 
