@@ -28,7 +28,7 @@ echo $QFW_TMP_DIR_PATH
 qfw_setup.sh
 
 echo "Running with $2"
-qfw_run.sh $QFW_PATH/../applications/dr_kim_qaoa/qaoa.py $2 $3 $4
+qfw_srun.sh $QFW_PATH/../applications/dr_kim_qaoa/qaoa.py $2 $3 $4
 
 qfw_teardown.sh
 

@@ -28,9 +28,9 @@ qfw_setup.sh
 # takes - #qubits, simtype and #itrs
 echo "Running $1 for $2 #qubits with $3 for $4 itrs"
 if [[ $1 == "qiskit" ]]; then
-    qfw_run.sh $QFW_PATH/../applications/test_ghz_qfw_qiskit.py $2 $3 $4
+    qfw_srun.sh $QFW_PATH/../applications/test_ghz_qfw_qiskit.py $2 $3 $4
 elif [[ $1 == "pennylane" ]]; then
-    qfw_run.sh $QFW_PATH/../applications/test_ghz_qfw_pennylane.py $2 $3 $4
+    qfw_srun.sh $QFW_PATH/../applications/test_ghz_qfw_pennylane.py $2 $3 $4
 else
     echo "Error: Unknown option $1"
     exit 1

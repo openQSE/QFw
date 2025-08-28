@@ -25,7 +25,7 @@ export QFW_TMP_DIR_PATH=$QFW_TMP_PATH/${dir_name}
 
 qfw_setup.sh
 
-qfw_run.sh $QFW_PATH/../applications/qlstm/Examples/qlstm_imdb_classifier.py $@
+qfw_srun.sh $QFW_PATH/../applications/qlstm/Examples/qlstm_imdb_classifier.py $@
 
 qfw_teardown.sh
 

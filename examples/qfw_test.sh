@@ -5,11 +5,13 @@ module load quantum/qsim
 
 module list
 
+export QFW_VENV_PATH=/ccs/home/shehataa/QFwTmp/myvenv
+
 set -xe
 
 qfw_setup.sh
 
-qfw_run.sh "$QFW_PATH/../applications/test_qfw_init.py"
+qfw_srun.sh "$QFW_PATH/../applications/test_qfw_init.py"
 
 qfw_teardown.sh
 
