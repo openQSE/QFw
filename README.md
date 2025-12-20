@@ -11,23 +11,16 @@ mkdir qhpc
 cd qhpc
 ```
 
-Copy required directories from the shared installation:
-
-* `applications`
-* `modules`
-* `QFw`
-
-From:
-
-```text
-/sw/frontier/lustre/qhpc
-```
-
-### Alternative: Clone from Git
+### Clone from Git
 
 ```text
 git@code.ornl.gov:hpcqc/applications.git
 git@code.ornl.gov:a2e/qfw.git
+git checkout qfw-initial
+git submodule update --init --recursive
+```
+Alternatively you can explicitly checkout DEFw in the QFw directory
+```text
 https://github.com/amirshehataornl/DEFw
 ```
 
