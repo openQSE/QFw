@@ -2,18 +2,12 @@ import uuid, time, copy, logging, threading, yaml, sys, select
 from collections import deque
 
 from qiskit.providers import BackendV2, Options
-from qiskit.providers import convert_to_target
 from qiskit.result import Result
-from qiskit.compiler import assemble
 from qiskit.transpiler import Target
-
-from qiskit.providers.models import BackendConfiguration, BackendProperties
 
 from qiskit_aer.backends.name_mapping import NAME_MAPPING
 
-from qiskit.assembler import disassemble
 from qiskit import qasm2, QuantumCircuit
-from qiskit import qobj as qobj_module
 
 from .qfw_job import QFWJob
 from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwNotFound, DEFwDumper
@@ -115,10 +109,13 @@ class QFWBackend(BackendV2):
 		me.exit()
 
 	def configuration(self):
-		return BackendConfiguration.from_dict(self._configuration_dict)
+		# Return configuration dict for backward compatibility
+		# BackendV2 doesn't require this method but some legacy code may use it
+		return self._configuration_dict
 
 	def properties(self):
-		return BackendProperties.from_dict(self._options_properties)
+		# Return properties dict for backward compatibility
+		return self._options_properties
 
 	def get_memory_from_counts(self, counts):
 		# return [] # uncomment when you don't need later!
@@ -130,11 +127,18 @@ class QFWBackend(BackendV2):
 
 	@property
 	def target(self):
-		# return Target("QFW Sim")
 		if self._target is not None:
 			return self._target
-		# print("config - ", self._configuration_dict)
-		tgt = convert_to_target(self.configuration(), None, None, NAME_MAPPING)
+
+		# Create a simple Target for BackendV2 compatibility
+		# For a simulator, we create a fully-connected target with all basis gates
+		tgt = Target(description="QFW Quantum Simulator Target")
+
+		# Note: For a generic simulator, we don't add specific gate instructions
+		# The backend will handle any gates in the basis_gates list
+		# This is sufficient for primitives that will transpile circuits before submission
+
+		self._target = tgt
 		return tgt
 
 	@property
@@ -194,11 +198,13 @@ class QFWBackend(BackendV2):
 
 		self.end_time = time.time()
 
+		# Extract metadata directly from circuit
+		creg_sizes = [[creg.name, creg.size] for creg in circuit.cregs]
 		result_dict = {
 			"header": {
-				"name": experiment.header.name,
-				"memory_slots": experiment.config.memory_slots,
-				"creg_sizes": experiment.header.creg_sizes,
+				"name": circuit.name if circuit.name else "circuit",
+				"memory_slots": circuit.num_clbits,
+				"creg_sizes": creg_sizes,
 			},
 			"status": "DONE",
 			"time_taken": self.end_time - self.start_time,
@@ -229,35 +235,21 @@ class QFWBackend(BackendV2):
 			return QFWJob(self, job_id, self._run_sync_job, circuits, options)
 
 	def _run_sync_job(self, job_id, circuits, options):
-		if isinstance(circuits, qobj_module.QasmQobj):
-			# print("\t\t of type QasmQobj")
-			qobj = circuits
-			# print("\t\t QFW does not work for qasmObj types as of now!!!!!!")
-		elif isinstance(circuits, QuantumCircuit):
-			# print("\t\t of type QuantumCircuit")
+		# Normalize circuits to a list
+		if isinstance(circuits, QuantumCircuit):
 			circuits = [circuits]
-			qobj = assemble(circuits)
-		# elif isinstance(circuits, list(QuantumCircuit)):
-		# 	# circuits = circuits
-		else:
-			# print("\t\t not of type QasmQobj")
-			# print(type(circuits))
-			qobj = assemble(circuits)
 
 		result_list = []
 
 		start = time.time()
-		# for experiment in qobj.experiments:
-		for (circuit,experiment) in zip(circuits, qobj.experiments):
-			result_list.append(self.run_experiment_sync(circuit, experiment, options))
+		for circuit in circuits:
+			result_list.append(self.run_experiment_sync(circuit, circuit, options))
 		end = time.time()
-
-		# print("\n\n result_list = ", result_list, "\n\n")
 
 		result = {
 			"backend_name": self._configuration_dict["backend_name"],
 			"backend_version": self._configuration_dict["backend_version"],
-			"qobj_id": qobj.qobj_id,
+			"qobj_id": str(uuid.uuid4()),
 			"job_id": job_id,
 			"results": result_list,
 			"status": "COMPLETED",
@@ -332,20 +324,16 @@ class QFWBackend(BackendV2):
 
 	# ASYNC
 	def _run_async_job(self, job_id, circuits, options):
-		if isinstance(circuits, qobj_module.QasmQobj):
-			qobj = circuits
-		elif isinstance(circuits, QuantumCircuit):
+		# Normalize circuits to a list
+		if isinstance(circuits, QuantumCircuit):
 			circuits = [circuits]
-			qobj = assemble(circuits)
-		else:
-			qobj = assemble(circuits)
 
 		cid_list = []
 
 		start = time.time()
-		for (circuit,experiment) in zip(circuits, qobj.experiments):
-			cid_list.append({self.run_experiment_async(circuit, experiment, options):
-						{'exp': experiment, 'status': 0}})
+		for circuit in circuits:
+			cid_list.append({self.run_experiment_async(circuit, circuit, options):
+						{'exp': circuit, 'status': 0}})
 		trigerring_time_taken = time.time() - start
 
 		# instead of returning here, collect all the results, wait here!
@@ -397,12 +385,14 @@ class QFWBackend(BackendV2):
 			# print("output = ", output)
 			out = {"counts": output, "statevector": [], "memory": self.get_memory_from_counts(output), "time_taken": res['completion_time'] - res['exec_time']}
 
-			experiment = qr['exp']
+			circuit = qr['exp']
+			# Extract metadata directly from circuit
+			creg_sizes = [[creg.name, creg.size] for creg in circuit.cregs]
 			result_dict = {
 				"header": {
-					"name": experiment.header.name,
-					"memory_slots": experiment.config.memory_slots,
-					"creg_sizes": experiment.header.creg_sizes,
+					"name": circuit.name if circuit.name else "circuit",
+					"memory_slots": circuit.num_clbits,
+					"creg_sizes": creg_sizes,
 				},
 				"status": "DONE",
 				"time_taken": out["time_taken"],
@@ -418,7 +408,7 @@ class QFWBackend(BackendV2):
 		result = {
 			"backend_name": self._configuration_dict["backend_name"],
 			"backend_version": self._configuration_dict["backend_version"],
-			"qobj_id": qobj.qobj_id,
+			"qobj_id": str(uuid.uuid4()),
 			"job_id": job_id,
 			"results": result_list,
 			"status": "COMPLETED",
