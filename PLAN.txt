@@ -1,0 +1,6 @@
+You are a python expert.
+Your Development tasks relate to backends/qfw_qiskit/
+ - Need to port this to support Qiskit v2.3.0
+ - Needs to support BackendSamplerV2 and Estimator interfaces
+Keep existing support for the DEFw that is already in code.
+Keep changes minimal.
