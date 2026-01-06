@@ -1,2 +1,2 @@
-qiskit==1.2.0
-qiskit-aer==0.14.2
+qiskit==2.2.3
+qiskit_aer==0.17.2
