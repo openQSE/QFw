@@ -5,7 +5,7 @@ module load quantum/qsim
 
 module list
 
-export QFW_VENV_PATH=/ccs/home/shehataa/QFwTmp/myvenv
+export QFW_VENV_PATH=/ccs/home/shehataa/tmp/qfw_venv
 
 set -xe
 
