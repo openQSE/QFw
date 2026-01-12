@@ -42,7 +42,7 @@ export DEFW_LOG_LEVEL=error
 export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}
 export DEFW_ONLY_LOAD_MODULE=api_qpm
 export DEFW_DISABLE_RESMGR=no
-export DEFW_PREF_PATH=/ccs/home/shehataa/QFwTmp/defw_app_pref.yaml
+export DEFW_PREF_PATH=${QFW_TMP_PATH}/defw_app_pref.yaml
 
 set -xe
 srun --het-group=0 python3 $1 "${@:2}"

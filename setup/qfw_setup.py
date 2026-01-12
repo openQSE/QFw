@@ -98,6 +98,8 @@ def start_dvm(node_list, use, modules):
 
 def start_resmgr(target, launcher, env_dict):
 	resmgr = f"resmgr_{target}"
+	tmp_path = os.environ['QFW_TMP_PATH']
+	pref_path = os.path.join(tmp_path, 'defw_resmgr_pref.yaml')
 
 	env =  {'DEFW_AGENT_NAME': resmgr,
 			'DEFW_LISTEN_PORT': str(8090),
@@ -113,7 +115,7 @@ def start_resmgr(target, launcher, env_dict):
 #			'DEFW_LOG_DIR': os.path.join('/tmp', resmgr),
 			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 							resmgr),
-			'DEFW_PREF_PATH': "/ccs/home/shehataa/QFwTmp/defw_resmgr_pref.yaml",
+			'DEFW_PREF_PATH': pref_path,
 			'DEFW_PARENT_HOSTNAME': target}
 
 	env.update(env_dict)
@@ -132,8 +134,11 @@ def start_qpm(resmgr, target, node_list, launcher, env_dict):
 	pids = []
 	dirs = []
 
+	tmp_path = os.environ['QFW_TMP_PATH']
 	for n in qpm_names:
 		qpm = f"qpm_{n}_{resmgr}"
+		pref_fname = f"defw_{n}_pref.yaml"
+		pref_path = os.path.join(tmp_path, pref_fname)
 
 		env =  {'DEFW_AGENT_NAME': qpm,
 				'DEFW_LISTEN_PORT': str(listen_port),
@@ -151,7 +156,7 @@ def start_qpm(resmgr, target, node_list, launcher, env_dict):
 									qpm),
 	#			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
 				'QFW_QPM_ASSIGNED_HOSTS': node_list,
-				'DEFW_PREF_PATH': "/ccs/home/shehataa/QFwTmp/defw_qpm_pref.yaml"
+				'DEFW_PREF_PATH': pref_path
 			}
 
 		if 'QFW_DVM_URI_PATH' in os.environ:
