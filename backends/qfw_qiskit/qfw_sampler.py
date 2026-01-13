@@ -28,12 +28,12 @@ from qiskit.primitives.primitive_job import PrimitiveJob
 from qiskit.providers.backend import BackendV2
 from qiskit.result import Result
 
-from .qfw_simulator import QFWBackend
+from .qfw_simulator import QFwBackend
 
 
 @dataclass
 class Options:
-	"""Options for :class:`~.QFWSamplerV2`"""
+	"""Options for :class:`~.QFwSamplerV2`"""
 
 	default_shots: int = 1024
 	"""The default shots to use if none are specified in :meth:`~.run`.
@@ -63,17 +63,17 @@ ResultMemory = list[str] | list[list[float]] | list[list[list[float]]]
 """Type alias for possible result memory formats."""
 
 
-class QFWSamplerV2(BaseSamplerV2):
-	"""Sampler V2 implementation that wraps QFWBackend.
+class QFwSamplerV2(BaseSamplerV2):
+	"""Sampler V2 implementation that wraps QFwBackend.
 
 	This sampler evaluates bitstrings for provided quantum circuits by wrapping
-	a :class:`~.QFWBackend` (BackendV2) object in the :class:`~.BaseSamplerV2` API.
+	a :class:`~.QFwBackend` (BackendV2) object in the :class:`~.BaseSamplerV2` API.
 
 	Each tuple of ``(circuit, <optional> parameter values, <optional> shots)``, called a sampler
 	primitive unified bloc (PUB), produces its own array-valued result. The :meth:`~run` method can
 	be given many pubs at once.
 
-	The options for :class:`~.QFWSamplerV2` consist of the following items:
+	The options for :class:`~.QFwSamplerV2` consist of the following items:
 
 	* ``default_shots``: The default shots to use if none are specified in :meth:`~run`.
 	  Default: 1024.
@@ -82,7 +82,7 @@ class QFWSamplerV2(BaseSamplerV2):
 	  Default: None.
 
 	* ``run_options``: A dictionary of options to pass through to the ``run()``
-	  method of the wrapped :class:`~.QFWBackend` instance.
+	  method of the wrapped :class:`~.QFwBackend` instance.
 
 	.. note::
 
@@ -98,12 +98,12 @@ class QFWSamplerV2(BaseSamplerV2):
 	):
 		"""
 		Args:
-			backend: The backend to run the primitive on. If None, a new QFWBackend will be created.
+			backend: The backend to run the primitive on. If None, a new QFwBackend will be created.
 			options: The options to control the default shots (``default_shots``) and
 				the random seed for the simulator (``seed_simulator``).
 		"""
 		if backend is None:
-			backend = QFWBackend()
+			backend = QFwBackend()
 		self._backend = backend
 		self._options = Options(**options) if options else Options()
 

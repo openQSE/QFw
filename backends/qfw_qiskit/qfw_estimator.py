@@ -25,7 +25,7 @@ from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.estimator_pub import EstimatorPub
 from qiskit.primitives.primitive_job import PrimitiveJob
 
-from .qfw_simulator import QFWBackend, QFwBackendType, QFwBackendCapability
+from .qfw_simulator import QFwBackend, QFwBackendType, QFwBackendCapability
 
 def _run_circuits(
 	circuits: QuantumCircuit | list[QuantumCircuit],
@@ -125,7 +125,7 @@ def _parity(integer: int) -> int:
 
 @dataclass
 class Options:
-	"""Options for :class:`~.QFWEstimatorV2`."""
+	"""Options for :class:`~.QFwEstimatorV2`."""
 
 	default_precision: float = 0.015625
 	"""The default precision to use if none are specified in :meth:`~run`.
@@ -157,11 +157,11 @@ class _PreprocessedData:
 	"""The pub's observable array broadcast to the shape of the pub."""
 
 
-class QFWEstimatorV2(BaseEstimatorV2):
-	r"""Estimator V2 implementation that wraps QFWBackend.
+class QFwEstimatorV2(BaseEstimatorV2):
+	r"""Estimator V2 implementation that wraps QFwBackend.
 
 	This estimator evaluates expectation values for provided quantum circuit and observable
-	combinations by wrapping a :class:`~.QFWBackend` (BackendV2) object in the
+	combinations by wrapping a :class:`~.QFwBackend` (BackendV2) object in the
 	:class:`~.BaseEstimatorV2` API.
 
 	This class does not perform any measurement or gate mitigation, and, presently, is only
@@ -181,9 +181,9 @@ class QFWEstimatorV2(BaseEstimatorV2):
 
 	Each tuple of ``(circuit, observables, <optional> parameter values, <optional> precision)``,
 	called an estimator primitive unified bloc (PUB), produces its own array-based result. The
-	:meth:`~.QFWEstimatorV2.run` method can be given a sequence of pubs to run in one call.
+	:meth:`~.QFwEstimatorV2.run` method can be given a sequence of pubs to run in one call.
 
-	The options for :class:`~.QFWEstimatorV2` consist of the following items:
+	The options for :class:`~.QFwEstimatorV2` consist of the following items:
 
 	* ``default_precision``: The default precision to use if none are specified in :meth:`~run`.
 	  Default: 0.015625 (1 / sqrt(4096)).
@@ -212,13 +212,13 @@ class QFWEstimatorV2(BaseEstimatorV2):
 	):
 		"""
 		Args:
-			backend: The backend to run the primitive on. If None, a new QFWBackend will be created.
+			backend: The backend to run the primitive on. If None, a new QFwBackend will be created.
 			options: The options to control the default precision (``default_precision``),
 				the operator grouping (``abelian_grouping``), and
 				the random seed for the simulator (``seed_simulator``).
 		"""
 		if backend is None:
-			backend = QFWBackend(betype=betype, capability=becap)
+			backend = QFwBackend(betype=betype, capability=becap)
 		self._backend = backend
 		self._options = Options(**options) if options else Options()
 
