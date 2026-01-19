@@ -4,23 +4,6 @@ if [ "$1" == "print_intro" ]; then
 	echo "Welcome to the Quantum Framework"
 fi
 
-module use /sw/frontier/qhpc/modules/
-module load quantum/qsim
-
-# check if QFW_VENV_PATH is set. If not, then setup a VENV and set the
-# environment variable to point to it.
-
-if [[ -z "${QFW_VENV_PATH:-}" ]]; then
-    QFW_VENV_PATH="$QFW_TMP_PATH/qfw_venv"
-    echo "QFW_VENV_PATH not set. Creating venv at: $QFW_VENV_PATH"
-
-    # Create the virtual environment
-    python3 -m venv "$QFW_VENV_PATH"
-
-    # Optionally export it for later use
-    export QFW_VENV_PATH
-fi
-
 hostname=$(hostname)
 
 # Loop through all environment variables

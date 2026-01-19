@@ -1,8 +1,6 @@
 #!/bin/bash
 
-module use /sw/frontier/qhpc/modules/
-module load quantum/qsim
-
+source $QFW_SETUP_PATH/qfw_activate
 
 hostname=$(hostname)
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
@@ -19,9 +17,6 @@ export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 export QFW_DVM_URI_PATH=$QFW_TMP_PATH/prte_dvm/dvm-uri
 
 set -x
-source $QFW_VENV_PATH/bin/activate
 source $QFW_SETUP_PATH/qfw_lib_path.sh
-python3 $QFW_SETUP_PATH/qfw_setup.py --groups "$1" \
-	--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim" \
-	--env "QFW_VENV_PATH=$QFW_VENV_PATH"
+python3 $QFW_SETUP_PATH/qfw_setup.py --groups "$1"
 

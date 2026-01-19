@@ -1,8 +1,5 @@
 #!/bin/bash
 
-module use /sw/frontier/qhpc/modules/
-module load quantum/qsim
-
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LISTEN_PORT=8095

@@ -51,8 +51,7 @@ export DEFW_AGENT_NAME=qfw_setup_phase_1
 export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 
 echo "*******START PHASE ONE SETUP: PRTE*******"
-python3 $QFW_SETUP_PATH/qfw_setup.py --dvm --groups "$het_groups" \
-		--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim"
+python3 $QFW_SETUP_PATH/qfw_setup.py --dvm --groups "$het_groups"
 if [ $? -ne 0 ]; then
 	echo "Failed to setup Quantum Framework"
 	$QFW_SETUP_PATH/qfw_restore_venv.sh
@@ -60,11 +59,14 @@ if [ $? -ne 0 ]; then
 fi
 echo "*******COMPLETED PHASE ONE SETUP: PRTE*******"
 
+#python3
+#$QFW_SETUP_PATH/qfw_teardown.sh
+#exit -1
+
 echo "*******START PHASE TWO SETUP*******"
 export DEFW_AGENT_NAME=qfw_setup_phase_2
 export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
-python3 $QFW_SETUP_PATH/qfw_setup.py --prun --groups "$het_groups" \
-			--use "/sw/frontier/qhpc/modules/" --mods "quantum/qsim" &
+python3 $QFW_SETUP_PATH/qfw_setup.py --prun --groups "$het_groups" &
 echo "*******COMPLETED PHASE TWO SETUP*******"
 
 echo "Quantum Framework Initialized"

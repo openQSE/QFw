@@ -1,7 +1,8 @@
 #!/bin/bash
 
-module use /sw/frontier/qhpc/modules/
-module load quantum/qsim
+if [[ -z "${_QFW_ACTIVE:-}" ]]; then
+	source $QFW_SETUP_PATH/qfw_activate
+fi
 
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
 export DEFW_SHELL_TYPE=cmdline

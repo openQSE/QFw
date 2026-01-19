@@ -1,0 +1,5 @@
+base-dir: /sw/frontier/qhpc
+python-venv-activate: /ccs/home/shehataa/tmp/qfw_venv/bin/activate
+libfabric-install: /sw/frontier/ums/ums024/cce/18.0.1/install/libfabric-2.3.1-20251111.dbg
+mpi-install: /sw/frontier/ums/ums024/cce/18.0.1/install/openmpi-5.0.9-20251111.dbg
+dev-install: /opt/rocm-6.2.4/
