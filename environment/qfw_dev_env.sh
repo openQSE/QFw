@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+
+# Must be sourced
+
+# --- sanity check -------------------------------------------------------------
+
+if [[ -z "${QFW_MASTER_SETUP_DEV_INSTALL}" ]]; then
+	echo "ERROR: QFW_MASTER_SETUP_DEV_INSTALL is not set"
+	return 1 2>/dev/null || exit 1
+fi
+
+# --- derive ROCm version and paths --------------------------------------------
+
+AMD_CURPATH="${QFW_MASTER_SETUP_DEV_INSTALL%/}"
+
+if [[ ! "${AMD_CURPATH}" =~ /rocm-([0-9]+(\.[0-9]+)*)$ ]]; then
+	echo "ERROR: QFW_MASTER_SETUP_DEV_INSTALL must end with /rocm-<version>"
+	return 1 2>/dev/null || exit 1
+fi
+
+MOD_LEVEL="${BASH_REMATCH[1]}"
+
+PKG_CONFIG_PREFIX="/usr/lib64"
+
+# CPE metadata
+CPE_PRODUCT_NAME="CRAY_ROCM"
+CPE_PKGCONFIG_LIB="rocm-${MOD_LEVEL}"
+CPE_PKGCONFIG_PATH="${PKG_CONFIG_PREFIX}/pkgconfig"
+
+# AMD paths
+AMD_LIB="${AMD_CURPATH}/lib"
+AMD_BIN="${AMD_CURPATH}/bin"
+AMD_INCLUDE="${AMD_CURPATH}/include"
+AMD_MAN="${AMD_CURPATH}/share/man"
+
+AMD_ROCP_LIB="${AMD_CURPATH}/lib/rocprofiler"
+AMD_ROCP_INCLUDE="${AMD_CURPATH}/include/rocprofiler"
+
+AMD_ROCT_LIB="${AMD_CURPATH}/lib/roctracer"
+AMD_ROCT_INCLUDE="${AMD_CURPATH}/include/roctracer"
+
+AMD_HIP_CMAKE="${AMD_CURPATH}/lib/cmake/hip"
+AMD_HIP_INCLUDE="${AMD_CURPATH}/include/hip"
+
+# --- environment variables ----------------------------------------------------
+
+export CRAY_ROCM_DIR="${AMD_CURPATH}"
+export CRAY_ROCM_PREFIX="${AMD_CURPATH}"
+export CRAY_ROCM_VERSION="${MOD_LEVEL}"
+
+export ROCM_PATH="${AMD_CURPATH}"
+export HIP_LIB_PATH="${AMD_LIB}"
+
+export CRAY_ROCM_INCLUDE_OPTS="-I${AMD_INCLUDE} \
+-I${AMD_ROCP_INCLUDE} \
+-I${AMD_ROCT_INCLUDE} \
+-I${AMD_HIP_INCLUDE} \
+-D__HIP_PLATFORM_AMD__"
+
+export CRAY_ROCM_POST_LINK_OPTS="\
+-L${AMD_LIB} \
+-L${AMD_ROCP_LIB} \
+-L${AMD_ROCT_LIB} \
+-lamdhip64"
+
+# --- path helpers -------------------------------------------------------------
+
+path_prepend() {
+	local var="$1"
+	local val="$2"
+	[[ -d "$val" ]] || return 0
+	eval "export ${var}=\"${val}:\${${var}:-}\""
+}
+
+path_append() {
+	local var="$1"
+	local val="$2"
+	[[ -d "$val" ]] || return 0
+	eval "export ${var}=\"\${${var}:-}:${val}\""
+}
+
+# --- PATH updates -------------------------------------------------------------
+
+path_prepend PATH "${AMD_BIN}"
+path_prepend MANPATH "${AMD_MAN}"
+path_prepend CMAKE_PREFIX_PATH "${AMD_HIP_CMAKE}"
+
+path_prepend LD_LIBRARY_PATH "${AMD_LIB}"
+path_prepend LD_LIBRARY_PATH "${AMD_ROCP_LIB}"
+path_prepend LD_LIBRARY_PATH "${AMD_ROCT_LIB}"
+
+# --- CPE / pkg-config ---------------------------------------------------------
+
+path_append PE_PRODUCT_LIST "${CPE_PRODUCT_NAME}"
+path_prepend PKG_CONFIG_PATH "${CPE_PKGCONFIG_PATH}"
+path_prepend PE_PKGCONFIG_LIBS "${CPE_PKGCONFIG_LIB}"

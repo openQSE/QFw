@@ -34,7 +34,7 @@ def execute_ssh_command(host, command, daemonize=False):
 	except Exception as e:
 		return -1, '', str(e)
 
-def start_qfw(host, use, modules, hetgroups):
+def start_qfw(host, hetgroups):
 	name = 'qfw_base_setup'
 	if 'QFW_DVM_URI_PATH' in os.environ:
 		uri = os.environ['QFW_DVM_URI_PATH']
@@ -60,16 +60,13 @@ def start_qfw(host, use, modules, hetgroups):
 	#cmd += f'mpirun -np 1 --dvm file:{uri} qfw_run_setup.sh "{hetgroups}"'
 	#execute_ssh_command(host, cmd, daemonize=True)
 
-	for u in use.split(':'):
-		cmd = f"module use {u};"
-	for m in modules.split(':'):
-		cmd += f"module load {m};"
-	cmd += f"export QFW_VENV_PATH={os.environ.get('QFW_VENV_PATH', '')};"
+	qfw_activate = os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_activate')
+	cmd = f"source {qfw_activate} >& /tmp/qfw_activate_result && "
 	cmd += f'nohup qfw_run_setup.sh "{hetgroups}" >& /tmp/qfw_run_setup.out'
 	prformat(fg.cyan+fg.bold, f"Starting QFW: {cmd}")
 	defw_exec_remote_cmd(cmd, host, deamonize=True)
 
-def start_dvm(node_list, use, modules):
+def start_dvm(node_list):
 	# get the job id of the head node
 	try:
 		job_id = os.environ['QFW_JOB_ID']
@@ -81,17 +78,14 @@ def start_dvm(node_list, use, modules):
 	else:
 		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 					 'prte_dvm', 'dvm-uri')
-	cmd = ''
-	for u in use.split(':'):
-		cmd += f"module use {u};"
-	for m in modules.split(':'):
-		cmd += f"module load {m};"
+	qfw_activate = os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_activate')
+	cmd = f"source {qfw_activate} >& /tmp/qfw_activate_for_prte && "
 	if job_id != -1 and 'QFW_HET_GROUP' in os.environ:
 		cmd += f'qfw_run_prte.sh {os.path.split(uri)[0]} "{host_list}" {job_id}'
 	else:
 		cmd += f'qfw_run_dev_prte.sh {os.path.split(uri)[0]} "{host_list}"'
 	rc, out, err = execute_ssh_command(node_list[0], cmd)
-	logging.debug(f"rc = {rc}\nout: {out}\nerror: {err}")
+	logging.critical(f"cmd = {cmd}; rc = {rc}; out: {out}; error: {err}")
 	if rc:
 		raise DEFwExecutionError(f"Failed to start DVM. rc = {rc}")
 	return rc
@@ -287,7 +281,7 @@ def start(g0, g1, launcher, shutdown, dvm, env_dict):
 
 		if dvm:
 			# Start PRTE DVM
-			start_dvm(g1, use_path, modules)
+			start_dvm(g1)
 			logging.debug("DVM STARTED")
 			me.exit()
 
@@ -371,7 +365,7 @@ if __name__ == '__main__':
 	hostname = socket.gethostname()
 
 	if prun:
-		start_qfw(g1_node_list[0], use_path, modules, groups)
+		start_qfw(g1_node_list[0], groups)
 		me.exit()
 
 	# only run on node 0
