@@ -1,9 +1,5 @@
 # QFw Setup Instructions
 
-These steps summarize the setup and installation process used during prior
-hackathons and installation recipes. Some steps may still be
-environment-specific.
-
 ---
 
 ## 1. Initial Directory Setup
@@ -28,207 +24,47 @@ git clone git@github.com:amirshehataornl/DEFw.git
 
 ---
 
-## 2. Update Hardcoded Paths
+## 2. Create a QFw install configuration YAML file
 
-### Update paths in `QFw/examples` and `QFw/setup`
+There are two types of configuration files outlined below. All fields in
+the configuration files are mandatory except highlighted ones.
 
-Use `sed` to replace old paths with your local path:
-
-```bash
-find /path/to/directory -type f -exec sed -i 's/old_string/new_string/g' {} +
-```
-
-Example:
+  1. A configuration file based on the module utility with the following
+     yaml format
 
 ```bash
-find . -type f -exec sed -i 's/sw\/frontier\/lustre\/orion\/stf006\/scratch\/QC/your\/path\/here/g' {} +
+base-dir: </path/to/QFw/base/directory> # example: /sw/frontier/qhpc
+module-path: </path/to/module/files> # example: /sw/frontier/qhpc/modules/
+module-file: </path/to/module> # example: quantum/qsim
+python-venv-activate: </path/to/python/env/activation/file> # example: /home/user/tmp/qfw_venv/bin/activate
+install-py-requirements: [True | False] # Optional. True to install python requirements. Defaults to false.
 ```
 
-### Update the modules file:
-
-#### BASE_DIR
-
-Edit the following file:
+  2. A configuration file based on setting environment variables with the
+     following yaml format
 
 ```bash
-modules/quantum/qsim
+base-dir: </path/to/QFw/base/directory> # example: /sw/frontier/qhpc
+python-venv-activate: </path/to/python/env/activation/file> # example: /home/user/tmp/qfw_venv/bin/activate
+libfabric-install: </path/to/libfabric/installation/directory>
+mpi-install: </path/to/open-mpi/installation/directory>
+dev-install: </path/to/base/directory/for/rocm-or-cuda> # example: /opt/rocm-6.2.4/
+install-py-requirements: [True | False] # Optional. True to install python requirements. Defaults to false.
 ```
 
-Change:
+## 3. Run the installation script
 
 ```bash
-set BASE_DIR /sw/frontier/qhpc/
+cd /path/to/QFw/base/directory/QFw/setup
+qfw_install -c /path/to/yaml-config
 ```
 
-to your local `qhpc` path.
+The installation script will generate a `qfw_activate` script to activate
+the QFw environment. This includes activating the python virtual
+environment specified in the configuration. If indicated it'll install the
+DEFw and QFw python requirements
 
-
-#### Update the openmpi module
-
-The QFw uses open MPI and libfabric to manage the simulation backend.
-Load the correct ones. Ex:
-
-```bash
-module use /sw/frontier/ums/ums024/modules
-module load openmpi/5.0.9.debug
-```
-
----
-
-## 3. Proxy Setup (If Required)
-
-Proxy setup might be necessary depending on the setup of the network.
-
-For Frontier and Borg clusters:
-
-```bash
-export all_proxy=socks://proxy.ccs.ornl.gov:3128/
-export ftp_proxy=ftp://proxy.ccs.ornl.gov:3128/
-export http_proxy=http://proxy.ccs.ornl.gov:3128/
-export https_proxy=http://proxy.ccs.ornl.gov:3128/
-export no_proxy='localhost,127.0.0.0/8,*.ccs.ornl.gov'
-```
-
----
-
-## 4. Load qsim Module
-
-```bash
-module use $PWD/modules/
-module load quantum/qsim
-# Load the desired python version. Ex:
-moduel load cray-python/3.11.7
-```
-
-Verify:
-
-```bash
-which python
-which pip
-```
-
----
-
-## 5. Create and Activate Python Virtual Environment
-
-```bash
-python -m venv qfwVirtEnv
-source qfwVirtEnv/bin/activate
-```
-
-Verify:
-
-```bash
-which python
-which pip
-```
-
----
-
-## 6. Reset Modules and activate Environment
-
-```bash
-module reset
-module use /path/to/your/modules
-module load quantum/qsim
-
-source qfwVirtEnv/bin/activate
-```
-
----
-
-## 7. Install Python Dependencies
-
-Ensure your python environment is activated.
-
-```bash
-# install DEFw requirements
-cd <BASE_DIR>/DEFw
-python -m pip install -r requirements.txt
-
-# install QFw requirements
-cd <BASE_DIR/QFw
-python -m pip install -r requirements.txt
-
-# install any other application requriements
-```
-
----
-
-## 8. Build the DEFw
-
-Ensure your python environment is activated.
-
-### Clean Build Artifacts
-
-```bash
-cd QFw/DEFw/src
-rm -rf __pycache__
-rm -f *.so defwp
-cd ..
-```
-
-### Build DEFw
-
-```bash
-which python
-which pip
-which scons
-scons --version
-
-scons .
-```
-
----
-
-## 8. Install Backend Libraries
-
-Ensure your python environment is activated.
-
-The DEFw has a qiskit backend which is used with both qiskit and
-pennylane.
-
-
-```bash
-cd QFw/backends
-pip install -e .
-```
-
----
-
-## 9. Configure DEFw Runtime Preferences
-
-The DEFw has a runtime configuration file which is picked up from the tmp
-directory configured in the qsim module file:
-
-```bash
-setenv QFW_TMP_PATH $home_dir/QFwTmp
-```
-
-This configuration file is used to set the logging verbosity, timeouts and
-other DEFw framework parameters.
-
-Edit:
-
-```bash
-$QFW_TMP_PATH/defw_app_pref.yaml
-```
-
-Example configuration:
-
-```yaml
-editor: /usr/bin/vim
-loglevel: defw_app
-halt_on_exception: false
-remote copy: false
-RPC timeout: 300
-num_intfs: 3
-cmd verbosity: true
-```
-
----
-
-## 10. Run QFw Example Tests
+## 6. Run example tests
 
 ### Allocate Compute Resources (Recommended Environment)
 
@@ -243,19 +79,20 @@ salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: -N 1 -t 4:00:00 -
 
 ---
 
-### Run a simple supermarq example
+### Activate the QFw environment
 
-ssh to the head node of job component one, if you weren't placed their
+```bash
+cd /path/to/QFw/base/directory/QFw/setup
+source ./qfw_activate
+```
+
+### Run simple QFw example scripts
+
+`ssh` to the head node of job component one, if you weren't placed their
 automatically.
 
 ```bash
-cd QFw/examples
-```
-
-Activate your python environment
-
-```bash
-source qfwVirtEnv/bin/activate
+cd /path/to/QFw/base/directory/QFw/setup
 ```
 
 Run:
@@ -263,4 +100,90 @@ Run:
 ./qfw_test.sh
 ./qfw_supermarq.sh async 1 4 100 0 ghz nwqsim
 ```
+
+---
+
+## Building the Distributed Execution Framework (DEFw)
+
+The DEFw is a C wrapper around python. It augments python with a set of
+features, including communication features which allow different
+applications running within the DEFw to communicate with each other via
+the implemented protocol.
+
+The DEFw will need to be built before the QFw can be used
+
+
+## 1. Activate the QFw environment
+
+The first time you install make sure to set `install-py-requirements = True`
+
+```bash
+cd /path/to/QFw/base/directory/QFw/setup
+source ./qfw_activate
+```
+
+---
+
+## 8. Build the DEFw
+
+### Clean Build Artifacts
+
+```bash
+cd QFw/DEFw/src
+rm -rf __pycache__
+rm -f *.so defwp
+cd ..
+```
+
+### Build DEFw
+
+```bash
+scons .
+```
+
+---
+
+## 9. Configure DEFw Runtime Preferences
+
+The DEFw runs all the QFw services:
+  - Resource manager
+  - QPM services for each of the simulator types supported
+  - QFw setup temporary services
+  - Python application
+
+The DEFw has a runtime configuration file which is picked up from the QFw tmp
+directory:
+
+```bash
+QFW_TMP_PATH=$home_dir/QFwTmp
+```
+
+This configuration file is used to set the logging verbosity, timeouts and
+other DEFw framework parameters.
+
+Each of the services above has a configuration file. If one is not there
+the DEFw will create one automatically. These are useful to manipulate
+for debugging purposes.
+
+Resource Manager: `$QFW_TMP_PATH/defw_resmgr_pref.yaml`
+QPM Services: `$QFW_TMP_PATH/defw_<qpm_type>_pref.yaml`
+Application: `$QFW_TMP_PATH/defw_app_pref.yaml`
+
+Example configuration:
+
+```bash
+vi $QFW_TMP_PATH/defw_app_pref.yaml
+```
+
+```yaml
+editor: /usr/bin/vim
+loglevel: defw_app
+halt_on_exception: false
+remote copy: false
+RPC timeout: 300
+num_intfs: 3
+cmd verbosity: true
+```
+---
+
 
