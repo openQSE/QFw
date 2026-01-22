@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import yaml, sys, getopt, os, stat
 
 def qfw_configure(cy):
@@ -5,6 +7,7 @@ def qfw_configure(cy):
 	module_path = cy.get('module-path', None)
 	module_file = cy.get('module-file', None)
 	python_activate = cy.get('python-venv-activate', None)
+	req_install = cy.get('install-py-requirements', False)
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: "
@@ -67,6 +70,20 @@ def qfw_configure(cy):
 
 		f.write(f'export QFW_VENV_PATH={os.path.dirname(os.path.dirname(python_activate))}\n')
 		f.write(f'source {python_activate}\n\n')
+		if '_QFW_BACKEND_INSTALLED' not in os.environ:
+			f.write(f'cd {base_dir}/QFw/backends\n')
+			f.write(f'pip3 install -e .\n')
+			f.write('export _QFW_BACKEND_INSTALLED=1\n')
+		if req_install:
+			if '_QFW_DEFW_REQ_INSTALLED' not in os.environ:
+				f.write(f'cd {base_dir}/QFw/DEFw\n')
+				f.write(f'python -m pip install -r requirements.txt\n')
+				f.write('export _QFW_DEFW_REQ_INSTALLED=1\n')
+			if '_QFW_REQ_INSTALLED' not in os.environ:
+				f.write(f'cd {base_dir}/QFw/setup\n')
+				f.write(f'python -m pip install -r requirements.txt\n')
+				f.write('export _QFW_REQ_INSTALLED=1\n')
+		f.write(f'cd {base_dir}/QFw\n\n')
 
 		f.write('qfw_deactivate() {\n')
 		f.write('    if [[ -z "${_QFW_ACTIVE:-}" ]]; then\n')
@@ -94,6 +111,9 @@ def qfw_configure(cy):
 		f.write('    unset _QFW_OLD_PATH\n')
 		f.write('    unset _QFW_OLD_LD_LIBRARY_PATH\n')
 		f.write('    unset _QFW_OLD_PYTHONPATH\n')
+		f.write('    unset _QFW_BACKEND_INSTALLED\n')
+		f.write('    unset _QFW_DEFW_REQ_INSTALLED\n')
+		f.write('    unset _QFW_REQ_INSTALLED\n')
 		f.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
 		f.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
 		f.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')
@@ -106,7 +126,7 @@ def qfw_configure(cy):
 
 def print_help():
 	print("Usage:")
-	print("   qfw_install.py -c <config.yaml>")
+	print("   ./qfw_install -c <config.yaml>")
 
 def main(argv):
 	try:
