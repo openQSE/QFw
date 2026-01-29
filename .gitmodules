@@ -1,4 +1,4 @@
 [submodule "DEFw"]
 	path = DEFw
-	url = git@github.com:amirshehataornl/DEFw.git
+	url = git@github.com:openQSE/DEFw.git
 	branch = master
