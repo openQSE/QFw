@@ -2,7 +2,7 @@
 
 ---
 
-## 1. Initial Directory Setup
+## Initial Directory Setup
 
 ```bash
 mkdir qhpc
@@ -24,7 +24,7 @@ git clone git@github.com:amirshehataornl/DEFw.git
 
 ---
 
-## 2. Create a QFw install configuration YAML file
+## Create a QFw install configuration YAML file
 
 There are two types of configuration files outlined below. All fields in
 the configuration files are mandatory except highlighted ones.
@@ -52,7 +52,7 @@ dev-install: </path/to/base/directory/for/rocm-or-cuda> # example: /opt/rocm-6.2
 install-py-requirements: [True | False] # Optional. True to install python requirements. Defaults to false.
 ```
 
-## 3. Run the installation script
+## Run the installation script
 
 ```bash
 cd /path/to/QFw/base/directory/QFw/setup
@@ -64,7 +64,7 @@ the QFw environment. This includes activating the python virtual
 environment specified in the configuration. If indicated it'll install the
 DEFw and QFw python requirements
 
-## 6. Run example tests
+## Run example tests
 
 ### Allocate Compute Resources (Recommended Environment)
 
@@ -101,6 +101,13 @@ Run:
 ./qfw_supermarq.sh async 1 4 100 0 ghz nwqsim
 ```
 
+### Deactivate the QFw environment
+
+Run:
+```bash
+qfw_deactivate
+```
+
 ---
 
 ## Building the Distributed Execution Framework (DEFw)
@@ -113,9 +120,9 @@ the implemented protocol.
 The DEFw will need to be built before the QFw can be used
 
 
-## 1. Activate the QFw environment
+## Activate the QFw environment
 
-The first time you install make sure to set `install-py-requirements = True`
+The first time you install make sure to set `install-py-requirements = True` in the QFw YAML install configuration file. This forces all python requirements to be installed. Follow the QFw installation steps described earlier.
 
 ```bash
 cd /path/to/QFw/base/directory/QFw/setup
@@ -124,7 +131,7 @@ source ./qfw_activate
 
 ---
 
-## 8. Build the DEFw
+## Build the DEFw
 
 ### Clean Build Artifacts
 
@@ -143,7 +150,7 @@ scons .
 
 ---
 
-## 9. Configure DEFw Runtime Preferences
+## Configure DEFw Runtime Preferences
 
 The DEFw runs all the QFw services:
   - Resource manager
@@ -165,23 +172,36 @@ Each of the services above has a configuration file. If one is not there
 the DEFw will create one automatically. These are useful to manipulate
 for debugging purposes.
 
-Resource Manager: `$QFW_TMP_PATH/defw_resmgr_pref.yaml`
-QPM Services: `$QFW_TMP_PATH/defw_<qpm_type>_pref.yaml`
-Application: `$QFW_TMP_PATH/defw_app_pref.yaml`
+- Resource Manager: `$QFW_TMP_PATH/defw_resmgr_pref.yaml`
+- QPM Services: `$QFW_TMP_PATH/defw_<qpm_type>_pref.yaml`
+- Application: `$QFW_TMP_PATH/defw_app_pref.yaml`
 
 Example configuration:
 
-```bash
-vi $QFW_TMP_PATH/defw_app_pref.yaml
-```
-
 ```yaml
+# Editor to use within the DEFw environment
+# When run interactively, the DEFw allows the user to edit test scripts within
+# the DEFw environment.
 editor: /usr/bin/vim
-loglevel: defw_app
+
+# Python log level.
+loglevel: debug
+
+# When running scripts autonomously, stop if halt_on_exception is set to true.
 halt_on_exception: false
+
+# Test scripts may only reside on the node running the master DEFw instance. The DEFw
+# can scp these scripts to the slaves when the slave needs them.
+# This feature is enabled or disabled based on the 'remote copy' field.
 remote copy: false
+
+# Timeout used for the DEFw RPC communication
 RPC timeout: 300
+
+# Maximum number of interfaces which the DEFw can use
 num_intfs: 3
+
+# The DEFw logs RPC communication to a file if cmd verbosity is set to true
 cmd verbosity: true
 ```
 ---
