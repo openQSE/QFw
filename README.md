@@ -56,7 +56,7 @@ install-py-requirements: [True | False] # Optional. True to install python requi
 
 ```bash
 cd /path/to/QFw/base/directory/QFw/setup
-qfw_install -c /path/to/yaml-config
+qfw_install -c /path/to/yaml-config [-o <qfw activation file name>]
 ```
 
 The installation script will generate a `qfw_activate` script to activate
@@ -79,24 +79,20 @@ salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: -N 1 -t 4:00:00 -
 
 ---
 
-### Activate the QFw environment
-
-```bash
-cd /path/to/QFw/base/directory/QFw/setup
-source ./qfw_activate
-```
-
 ### Run simple QFw example scripts
 
 `ssh` to the head node of job component one, if you weren't placed their
 automatically.
 
+#### Activate the QFw environment
+
 ```bash
-cd /path/to/QFw/base/directory/QFw/setup
+source /path/to/QFw/base/directory/QFw/setup/qfw_activate
 ```
 
 Run:
 ```bash
+cd /path/to/QFw/base/directory/QFw/examples
 ./qfw_test.sh
 ./qfw_supermarq.sh async 1 4 100 0 ghz nwqsim
 ```
