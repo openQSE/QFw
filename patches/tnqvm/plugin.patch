@@ -1,0 +1,13 @@
+diff --git a/quantum/plugins/CMakeLists.txt b/quantum/plugins/CMakeLists.txt
+index 7e668171..843ffb82 100644
+--- a/quantum/plugins/CMakeLists.txt
++++ b/quantum/plugins/CMakeLists.txt
+@@ -10,7 +10,7 @@
+ # Contributors:
+ #   Alexander J. McCaskey - initial API and implementation
+ # *******************************************************************************/
+-add_subdirectory(ibm)
++#add_subdirectory(ibm)
+ add_subdirectory(rigetti)
+ #add_subdirectory(cmr)
+ add_subdirectory(dwave)

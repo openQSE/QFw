@@ -1,0 +1,29 @@
+diff --git a/TALSH/Makefile b/TALSH/Makefile
+index 84cb1ba..4d9deb8 100644
+--- a/TALSH/Makefile
++++ b/TALSH/Makefile
+@@ -104,11 +104,10 @@ export PATH_CUTENSOR ?= /usr/local/cutensor
+ #export PATH_ROCM ?= /sw/spock/spack-envs/views/rocm-4.2.0
+ export PATH_ROCM ?= /opt/rocm
+ # Only reset these if HIP files are spread in system directories:
+- export PATH_HIP_INC ?= $(PATH_ROCM)/hip/include
+- export PATH_HIPBLAS_INC ?= $(PATH_ROCM)/hipblas/include
+- export PATH_HIP_LIB ?= $(PATH_ROCM)/hip/lib
+- export PATH_HIPBLAS_LIB ?= $(PATH_ROCM)/hipblas/lib
+- export PATH_HIP_BIN ?= $(PATH_ROCM)/hip/bin
++ export PATH_HIP_INC ?= $(PATH_ROCM)/include
++ export PATH_HIPBLAS_INC ?= $(PATH_ROCM)/include/hipblas
++ export PATH_HIP_LIB ?= $(PATH_ROCM)/lib
++ export PATH_HIPBLAS_LIB ?= $(PATH_ROCM)/lib
+ 
+ #YOU ARE DONE! MAKE IT!
+ 
+@@ -371,7 +370,7 @@ else
+ CUDA_FLAGS = -D_FORCE_INLINES
+ endif
+ 
+-HIP_FLAGS = -c -g -O3 -D_FORCE_INLINES -fno-gpu-rdc -fPIC --amdgpu-target=gfx906,gfx908 #-fopenmp
++HIP_FLAGS = -c -g -O3 -D_FORCE_INLINES -fno-gpu-rdc -fPIC --amdgpu-target=gfx90a
+ 
+ #Accelerator support:
+ ifeq ($(TOOLKIT),IBM)

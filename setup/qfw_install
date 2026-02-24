@@ -4,10 +4,12 @@ import yaml, sys, getopt, os, stat
 
 def qfw_configure(cy):
 	base_dir = cy.get('base-dir', None)
-	module_path = cy.get('module-path', None)
-	module_file = cy.get('module-file', None)
+	module_path = cy.get('qfw-module-path', None)
+	module_file = cy.get('qfw-module-file', None)
+	extra_mod_files = cy.get('extra-module-files', None)
 	python_activate = cy.get('python-venv-activate', None)
 	req_install = cy.get('install-py-requirements', False)
+	req_build = cy.get('build-dependencies', False)
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: "
@@ -29,6 +31,11 @@ def qfw_configure(cy):
 		f.write('    return 0\n')
 		f.write('fi\n\n')
 
+		f.write('_QFW_SKIP_PATCHES=0\n')
+		f.write('if [[ "${1:-}" == "--skip-patches" ]]; then\n')
+		f.write('    _QFW_SKIP_PATCHES=1\n')
+		f.write('fi\n\n')
+
 		f.write('export _QFW_ACTIVE=1\n')
 		f.write('export _QFW_OLD_CMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"\n')
 		f.write('export _QFW_OLD_PE_PRODUCT_LIST="$PE_PRODUCT_LIST"\n')
@@ -37,13 +44,20 @@ def qfw_configure(cy):
 		f.write('export _QFW_OLD_PATH="$PATH"\n')
 		f.write('export _QFW_OLD_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"\n')
 		f.write('export _QFW_OLD_PYTHONPATH="$PYTHONPATH"\n')
+		f.write(f'export _QFW_OLD_BLASLIB=$BLASLIB\n')
+		f.write(f'export _QFW_OLD_BLAS_LIB_DIR=$BLAS_LIB_DIR\n')
+		f.write(f'export _QFW_OLD_ACLOCAL_PATH=$ACLOCAL_PATH\n')
 
 		f.write(f'export QFW_MASTER_SETUP_BASE_DIR="{base_dir}"\n')
 
 		if module_path:
 			f.write('export _QFW_USED_MODULES=1\n')
+			if extra_mod_files:
+				f.write(f'module load {extra_mod_files}\n')
 			f.write(f'module use {module_path}\n')
 			f.write(f'module load {module_file}\n')
+			f.write(f'ml\n')
+			f.write(f'export BLAS_LIB_DIR=$(pkg-config --variable=libdir openblas)\n')
 		else:
 			libfab_env = os.path.join(qfw_env, 'qfw_libfabric_env.sh')
 			mpi_env = os.path.join(qfw_env, 'qfw_mpi_env.sh')
@@ -59,17 +73,34 @@ def qfw_configure(cy):
 			if not dev:
 				raise ValueError("Need to install Device Library")
 
+			openblas_root = cy.get('openblas-root', None)
+			cmake_root = cy.get('cmake-root', None)
+
 			f.write(f'export QFW_MASTER_SETUP_MPI_INSTALL="{mpi}"\n')
 			f.write(f'export QFW_MASTER_SETUP_DEV_INSTALL="{dev}"\n')
 			if libfab:
-					f.write(f'export QFW_MASTER_SETUP_LIBFABRIC_INSTALL="{libfab}"\n')
-					f.write(f'source {libfab_env}\n')
+				f.write(f'export QFW_MASTER_SETUP_LIBFABRIC_INSTALL="{libfab}"\n')
+				f.write(f'source {libfab_env}\n')
 			f.write(f'source {dev_vars}\n')
 			f.write(f'source {mpi_env}\n')
 			f.write(f'source {qfw_vars}\n')
 
+			if openblas_root:
+				f.write(f'export BLASLIB=OPENBLAS\n')
+				f.write(f'export PATH="{openblas_root}/bin:$PATH"\n')
+				f.write(f'export LD_LIBRARY_PATH="{openblas_root}/lib:$LD_LIBRARY_PATH"\n')
+				f.write(f'export BLAS_LIB_DIR = ${openblas_root}/lib\n')
+				f.write(f'export PKG_CONFIG_PATH="{openblas_root}/lib/pkgconfig:$PKG_CONFIG_PATH"\n')
+				f.write(f'export CMAKE_PREFIX_PATH="{openblas_root}:$CMAKE_PREFIX_PATH"\n\n')
+
+			if cmake_root:
+				f.write(f'export PATH="{cmake_root}/bin:$PATH"\n')
+				f.write(f'export ACLOCAL_PATH="{cmake_root}/share/aclocal:$ACLOCAL_PATH"\n')
+				f.write(f'export CMAKE_PREFIX_PATH="{cmake_root}:$CMAKE_PREFIX_PATH"\n\n')
+
 		f.write(f'export QFW_VENV_PATH={os.path.dirname(os.path.dirname(python_activate))}\n')
 		f.write(f'source {python_activate}\n\n')
+		f.write(f'export PYTHON_PATH=$(which python3)\n')
 		if '_QFW_BACKEND_INSTALLED' not in os.environ:
 			f.write(f'cd {base_dir}/QFw/backends\n')
 			f.write(f'pip3 install -e .\n')
@@ -83,6 +114,17 @@ def qfw_configure(cy):
 				f.write(f'cd {base_dir}/QFw/setup\n')
 				f.write(f'python -m pip install -r requirements.txt\n')
 				f.write('export _QFW_REQ_INSTALLED=1\n')
+		if req_build:
+			from datetime import datetime
+			VERSION = datetime.now().strftime("%Y%m%d-%H%M%S")
+			f.write('\nif [[ $_QFW_SKIP_PATCHES -eq 0 ]]; then\n')
+			f.write(f'    export QFW_DEP_BUILD_VERSION={VERSION}\n')
+			f.write(f'    {os.path.join(base_dir, "QFw", "patches", "tnqvm", "build.sh")}\n')
+			f.write(f'    {os.path.join(base_dir, "QFw", "patches", "nwqsim", "build.sh")}\n')
+			f.write(f'else\n')
+			f.write(f'    echo "Skipping TNQVM and NWQSIM patch builds (--skip-patches set)"\n')
+			f.write(f'fi\n')
+
 		f.write(f'cd {base_dir}/QFw\n\n')
 
 		f.write('qfw_deactivate() {\n')
@@ -105,6 +147,9 @@ def qfw_configure(cy):
 		f.write('    export PATH="$_QFW_OLD_PATH"\n')
 		f.write('    export LD_LIBRARY_PATH="$_QFW_OLD_LD_LIBRARY_PATH"\n')
 		f.write('    export PYTHONPATH="$_QFW_OLD_PYTHONPATH"\n\n')
+		f.write('    export BLASLIB=$_QFW_OLD_BLASLIB\n')
+		f.write('    export BLAS_LIB_DIR=$_QFW_OLD_BLAS_LIB_DIR\n')
+		f.write('    export ACLOCAL_PATH=$_QFW_OLD_ACLOCAL_PATH\n')
 
 		f.write('    unset _QFW_ACTIVE\n')
 		f.write('    unset _QFW_USED_MODULES\n')
@@ -117,7 +162,8 @@ def qfw_configure(cy):
 		f.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
 		f.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
 		f.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')
-		f.write('    unset QFW_VENV_PATH\n\n')
+		f.write('    unset QFW_VENV_PATH\n')
+		f.write('    unset _QFW_SKIP_PATCHES\n\n')
 
 		f.write('    unset -f qfw_deactivate\n')
 		f.write('}\n')

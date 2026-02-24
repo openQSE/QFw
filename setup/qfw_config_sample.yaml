@@ -1,5 +1,7 @@
 base-dir: /sw/frontier/qhpc
-module-path: /sw/frontier/qhpc/modules/
-module-file: quantum/qsim
+qfw-module-path: /sw/frontier/qhpc/modules/
+qfw-module-file: quantum/qsim
+extra-module-files: openblas cmake gcc/12.2.0
 python-venv-activate: /ccs/home/shehataa/tmp/qfw_venv/bin/activate
 install-py-requirements: True
+build-dependencies: True
