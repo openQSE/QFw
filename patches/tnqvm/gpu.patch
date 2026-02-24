@@ -1,0 +1,22 @@
+diff --git a/tpls/CMakeLists.txt b/tpls/CMakeLists.txt
+index 5f51bb4..5cf7636 100644
+--- a/tpls/CMakeLists.txt
++++ b/tpls/CMakeLists.txt
+@@ -365,7 +365,7 @@ else()
+                               EXA_TALSH_ONLY=YES
+                               EXATN_SERVICE=YES
+                               EXA_OS=LINUX
+-                              GPU_CUDA=NOCUDA
++                              GPU_CUDA=${GPU_CUDA}
+                               MPILIB=NONE
+                               BLASLIB=${BLAS_LIB}
+                               PATH_BLAS_${BLAS_LIB}=${BLAS_PATH}
+@@ -392,7 +392,7 @@ else()
+                               EXA_TALSH_ONLY=YES #reset to "NO" for full ExaTENSOR
+                               EXATN_SERVICE=YES
+                               EXA_OS=LINUX
+-                              GPU_CUDA=NOCUDA
++                              GPU_CUDA=${GPU_CUDA}
+                               MPILIB=${MPI_LIB}
+                               PATH_${MPI_LIB}=${MPI_ROOT_DIR}
+                               PATH_${MPI_LIB}_BIN=${MPI_BIN_PATH}

@@ -1,0 +1,294 @@
+diff --git a/examples/base_api/CMakeLists.txt b/examples/base_api/CMakeLists.txt
+index 6ec24c1..3930de9 100644
+--- a/examples/base_api/CMakeLists.txt
++++ b/examples/base_api/CMakeLists.txt
+@@ -1,11 +1,12 @@
+ include_directories(${XACC_INCLUDE_DIRS})
+ include_directories(${PROJECT_SOURCE_DIR})
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
+ 
+ add_executable(qasm_sim qasm_sim.cpp)
+-target_link_libraries(qasm_sim PRIVATE xacc::xacc)
++target_link_libraries(qasm_sim PRIVATE xacc::xacc ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ 
+ add_executable(bitstring_amplitude bitstring_amplitude.cpp)
+-target_link_libraries(bitstring_amplitude PRIVATE xacc::xacc)
++target_link_libraries(bitstring_amplitude PRIVATE xacc::xacc ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ 
+ add_executable(noisy_sim noisy_sim.cpp)
+-target_link_libraries(noisy_sim PRIVATE xacc::xacc)
+\ No newline at end of file
++target_link_libraries(noisy_sim PRIVATE xacc::xacc ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+diff --git a/examples/exatn_gen/CMakeLists.txt b/examples/exatn_gen/CMakeLists.txt
+index bbc9f06..d21d792 100644
+--- a/examples/exatn_gen/CMakeLists.txt
++++ b/examples/exatn_gen/CMakeLists.txt
+@@ -1,5 +1,6 @@
+ include_directories(${XACC_INCLUDE_DIRS})
+ include_directories(${PROJECT_SOURCE_DIR})
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
+ 
+ add_executable(exatn_reconstruct_visitor exatn_reconstruct_visitor.cpp)
+-target_link_libraries(exatn_reconstruct_visitor PRIVATE xacc::xacc tnqvm)
++target_link_libraries(exatn_reconstruct_visitor PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+diff --git a/examples/mpi/CMakeLists.txt b/examples/mpi/CMakeLists.txt
+index b42a251..5246b65 100644
+--- a/examples/mpi/CMakeLists.txt
++++ b/examples/mpi/CMakeLists.txt
+@@ -1,11 +1,21 @@
++find_package(ExaTN QUIET)
++if (ExaTN_FOUND)
++   message(STATUS "Found ExaTN at ${EXATN_ROOT}")
++   include_directories(${EXATN_INCLUDE_DIRS})
++endif()
++
+ include_directories(${XACC_INCLUDE_DIRS})
+ include_directories(${PROJECT_SOURCE_DIR})
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
+ 
+ add_executable(testMpi testMpi.cpp)
+-target_link_libraries(testMpi PRIVATE xacc::xacc)
++target_link_libraries(testMpi PRIVATE xacc::xacc ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ 
+ add_executable(qaoa_mpi qaoa_mpi.cpp)
+-target_link_libraries(qaoa_mpi PRIVATE xacc::xacc)
++target_link_libraries(qaoa_mpi PRIVATE xacc::xacc ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ 
+ add_executable(deutsch_jozsa deutsch_jozsa.cpp)
+-target_link_libraries(deutsch_jozsa PRIVATE xacc::xacc)
+\ No newline at end of file
++target_link_libraries(deutsch_jozsa PRIVATE xacc::xacc ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
++
++add_executable(circuit_runner circuit_runner.cpp)
++target_link_libraries(circuit_runner PRIVATE xacc::xacc exatn::exatn ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+diff --git a/examples/mpi/deutsch_jozsa.cpp b/examples/mpi/deutsch_jozsa.cpp
+index 9bbcda5..bdde1b8 100644
+--- a/examples/mpi/deutsch_jozsa.cpp
++++ b/examples/mpi/deutsch_jozsa.cpp
+@@ -1,7 +1,9 @@
+ #include "xacc.hpp"
++#include <unistd.h>
+ 
+ int main(int argc, char **argv) {
+   // Initialize the XACC Framework
++  //sleep(60);
+   xacc::Initialize(argc, argv);
+   xacc::set_verbose(true);
+   auto compiler = xacc::getCompiler("staq");
+diff --git a/examples/multiple_visitors/CMakeLists.txt b/examples/multiple_visitors/CMakeLists.txt
+index 6a242bb..482e887 100644
+--- a/examples/multiple_visitors/CMakeLists.txt
++++ b/examples/multiple_visitors/CMakeLists.txt
+@@ -1,5 +1,6 @@
+ include_directories(${XACC_INCLUDE_DIRS})
+ include_directories(${PROJECT_SOURCE_DIR})
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
+ 
+ add_executable(multiple_visitors multiple_visitors.cpp)
+-target_link_libraries(multiple_visitors PRIVATE xacc::xacc tnqvm)
+\ No newline at end of file
++target_link_libraries(multiple_visitors PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+diff --git a/examples/sycamore/CMakeLists.txt b/examples/sycamore/CMakeLists.txt
+index 3cd4519..cffce31 100644
+--- a/examples/sycamore/CMakeLists.txt
++++ b/examples/sycamore/CMakeLists.txt
+@@ -1,34 +1,36 @@
+ include_directories(${XACC_INCLUDE_DIRS})
+ include_directories(${PROJECT_SOURCE_DIR})
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
+ 
+ add_executable(sycamore_circ_contract_flops sycamore_circ_contract_flops.cpp)
+-target_link_libraries(sycamore_circ_contract_flops PRIVATE xacc::xacc tnqvm)
++#target_link_libraries(sycamore_circ_contract_flops PRIVATE xacc::xacc tnqvm /opt/rocm-4.5.2/lib/libamdhip64.so /opt/rocm-4.5.2/lib/libhipblas.so)
++target_link_libraries(sycamore_circ_contract_flops PRIVATE xacc::xacc tnqvm  ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_contract_flops PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ 
+ add_executable(sycamore_circ_mps sycamore_circ_mps.cpp)
+-target_link_libraries(sycamore_circ_mps PRIVATE xacc::xacc tnqvm)
++target_link_libraries(sycamore_circ_mps PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_mps PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ 
+ add_executable(sycamore_circ_amplitude sycamore_circ_amplitude.cpp)
+-target_link_libraries(sycamore_circ_amplitude PRIVATE xacc::xacc tnqvm)
++target_link_libraries(sycamore_circ_amplitude PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_amplitude PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ 
+ add_executable(sycamore_circ_validate_contraction sycamore_circ_validate_contraction.cpp)
+-target_link_libraries(sycamore_circ_validate_contraction PRIVATE xacc::xacc tnqvm)
++target_link_libraries(sycamore_circ_validate_contraction PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_validate_contraction PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ 
+ add_executable(sycamore_circ_amplitude_compare sycamore_circ_amplitude_compare.cpp)
+-target_link_libraries(sycamore_circ_amplitude_compare PRIVATE xacc::xacc tnqvm)
++target_link_libraries(sycamore_circ_amplitude_compare PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_amplitude_compare PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ 
+ add_executable(sycamore_circ_amplitude_conjugate_layer sycamore_circ_amplitude_conjugate_layer.cpp)
+-target_link_libraries(sycamore_circ_amplitude_conjugate_layer PRIVATE xacc::xacc tnqvm)
++target_link_libraries(sycamore_circ_amplitude_conjugate_layer PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_amplitude_conjugate_layer PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ 
+ add_executable(sycamore_circ_slice_samples sycamore_circ_slice_samples.cpp)
+-target_link_libraries(sycamore_circ_slice_samples PRIVATE xacc::xacc tnqvm)
++target_link_libraries(sycamore_circ_slice_samples PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_slice_samples PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ 
+ add_executable(sycamore_circ_approx sycamore_circ_approx.cpp)
+-target_link_libraries(sycamore_circ_approx PRIVATE xacc::xacc tnqvm)
++target_link_libraries(sycamore_circ_approx PRIVATE xacc::xacc tnqvm ${CMAKE_PATH_ROCM}/lib/libamdhip64.so  ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(sycamore_circ_approx PRIVATE RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+diff --git a/tnqvm/TNQVM.hpp b/tnqvm/TNQVM.hpp
+index 047c4d0..0a213a7 100644
+--- a/tnqvm/TNQVM.hpp
++++ b/tnqvm/TNQVM.hpp
+@@ -135,7 +135,7 @@ public:
+   virtual void
+   execute(std::shared_ptr<AcceleratorBuffer> buffer,
+           const std::shared_ptr<CompositeInstruction> baseCircuit,
+-          const std::vector<std::shared_ptr<CompositeInstruction>> basisRotations) override;
++          const std::vector<std::shared_ptr<CompositeInstruction>> basisRotations);
+ 
+   const std::vector<std::complex<double>>
+   getAcceleratorState(std::shared_ptr<CompositeInstruction> program) override;
+diff --git a/tnqvm/visitors/exatn-dm/tests/CMakeLists.txt b/tnqvm/visitors/exatn-dm/tests/CMakeLists.txt
+index c2a154e..a936e1c 100644
+--- a/tnqvm/visitors/exatn-dm/tests/CMakeLists.txt
++++ b/tnqvm/visitors/exatn-dm/tests/CMakeLists.txt
+@@ -1,6 +1,8 @@
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
++
+ # Forcing use of XACC gtest install... :/ 
+ include_directories(${XACC_ROOT}/include/gtest)
+ 
+ add_executable(DensityMatrixSimTester JsonNoiseModelTester.cpp)
+-target_link_libraries(DensityMatrixSimTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(DensityMatrixSimTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME DensityMatrixSimTester COMMAND DensityMatrixSimTester)
+diff --git a/tnqvm/visitors/exatn-gen/tests/CMakeLists.txt b/tnqvm/visitors/exatn-gen/tests/CMakeLists.txt
+index 41c4311..b6d90ad 100644
+--- a/tnqvm/visitors/exatn-gen/tests/CMakeLists.txt
++++ b/tnqvm/visitors/exatn-gen/tests/CMakeLists.txt
+@@ -1,8 +1,10 @@
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
++
+ # Forcing use of XACC gtest install... :/ 
+ include_directories(${XACC_ROOT}/include/gtest)
+ 
+ add_executable(ExaTnGenTester ExaTnGenTester.cpp)
+-target_link_libraries(ExaTnGenTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(ExaTnGenTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME ExaTnGenTester COMMAND ExaTnGenTester)
+ # Multi-threaded on CADES/CI VM will cause this test to slow down.
+-set_tests_properties(ExaTnGenTester PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
+\ No newline at end of file
++set_tests_properties(ExaTnGenTester PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
+diff --git a/tnqvm/visitors/exatn-mpo/tests/CMakeLists.txt b/tnqvm/visitors/exatn-mpo/tests/CMakeLists.txt
+index 419bc78..5fe599f 100644
+--- a/tnqvm/visitors/exatn-mpo/tests/CMakeLists.txt
++++ b/tnqvm/visitors/exatn-mpo/tests/CMakeLists.txt
+@@ -1,13 +1,15 @@
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
++
+ # Forcing use of XACC gtest install... :/ 
+ include_directories(${XACC_ROOT}/include/gtest)
+ 
+ add_executable(ExaTnPmpsTester ExaTnPmpsTester.cpp)
+-target_link_libraries(ExaTnPmpsTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(ExaTnPmpsTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(ExaTnPmpsTester PRIVATE BACKEND_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ add_test(NAME ExaTnPmpsTester COMMAND ExaTnPmpsTester)
+ 
+ add_executable(NoiseModelTester NoiseModelTester.cpp)
+-target_link_libraries(NoiseModelTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(NoiseModelTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(NoiseModelTester PRIVATE BACKEND_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ add_test(NAME NoiseModelTester COMMAND NoiseModelTester)
+ 
+@@ -17,6 +19,6 @@ add_test(NAME NoiseModelTester COMMAND NoiseModelTester)
+ # add_test(NAME VqeTester COMMAND VqeTester)
+ 
+ add_executable(JsonNoiseModelTester JsonNoiseModelTester.cpp)
+-target_link_libraries(JsonNoiseModelTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(JsonNoiseModelTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ target_compile_definitions(JsonNoiseModelTester PRIVATE BACKEND_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
+ add_test(NAME JsonNoiseModelTester COMMAND JsonNoiseModelTester)
+diff --git a/tnqvm/visitors/exatn-mps/tests/CMakeLists.txt b/tnqvm/visitors/exatn-mps/tests/CMakeLists.txt
+index 1d12ddb..c81a8cb 100644
+--- a/tnqvm/visitors/exatn-mps/tests/CMakeLists.txt
++++ b/tnqvm/visitors/exatn-mps/tests/CMakeLists.txt
+@@ -1,3 +1,5 @@
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
++
+ # Forcing use of XACC gtest install... :/ 
+ include_directories(${XACC_ROOT}/include/gtest)
+ 
+@@ -17,43 +19,43 @@ if (TNQVM_MPI_ENABLED)
+    
+    # Add the a simple MPI test
+    add_mpi_test(MpsOverMpi)
+-   target_link_libraries(MpsOverMpiTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++   target_link_libraries(MpsOverMpiTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ else()
+ 
+ add_executable(NearestNeighborTransformTester NearestNeighborTransformTester.cpp)
+-target_link_libraries(NearestNeighborTransformTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(NearestNeighborTransformTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME NearestNeighborTransformTester COMMAND NearestNeighborTransformTester)
+ target_compile_features(NearestNeighborTransformTester PRIVATE cxx_std_14)
+ 
+ add_executable(MpsGateTester MpsGateTester.cpp)
+-target_link_libraries(MpsGateTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(MpsGateTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME MpsGateTester COMMAND MpsGateTester)
+ target_compile_features(MpsGateTester PRIVATE cxx_std_14)
+ 
+ 
+ add_executable(MpsMeasurementTester MpsMeasurementTester.cpp)
+-target_link_libraries(MpsMeasurementTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(MpsMeasurementTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME MpsMeasurementTester COMMAND MpsMeasurementTester)
+ target_compile_features(MpsMeasurementTester PRIVATE cxx_std_14)
+ 
+ add_executable(SvdTruncateTester SvdTruncateTester.cpp)
+-target_link_libraries(SvdTruncateTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(SvdTruncateTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME SvdTruncateTester COMMAND SvdTruncateTester)
+ target_compile_features(SvdTruncateTester PRIVATE cxx_std_14)
+ 
+ add_executable(NumericalTester NumericalTester.cpp)
+-target_link_libraries(NumericalTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(NumericalTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME NumericalTester COMMAND NumericalTester)
+ target_compile_features(NumericalTester PRIVATE cxx_std_14)
+ 
+ add_executable(NumericalTesterCheckNorm NumericalTesterCheckNorm.cpp)
+-target_link_libraries(NumericalTesterCheckNorm PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(NumericalTesterCheckNorm PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME NumericalTesterCheckNorm COMMAND NumericalTesterCheckNorm)
+ target_compile_features(NumericalTesterCheckNorm PRIVATE cxx_std_14)
+ 
+ 
+ add_executable(BigCircuitTester BigCircuitTester.cpp)
+-target_link_libraries(BigCircuitTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(BigCircuitTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME BigCircuitTester COMMAND BigCircuitTester)
+ target_compile_features(BigCircuitTester PRIVATE cxx_std_14)
+ endif()
+diff --git a/tnqvm/visitors/exatn/tests/CMakeLists.txt b/tnqvm/visitors/exatn/tests/CMakeLists.txt
+index 144140f..9797e40 100644
+--- a/tnqvm/visitors/exatn/tests/CMakeLists.txt
++++ b/tnqvm/visitors/exatn/tests/CMakeLists.txt
+@@ -1,8 +1,10 @@
++set(CMAKE_PATH_ROCM $ENV{PATH_ROCM})
++
+ # Forcing use of XACC gtest install... :/ 
+ include_directories(${XACC_ROOT}/include/gtest)
+ 
+ add_executable(ExatnVisitorInternalTester ExatnVisitorInternalTester.cpp)
+ #target_include_directories(ExatnVisitorInternalTester PRIVATE ${GTEST_INCLUDE_DIRS})
+-target_link_libraries(ExatnVisitorInternalTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn)
++target_link_libraries(ExatnVisitorInternalTester PRIVATE ${XACC_ROOT}/lib/libgtest.so ${XACC_ROOT}/lib/libgtest_main.so tnqvm-exatn ${CMAKE_PATH_ROCM}/lib/libhipblas.so)
+ add_test(NAME ExatnVisitorInternalTester COMMAND ExatnVisitorInternalTester)
+-target_compile_features(ExatnVisitorInternalTester PRIVATE cxx_std_14)
+\ No newline at end of file
++target_compile_features(ExatnVisitorInternalTester PRIVATE cxx_std_14)

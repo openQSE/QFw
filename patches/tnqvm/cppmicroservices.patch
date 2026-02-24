@@ -1,0 +1,57 @@
+diff --git a/cmake/GlobalConfig.h.in b/cmake/GlobalConfig.h.in
+index d6b65e11..79855cc7 100644
+--- a/cmake/GlobalConfig.h.in
++++ b/cmake/GlobalConfig.h.in
+@@ -141,7 +141,7 @@ US_MSVC_DISABLE_WARNING(4996)
+ #define US_HASH_FUNCTION_BEGIN(type)                         \
+ namespace std {                                              \
+ template<>                                                   \
+-struct hash<type> : std::unary_function<type, std::size_t> { \
++struct hash<type>                                          { \
+ std::size_t operator()(const type& arg) const {
+ 
+ #define US_HASH_FUNCTION_END } }; }
+diff --git a/framework/src/service/ServiceListenerEntry.cpp b/framework/src/service/ServiceListenerEntry.cpp
+index 1086deab..47a3d5ba 100644
+--- a/framework/src/service/ServiceListenerEntry.cpp
++++ b/framework/src/service/ServiceListenerEntry.cpp
+@@ -32,7 +32,7 @@ US_MSVC_PUSH_DISABLE_WARNING(4180) // qualifier applied to function type has no
+ 
+ namespace cppmicroservices {
+ 
+-struct ServiceListenerCompare : std::binary_function<ServiceListener, ServiceListener, bool>
++struct ServiceListenerCompare
+ {
+   bool operator()(const ServiceListener& f1,
+                   const ServiceListener& f2) const
+diff --git a/third_party/jsoncpp.cpp b/third_party/jsoncpp.cpp
+index d827863d..7a66abc4 100644
+--- a/third_party/jsoncpp.cpp
++++ b/third_party/jsoncpp.cpp
+@@ -381,7 +381,7 @@ bool Reader::readValue() {
+     break;
+   case tokenNull:
+     {
+-    Value v;
++    Value v(false);
+     currentValue().swapPayload(v);
+     }
+     break;
+@@ -1224,7 +1224,7 @@ bool OurReader::readValue() {
+     break;
+   case tokenNull:
+     {
+-    Value v;
++    Value v(false);
+     currentValue().swapPayload(v);
+     }
+     break;
+@@ -1253,7 +1253,7 @@ bool OurReader::readValue() {
+       // "Un-read" the current token and mark the current value as a null
+       // token.
+       current_--;
+-      Value v;
++      Value v(false);
+       currentValue().swapPayload(v);
+       break;
+     } // else, fall through ...
