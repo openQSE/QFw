@@ -53,6 +53,8 @@ cmake ${QSRC}/NWQ-Sim \
         -DHIP_ARCH=gfx90a && \
 make -j && make install
 
+cp ${BASE_BUILD_DIR}/qasm/nwq_qasm ${QFW_MASTER_SETUP_BASE_DIR}/QFw/bin/circuit_runner.nwqsim
+
 if [ $? -ne 0 ]; then
     exit $?
 fi

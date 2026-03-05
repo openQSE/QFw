@@ -162,5 +162,7 @@ CC=gcc CXX=g++ FC=gfortran cmake \
 
 make -j install
 
+cp ${BASE_BUILD_DIR}/tnqvm/examples/mpi/circuit_runner ${QFW_MASTER_SETUP_BASE_DIR}/QFw/bin/circuit_runner.tnqvm
+
 echo "### BUILD COMPLETE"
 

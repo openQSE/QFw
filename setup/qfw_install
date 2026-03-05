@@ -75,6 +75,7 @@ def qfw_configure(cy):
 
 			openblas_root = cy.get('openblas-root', None)
 			cmake_root = cy.get('cmake-root', None)
+			gcc_root = cy.get('gcc-root', None)
 
 			f.write(f'export QFW_MASTER_SETUP_MPI_INSTALL="{mpi}"\n')
 			f.write(f'export QFW_MASTER_SETUP_DEV_INSTALL="{dev}"\n')
@@ -89,7 +90,7 @@ def qfw_configure(cy):
 				f.write(f'export BLASLIB=OPENBLAS\n')
 				f.write(f'export PATH="{openblas_root}/bin:$PATH"\n')
 				f.write(f'export LD_LIBRARY_PATH="{openblas_root}/lib:$LD_LIBRARY_PATH"\n')
-				f.write(f'export BLAS_LIB_DIR = ${openblas_root}/lib\n')
+				f.write(f'export BLAS_LIB_DIR={openblas_root}/lib\n')
 				f.write(f'export PKG_CONFIG_PATH="{openblas_root}/lib/pkgconfig:$PKG_CONFIG_PATH"\n')
 				f.write(f'export CMAKE_PREFIX_PATH="{openblas_root}:$CMAKE_PREFIX_PATH"\n\n')
 
@@ -97,6 +98,11 @@ def qfw_configure(cy):
 				f.write(f'export PATH="{cmake_root}/bin:$PATH"\n')
 				f.write(f'export ACLOCAL_PATH="{cmake_root}/share/aclocal:$ACLOCAL_PATH"\n')
 				f.write(f'export CMAKE_PREFIX_PATH="{cmake_root}:$CMAKE_PREFIX_PATH"\n\n')
+
+			if gcc_root:
+				f.write(f'export PATH="{gcc_root}/bin:$PATH"\n')
+				f.write(f'export GCC_PATH={gcc_root}\n')
+				f.write(f'export GCC_PREFIX={gcc_root}\n')
 
 		f.write(f'export QFW_VENV_PATH={os.path.dirname(os.path.dirname(python_activate))}\n')
 		f.write(f'source {python_activate}\n\n')
@@ -151,6 +157,8 @@ def qfw_configure(cy):
 		f.write('    export BLAS_LIB_DIR=$_QFW_OLD_BLAS_LIB_DIR\n')
 		f.write('    export ACLOCAL_PATH=$_QFW_OLD_ACLOCAL_PATH\n')
 
+		f.write('    unset GCC_PATH\n')
+		f.write('    unset GCC_PREFIX\n')
 		f.write('    unset _QFW_ACTIVE\n')
 		f.write('    unset _QFW_USED_MODULES\n')
 		f.write('    unset _QFW_OLD_PATH\n')
