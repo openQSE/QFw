@@ -5,3 +5,4 @@ extra-module-files: openblas cmake gcc/12.2.0
 python-venv-activate: /ccs/home/shehataa/tmp/qfw_venv/bin/activate
 install-py-requirements: True
 build-dependencies: True
+
