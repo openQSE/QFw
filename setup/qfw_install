@@ -5,8 +5,9 @@ import yaml, sys, getopt, os, stat
 def qfw_configure(cy):
 	base_dir = cy.get('base-dir', None)
 	module_path = cy.get('qfw-module-path', None)
-	module_file = cy.get('qfw-module-file', None)
-	extra_mod_files = cy.get('extra-module-files', None)
+	module_file = cy.get('qfw-module-load', None)
+	unloads = cy.get('module-unload', None)
+	extra_mod_loads = cy.get('extra-module-load', None)
 	python_activate = cy.get('python-venv-activate', None)
 	req_install = cy.get('install-py-requirements', False)
 	req_build = cy.get('build-dependencies', False)
@@ -52,10 +53,12 @@ def qfw_configure(cy):
 
 		if module_path:
 			f.write('export _QFW_USED_MODULES=1\n')
-			if extra_mod_files:
-				f.write(f'module load {extra_mod_files}\n')
+			if extra_mod_loads:
+				f.write(f'module load {extra_mod_loads}\n')
 			f.write(f'module use {module_path}\n')
 			f.write(f'module load {module_file}\n')
+			if unloads:
+				f.write(f'module unload {unloads}\n')
 			f.write(f'ml\n')
 			f.write(f'export BLAS_LIB_DIR=$(pkg-config --variable=libdir openblas)\n')
 		else:
