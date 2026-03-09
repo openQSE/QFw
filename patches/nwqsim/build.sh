@@ -49,8 +49,8 @@ cmake ${QSRC}/NWQ-Sim \
         -DCMAKE_INSTALL_PREFIX=${BASE_INSTALL_DIR} \
         -DCMAKE_C_COMPILER=gcc \
         -DCMAKE_CXX_COMPILER=g++ \
-        -DPython_EXECUTABLE="${PYTHON_PATH}" \
-        -DHIP_ARCH=gfx90a && \
+        -DHIP_ARCH=gfx90a \
+        -DPython_EXECUTABLE="${PYTHON_PATH}" && \
 make -j && make install
 
 cp ${BASE_BUILD_DIR}/qasm/nwq_qasm ${QFW_MASTER_SETUP_BASE_DIR}/QFw/bin/circuit_runner.nwqsim
