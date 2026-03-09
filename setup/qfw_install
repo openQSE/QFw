@@ -130,6 +130,7 @@ def qfw_configure(cy):
 			f.write(f'    export QFW_DEP_BUILD_VERSION={VERSION}\n')
 			f.write(f'    {os.path.join(base_dir, "QFw", "patches", "tnqvm", "build.sh")}\n')
 			f.write(f'    {os.path.join(base_dir, "QFw", "patches", "nwqsim", "build.sh")}\n')
+			f.write(f'    {os.path.join(base_dir, "QFw", "DEFw", "build.sh")}\n')
 			f.write(f'else\n')
 			f.write(f'    echo "Skipping TNQVM and NWQSIM patch builds (--skip-patches set)"\n')
 			f.write(f'fi\n')
