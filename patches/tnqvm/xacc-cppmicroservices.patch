@@ -1,0 +1,20 @@
+diff --git a/util/src/FileSystem.cpp b/util/src/FileSystem.cpp
+index 9c78ccce..8e9d7ee1 100755
+--- a/util/src/FileSystem.cpp
++++ b/util/src/FileSystem.cpp
+@@ -35,6 +35,7 @@
+   #include <errno.h>
+   #include <string.h>
+   #include <unistd.h>   // getcwd
++  #include <cstdint>
+ 
+   #define US_STAT struct stat
+   #define us_stat stat
+@@ -50,6 +51,7 @@
+   #include <crtdbg.h>
+   #include <direct.h>
+   #include <stdint.h>
++  #include <cstdint>
+ #ifdef __MINGW32__
+   #include <dirent.h>
+ #else
