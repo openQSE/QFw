@@ -4,7 +4,8 @@ set -xe
 
 qfw_setup.sh
 
-qfw_srun.sh "$QFW_PATH/../applications/chemistry_example_aim2/$1"
+# takes the name of the chemistry app script to run
+qfw_srun.sh "$QFW_PATH/examples/tests/chemistry_example_aim2/$1"
 
 qfw_teardown.sh
 
