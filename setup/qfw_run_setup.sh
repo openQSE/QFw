@@ -1,6 +1,8 @@
 #!/bin/bash
 
-source $QFW_SETUP_PATH/qfw_activate
+if [[ -z "${_QFW_ACTIVE:-}" ]]; then
+	source $QFW_SETUP_PATH/qfw_activate --skip-patches
+fi
 
 hostname=$(hostname)
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml

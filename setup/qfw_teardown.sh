@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [[ -z "${_QFW_ACTIVE:-}" ]]; then
-	source $QFW_SETUP_PATH/qfw_activate
+	source $QFW_SETUP_PATH/qfw_activate --skip-patches
 fi
 
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml

@@ -29,8 +29,7 @@ echo "# SLURM_JOB_CPUS_PER_NODE: $SLURM_JOB_CPUS_PER_NODE"
 echo "#  SLURM_THREADS_PER_CORE: $SLURM_THREADS_PER_CORE"
 echo "#----"
 
-module use /sw/frontier/qhpc/modules/
-module load quantum/qsim
+source /sw/frontier/qhpc/QFw/setup/qfw_activate --skip-patches
 
 module list
 
@@ -40,7 +39,17 @@ set -xe
 
 qfw_setup.sh
 
-qfw_srun.sh "$QFW_PATH/../applications/test_supermarq.py"     \
+# test_supermarq.py takes
+#   run: sync or async
+#   iterations: number of iterations to run the test
+#   startquibt: The number of qubits to start with. Increases by one if
+#               increas is true
+#   shots: number of shots
+#   increase: increase the number of qubits per iteration
+#   method: ghz or vqe
+#   backend: The backend type to use: tnqvm, nwqsim or qb
+#
+qfw_srun.sh "$QFW_PATH/examples/tests/test_supermarq.py"     \
                --run $1 --iterations $2 --startqbit $3       \
                --increase $4 --method $5
 
@@ -51,21 +60,4 @@ echo "#########"
 
 echo "# END-TIME: $(date)"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+qfw_deactivate

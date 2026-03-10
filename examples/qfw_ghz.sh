@@ -1,8 +1,5 @@
 #!/bin/bash
 
-module use /sw/frontier/qhpc/modules/
-module load quantum/qsim
-
 uname -a
 echo "# START-TIME: $(date)"
 echo "#            SLURM_NNODES: $SLURM_NNODES"
@@ -18,17 +15,22 @@ echo "##################################"
 
 set -xe
 
-timestamp=$(date +"%Y%m%d_%H%M%S")
-random_string=$(uuidgen | tr '[:upper:]' '[:lower:]' | head -c 8)
-dir_name="qfwtmp_${timestamp}_${random_string}"
-export QFW_TMP_DIR_PATH=$QFW_TMP_PATH/${dir_name}
-
-echo $QFW_TMP_DIR_PATH
-
 qfw_setup.sh
 
-echo "Running with $2"
-qfw_srun.sh $QFW_PATH/../applications/dr_kim_qaoa/qaoa.py $2 $3 $4
+# takes:
+#   number of qubits
+#   simtype: nwqsim, tnqvm or qiskit-aer
+#   number of iterations
+#
+echo "Running $1 for $2 #qubits with $3 for $4 itrs"
+if [[ $1 == "qiskit" ]]; then
+    qfw_srun.sh $QFW_PATH/examples/tests/test_qiskit_ghz.py $2 $3 $4
+elif [[ $1 == "pennylane" ]]; then
+    qfw_srun.sh $QFW_PATH/examples/tests/test_pennylane_ghz.py $2 $3 $4
+else
+    echo "Error: Unknown option $1"
+    exit 1
+fi
 
 qfw_teardown.sh
 
