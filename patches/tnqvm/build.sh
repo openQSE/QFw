@@ -34,7 +34,7 @@ mkdir -p "${QSRC}"
 cd "${QSRC}"
 
 if [ ! -d xacc ]; then
-  git clone https://github.com/eclipse/xacc
+  git clone --recursive https://github.com/eclipse/xacc
 fi
 
 if [ ! -d tnqvm ]; then
@@ -70,6 +70,10 @@ patch -p1 -i "${PATCH_DIR}/exatn_tpls.patch"
 
 cd "${QSRC}/xacc"
 patch -p1 -i "${PATCH_DIR}/plugin.patch"
+patch -p1 -i "${PATCH_DIR}/xacc-cmakelist.patch"
+
+cd "${QSRC}/xacc/tpls/cppmicroservices"
+patch -p1 -i "${PATCH_DIR}/xacc-cppmicroservices.patch"
 
 cd "${QSRC}/tnqvm"
 patch -p1 -i "${PATCH_DIR}/tnqvm.patch"

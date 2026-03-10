@@ -1,0 +1,63 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 0431ea84..9bf71f23 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -28,18 +28,50 @@ endif()
+ 
+ find_package(Git QUIET)
+ 
+-if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git" AND NOT EXISTS "${CMAKE_SOURCE_DIR}/tpls/boost-cmake/CMakeLists.txt")
+-  # Update submodules as needed
++if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
++  # Initialize only submodules that are missing on disk.
++  # This avoids overwriting local patches in already-populated submodule trees.
+   option(GIT_SUBMODULE "Check submodules during build" ON)
+ 
+   if(GIT_SUBMODULE)
+-    message(STATUS "Submodule update")
+-    execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+-      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+-      RESULT_VARIABLE GIT_SUBMOD_RESULT)
++    set(XACC_SUBMODULE_MARKERS
++      "tpls/cppmicroservices|tpls/cppmicroservices/CMakeLists.txt"
++      "tpls/boost-cmake|tpls/boost-cmake/CMakeLists.txt"
++      "tpls/cpr|tpls/cpr/CMakeLists.txt"
++      "tpls/triq|tpls/triq/CMakeLists.txt"
++      "tpls/qsim|tpls/qsim/CMakeLists.txt"
++      "tpls/pybind11|tpls/pybind11/CMakeLists.txt"
++      "tpls/spdlog|tpls/spdlog/CMakeLists.txt"
++      "tpls/nlohmann|tpls/nlohmann/CMakeLists.txt"
++      "tpls/eigen|tpls/eigen/CMakeLists.txt"
++      "quantum/plugins/dwave/embedding/minorminer|quantum/plugins/dwave/embedding/minorminer/CMakeLists.txt"
++      "quantum/plugins/dwave/tpls/legacy-sapi-clients|quantum/plugins/dwave/tpls/legacy-sapi-clients/c-client/CMakeLists.txt"
++      "xacc/optimizer/nlopt-optimizers/nlopt|xacc/optimizer/nlopt-optimizers/nlopt/CMakeLists.txt"
++    )
++    set(XACC_MISSING_SUBMODULES "")
++
++    foreach(XACC_SUBMODULE_ENTRY IN LISTS XACC_SUBMODULE_MARKERS)
++      string(REPLACE "|" ";" XACC_SUBMODULE_INFO "${XACC_SUBMODULE_ENTRY}")
++      list(GET XACC_SUBMODULE_INFO 0 XACC_SUBMODULE_PATH)
++      list(GET XACC_SUBMODULE_INFO 1 XACC_SUBMODULE_MARKER)
++
++      if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${XACC_SUBMODULE_MARKER}")
++        list(APPEND XACC_MISSING_SUBMODULES "${XACC_SUBMODULE_PATH}")
++      endif()
++    endforeach()
++
++    if(XACC_MISSING_SUBMODULES)
++      message(STATUS "Initializing missing submodules: ${XACC_MISSING_SUBMODULES}")
++      execute_process(
++        COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive -- ${XACC_MISSING_SUBMODULES}
++        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
++        RESULT_VARIABLE GIT_SUBMOD_RESULT)
+ 
+-    if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+-      message(FATAL_ERROR "git submodule update --init failed with ${GIT_SUBMOD_RESULT}, please checkout submodules")
++      if(NOT GIT_SUBMOD_RESULT EQUAL "0")
++        message(FATAL_ERROR "git submodule update --init failed with ${GIT_SUBMOD_RESULT}, please checkout submodules")
++      endif()
++    else()
++      message(STATUS "All tracked submodule directories already exist; skipping submodule update.")
+     endif()
+   endif()
+ endif()
