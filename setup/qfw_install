@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import yaml, sys, getopt, os, stat
+import yaml, sys, getopt, os, stat, subprocess
 
 def qfw_configure(cy):
 	base_dir = cy.get('base-dir', None)
@@ -22,6 +22,7 @@ def qfw_configure(cy):
 	os.makedirs(qfw_setup_dir, exist_ok=True)
 
 	qfw_activate = os.path.join(qfw_setup_dir, 'qfw_activate')
+	qfw_build_deps = os.path.join(qfw_setup_dir, 'qfw_build_deps.sh')
 
 	with open(qfw_activate, 'w') as f:
 		f.write('#!/usr/bin/env bash\n')
@@ -32,11 +33,7 @@ def qfw_configure(cy):
 		f.write('    return 0\n')
 		f.write('fi\n\n')
 
-		f.write('_QFW_SKIP_PATCHES=0\n')
-		f.write('if [[ "${1:-}" == "--skip-patches" ]]; then\n')
-		f.write('    _QFW_SKIP_PATCHES=1\n')
-		f.write('fi\n\n')
-
+		f.write('export _QFW_OLD_PWD="$PWD"\n')
 		f.write('export _QFW_ACTIVE=1\n')
 		f.write('export _QFW_OLD_CMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"\n')
 		f.write('export _QFW_OLD_PE_PRODUCT_LIST="$PE_PRODUCT_LIST"\n')
@@ -110,32 +107,7 @@ def qfw_configure(cy):
 		f.write(f'export QFW_VENV_PATH={os.path.dirname(os.path.dirname(python_activate))}\n')
 		f.write(f'source {python_activate}\n\n')
 		f.write(f'export PYTHON_PATH=$(which python3)\n')
-		if '_QFW_BACKEND_INSTALLED' not in os.environ:
-			f.write(f'cd {base_dir}/QFw/backends\n')
-			f.write(f'pip3 install -e .\n')
-			f.write('export _QFW_BACKEND_INSTALLED=1\n')
-		if req_install:
-			if '_QFW_DEFW_REQ_INSTALLED' not in os.environ:
-				f.write(f'cd {base_dir}/QFw/DEFw\n')
-				f.write(f'python -m pip install -r requirements.txt\n')
-				f.write('export _QFW_DEFW_REQ_INSTALLED=1\n')
-			if '_QFW_REQ_INSTALLED' not in os.environ:
-				f.write(f'cd {base_dir}/QFw/setup\n')
-				f.write(f'python -m pip install -r requirements.txt\n')
-				f.write('export _QFW_REQ_INSTALLED=1\n')
-		if req_build:
-			from datetime import datetime
-			VERSION = datetime.now().strftime("%Y%m%d-%H%M%S")
-			f.write('\nif [[ $_QFW_SKIP_PATCHES -eq 0 ]]; then\n')
-			f.write(f'    export QFW_DEP_BUILD_VERSION={VERSION}\n')
-			f.write(f'    {os.path.join(base_dir, "QFw", "patches", "tnqvm", "build.sh")}\n')
-			f.write(f'    {os.path.join(base_dir, "QFw", "patches", "nwqsim", "build.sh")}\n')
-			f.write(f'    {os.path.join(base_dir, "QFw", "DEFw", "build.sh")}\n')
-			f.write(f'else\n')
-			f.write(f'    echo "Skipping TNQVM and NWQSIM patch builds (--skip-patches set)"\n')
-			f.write(f'fi\n')
-
-		f.write(f'cd {base_dir}/QFw\n\n')
+		f.write('cd "$_QFW_OLD_PWD"\n\n')
 
 		f.write('qfw_deactivate() {\n')
 		f.write('    if [[ -z "${_QFW_ACTIVE:-}" ]]; then\n')
@@ -168,19 +140,50 @@ def qfw_configure(cy):
 		f.write('    unset _QFW_OLD_PATH\n')
 		f.write('    unset _QFW_OLD_LD_LIBRARY_PATH\n')
 		f.write('    unset _QFW_OLD_PYTHONPATH\n')
-		f.write('    unset _QFW_BACKEND_INSTALLED\n')
-		f.write('    unset _QFW_DEFW_REQ_INSTALLED\n')
-		f.write('    unset _QFW_REQ_INSTALLED\n')
+		f.write('    unset _QFW_OLD_PWD\n')
 		f.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
 		f.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
 		f.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')
 		f.write('    unset QFW_VENV_PATH\n')
-		f.write('    unset _QFW_SKIP_PATCHES\n\n')
+		f.write('    unset PYTHON_PATH\n\n')
 
 		f.write('    unset -f qfw_deactivate\n')
 		f.write('}\n')
 
 	os.chmod(qfw_activate, os.stat(qfw_activate).st_mode | stat.S_IXUSR)
+
+	with open(qfw_build_deps, 'w') as f:
+		f.write('#!/usr/bin/env bash\n')
+		f.write('set -e\n\n')
+		f.write(f'source {qfw_activate}\n\n')
+		f.write('cleanup() {\n')
+		f.write('    if declare -f qfw_deactivate >/dev/null 2>&1; then\n')
+		f.write('        qfw_deactivate\n')
+		f.write('    fi\n')
+		f.write('}\n')
+		f.write('trap cleanup EXIT\n\n')
+
+		if req_install:
+			f.write(f'cd {base_dir}/QFw/backends\n')
+			f.write('pip3 install -e .\n')
+			f.write(f'cd {base_dir}/QFw/DEFw\n')
+			f.write('python -m pip install -r requirements.txt\n')
+			f.write(f'cd {base_dir}/QFw/setup\n')
+			f.write('python -m pip install -r requirements.txt\n\n')
+
+		if req_build:
+			f.write('export QFW_DEP_BUILD_VERSION=$(date +%Y%m%d-%H%M%S)\n')
+			f.write(f'{os.path.join(base_dir, "QFw", "patches", "tnqvm", "build.sh")}\n')
+			f.write(f'{os.path.join(base_dir, "QFw", "patches", "nwqsim", "build.sh")}\n')
+			f.write(f'{os.path.join(base_dir, "QFw", "DEFw", "build.sh")}\n\n')
+
+		if not req_install and not req_build:
+			f.write('echo "No dependency installation or build steps were requested."\n')
+
+		f.write(f'cd {base_dir}/QFw\n')
+
+	os.chmod(qfw_build_deps, os.stat(qfw_build_deps).st_mode | stat.S_IXUSR)
+	subprocess.run([qfw_build_deps], check=True)
 
 def print_help():
 	print("Usage:")
@@ -217,4 +220,3 @@ def main(argv):
 if __name__ == '__main__':
 	argv = sys.argv[1:]
 	main(argv)
-
