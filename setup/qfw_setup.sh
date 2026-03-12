@@ -36,10 +36,8 @@ het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh)
 #  and one of the Launchers.
 #
 #  2. Anything spawned on a node other than the one qfw_setup.py is
-#  running on will need to setup the environment manually. This is why we
-#  pass the module use path, and modules to load and the python
-#  environment to activate. These will precede the actual process which
-#  will run and therefore the process will have the correct environment.
+#  running on will need to setup the environment manually. That setup is
+#  now encapsulated by qfw_activate before the process is started.
 #
 #  3. The actual QPM service code shouldn't really worry about having to
 #  set up the environment for the QRC. The QRC should've been spawned
@@ -66,4 +64,3 @@ python3 $QFW_SETUP_PATH/qfw_setup.py --prun --groups "$het_groups" &
 echo "*******COMPLETED PHASE TWO SETUP*******"
 
 echo "Quantum Framework Initialized"
-
