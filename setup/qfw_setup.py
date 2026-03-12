@@ -34,6 +34,14 @@ def execute_ssh_command(host, command, daemonize=False):
 	except Exception as e:
 		return -1, '', str(e)
 
+def get_external_defw_env():
+	env = {}
+	for key in ['DEFW_EXTERNAL_SERVICES_PATH',
+				'DEFW_EXTERNAL_SERVICE_APIS_PATH']:
+		if key in os.environ:
+			env[key] = os.environ[key]
+	return env
+
 def start_qfw(host, hetgroups):
 	name = 'qfw_base_setup'
 	if 'QFW_DVM_URI_PATH' in os.environ:
@@ -112,6 +120,7 @@ def start_resmgr(target, launcher, env_dict):
 			'DEFW_PREF_PATH': pref_path,
 			'DEFW_PARENT_HOSTNAME': target}
 
+	env.update(get_external_defw_env())
 	env.update(env_dict)
 
 	pid = launcher.launch('defwp -d', env=env)
@@ -156,6 +165,7 @@ def start_qpm(resmgr, target, node_list, launcher, env_dict):
 		if 'QFW_DVM_URI_PATH' in os.environ:
 			env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
 
+		env.update(get_external_defw_env())
 		env.update(env_dict)
 
 		pid = launcher.launch('defwp -d', env=env, target=target)

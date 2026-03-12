@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import yaml, sys, getopt, os, stat, subprocess
+from datetime import datetime
 
 def qfw_configure(cy):
 	base_dir = cy.get('base-dir', None)
@@ -11,10 +12,17 @@ def qfw_configure(cy):
 	python_activate = cy.get('python-venv-activate', None)
 	req_install = cy.get('install-py-requirements', False)
 	req_build = cy.get('build-dependencies', False)
+	dep_build_version = cy.get('qfw-dep-build-version', None)
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: "
 						 "base-dir and python-venv-activate entries")
+
+	if req_build and not dep_build_version:
+		dep_build_version = datetime.now().strftime("%Y%m%d-%H%M%S")
+	if not req_build and not dep_build_version:
+		raise ValueError("Configuration file needs to specify qfw-dep-build-version "
+						 "when build-dependencies is false")
 
 	qfw_setup_dir = os.path.join(base_dir, 'QFw', 'setup')
 	qfw_env = os.path.join(base_dir, 'QFw', 'environment')
@@ -47,6 +55,13 @@ def qfw_configure(cy):
 		f.write(f'export _QFW_OLD_ACLOCAL_PATH=$ACLOCAL_PATH\n')
 
 		f.write(f'export QFW_MASTER_SETUP_BASE_DIR="{base_dir}"\n')
+		if dep_build_version:
+			f.write(f'export QFW_DEP_BUILD_VERSION="{dep_build_version}"\n')
+		f.write('if [[ -z "${QFW_DEP_BUILD_VERSION:-}" ]]; then\n')
+		f.write('    echo "ERROR: QFW_DEP_BUILD_VERSION is not set. Re-run qfw_install with build-dependencies enabled or set qfw-dep-build-version in the config." >&2\n')
+		f.write('    unset _QFW_ACTIVE\n')
+		f.write('    return 1\n')
+		f.write('fi\n\n')
 
 		if module_path:
 			f.write('export _QFW_USED_MODULES=1\n')
@@ -142,6 +157,7 @@ def qfw_configure(cy):
 		f.write('    unset _QFW_OLD_PYTHONPATH\n')
 		f.write('    unset _QFW_OLD_PWD\n')
 		f.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
+		f.write('    unset QFW_DEP_BUILD_VERSION\n')
 		f.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
 		f.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')
 		f.write('    unset QFW_VENV_PATH\n')
@@ -172,7 +188,9 @@ def qfw_configure(cy):
 			f.write('python -m pip install -r requirements.txt\n\n')
 
 		if req_build:
-			f.write('export QFW_DEP_BUILD_VERSION=$(date +%Y%m%d-%H%M%S)\n')
+			f.write('if [[ -z "${QFW_DEP_BUILD_VERSION:-}" ]]; then\n')
+			f.write(f'    export QFW_DEP_BUILD_VERSION="{dep_build_version}"\n')
+			f.write('fi\n')
 			f.write(f'{os.path.join(base_dir, "QFw", "patches", "tnqvm", "build.sh")}\n')
 			f.write(f'{os.path.join(base_dir, "QFw", "patches", "nwqsim", "build.sh")}\n')
 			f.write(f'{os.path.join(base_dir, "QFw", "DEFw", "build.sh")}\n\n')

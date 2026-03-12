@@ -1,9 +1,10 @@
 base-dir: /sw/frontier/qhpc
-qfw-module-path: /sw/frontier/qhpc/modules/
-qfw-module-load: quantum/qsim
+qfw-module-path: /sw/frontier/qhpc/QFw/environment/
+qfw-module-load: qsim
 extra-module-load : openblas cmake gcc-native/13.2 swig rocm
 module-unload : gcc-native/14.2 gcc/12.2.0
 python-venv-activate: /ccs/home/shehataa/tmp/qfw_venv/bin/activate
-install-py-requirements: True
-build-dependencies: True
+install-py-requirements: False
+build-dependencies: False
+qfw-dep-build-version: 20260311-150318
 

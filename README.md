@@ -1,205 +1,194 @@
-# QFw Setup Instructions
+# QFw
 
----
+QFw is a multi-node quantum execution framework built around DEFw,
+simulator-specific QPM services, and application-side APIs. It is
+designed to start a distributed simulation environment, launch
+simulator backends such as TNQVM and NWQ-Sim on allocated resources,
+and expose those services to Python applications and examples.
 
-## Initial Directory Setup
+## Installation Instructions
+
+### Clone the repositories
 
 ```bash
-mkdir qhpc
+mkdir -p qhpc
 cd qhpc
-```
-
-### Clone from Git
-
-```bash
-git@code.ornl.gov:hpcqc/applications.git
-git@code.ornl.gov:a2e/qfw.git
-git checkout qfw-initial
+git clone git@github.com:openQSE/QFw.git
+cd QFw
 git submodule update --init --recursive
 ```
-Alternatively you can explicitly checkout DEFw in the QFw directory
+
+The `DEFw` submodule is currently configured from:
+
 ```bash
-git clone git@github.com:amirshehataornl/DEFw.git
+git@github.com:openQSE/DEFw.git
 ```
 
----
+### Create an install configuration
 
-## Create a QFw install configuration YAML file
+QFw supports two installation modes.
 
-There are two types of configuration files outlined below. All fields in
-the configuration files are mandatory except highlighted ones.
+1. Module-based environment:
 
-  1. A configuration file based on the module utility with the following
-     yaml format
-
-```bash
-base-dir: </path/to/QFw/base/directory> # example: /sw/frontier/qhpc
-module-path: </path/to/module/files> # example: /sw/frontier/qhpc/modules/
-module-file: </path/to/module> # example: quantum/qsim
-python-venv-activate: </path/to/python/env/activation/file> # example: /home/user/tmp/qfw_venv/bin/activate
-install-py-requirements: [True | False] # Optional. True to install python requirements. Defaults to false.
+```yaml
+base-dir: </path/to/QFw/base/directory>               # example:
+/sw/frontier/qhpc
+qfw-module-path: </path/to/module/files>              # example:
+/sw/frontier/qhpc/QFw/environment/
+qfw-module-load: <module-name>                        # example: qsim
+python-venv-activate: </path/to/venv/bin/activate>
+install-py-requirements: [True | False]               # optional, default False
+build-dependencies: [True | False]                    # optional, default False
+qfw-dep-build-version: <existing build version>       # required if
+                                                      # no dependency build
 ```
 
-  2. A configuration file based on setting environment variables with the
-     following yaml format
+2. Explicit environment-variable setup:
 
-```bash
-base-dir: </path/to/QFw/base/directory> # example: /sw/frontier/qhpc
-python-venv-activate: </path/to/python/env/activation/file> # example: /home/user/tmp/qfw_venv/bin/activate
-libfabric-install: </path/to/libfabric/installation/directory>
-mpi-install: </path/to/open-mpi/installation/directory>
-dev-install: </path/to/base/directory/for/rocm-or-cuda> # example: /opt/rocm-6.2.4/
-install-py-requirements: [True | False] # Optional. True to install python requirements. Defaults to false.
+```yaml
+base-dir: </path/to/QFw/base/directory>
+python-venv-activate: </path/to/venv/bin/activate>
+libfabric-install: </path/to/libfabric/install>
+mpi-install: </path/to/openmpi/install>
+dev-install: </path/to/rocm-or-cuda/root>             # example:
+                                                      # /opt/rocm-6.2.4/
+install-py-requirements: [True | False]
+build-dependencies: [True | False]
+qfw-dep-build-version: <existing build version>       # required if
+                                                      # no dependency build
 ```
 
-## Run the installation script
+If `build-dependencies` is `True`, `qfw_install` generates a new
+`QFW_DEP_BUILD_VERSION` and uses it for TNQVM and NWQ-Sim builds. If
+`build-dependencies` is `False`, `qfw-dep-build-version` must already be
+provided so activation can resolve the versioned runtime paths.
+
+### Run the installer
 
 ```bash
-cd /path/to/QFw/base/directory/QFw/setup
-qfw_install -c /path/to/yaml-config [-o <qfw activation file name>]
+cd /path/to/QFw/setup
+./qfw_install -c /path/to/config.yaml
 ```
 
-The installation script will generate a `qfw_activate` script to activate
-the QFw environment. This includes activating the python virtual
-environment specified in the configuration. If indicated it'll install the
-DEFw and QFw python requirements
+This generates:
 
-## Run example tests
+- `setup/qfw_activate`: activates the QFw environment only
+- `setup/qfw_build_deps.sh`: installs Python requirements, builds
+  dependencies when requested, then deactivates
 
-### Allocate Compute Resources (Recommended Environment)
+## Run Instructions
 
-Use SLURM's heterogeneous feature to allocate two job components:
-
-- Job component one is used for the application
-- Job component two is used for the simulation environment
+### Activate the environment
 
 ```bash
-salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: -N 1 -t 4:00:00 -A <project> --network=single_node_vni
+source /path/to/QFw/setup/qfw_activate
 ```
 
----
+`qfw_activate` now fails fast if `QFW_DEP_BUILD_VERSION` is missing,
+because the simulator runtime paths are versioned.
 
-### Run simple QFw example scripts
+### Allocate resources
 
-`ssh` to the head node of job component one, if you weren't placed their
-automatically.
+QFw is typically run on Frontier with two SLURM heterogeneous job components:
 
-#### Activate the QFw environment
+- component 0: application side
+- component 1: simulation environment
 
 ```bash
-source /path/to/QFw/base/directory/QFw/setup/qfw_activate
+salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: \
+  -N 1 -t 4:00:00 -A <project> --network=single_node_vni
 ```
 
-Run:
+### Start QFw
+
+After activation, start the framework from the setup scripts:
+
 ```bash
-cd /path/to/QFw/base/directory/QFw/examples
-./qfw_test.sh
+cd /path/to/QFw/setup
+./qfw_setup.sh
+```
+
+For local development on one node:
+
+```bash
+cd /path/to/QFw/setup
+./qfw_dev_setup.sh
+```
+
+### Run examples
+
+```bash
+cd /path/to/QFw/examples
 ./qfw_supermarq.sh async 1 4 100 0 ghz nwqsim
 ```
 
-### Deactivate the QFw environment
+Example tests live under `examples/tests/` and can be run with:
 
-Run:
+```bash
+pytest examples/tests
+```
+
+### Deactivate the environment
+
 ```bash
 qfw_deactivate
 ```
 
----
+## High Level Design
 
-## Building the Distributed Execution Framework (DEFw)
+QFw uses DEFw as the distributed runtime and layers QFw-specific
+services and APIs on top. DEFw handles process startup, messaging, role
+management, and remote execution. QFw adds simulator-specific QPM
+services, QRC execution paths, installation helpers, and example
+applications.
 
-The DEFw is a C wrapper around python. It augments python with a set of
-features, including communication features which allow different
-applications running within the DEFw to communicate with each other via
-the implemented protocol.
+The current repository is organized around:
 
-The DEFw will need to be built before the QFw can be used
+- `setup/`: activation, installation, SLURM orchestration, and startup scripts
+- `services/`: QFw-owned external DEFw services such as
+  `svc_tnqvm_qpm` and `svc_nwqsim_qpm`
+- `service-apis/`: QFw-owned external DEFw service APIs such as `api_qpm`
+- `DEFw/`: the distributed runtime submodule
+- `bin/`: simulator runner binaries copied from dependency builds
+- `examples/`: runnable examples and integration-style tests
 
+At runtime:
 
-## Activate the QFw environment
+1. `qfw_activate` exports the QFw and DEFw environment.
+2. `qfw_setup.sh` starts PRTE, DEFw resource-manager/launcher
+   processes, and QPM services.
+3. Applications connect through `api_qpm` and reserve QPM services.
+4. QPM services launch simulator-specific QRC executions through the
+   installed backend runners.
 
-The first time you install make sure to set `install-py-requirements = True` in the QFw YAML install configuration file. This forces all python requirements to be installed. Follow the QFw installation steps described earlier.
+```mermaid
+flowchart LR
+    User[Python App or Example] --> API[QFw Service APIs]
+    API --> DEFwAgent[DEFw Agent]
+    DEFwAgent --> ResMgr[DEFw Resource Manager]
+    ResMgr --> Launcher[DEFw Launcher]
+    ResMgr --> QPM[QFw QPM Services]
+    QPM --> QRC[Simulator QRC Execution]
+    QRC --> Backend[TNQVM or NWQ-Sim Runner]
 
-```bash
-cd /path/to/QFw/base/directory/QFw/setup
-source ./qfw_activate
+    subgraph Runtime["DEFw Runtime"]
+        DEFwAgent
+        ResMgr
+        Launcher
+    end
+
+    subgraph QFw["QFw Layer"]
+        API
+        QPM
+        QRC
+        Backend
+    end
 ```
 
----
+QFw-specific services and APIs are loaded into DEFw through:
 
-## Build the DEFw
+- `DEFW_EXTERNAL_SERVICES_PATH`
+- `DEFW_EXTERNAL_SERVICE_APIS_PATH`
 
-### Clean Build Artifacts
-
-```bash
-cd QFw/DEFw/src
-rm -rf __pycache__
-rm -f *.so defwp
-cd ..
-```
-
-### Build DEFw
-
-```bash
-scons .
-```
-
----
-
-## Configure DEFw Runtime Preferences
-
-The DEFw runs all the QFw services:
-  - Resource manager
-  - QPM services for each of the simulator types supported
-  - QFw setup temporary services
-  - Python application
-
-The DEFw has a runtime configuration file which is picked up from the QFw tmp
-directory:
-
-```bash
-QFW_TMP_PATH=$home_dir/QFwTmp
-```
-
-This configuration file is used to set the logging verbosity, timeouts and
-other DEFw framework parameters.
-
-Each of the services above has a configuration file. If one is not there
-the DEFw will create one automatically. These are useful to manipulate
-for debugging purposes.
-
-- Resource Manager: `$QFW_TMP_PATH/defw_resmgr_pref.yaml`
-- QPM Services: `$QFW_TMP_PATH/defw_<qpm_type>_pref.yaml`
-- Application: `$QFW_TMP_PATH/defw_app_pref.yaml`
-
-Example configuration:
-
-```yaml
-# Editor to use within the DEFw environment
-# When run interactively, the DEFw allows the user to edit test scripts within
-# the DEFw environment.
-editor: /usr/bin/vim
-
-# Python log level.
-loglevel: debug
-
-# When running scripts autonomously, stop if halt_on_exception is set to true.
-halt_on_exception: false
-
-# Test scripts may only reside on the node running the master DEFw instance. The DEFw
-# can scp these scripts to the slaves when the slave needs them.
-# This feature is enabled or disabled based on the 'remote copy' field.
-remote copy: false
-
-# Timeout used for the DEFw RPC communication
-RPC timeout: 300
-
-# Maximum number of interfaces which the DEFw can use
-num_intfs: 3
-
-# The DEFw logs RPC communication to a file if cmd verbosity is set to true
-cmd verbosity: true
-```
----
-
-
+This keeps the DEFw framework generic while allowing QFw to evolve its
+simulator services independently.
