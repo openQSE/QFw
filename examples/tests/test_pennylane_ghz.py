@@ -4,6 +4,7 @@ import time
 
 from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
 
+
 def run_simulation(dev, itrs):
 	@qml.qnode(dev)
 	def circuit():
@@ -28,9 +29,13 @@ itrs = int(sys.argv[3])
 
 
 if sim_type == "nwqsim":
-	backend_instance = QFwBackend(betype=QFwBackendType.QFW_TYPE_NWQSIM, capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+	backend_instance = QFwBackend(
+		betype=QFwBackendType.QFW_TYPE_NWQSIM,
+		capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
 elif sim_type == "tnqvm":
-	backend_instance = QFwBackend(betype=QFwBackendType.QFW_TYPE_TNQVM, capability=QFwBackendCapability.QFW_CAP_TENSORNETWORK)
+	backend_instance = QFwBackend(
+		betype=QFwBackendType.QFW_TYPE_TNQVM,
+		capability=QFwBackendCapability.QFW_CAP_TENSORNETWORK)
 elif sim_type == "qiskit-aer":
 	backend_instance = qml.device('qiskit.aer', wires=nq)
 else:
