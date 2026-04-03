@@ -1,0 +1,18 @@
+# Test Pull Request
+#
+# Runs on every PR targeting main. Uses the shared reusable workflow so that
+# PR checks are identical to what runs on main after merge.
+#
+# To modify what is tested, edit test-reusable.yml.
+
+name: Test Pull Request
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    uses: ./.github/workflows/test-reusable.yml
+    with:
+      upload_artifacts: false
