@@ -1,4 +1,4 @@
-from tests.mock.fakes import FakeEventAPI, FakeQPM, FakeRuntime
+from tests.mock.fakes import FakeCircuit, FakeEventAPI, FakeQPM, FakeRuntime
 
 
 class FakeJob:
@@ -56,12 +56,13 @@ def test_backend_run_and_shutdown_use_job_and_runtime(monkeypatch):
 	monkeypatch.setattr(qfw_simulator.g_circ_metrics, "dump", lambda: None)
 
 	backend = qfw_simulator.QFwBackend()
-	circuit = qfw_simulator.QuantumCircuit(2, name="smoke")
+	circuit = FakeCircuit(2, name="smoke")
 
 	job = backend.run(circuit, shots=12, seed=21, seed_simulator=34)
 	backend.shutdown()
 
 	assert isinstance(job, FakeJob)
+	assert job.circuits is circuit
 	assert job.submit_called is True
 	assert job.options == {"seed_simulator": 34, "shots": 12, "seed": 21}
 	assert fake_qpm.shutdown_called is True

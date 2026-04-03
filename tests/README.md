@@ -66,6 +66,11 @@ Phase 1 covers:
   - event registration
   - job creation/submission
   - shutdown calling both QPM shutdown and runtime exit
+- backend smoke coverage intentionally uses fake collaborators and a
+  fake circuit input so the test remains stable across harmless import
+  cleanup and internal refactors
+- real circuit/payload behavior is covered in the `QFwJob` tests rather
+  than in backend smoke tests
 
 Phase 1 does not cover:
 
