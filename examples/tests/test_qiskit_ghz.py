@@ -1,8 +1,8 @@
-import qiskit
 from qiskit import QuantumCircuit
 from qiskit_aer import AerSimulator
 
 import sys
+import time
 
 # ------------------ QFW backend--------------------- #
 from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
@@ -14,13 +14,11 @@ itrs = int(sys.argv[3])
 
 qc = QuantumCircuit(nq)
 qc.h(0)
-for i in range(nq-1):
-	qc.cx(i, i+1)
+for i in range(nq - 1):
+	qc.cx(i, i + 1)
 qc.measure_all()
 # qc.draw()
 # print(qc)
-
-import time
 
 
 if sim_type == "nwqsim":
@@ -28,8 +26,8 @@ if sim_type == "nwqsim":
 	for i in range(itrs):
 		start_time = time.time()
 		simulator_obj = QFwBackend(betype=QFwBackendType.QFW_TYPE_NWQSIM, capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
-		# counts_nwqsim = qfw.execute(qc, shots=1024, backend="nwqsim") # this is sync, or call like .run(run_async=False)
-		qfw_job = simulator_obj.run(qc, shots=1024) # this is async job, but will poll and get result
+		# counts_nwqsim = qfw.execute(qc, shots=1024, backend="nwqsim") # sync
+		qfw_job = simulator_obj.run(qc, shots=1024)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
 		counts_nwqsim = res_obj.get_counts()
 		end_time = time.time()
@@ -40,8 +38,10 @@ elif sim_type == "tnqvm":
 	# ghz_tnqvm_times = []
 	for i in range(itrs):
 		start_time = time.time()
-		simulator_obj = QFwBackend(betype=QFwBackendType.QFW_TYPE_TNQVM, capability=QFwBackendCapability.QFW_CAP_TENSORNETWORK)
-		qfw_job = simulator_obj.run(qc, shots=1024) # this is async job, but will poll and get result
+		simulator_obj = QFwBackend(
+			betype=QFwBackendType.QFW_TYPE_TNQVM,
+			capability=QFwBackendCapability.QFW_CAP_TENSORNETWORK)
+		qfw_job = simulator_obj.run(qc, shots=1024)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
 		counts_tnqvm = res_obj.get_counts()
 		end_time = time.time()
@@ -54,7 +54,7 @@ elif sim_type == "qiskit-aer":
 	for i in range(itrs):
 		start_time = time.time()
 		simulator_obj = AerSimulator(method="statevector")
-		aer_job = simulator_obj.run(qc, shots=1024) # this is async job, but will poll and get result
+		aer_job = simulator_obj.run(qc, shots=1024)  # async job, but will poll and get result
 		res_obj = aer_job.result()
 		counts_tnqvm = res_obj.get_counts()
 		end_time = time.time()
