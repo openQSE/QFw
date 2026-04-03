@@ -139,8 +139,9 @@ qfw_deactivate
 To run the same checks as CI locally (not part of the QFw build or installation):
 
 ```bash
-pip install flake8        # one-time dependency install
-./.github/scripts/ci-checks.sh
+pip install flake8 pytest       # one-time dependency install
+./.github/scripts/ci-checks.sh  # lint and syntax
+./.github/scripts/ci-mock.sh    # CI-safe mock tests
 ```
 
 ## High Level Design
