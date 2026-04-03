@@ -27,6 +27,7 @@ from qiskit.primitives.primitive_job import PrimitiveJob
 
 from .qfw_simulator import QFwBackend, QFwBackendType, QFwBackendCapability
 
+
 def _run_circuits(
 	circuits: QuantumCircuit | list[QuantumCircuit],
 	backend: BackendV2,
