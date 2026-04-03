@@ -1,11 +1,11 @@
-import defw, logging
+import logging
 from defw_app_util import defw_get_resource_mgr, defw_reserve_service_by_name
-from time import sleep
-from defw_exception import DEFwNotReady
+
 
 def test_qpm(qpm_api):
 	logging.debug("Testing QPM")
 	logging.debug(qpm_api.test())
+
 
 def get_qpm(qpm_type=-1, qpm_cap=-1):
 	#Grab a qpm if one exists
@@ -21,5 +21,3 @@ def get_qpm(qpm_type=-1, qpm_cap=-1):
 		qpm_api.shutdown()
 
 	return qpm_api
-
-

@@ -1,10 +1,14 @@
-import logging, uuid, time, select
+import logging
+import uuid
+import time
+import select
 
 from qiskit import qasm2, QuantumCircuit
 from qiskit.providers import JobV1 as Job
 from qiskit.providers.jobstatus import JobStatus
 from qiskit.result import Result
 from defw_exception import DEFwError, DEFwInProgress, DEFwNotFound
+
 
 class QFwJob(Job):
 	def __init__(self, backend, qpm, event_api, qobj, options):
@@ -53,8 +57,8 @@ class QFwJob(Job):
 
 		start = time.time()
 		for circuit in circuits:
-			self._cid_list.append({self._run_experiment_async(circuit):
-						{'exp': circuit, 'status': 0}})
+			cid = self._run_experiment_async(circuit)
+			self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
 		self._submission_time = time.time() - start
 		return
 
@@ -68,8 +72,7 @@ class QFwJob(Job):
 		start = time.time()
 		logging.defw_app(f"result reader start time: {start}")
 		event_fd = self._qpm_event_api.fileno()
-		while (time.time() - start < circuit_run_timeout and \
-			total_circuits_completed != total_circ):
+		while time.time() - start < circuit_run_timeout and total_circuits_completed != total_circ:
 			readable, _, _ = select.select([event_fd], [], [], 1)
 			if len(readable) > 0 and event_fd not in readable:
 				raise DEFwError("Something wrong with select")
@@ -78,7 +81,9 @@ class QFwJob(Job):
 				results += r
 				total_circuits_completed += len(r)
 
-		logging.defw_app(f"Result reader thread ending. Events: {total_circuits_completed}. Expected: {total_circ}. Time: {time.time()}")
+		logging.defw_app(
+			f"Result reader thread ending. Events: {total_circuits_completed}."
+			f" Expected: {total_circ}. Time: {time.time()}")
 		for r in results:
 			res = r.get_event()
 			exp = None
@@ -94,7 +99,7 @@ class QFwJob(Job):
 
 	def _get_memory_from_counts(self, counts):
 		m = []
-		for k,v in counts.items():
+		for k, v in counts.items():
 			for i in range(v):
 				m.append(k)
 		return m
@@ -112,10 +117,10 @@ class QFwJob(Job):
 			output = res.get("result", {})
 
 			out = {
-					"counts": output,
-					"statevector": [],
-					"memory": self._get_memory_from_counts(output),
-					"time_taken": res['completion_time'] - res['exec_time']
+				"counts": output,
+				"statevector": [],
+				"memory": self._get_memory_from_counts(output),
+				"time_taken": res['completion_time'] - res['exec_time']
 			}
 
 			circuit = qr['exp']
@@ -170,13 +175,13 @@ class QFwJob(Job):
 		# will be too much communication with the backend.
 		return NotImplementedError
 		# query job_id and return one of -
-			# JobStatus.INITIALIZING
-			# JobStatus.QUEUED
-			# JobStatus.VALIDATING
-			# JobStatus.RUNNING
-			# JobStatus.CANCELLED
-			# JobStatus.DONE
-			# JobStatus.ERROR
+		# JobStatus.INITIALIZING
+		# JobStatus.QUEUED
+		# JobStatus.VALIDATING
+		# JobStatus.RUNNING
+		# JobStatus.CANCELLED
+		# JobStatus.DONE
+		# JobStatus.ERROR
 		# checking self._qfw_job_id
 		try:
 			self._qpm.read_cq(self._qfw_job_id)
