@@ -42,7 +42,6 @@ def async_wait_read_cq(api, total_circ):
 		except Exception as e:
 			if type(e) == DEFwInProgress:
 				prformat(fg.red+fg.bold, f"waiting on circuit completion")
-				wait += 1
 				sleep(1)
 				continue
 			else:
