@@ -1,6 +1,6 @@
 import sys, os, logging, yaml, requests, threading
 import svc_launcher, cdefw_global
-from time import sleep, time
+from time import sleep
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
@@ -20,16 +20,16 @@ def send_request(vqpu_url):
 		return -1
 
 def wait_for_vqpu(url, host, config):
-	time = 0
+	elapsed = 0
 	while True:
 		rc = send_request(url)
 		if rc != -1:
 			break
-		if time >= QB_START_TIMEOUT:
+		if elapsed >= QB_START_TIMEOUT:
 			break
 		logging.debug(f"wait_for_vqpu: {url}, {host}, {config}")
 		sleep(1)
-		time += 1
+		elapsed += 1
 		continue
 	if rc != -1:
 		config[host]['status'] = True
