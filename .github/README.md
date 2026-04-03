@@ -15,8 +15,8 @@
 All three trigger workflows call `test-reusable.yml` with identical steps, so PR and post-merge runs never diverge.
 
 **Current scope** (standard GitHub Actions runners):
-- **Flake8 lint** — `services/`, `service-apis/`, `backends/`, `examples/` using `DEFw/.flake8` config
-- **Syntax check** — `python -m py_compile` on all `.py` files in those directories
+- **`ci-checks`** — Flake8 lint on `services/`, `service-apis/`, `backends/`, `examples/`, plus `python -m py_compile` on those directories
+- **`ci-mock`** — `python -m pytest tests/mock -q`
 
 **Matrix:** Python 3.10 and 3.12 on ubuntu-latest.
 
@@ -24,17 +24,18 @@ All three trigger workflows call `test-reusable.yml` with identical steps, so PR
 
 ## Running checks locally
 
-`.github/scripts/ci-checks.sh` is the current local wrapper for the CI lint/syntax checks. It is what CI runs, and developers can run it locally before pushing.
+`.github/scripts/ci-checks.sh` and `.github/scripts/ci-mock.sh` are the local wrappers for the CI checks. CI runs them as separate steps so failures are distinguishable, and developers can run either one locally before pushing.
 
 ```bash
-pip install flake8        # one-time dependency install
+pip install flake8 pytest        # one-time dependency install
 ./.github/scripts/ci-checks.sh   # run lint and syntax checks
+./.github/scripts/ci-mock.sh     # run CI-safe mock tests
 ```
 
 > **CI helper location:** CI-oriented shell helpers live in `.github/scripts/`.
-> `test-reusable.yml` calls that script directly — edit it there and the change
+> `test-reusable.yml` calls those scripts directly — edit them there and the change
 > is automatically reflected in both CI and local runs. Update the `Dependencies`
-> comment in the script if new tools are required.
+> comment in each script if new tools are required.
 
 ## Merge controls (`check-merge-labels.yml`)
 
