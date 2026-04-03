@@ -140,7 +140,7 @@ To run the same checks as CI locally (not part of the QFw build or installation)
 
 ```bash
 pip install flake8        # one-time dependency install
-./scripts/ci-checks.sh
+./.github/scripts/ci-checks.sh
 ```
 
 ## High Level Design

@@ -24,14 +24,14 @@ All three trigger workflows call `test-reusable.yml` with identical steps, so PR
 
 ## Running checks locally
 
-`scripts/ci-checks.sh` is the single source of truth for all checks — it is what CI runs, and what developers should run locally before pushing.
+`.github/scripts/ci-checks.sh` is the current local wrapper for the CI lint/syntax checks. It is what CI runs, and developers can run it locally before pushing.
 
 ```bash
 pip install flake8        # one-time dependency install
-./scripts/ci-checks.sh   # run all checks
+./.github/scripts/ci-checks.sh   # run lint and syntax checks
 ```
 
-> **Single source of truth:** All checks are defined in `scripts/ci-checks.sh`.
+> **CI helper location:** CI-oriented shell helpers live in `.github/scripts/`.
 > `test-reusable.yml` calls that script directly — edit it there and the change
 > is automatically reflected in both CI and local runs. Update the `Dependencies`
 > comment in the script if new tools are required.
