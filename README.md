@@ -24,6 +24,12 @@ The `DEFw` submodule is currently configured from:
 git@github.com:openQSE/DEFw.git
 ```
 
+### Clone from Git (includes submodules)
+
+```bash
+git clone --recursive git@github.com:openQSE/QFw.git
+```
+
 ### Create an install configuration
 
 QFw supports two installation modes.
