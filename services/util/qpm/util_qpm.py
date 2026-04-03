@@ -3,7 +3,7 @@ from api_events import BaseEventAPI
 from defw_util import expand_host_list, round_half_up, round_to_nearest_power_of_two
 from defw import me
 import logging, uuid, time, queue, threading, logging, yaml
-from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress
+from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwOutOfResources
 import os
 from .util_circuit import Circuit, MAX_PPN
 from statistics import mean, median, stdev
