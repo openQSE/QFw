@@ -22,6 +22,20 @@ All three trigger workflows call `test-reusable.yml` with identical steps, so PR
 
 **Integration tests** require a running distributed framework (PRTE, DEFw, QPM services, simulator binaries) and must be run manually or on dedicated hardware. When self-hosted runners or a containerized stack become available, add steps to `test-reusable.yml`.
 
+## Running checks locally
+
+`scripts/ci-checks.sh` is the single source of truth for all checks — it is what CI runs, and what developers should run locally before pushing.
+
+```bash
+pip install flake8        # one-time dependency install
+./scripts/ci-checks.sh   # run all checks
+```
+
+> **Single source of truth:** All checks are defined in `scripts/ci-checks.sh`.
+> `test-reusable.yml` calls that script directly — edit it there and the change
+> is automatically reflected in both CI and local runs. Update the `Dependencies`
+> comment in the script if new tools are required.
+
 ## Merge controls (`check-merge-labels.yml`)
 
 - **`do-not-merge` label** — blocks merge until removed
