@@ -1,10 +1,11 @@
-from defw_agent_info import *
-import logging, sys, os
-import importlib, yaml, psutil
+from defw_agent_info import *  # noqa: F401,F403
+import sys
+import os
 from defw_exception import DEFwError, DEFwExecutionError
 from util.qpm.util_qrc import UTIL_QRC
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
+
 
 class QRC(UTIL_QRC):
 	def __init__(self, start=True):
@@ -24,10 +25,10 @@ class QRC(UTIL_QRC):
 			if catch == -1:
 				raise DEFwError({"Error": "Could not parse result!"})
 				return {"Error": "Could not parse result!"}
-			results = lines[catch+1:-1]
+			results = lines[catch + 1:-1]
 			counts = {}
 			for each_res_line in results:
-				k,v = each_res_line.split(":")
+				k, v = each_res_line.split(":")
 				k = k.strip('" ').strip()
 				v = int(v)
 				counts[k] = v
@@ -57,16 +58,17 @@ class QRC(UTIL_QRC):
 
 		try:
 			dvm = info["qfw_dvm_uri_path"]
-		except:
+		except KeyError:
 			dvm = "search"
 		exec_cmd = shutil.which(info["exec"])
 
-		cmd = f'{exec_cmd} --dvm {dvm} -x LD_LIBRARY_PATH ' \
-			  f'--mca btl ^tcp,ofi,vader,openib ' \
-			  f'--mca pml ^ucx --mca mtl ofi --mca opal_common_ofi_provider_include '\
-			  f'{info["provider"]} --bind-to core '\
-			  f'--np {info["np"]} --host {hosts} -v {nwqsim_executable} ' \
-			  f'-q {qasm_file} '
+		cmd = (
+			f'{exec_cmd} --dvm {dvm} -x LD_LIBRARY_PATH '
+			f'--mca btl ^tcp,ofi,vader,openib '
+			f'--mca pml ^ucx --mca mtl ofi --mca opal_common_ofi_provider_include '
+			f'{info["provider"]} --bind-to core '
+			f'--np {info["np"]} --host {hosts} -v {nwqsim_executable} '
+			f'-q {qasm_file} ')
 
 		if "num_shots" in info:
 			cmd += f' -shots {info["num_shots"]} '
@@ -74,7 +76,7 @@ class QRC(UTIL_QRC):
 		if "backend" in info:
 			cmd += f'-backend {info["backend"]} '
 		else:
-			cmd += f'-backend OPENMP'
+			cmd += '-backend OPENMP'
 
 		if "method" in info:
 			cmd += f' -sim {info["method"]}'
