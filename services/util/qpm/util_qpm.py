@@ -1,15 +1,19 @@
-from defw_agent_info import *
+from defw_agent_info import *  # noqa: F401,F403
 from api_events import BaseEventAPI
-from defw_util import expand_host_list, round_half_up, round_to_nearest_power_of_two
+from defw_util import expand_host_list
 from defw import me
-import logging, uuid, time, queue, threading, logging, yaml
-from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwOutOfResources
+import logging
+import uuid
+import time
+import queue
 import os
+from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwOutOfResources
 from .util_circuit import Circuit, MAX_PPN
 from statistics import mean, median, stdev
 
 qpm_initialized = False
 qpm_shutdown = False
+
 
 class UTIL_QPM:
 	def __init__(self, qrc, max_ppn=MAX_PPN, start=True):
@@ -43,8 +47,6 @@ class UTIL_QPM:
 		return cid
 
 	def delete_circuit(self, cid):
-		global qpm_initialized
-
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -67,15 +69,16 @@ class UTIL_QPM:
 		# If the number of hosts required is more than the total number
 		# of hosts then we can't run the circuit.
 		if num_hosts > len(self.free_hosts.keys()):
-			raise DEFwOutOfResources(f"hosts requested is more than available" \
-									 f" Available resources = {np}:{num_hosts}:{self.free_hosts}")
+			raise DEFwOutOfResources(
+				f"hosts requested is more than available"
+				f" Available resources = {np}:{num_hosts}:{self.free_hosts}")
 
 		tmp_resources = {}
 		consumed_res = {}
 		itrnp = 0
 		for host in self.free_hosts.keys():
 			if np == 0:
-				break;
+				break
 			tmp_resources[host] = self.free_hosts[host]
 			if self.free_hosts[host] >= np:
 				self.free_hosts[host] = self.free_hosts[host] - np
@@ -91,8 +94,9 @@ class UTIL_QPM:
 			# restore whatever was consumed
 			for k, v in tmp_resources.items():
 				self.free_hosts[k] = v
-			raise DEFwOutOfResources(f"Not enough slots to run simulation" \
-									 f" Available resources = {np}:{num_hosts}:{self.free_hosts}")
+			raise DEFwOutOfResources(
+				f"Not enough slots to run simulation"
+				f" Available resources = {np}:{num_hosts}:{self.free_hosts}")
 
 		circ.info['hosts'] = consumed_res
 		logging.debug(f"Circuit consumed: {consumed_res}")
@@ -136,8 +140,6 @@ class UTIL_QPM:
 		return circuit
 
 	def sync_run(self, info, common_run=None):
-		global qpm_initialized
-
 		if not common_run:
 			common_run = self.common_run
 		else:
@@ -157,8 +159,6 @@ class UTIL_QPM:
 		return result
 
 	def async_run_oor(self, cid, common_run=None):
-		global qpm_initialized
-
 		if not common_run:
 			common_run = self.common_run
 		else:
@@ -179,8 +179,6 @@ class UTIL_QPM:
 			raise e
 
 	def async_run(self, info, common_run=None):
-		global qpm_initialized
-
 		if not common_run:
 			common_run = self.common_run
 		else:
@@ -203,8 +201,6 @@ class UTIL_QPM:
 		return cid
 
 	def read_cq(self, cid=None):
-		global qpm_initialized
-
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -220,8 +216,6 @@ class UTIL_QPM:
 		return r
 
 	def peek_cq(self, cid=None):
-		global qpm_initialized
-
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -244,8 +238,6 @@ class UTIL_QPM:
 		self.qrc.register_event_notification(self.push_info)
 
 	def is_ready(self):
-		global qpm_initialized
-
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -253,15 +245,15 @@ class UTIL_QPM:
 
 	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc):
 		from api_qpm import QPMType, QPMCapability
-		from defw_agent_info import get_bit_list, get_bit_desc, \
-									Capability, DEFwServiceInfo
+		from defw_agent_info import get_bit_list, get_bit_desc, Capability, DEFwServiceInfo
 		t = get_bit_list(type_bits, QPMType)
 		c = get_bit_list(caps_bits, QPMCapability)
 		cap = Capability(type_bits, caps_bits, get_bit_desc(t, c))
-		info = DEFwServiceInfo(svc_name, svc_desc,
-							   self.__class__.__name__,
-							   self.__class__.__module__,
-							   cap, -1)
+		info = DEFwServiceInfo(
+			svc_name, svc_desc,
+			self.__class__.__name__,
+			self.__class__.__module__,
+			cap, -1)
 		return info
 
 	def reserve(self, svc, client_ep, *args, **kwargs):
@@ -304,7 +296,7 @@ class UTIL_QPM:
 			self.compute_stats(create_launch, 'create->launch')
 			self.compute_stats(launch_running, 'launch->running')
 			self.compute_stats(exec_completion, 'exec->completion')
-		except:
+		except Exception:
 			pass
 
 		if self.qrc:
@@ -315,4 +307,3 @@ class UTIL_QPM:
 
 	def test(self):
 		return "****UTIL QPM Test Successful****"
-
