@@ -12,19 +12,19 @@
 
 ## Test logic (`test-reusable.yml`)
 
-All three trigger workflows call `test-reusable.yml` with identical steps, so PR and post-merge runs never diverge.
+All three trigger workflows call `test-reusable.yml` with identical jobs, so PR and post-merge runs never diverge.
 
 **Current scope** (standard GitHub Actions runners):
 - **`ci-checks`** — Flake8 lint on `services/`, `service-apis/`, `backends/`, `examples/`, plus `python -m py_compile` on those directories
 - **`ci-mock`** — `python -m pytest tests/mock -q`
 
-**Matrix:** Python 3.10 and 3.12 on ubuntu-latest.
+**Matrix:** Python 3.10 and 3.12 on ubuntu-latest, configured once via the reusable workflow's shared `python_versions` input.
 
 **Integration tests** require a running distributed framework (PRTE, DEFw, QPM services, simulator binaries) and must be run manually or on dedicated hardware. When self-hosted runners or a containerized stack become available, add steps to `test-reusable.yml`.
 
 ## Running checks locally
 
-`.github/scripts/ci-checks.sh` and `.github/scripts/ci-mock.sh` are the local wrappers for the CI checks. CI runs them as separate steps so failures are distinguishable, and developers can run either one locally before pushing.
+`.github/scripts/ci-checks.sh` and `.github/scripts/ci-mock.sh` are the local wrappers for the CI checks. CI runs them as separate jobs so GitHub reports distinct checks for lint/syntax and mock-test failures, and developers can run either one locally before pushing.
 
 ```bash
 pip install flake8 pytest        # one-time dependency install
