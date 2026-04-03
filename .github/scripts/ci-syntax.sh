@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# .github/scripts/ci-checks.sh — CI/local wrapper for lint and syntax checks.
+# .github/scripts/ci-syntax.sh — CI/local wrapper for lint and syntax checks.
 #
-# Called by CI:  .github/workflows/test-reusable.yml ("Run ci-checks" step)
-# Run locally:   ./.github/scripts/ci-checks.sh
+# Called by CI:  .github/workflows/test-reusable.yml ("Run ci-syntax" step)
+# Run locally:   ./.github/scripts/ci-syntax.sh
 #
 # Dependencies:  pip install flake8
 set -e
@@ -16,4 +16,4 @@ flake8 --config .github/scripts/.flake8 $FLAKE8_DIRS
 echo "--- syntax check ---"
 find $FLAKE8_DIRS -name "*.py" -print0 | xargs -0 python -m py_compile
 
-echo "ci-checks passed."
+echo "ci-syntax passed."
