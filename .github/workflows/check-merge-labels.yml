@@ -1,0 +1,111 @@
+# Check Merge Labels and Dependencies
+#
+# This workflow prevents merging pull requests that have specific blocking conditions:
+# 1. Blocking labels (like do-not-merge)
+# 2. Unresolved PR dependencies
+#
+# Blocking labels:
+# - do-not-merge: Prevents merging until label is removed
+#
+# PR Dependencies:
+# Add "depends-on: #123" in the PR description to block merging until PR #123 is merged.
+# Supports multiple dependencies: "depends-on: #123, #456"
+# Case insensitive: "Depends-on:" or "depends-on:" both work
+#
+# The workflow will fail (preventing merge) if:
+# - Any blocking labels are found
+# - Any dependent PRs are not merged yet
+#
+# To allow merging:
+# - Remove blocking labels, AND
+# - Ensure all dependent PRs are merged (or remove depends-on if no longer needed)
+
+name: Check Merge Labels and Dependencies
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [labeled, unlabeled, opened, synchronize, reopened, edited]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  check-blocking-labels:
+    name: Check for blocking labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for do-not-merge label
+        run: |
+          echo "Checking for blocking labels on PR #${{ github.event.number }}"
+
+          # Get the labels from the PR
+          labels="${{ join(github.event.pull_request.labels.*.name, ' ') }}"
+          echo "PR labels: $labels"
+
+          # Check if do-not-merge label is present
+          if echo "$labels" | grep -q "do-not-merge"; then
+            echo "❌ PR has 'do-not-merge' label - blocking merge"
+            echo "Remove the 'do-not-merge' label to allow merging"
+            exit 1
+          fi
+
+          echo "✅ No blocking labels found - PR can be merged"
+
+  check-pr-dependencies:
+    name: Check PR dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check dependent PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking for PR dependencies on PR #${{ github.event.number }}"
+
+          # Get PR body and check for depends-on pattern
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body | jq -r '.body // ""')
+          echo "PR body: $PR_BODY"
+
+          # Extract dependency PR numbers (supports multiple: depends-on: #123, #456)
+          DEPS=$(echo "$PR_BODY" | grep -iE "depends-on:" | sed -E 's/.*depends-on:[[:space:]]*//i' | grep -oE '#[0-9]+' | sed 's/#//' | sort -u)
+
+          if [ -z "$DEPS" ]; then
+            echo "✅ No dependencies found - PR can be merged"
+            exit 0
+          fi
+
+          echo "Found dependencies: $(echo $DEPS | sed 's/^/#/' | tr '\n' ' ')"
+
+          # Check each dependency
+          FAILED=false
+          for DEP_PR in $DEPS; do
+            echo "Checking if PR #$DEP_PR is merged..."
+
+            # Check if PR exists and get its status
+            if ! gh pr view $DEP_PR --json state > /dev/null 2>&1; then
+              echo "❌ PR #$DEP_PR does not exist"
+              FAILED=true
+              continue
+            fi
+
+            # Check if PR merged (forcing state to UPPERCASE for consistency
+            STATE=$(gh pr view $DEP_PR --json state | jq -r '.state' | tr '[:lower:]' '[:upper:]')
+
+            if [ "$STATE" = "MERGED" ]; then
+              echo "✅ PR #$DEP_PR is merged"
+            else
+              echo "❌ PR #$DEP_PR is not merged (state: $STATE)"
+              FAILED=true
+            fi
+          done
+
+          if [ "$FAILED" = "true" ]; then
+            echo ""
+            echo "❌ Cannot merge - some dependencies are not satisfied"
+            echo "Note: Add 'depends-on: #123' in the PR description to specify dependencies"
+            exit 1
+          fi
+
+          echo "✅ All dependencies satisfied - PR can be merged"
