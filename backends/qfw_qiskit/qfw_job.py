@@ -4,6 +4,7 @@ from qiskit import qasm2, QuantumCircuit
 from qiskit.providers import JobV1 as Job
 from qiskit.providers.jobstatus import JobStatus
 from qiskit.result import Result
+from defw_exception import DEFwError, DEFwInProgress, DEFwNotFound
 
 class QFwJob(Job):
 	def __init__(self, backend, qpm, event_api, qobj, options):
@@ -178,13 +179,13 @@ class QFwJob(Job):
 			# JobStatus.ERROR
 		# checking self._qfw_job_id
 		try:
-			res = qpm_api.read_cq(self._qfw_job_id)
+			self._qpm.read_cq(self._qfw_job_id)
 		except Exception as e:
-			if type(e) == DEFwInProgress:
+			if isinstance(e, DEFwInProgress):
 				return JobStatus.RUNNING
-			elif type(e) == DEFwError:
+			elif isinstance(e, DEFwError):
 				return JobStatus.ERROR
-			elif type(e) == DEFwNotFound:
+			elif isinstance(e, DEFwNotFound):
 				return JobStatus.ERROR
 
 	def backend(self):
