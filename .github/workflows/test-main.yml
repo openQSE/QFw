@@ -1,0 +1,18 @@
+# Test Main Branch
+#
+# Runs on every push to main (i.e., after a PR is merged). Uses the same
+# reusable workflow as test-pr.yml to guarantee identical behavior.
+#
+# To modify what is tested, edit test-reusable.yml.
+
+name: Test Main Branch
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    uses: ./.github/workflows/test-reusable.yml
+    with:
+      upload_artifacts: true

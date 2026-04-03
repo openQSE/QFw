@@ -1,0 +1,70 @@
+# Test Release
+#
+# Runs when a version tag is pushed (e.g., after merging a release PR to main).
+# Runs the same tests as main branch builds, then creates a GitHub release.
+#
+# Typical workflow:
+#   1. Merge release PR into main
+#   2. Tag the merge commit: git tag v1.0.0 && git push origin v1.0.0
+#   3. This workflow runs tests and, if they pass, creates the GitHub release
+#
+# Prerelease detection: tags containing '-' (e.g., v1.0.0-beta) are marked
+# as prereleases automatically.
+#
+# To modify what is tested, edit test-reusable.yml.
+
+name: Test Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test:
+    uses: ./.github/workflows/test-reusable.yml
+    with:
+      upload_artifacts: true
+
+  create_release:
+    needs: [test]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Get version from tag
+      id: version
+      run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      id: create_release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: QFw ${{ steps.version.outputs.version }}
+        body: |
+          # QFw Release ${{ steps.version.outputs.version }}
+
+          ## Test Results
+          This release has been automatically tested on:
+          - **Python versions**: 3.10, 3.12
+          - **Operating system**: Ubuntu Linux
+
+          ## Installation
+          ```bash
+          git clone --recursive --branch ${{ github.ref_name }} https://github.com/${{ github.repository }}.git
+          cd QFw/setup
+          ./qfw_install -c /path/to/config.yaml
+          source qfw_activate
+          ```
+
+          ## Changes
+          See the commit history and merged pull requests for details on changes in this release.
+        draft: false
+        prerelease: ${{ contains(github.ref, '-') }}
