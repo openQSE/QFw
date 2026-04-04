@@ -1,16 +1,15 @@
-import uuid, time, copy, logging, threading, yaml, sys, select
+import time
+import logging
+import threading
+import yaml
+import sys
 from collections import deque
 
 from qiskit.providers import BackendV2, Options
-from qiskit.result import Result
 from qiskit.transpiler import Target
 
-from qiskit_aer.backends.name_mapping import NAME_MAPPING
-
-from qiskit import qasm2, QuantumCircuit
-
 from .qfw_job import QFwJob
-from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwNotFound, DEFwDumper
+from defw_exception import DEFwDumper
 from defw import me
 from .qfw_lookup_service import get_qpm
 from enum import IntFlag
@@ -21,8 +20,11 @@ from defw_common_def import g_rpc_metrics
 # This is a mirror of QPMType and QPMCapability. And they always need to
 # match. The point here is not to expose QPM specific information to the
 # application as they should always be abstracted away by the backend.
-QFwBackendType = IntFlag('QFwBackendType', {name.replace("QPM_", "QFW_"): member for name, member in QPMType.__members__.items()})
-QFwBackendCapability = IntFlag('QFwBackendCapability', {name.replace("QPM_", "QFW_"): member for name, member in QPMCapability.__members__.items()})
+_qfw_type_names = {name.replace("QPM_", "QFW_"): m for name, m in QPMType.__members__.items()}
+QFwBackendType = IntFlag('QFwBackendType', _qfw_type_names)
+_qfw_cap_names = {name.replace("QPM_", "QFW_"): m for name, m in QPMCapability.__members__.items()}
+QFwBackendCapability = IntFlag('QFwBackendCapability', _qfw_cap_names)
+
 
 class CircuitMetrics:
 	def __init__(self, window_size=4096):
@@ -45,9 +47,11 @@ class CircuitMetrics:
 	def add_time(self, start_time, end_time, label):
 		with self.lock:
 			if label not in self.db:
-				self.db[label] = {'window': deque(maxlen=self.window_size),
-												 'avg': 0.0, 'min': sys.maxsize, 'max': 0.0,
-												 'total': 0}
+				self.db[label] = {
+					'window': deque(maxlen=self.window_size),
+					'avg': 0.0, 'min': sys.maxsize, 'max': 0.0,
+					'total': 0
+				}
 			self.add_timing_locked(start_time, end_time, self.db[label])
 
 	def dump(self):
@@ -55,28 +59,29 @@ class CircuitMetrics:
 
 		dbcopy = copy.deepcopy(self.db)
 		for k, v in dbcopy.items():
-			del(v['window'])
+			del v['window']
 		logging.defw_app("QFw Backend statistics")
-		logging.defw_app(yaml.dump(dbcopy,
-						 Dumper=DEFwDumper, indent=2, sort_keys=False))
+		logging.defw_app(yaml.dump(dbcopy, Dumper=DEFwDumper, indent=2, sort_keys=False))
+
 
 g_circ_metrics = CircuitMetrics()
 
 EVENT_TYPE_CIRC_RESULT = 1
+
 
 class QFwBackend(BackendV2):
 	BACKEND_NAME = "QFw Backend"
 	BACKEND_VERSION = "1.0"
 	COMPLETION_TIMEOUT_SEC = 200
 
-	def __init__(self, betype=-1, capability=-1, target = None, properties = None):
+	def __init__(self, betype=-1, capability=-1, target=None, properties=None):
 		self.log_time = time.time()
 		self.qpm = get_qpm(betype, capability)
 		# register for events with the qpm
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
-		self.qpm.register_event_notification(me.my_endpoint(),
-							EVENT_TYPE_CIRC_RESULT, self.event_api.class_id())
+		self.qpm.register_event_notification(
+			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, self.event_api.class_id())
 
 		super().__init__(name=self.my_name())
 		self._target = target
@@ -104,16 +109,17 @@ class QFwBackend(BackendV2):
 			"backend_name": self.my_name(),
 			"backend_version": self.my_version(),
 			"n_qubits": 400,
-			"basis_gates": ['x', 'y', 'z', 'h', 's',
-							'sdg', 't', 'tdg', 'ri',
-							'rx', 'ry', 'rz', 'sx',
-							'p', 'u', 'cx', 'cy',
-							'cz', 'ch', 'cs', 'csdg',
-							'ct', 'ctdg', 'crx', 'cry',
-							'crz', 'csx', 'cp', 'cu',
-							'id', 'swap', 'm', 'ma',
-							'reset', 'u1', 'u2', 'u3',
-							'ccx', 'cswap', 'rxx', 'ryy', 'rzz'],
+			"basis_gates": [
+				'x', 'y', 'z', 'h', 's',
+				'sdg', 't', 'tdg', 'ri',
+				'rx', 'ry', 'rz', 'sx',
+				'p', 'u', 'cx', 'cy',
+				'cz', 'ch', 'cs', 'csdg',
+				'ct', 'ctdg', 'crx', 'cry',
+				'crz', 'csx', 'cp', 'cu',
+				'id', 'swap', 'm', 'ma',
+				'reset', 'u1', 'u2', 'u3',
+				'ccx', 'cswap', 'rxx', 'ryy', 'rzz'],
 			"coupling_map": None,
 			"simulator": True,
 			"local": True,
@@ -185,4 +191,3 @@ class QFwBackend(BackendV2):
 
 	def my_version(self):
 		return self.BACKEND_VERSION
-

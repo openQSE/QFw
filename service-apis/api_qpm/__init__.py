@@ -1,12 +1,13 @@
-from defw_util import prformat, fg, bg
-from .api_qpm import *
+from .api_qpm import *  # noqa: F401,F403
 
 # This is used by the infrastructure to display information about
 # the service module. The name is also used as a key through out the
 # infrastructure. Without it the service module will not load.
-svc_info = {'name': 'QPM',
-			'description': 'Quantum Platform Manager',
-			'version': 1.0}
+svc_info = {
+	'name': 'QPM',
+	'description': 'Quantum Platform Manager',
+	'version': 1.0
+}
 
 # This is used by the infrastructure to define all the service classes.
 # Each class should be a separate service. Each class should implement the
@@ -14,10 +15,12 @@ svc_info = {'name': 'QPM',
 #	query()
 #	reserve()
 #	release()
-service_classes = [QPM]
+service_classes = [QPM]  # noqa: F405
+
 
 def initialize():
 	pass
+
 
 def uninitialize():
 	pass

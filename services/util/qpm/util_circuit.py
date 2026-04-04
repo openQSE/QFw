@@ -1,20 +1,25 @@
-from defw_agent_info import *
+from defw_agent_info import *  # noqa: F401,F403
 from defw_util import round_half_up, round_to_nearest_power_of_two
-import logging, os, time
+import logging
+import os
+import time
 
 # Maximum number of processes per node
 MAX_PPN = 8
 # Maximum number of qubits per process
 MAX_QUBITS_PP = 10
 
+
 def set_max_ppn(ppn):
 	global MAX_PPN
 	MAX_PPN = ppn
+
 
 def set_max_qubits_pp(max_qubits):
 	global MAX_QUBITS_PP
 	logging.debug(f"set_max_qubits_pp({max_qubits})")
 	MAX_QUBITS_PP = max_qubits
+
 
 class CircuitStates:
 	UNDEF = 0
@@ -26,6 +31,7 @@ class CircuitStates:
 	LAUNCHING = 6
 	RESOURCES_CONSUMED = 7
 	FAIL = 8
+
 
 class Circuit:
 	def __init__(self, cid, info, free_res_cb):
@@ -47,7 +53,7 @@ class Circuit:
 
 		try:
 			self.info['exec'] = os.environ['QFW_LAUNCHER_BIN']
-		except:
+		except KeyError:
 			self.info['exec'] = 'mpirun'
 
 		try:
@@ -58,8 +64,8 @@ class Circuit:
 			# QFW_MODULE_LOADS is in the format:
 			#	mod1,mod2,...
 			mods = os.environ['QFW_MODULE_LOADS']
-			self.info['modules']['mods'] =  mods.split(',')
-		except:
+			self.info['modules']['mods'] = mods.split(',')
+		except KeyError:
 			self.info['modules'] = {}
 			self.info['modules']['use'] = ''
 			self.info['modules']['mods'] = ''
@@ -67,17 +73,16 @@ class Circuit:
 		# These must be defined
 		try:
 			self.info['provider'] = os.environ['QFW_OMPI_LIBFABRIC_PROV']
-		except:
+		except KeyError:
 			self.info['provider'] = 'shm+cxi:linkx'
 
 		try:
 			self.info['mapping'] = os.environ['QFW_OMPI_MAPPING']
-		except:
+		except KeyError:
 			self.info['mapping'] = 'ppr:1:l3cache'
 			#self.info['mapping'] = 'l3cache:pe=6'
 
-		self.info['qfw_dvm_uri_path'] = \
-				f"file:{os.environ['QFW_DVM_URI_PATH']}"
+		self.info['qfw_dvm_uri_path'] = f"file:{os.environ['QFW_DVM_URI_PATH']}"
 
 		# each 10 qubits requires 1 node added to the simulation
 		np = round_half_up(self.info['num_qubits'] / max_qubits)
@@ -86,8 +91,9 @@ class Circuit:
 		else:
 			np = round_to_nearest_power_of_two(np)
 		self.info['np'] = np
-		logging.debug(f"Setting number of processes to: {self.info['np']} " \
-					  f"for num qubits: {self.info['num_qubits']}")
+		logging.debug(
+			f"Setting number of processes to: {self.info['np']} "
+			f"for num qubits: {self.info['num_qubits']}")
 
 	def getState(self):
 		return self.__state
@@ -147,4 +153,3 @@ class Circuit:
 		if self.__state == CircuitStates.DONE:
 			return 'DONE'
 		return 'BUG'
-

@@ -1,21 +1,15 @@
-import sys, time, math
+import sys
+import time
+import math
 from mpi4py import MPI
-from qiskit.qasm2 import dumps
-from qiskit_aer import Aer, AerSimulator
-from qiskit.primitives import BackendSampler
-from qiskit_algorithms import VQE
 from qiskit import transpile
 from qiskit.quantum_info import SparsePauliOp
-from qiskit_algorithms.optimizers import COBYLA
-from qiskit.primitives import StatevectorEstimator
 from qiskit.circuit.library import TwoLocal
 from qiskit_nature.second_q.drivers import PySCFDriver
 from qiskit_nature.second_q.transformers import FreezeCoreTransformer
 from qiskit_nature.second_q.mappers import ParityMapper
 from qiskit_nature.second_q.problems import ElectronicStructureProblem
-from qiskit_nature.second_q.hamiltonians import ElectronicEnergy
 from scipy.optimize import minimize
-from qiskit.quantum_info import Operator
 import numpy as np
 
 # ------------------ QFW Backend -------------------- #
@@ -31,7 +25,7 @@ size = comm.Get_size()
 
 try:
 	max_iter = int(sys.argv[1])
-except:
+except (ValueError, IndexError):
 	max_iter = 50
 
 total_itr = 0
@@ -68,6 +62,7 @@ print(f"Rank {rank} of {size} calculationg sub_hamiltonian(size: {len(sub_hamilt
 # Define the variational form and optimizer
 ansatz = TwoLocal(4, rotation_blocks='ry', entanglement_blocks='cx', reps=2)
 
+
 # Function to run VQE manually
 def run_vqe(params):
 	global total_itr
@@ -86,6 +81,7 @@ def run_vqe(params):
 		ex = np.real(ex)
 	return ex
 
+
 # Initial parameters
 initial_params = np.random.random(ansatz.num_parameters)
 result = minimize(run_vqe, initial_params, method="COBYLA", options={'maxiter': max_iter})
@@ -101,4 +97,3 @@ if rank == 0:
 	print(f"Total number of circuit execution: {total_itr * size}")
 	print(f"Sub-energies: {all_energies}")
 	print(f"Combined ground state energy: {final_energy}")
-

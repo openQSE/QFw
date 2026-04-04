@@ -1,14 +1,18 @@
 from api_events import Event
-from defw_agent_info import *
-from defw_util import prformat, fg, bg
-from defw import me
-import logging, uuid, time, queue, threading, sys, os, io, contextlib
-import importlib, yaml, psutil
-from defw_exception import DEFwError, DEFwExists, DEFwExecutionError, DEFwInProgress, DEFwOutOfResources
-import svc_launcher, cdefw_global
+from defw_agent_info import *  # noqa: F401,F403
 from defw_util import print_thread_stack_trace_to_logger
+import logging
+import time
+import queue
+import threading
+import sys
+import os
+from defw_exception import DEFwExecutionError, DEFwInProgress, DEFwOutOfResources
+import svc_launcher
+import cdefw_global
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
+
 
 class UTIL_QRC:
 	# max work queue size
@@ -27,7 +31,7 @@ class UTIL_QRC:
 		self.worker_pool_rr = 0
 		self.num_workers = num_workers
 		self.num_worker_tasks = num_worker_tasks
-		self.num_cores = psutil.cpu_count(logical=False)
+		self.num_cores = psutil.cpu_count(logical=False)  # noqa: F405
 		logging.debug(f'num_cores = {self.num_cores} start = {start}')
 		if start:
 			self.launcher = svc_launcher.Launcher()
@@ -35,10 +39,12 @@ class UTIL_QRC:
 				with self.worker_pool_lock:
 					runner = threading.Thread(target=self.runner, args=(x,))
 					logging.debug(f"inserting {x} in the worker pool")
-					self.worker_pool.append({'thread': runner,
-											 'active_tasks': [],
-											 'queue': queue.Queue(),
-											 'state': UTIL_QRC.THREAD_STATE_FREE})
+					self.worker_pool.append({
+						'thread': runner,
+						'active_tasks': [],
+						'queue': queue.Queue(),
+						'state': UTIL_QRC.THREAD_STATE_FREE
+					})
 					runner.daemon = True
 					runner.start()
 
@@ -73,30 +79,32 @@ class UTIL_QRC:
 					circ.set_exec_done()
 				except Exception as e:
 					logging.critical(f"parse result failure = {e}")
-					output = "{result: missing, exception: "+ f"{e}" + "}"
+					output = "{result: missing, exception: " + f"{e}" + "}"
 					circ.set_fail()
 			else:
 				stdout = stdout.decode('utf-8')
 				stderr = stderr.decode('utf-8')
 				res = stdout + '\n' + stderr
-				output = "{result: "+ f"{res}" + "}"
+				output = "{result: " + f"{res}" + "}"
 				circ.set_fail()
 
 			try:
 				os.remove(qasm_file)
-			except:
+			except OSError:
 				pass
 
-			r = {'cid': cid,
-				 'result': output,
-				 'rc': rc,
-				 'launch_time': circ.launch_time,
-				 'creation_time': circ.creation_time,
-				 'exec_time': circ.exec_time,
-				 'completion_time': circ.completion_time,
-				 'resources_consumed_time': circ.resources_consumed_time,
-				 'cq_enqueue_time': time.time(),
-				 'cq_dequeue_time': -1 }
+			r = {
+				'cid': cid,
+				'result': output,
+				'rc': rc,
+				'launch_time': circ.launch_time,
+				'creation_time': circ.creation_time,
+				'exec_time': circ.exec_time,
+				'completion_time': circ.completion_time,
+				'resources_consumed_time': circ.resources_consumed_time,
+				'cq_enqueue_time': time.time(),
+				'cq_dequeue_time': -1
+			}
 
 			circ.free_resources(circ)
 
@@ -126,16 +134,17 @@ class UTIL_QRC:
 			# bind to core
 			# We can enhance this more to avoid core 0 in every l3 cache
 			bound_core = (my_id + 1) % self.num_cores
-			if not bound_core in super_affinity:
+			if bound_core not in super_affinity:
 				tmp = bound_core + 1
 				while tmp != bound_core:
 					if tmp in super_affinity:
 						bound_core = tmp
 						break
-					tmp  = (tmp + 1) % len(super_affinity)
+					tmp = (tmp + 1) % len(super_affinity)
 			try:
-				logging.debug(f'binding {threading.get_ident()} to ' \
-							  f'{bound_core} from  {os.sched_getaffinity(0)}')
+				logging.debug(
+					f'binding {threading.get_ident()} to '
+					f'{bound_core} from  {os.sched_getaffinity(0)}')
 				os.sched_setaffinity(0, {bound_core})
 			except Exception as e:
 				logging.critical(f'Failed to bind {threading.get_ident()} to {bound_core}')
@@ -144,8 +153,8 @@ class UTIL_QRC:
 		while not self.shutdown_workers:
 			empty = False
 			try:
-				circ = my_queue.get(timeout = 0.001) # sleep
-				if circ == None:
+				circ = my_queue.get(timeout=0.001)  # sleep
+				if circ is None:
 					self.shutdown_workers = True
 					continue
 			except queue.Empty:
@@ -155,7 +164,6 @@ class UTIL_QRC:
 
 			if not empty:
 				result = None
-				pid = -1
 				try:
 					task_info = self.run_circuit_async(circ)
 				except Exception as e:
@@ -168,7 +176,8 @@ class UTIL_QRC:
 						self.worker_pool[my_id]['state'] = UTIL_QRC.THREAD_STATE_FREE
 
 				if result:
-					r = {'cid': circ.get_cid(),
+					r = {
+						'cid': circ.get_cid(),
 						'result': result,
 						'rc': rc,
 						'launch_time': circ.launch_time,
@@ -177,7 +186,8 @@ class UTIL_QRC:
 						'completion_time': circ.completion_time,
 						'resources_consumed_time': circ.resources_consumed_time,
 						'cq_enqueue_time': time.time(),
-						'cq_dequeue_time': -1}
+						'cq_dequeue_time': -1
+					}
 					with self.circuit_results_lock:
 						self.circuit_results.append(r)
 						circ.free_resources(circ)
@@ -222,7 +232,7 @@ class UTIL_QRC:
 		tmp_dir = cdefw_global.get_defw_tmp_dir()
 
 		qasm_c = circ.info["qasm"]
-		qasm_file = os.path.join(tmp_dir, str(cid)+".qasm")
+		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
 		with open(qasm_file, 'w') as f:
 			f.write(qasm_c)
 
@@ -250,7 +260,7 @@ class UTIL_QRC:
 		tmp_dir = cdefw_global.get_defw_tmp_dir()
 
 		qasm_c = circ.info["qasm"]
-		qasm_file = os.path.join(tmp_dir, str(cid)+".qasm")
+		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
 		with open(qasm_file, 'w') as f:
 			f.write(qasm_c)
 
@@ -275,22 +285,25 @@ class UTIL_QRC:
 
 		if rc == 0:
 			circ.set_exec_done()
-			r = {'cid': cid,
-				 'result': output,
-				 'rc': rc,
-				 'launch_time': circ.launch_time,
-				 'creation_time': circ.creation_time,
-				 'exec_time': circ.exec_time,
-				 'completion_time': circ.completion_time,
-				 'resources_consumed_time': circ.resources_consumed_time,
-				 'cq_enqueue_time': time.time(),
-				 'cq_dequeue_time': -1 }
+			r = {
+				'cid': cid,
+				'result': output,
+				'rc': rc,
+				'launch_time': circ.launch_time,
+				'creation_time': circ.creation_time,
+				'exec_time': circ.exec_time,
+				'completion_time': circ.completion_time,
+				'resources_consumed_time': circ.resources_consumed_time,
+				'cq_enqueue_time': time.time(),
+				'cq_dequeue_time': -1
+			}
 			return r
 
 		circ.set_fail()
-		error_str = f"Circuit failed with {rc}:{output.decode('utf8')}:" \
-				f"{error.decode('utf-8')}:" \
-				f"total run-time = {circ.exec_time - circ.completion_time}"
+		error_str = (
+			f"Circuit failed with {rc}:{output.decode('utf8')}:"
+			f"{error.decode('utf-8')}:"
+			f"total run-time = {circ.exec_time - circ.completion_time}")
 		logging.debug(error_str)
 		raise DEFwExecutionError(error_str)
 
@@ -307,12 +320,11 @@ class UTIL_QRC:
 		with self.worker_pool_lock:
 			while True:
 				worker = self.worker_pool[i]
-				if worker['state'] == UTIL_QRC.THREAD_STATE_FREE and \
-				   worker['queue'].qsize() < self.num_worker_tasks:
-						worker['queue'].put(circ)
-						if worker['queue'].qsize() >= self.num_worker_tasks:
-							worker['state'] = UTIL_QRC.THREAD_STATE_BUSY
-						return cid
+				if worker['state'] == UTIL_QRC.THREAD_STATE_FREE and worker['queue'].qsize() < self.num_worker_tasks:
+					worker['queue'].put(circ)
+					if worker['queue'].qsize() >= self.num_worker_tasks:
+						worker['state'] = UTIL_QRC.THREAD_STATE_BUSY
+					return cid
 				else:
 					i = (i + 1) % self.num_workers
 					if i == idx:
@@ -328,4 +340,3 @@ class UTIL_QRC:
 		logging.critical("shutdown called")
 		self.launcher.shutdown()
 		self.shutdown_workers = True
-

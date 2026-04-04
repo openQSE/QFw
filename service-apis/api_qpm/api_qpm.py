@@ -3,6 +3,7 @@ from enum import IntFlag
 
 VERSION = 0.1
 
+
 class QPMType(IntFlag):
 	QPM_TYPE_HARDWARE = 1 << 0
 	QPM_TYPE_SIMULATOR = 1 << 1
@@ -10,13 +11,15 @@ class QPMType(IntFlag):
 	QPM_TYPE_TNQVM = 1 << 3
 	QPM_TYPE_NWQSIM = 1 << 4
 
+
 class QPMCapability(IntFlag):
 	QPM_CAP_TENSORNETWORK = 1 << 0
 	QPM_CAP_STATEVECTOR = 1 << 1
 
+
 class QPM(BaseRemote):
 	def __init__(self, si):
-		super().__init__(service_info = si)
+		super().__init__(service_info=si)
 
 	def delete_circuit(self, cid):
 		pass
@@ -44,4 +47,3 @@ class QPM(BaseRemote):
 
 	def shutdown(self):
 		pass
-

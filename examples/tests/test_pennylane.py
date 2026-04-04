@@ -1,7 +1,6 @@
 # got this originally from https://docs.pennylane.ai/projects/qiskit/en/latest/devices/aer.html
 
 import pennylane as qml
-import qiskit
 from qiskit_aer import noise
 
 # ------------------ QFW simulator ------------------ #
@@ -25,9 +24,12 @@ noise_model.add_all_qubit_quantum_error(error_2, ['cx'])
 # dev = qml.device('qiskit.aer', wires=2, noise_model=noise_model)
 # -------------------------------------------------------------------------- #
 # ---------------------- QFWSimulator Pennylane Device --------------------- #
-backend_instance = QFwBackend(betype=QFwBackendType.QFW_TYPE_NWQSIM, capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+backend_instance = QFwBackend(
+	betype=QFwBackendType.QFW_TYPE_NWQSIM,
+	capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
 dev = qml.device('qiskit.remote', wires=2, backend=backend_instance)
 # -------------------------------------------------------------------------- #
+
 
 # Create a PennyLane quantum node run on the device
 @qml.qnode(dev)
@@ -37,6 +39,7 @@ def circuit(x, y, z):
     qml.RX(x, wires=[0])
     qml.CNOT(wires=[0, 1])
     return qml.expval(qml.PauliZ(wires=1))
+
 
 # Result of noisy simulator
 print("\n \t ------------------- \n")

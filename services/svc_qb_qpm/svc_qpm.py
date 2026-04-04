@@ -1,6 +1,11 @@
-import sys, os, logging, yaml, requests, threading
-import svc_launcher, cdefw_global
-from time import sleep, time
+import os
+import logging
+import yaml
+import requests
+import threading
+import svc_launcher
+import cdefw_global
+from time import sleep
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
@@ -11,30 +16,33 @@ QB_START_TIMEOUT = 40
 MAX_VQPU_QUBITS = 15
 MAX_VQPU_PPN = 1
 
+
 def send_request(vqpu_url):
 	url = f'{vqpu_url}/get'  # This is a public testing endpoint
 	try:
 		response = requests.get(url)
 		return response.status_code
-	except:
+	except Exception:
 		return -1
 
+
 def wait_for_vqpu(url, host, config):
-	time = 0
+	elapsed = 0
 	while True:
 		rc = send_request(url)
 		if rc != -1:
 			break
-		if time >= QB_START_TIMEOUT:
+		if elapsed >= QB_START_TIMEOUT:
 			break
 		logging.debug(f"wait_for_vqpu: {url}, {host}, {config}")
 		sleep(1)
-		time += 1
+		elapsed += 1
 		continue
 	if rc != -1:
 		config[host]['status'] = True
 	else:
 		config[host]['status'] = False
+
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True):
@@ -47,9 +55,10 @@ class QPM(UTIL_QPM):
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC
 		from api_qpm import QPMType, QPMCapability
-		info = self.query_helper(QPMType.QPM_TYPE_QB | QPMType.QPM_TYPE_SIMULATOR,
-								 QPMCapability.QPM_CAP_STATEVECTOR,
-								 SERVICE_NAME, SERVICE_DESC)
+		info = self.query_helper(
+			QPMType.QPM_TYPE_QB | QPMType.QPM_TYPE_SIMULATOR,
+			QPMCapability.QPM_CAP_STATEVECTOR,
+			SERVICE_NAME, SERVICE_DESC)
 		logging.debug(f"QB {SERVICE_DESC}: {info}")
 		return info
 
@@ -60,8 +69,8 @@ class QPM(UTIL_QPM):
 		return super().create_circuit(info)
 
 	def start_vqpus(self):
-		cfg_template = os.path.join(os.environ['QFW_BIN_PATH'], 'QB',
-									'cfg', 'remote_backends.yaml')
+		cfg_template = os.path.join(
+			os.environ['QFW_BIN_PATH'], 'QB', 'cfg', 'remote_backends.yaml')
 		with open(cfg_template, 'r') as f:
 			self.qb_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
@@ -77,8 +86,7 @@ class QPM(UTIL_QPM):
 			self.vqpu_cfgs[k] = {}
 			self.vqpu_cfgs[k]['cfg'] = os.path.join(tmp_dir, host_fname)
 			with open(self.vqpu_cfgs[k]['cfg'], 'w') as f:
-				f.write(yaml.dump(self.qb_cfg, Dumper=DEFwDumper,
-								  indent=2, sort_keys=True))
+				f.write(yaml.dump(self.qb_cfg, Dumper=DEFwDumper, indent=2, sort_keys=True))
 			self.launcher = svc_launcher.Launcher()
 			self.vqpu_hosts.append(k)
 			vqpu_cmd = os.path.join(os.environ['QFW_BIN_PATH'], 'vqpu.sh')
@@ -87,8 +95,7 @@ class QPM(UTIL_QPM):
 			#env = {'VQPU_PORT': '8081', 'MODULEPATH': module_path}
 			env = {'VQPU_PORT': '8081'}
 			logging.debug(f"Starting vQPU on {k} with {self.vqpu_cfgs[k]['cfg']} with:\n\t{vqpu_cmd}\n\t{env}")
-			self.launcher.launch(f"{vqpu_cmd}",
-					env=env, target=k)
+			self.launcher.launch(f"{vqpu_cmd}", env=env, target=k)
 			#self.launcher.launch(f"{vqpu_cmd}", target=k)
 			thread = threading.Thread(target=wait_for_vqpu, args=(vqpu_url, k, self.vqpu_cfgs,))
 			threads.append(thread)
@@ -102,7 +109,6 @@ class QPM(UTIL_QPM):
 			if not v['status']:
 				self.launcher.shutdown()
 				raise DEFwNotFound(f"Failed to start vQPU on {k}")
-
 
 	def qb_common_run(self, cid):
 		circuit = self.circuits[cid]
@@ -132,4 +138,3 @@ class QPM(UTIL_QPM):
 
 	def test(self):
 		return "****QB QPM Test Successful****"
-
