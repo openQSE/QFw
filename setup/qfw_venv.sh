@@ -6,18 +6,15 @@ fi
 
 hostname=$(hostname)
 
-# Loop through all environment variables
+unset QFW_HET_GROUP
 for var in "${!SLURM_JOB_NODELIST_HET_GROUP_@}"; do
 	export QFW_HET_GROUP=1
 	break
 done
 
-# Check if SLURM_JOB_ID is set
-if [ -n "${SLURM_JOB_ID}" ]; then
-	# If SLURM_JOB_ID is set, assign it to QFW_JOB_ID
+if [ -n "${SLURM_JOB_ID:-}" ]; then
 	export QFW_JOB_ID=$SLURM_JOB_ID
 else
-	# If SLURM_JOB_ID is not set, assign -1 to QFW_JOB_ID
 	export QFW_JOB_ID=-1
 fi
 
@@ -40,4 +37,3 @@ if [[ $? -ne 0 ]]; then
 	echo "Command failed, exiting."
 	exit 1
 fi
-

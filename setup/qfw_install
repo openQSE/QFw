@@ -46,10 +46,21 @@ def qfw_configure(cy):
 	cxx = cy.get('cxx', None)
 	fc = cy.get('fc', None)
 	hip_arch = cy.get('hip-arch', None)
+	runtime_mode = cy.get('runtime-mode', None)
+	require_het_groups = cy.get('require-het-groups', None)
+	tmp_dir = cy.get('tmp-dir', None)
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: "
 						 "base-dir and python-venv-activate entries")
+
+	if runtime_mode is None:
+		runtime_mode = 'container' if cy.get('install-profile', '').strip().lower() == 'container' else 'frontier'
+	runtime_mode = runtime_mode.strip().lower()
+	if runtime_mode not in ['frontier', 'container']:
+		raise ValueError(f"Unsupported runtime-mode '{runtime_mode}'")
+	if require_het_groups is None:
+		require_het_groups = True
 
 	if req_build and not dep_build_version:
 		dep_build_version = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -88,6 +99,10 @@ def qfw_configure(cy):
 		f.write(f'export _QFW_OLD_ACLOCAL_PATH=$ACLOCAL_PATH\n')
 
 		f.write(f'export QFW_MASTER_SETUP_BASE_DIR="{base_dir}"\n')
+		f.write(f'export QFW_RUNTIME_MODE="{runtime_mode}"\n')
+		f.write(f'export QFW_REQUIRE_HET_GROUPS="{"yes" if require_het_groups else "no"}"\n')
+		if tmp_dir:
+			f.write(f'export QFW_MASTER_SETUP_TMP_DIR="{tmp_dir}"\n')
 		if dep_build_version:
 			f.write(f'export QFW_DEP_BUILD_VERSION="{dep_build_version}"\n')
 		f.write('if [[ -z "${QFW_DEP_BUILD_VERSION:-}" ]]; then\n')
@@ -200,6 +215,9 @@ def qfw_configure(cy):
 		f.write('    unset _QFW_OLD_PWD\n')
 		f.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
 		f.write('    unset QFW_DEP_BUILD_VERSION\n')
+		f.write('    unset QFW_RUNTIME_MODE\n')
+		f.write('    unset QFW_REQUIRE_HET_GROUPS\n')
+		f.write('    unset QFW_MASTER_SETUP_TMP_DIR\n')
 		f.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
 		f.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')
 		f.write('    unset QFW_VENV_PATH\n')

@@ -1,4 +1,5 @@
 install-profile: container
+runtime-mode: container
 base-dir: /workspace/qfw-container-base
 python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
 libfabric-install: /opt/qfw/libfabric

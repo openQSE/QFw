@@ -16,8 +16,12 @@ export DEFW_LOAD_NO_INIT=svc_launcher
 export DEFW_ONLY_LOAD_MODULE=svc_resmgr
 export DEFW_DISABLE_RESMGR=yes
 
-filtered_env=$(env | grep "SLURM_JOB_NODELIST_HET_GROUP_1")
-output=$(python3 $QFW_SETUP_PATH/extract_head_node.py $filtered_env)
+if env | grep -q "^SLURM_JOB_NODELIST_HET_GROUP_1="; then
+	filtered_env=$(env | grep "SLURM_JOB_NODELIST_HET_GROUP_1")
+	output=$(python3 $QFW_SETUP_PATH/extract_head_node.py "$filtered_env")
+else
+	output="${SLURM_JOB_NODELIST:-$(hostname)}"
+fi
 
 node=$(echo "$output" | tr '\n' ' ' | \
 	/usr/bin/python3 -c "import sys;print(sys.stdin.read().split()[0])")

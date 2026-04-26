@@ -87,6 +87,13 @@ If `build-dependencies` is `True`, `qfw_install` generates a new
 `build-dependencies` is `False`, `qfw-dep-build-version` must already be
 provided so activation can resolve the versioned runtime paths.
 
+`runtime-mode` controls how QFw interprets the allocation and temp-path
+layout. Supported values are:
+
+- `frontier`: keep the Frontier-oriented assumptions
+- `container`: use the mounted workspace for temp files while still
+  supporting the same Slurm heterogeneous startup flow
+
 ### Run the installer
 
 ```bash
