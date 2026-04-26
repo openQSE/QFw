@@ -42,6 +42,10 @@ def qfw_configure(cy):
 	req_install = cy.get('install-py-requirements', False)
 	req_build = cy.get('build-dependencies', False)
 	dep_build_version = cy.get('qfw-dep-build-version', None)
+	cc = cy.get('cc', None)
+	cxx = cy.get('cxx', None)
+	fc = cy.get('fc', None)
+	hip_arch = cy.get('hip-arch', None)
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: "
@@ -147,6 +151,15 @@ def qfw_configure(cy):
 				f.write(f'export PATH="{gcc_root}/bin:$PATH"\n')
 				f.write(f'export GCC_PATH={gcc_root}\n')
 				f.write(f'export GCC_PREFIX={gcc_root}\n')
+
+		if cc:
+			f.write(f'export QFW_MASTER_SETUP_CC="{cc}"\n')
+		if cxx:
+			f.write(f'export QFW_MASTER_SETUP_CXX="{cxx}"\n')
+		if fc:
+			f.write(f'export QFW_MASTER_SETUP_FC="{fc}"\n')
+		if hip_arch:
+			f.write(f'export QFW_MASTER_SETUP_HIP_ARCH="{hip_arch}"\n')
 
 		f.write(f'export QFW_VENV_PATH={os.path.dirname(os.path.dirname(python_activate))}\n')
 		f.write(f'source {python_activate}\n\n')

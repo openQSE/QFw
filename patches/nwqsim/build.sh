@@ -6,6 +6,9 @@ set -xe
 # Build configuration
 # -------------------------------
 VERSION=${QFW_DEP_BUILD_VERSION}
+CC_BIN=${QFW_MASTER_SETUP_CC:-gcc}
+CXX_BIN=${QFW_MASTER_SETUP_CXX:-g++}
+HIP_ARCH=${QFW_MASTER_SETUP_HIP_ARCH:-gfx90a}
 
 SRC_ROOT=${QFW_MASTER_SETUP_BASE_DIR}/source
 BASE_INSTALL_DIR=${QFW_MASTER_SETUP_BASE_DIR}/install/${VERSION}/NWQSIM/
@@ -48,9 +51,9 @@ echo "#### BUILDING NWQ-Sim: ${QSRC}/NWQ-Sim"
 cd ${BASE_BUILD_DIR} && \
 cmake ${QSRC}/NWQ-Sim \
         -DCMAKE_INSTALL_PREFIX=${BASE_INSTALL_DIR} \
-        -DCMAKE_C_COMPILER=gcc \
-        -DCMAKE_CXX_COMPILER=g++ \
-        -DHIP_ARCH=gfx90a \
+        -DCMAKE_C_COMPILER="${CC_BIN}" \
+        -DCMAKE_CXX_COMPILER="${CXX_BIN}" \
+        -DHIP_ARCH="${HIP_ARCH}" \
         -DPython_EXECUTABLE="${PYTHON_PATH}" && \
 make -j && make install
 
@@ -59,4 +62,3 @@ cp ${BASE_BUILD_DIR}/qasm/nwq_qasm ${QFW_MASTER_SETUP_BASE_DIR}/QFw/bin/circuit_
 if [ $? -ne 0 ]; then
     exit $?
 fi
-
