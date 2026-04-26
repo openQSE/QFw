@@ -39,6 +39,8 @@ QFw supports three installation modes.
 ```yaml
 base-dir: </path/to/QFw/base/directory>               # example:
 /sw/frontier/qhpc
+runtime-mode: frontier
+mpi-transport-mode: ofi
 qfw-module-path: </path/to/module/files>              # example:
 /sw/frontier/qhpc/QFw/environment/
 qfw-module-load: <module-name>                        # example: qsim
@@ -53,6 +55,13 @@ qfw-dep-build-version: <existing build version>       # required if
 
 ```yaml
 base-dir: </path/to/QFw/base/directory>
+runtime-mode: frontier | container                    # optional, default:
+                                                      # frontier unless
+                                                      # install-profile is
+                                                      # container
+mpi-transport-mode: ofi | auto                        # optional, default:
+                                                      # ofi for frontier,
+                                                      # auto for container
 python-venv-activate: </path/to/venv/bin/activate>
 libfabric-install: </path/to/libfabric/install>
 mpi-install: </path/to/openmpi/install>
@@ -68,11 +77,14 @@ qfw-dep-build-version: <existing build version>       # required if
 
 ```yaml
 install-profile: container
+runtime-mode: container
+mpi-transport-mode: auto
 base-dir: /workspace/qfw-container-base
 python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
 libfabric-install: /opt/qfw/libfabric
 mpi-install: /opt/qfw/openmpi
 dev-install: /workspace/qfw-container-base/rocm      # or /opt/rocm
+require-het-groups: False                             # optional, default False
 build-dependencies: [True | False]
 qfw-dep-build-version: <existing build version>      # required if
                                                       # no dependency build
@@ -103,6 +115,17 @@ path:
 You can also add an `mpi-env:` mapping in the config to export explicit
 MPI or MCA environment variables after activation.
 
+Additional optional config keys used by the current installer and
+dependency-build path include:
+
+- `install-py-requirements`
+- `cc`, `cxx`, `fc`
+- `hip-arch`
+- `tmp-dir`
+- `require-het-groups`
+- `mpi-env`
+- `openblas-root`, `cmake-root`, `gcc-root`
+
 ### Run the installer
 
 ```bash
@@ -122,6 +145,14 @@ NWQ-Sim, and DEFw.
 
 ```bash
 cd /path/to/QFw/setup
+./qfw_build_deps.sh
+```
+
+For the container profile, the normal sequence is:
+
+```bash
+cd /workspace/qfw-container-base/QFw/setup
+./qfw_install -c qfw_config_sample_container.yaml
 ./qfw_build_deps.sh
 ```
 
@@ -148,6 +179,14 @@ salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: \
   -N 1 -t 4:00:00 -A <project> --network=single_node_vni
 ```
 
+In container mode, heterogeneous groups are optional. A normal Slurm
+allocation is acceptable when `runtime-mode: container` and
+`require-het-groups: False` are used:
+
+```bash
+salloc -N 2 -n 2
+```
+
 ### Start QFw
 
 After activation, start the framework from the setup scripts:
@@ -157,14 +196,24 @@ cd /path/to/QFw/setup
 ./qfw_setup.sh
 ```
 
-For local development on one node:
+`qfw_setup.sh` remains the primary startup path. It performs the PRTE
+startup phase and then launches the QFw framework phase.
 
-```bash
-cd /path/to/QFw/setup
-./qfw_dev_setup.sh
-```
+For container-oriented local development there is currently no
+`qfw_dev_setup.sh` wrapper in this repository. The nearest equivalents
+are:
+
+- `./qfw_smoke_test.sh` for a staged container validation path
+- `python3 qfw_setup.py -x --groups "$($QFW_SETUP_PATH/qfw_extract_groups.sh)"`
+  for direct local `--dev-run` startup from an activated environment
+
+The direct `--dev-run` path is a lower-level developer interface than
+`qfw_setup.sh`.
 
 ### Run examples
+
+After `qfw_setup.sh` has started the framework, applications can be run
+through the normal example scripts.
 
 ```bash
 cd /path/to/QFw/examples
@@ -177,6 +226,32 @@ Example tests live under `examples/tests/` and can be run with:
 pytest examples/tests
 ```
 
+### Container smoke test
+
+After activation you can run the container-oriented smoke path:
+
+```bash
+cd /path/to/QFw/setup
+./qfw_smoke_test.sh
+```
+
+This validates:
+
+- activation and import wiring
+- local PRTE DVM startup
+- local QPM startup through `qfw_setup.py --dev-run`
+- the built-in DEFw smoke suite
+
+This helper is intended for the container-oriented workflow. It is not a
+replacement for a full multi-node Frontier run.
+
+Optional flags:
+
+```bash
+./qfw_smoke_test.sh --skip-prte
+./qfw_smoke_test.sh --skip-qpm
+./qfw_smoke_test.sh --skip-defw-suite
+```
 ### Deactivate the environment
 
 ```bash
