@@ -1,5 +1,6 @@
 base-dir: /sw/frontier/qhpc
 runtime-mode: frontier
+mpi-transport-mode: ofi
 qfw-module-path: /sw/frontier/qhpc/QFw/environment/
 qfw-module-load: qsim
 extra-module-load : openblas cmake gcc-native/13.2 swig rocm

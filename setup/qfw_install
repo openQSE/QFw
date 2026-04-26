@@ -49,6 +49,8 @@ def qfw_configure(cy):
 	runtime_mode = cy.get('runtime-mode', None)
 	require_het_groups = cy.get('require-het-groups', None)
 	tmp_dir = cy.get('tmp-dir', None)
+	mpi_transport_mode = cy.get('mpi-transport-mode', None)
+	mpi_env_overrides = cy.get('mpi-env', {})
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: "
@@ -61,6 +63,13 @@ def qfw_configure(cy):
 		raise ValueError(f"Unsupported runtime-mode '{runtime_mode}'")
 	if require_het_groups is None:
 		require_het_groups = True
+	if mpi_transport_mode is None:
+		mpi_transport_mode = 'auto' if runtime_mode == 'container' else 'ofi'
+	mpi_transport_mode = mpi_transport_mode.strip().lower()
+	if mpi_transport_mode not in ['auto', 'ofi']:
+		raise ValueError(f"Unsupported mpi-transport-mode '{mpi_transport_mode}'")
+	if mpi_env_overrides and not isinstance(mpi_env_overrides, dict):
+		raise ValueError("mpi-env must be a mapping of environment variable names to values")
 
 	if req_build and not dep_build_version:
 		dep_build_version = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -101,6 +110,7 @@ def qfw_configure(cy):
 		f.write(f'export QFW_MASTER_SETUP_BASE_DIR="{base_dir}"\n')
 		f.write(f'export QFW_RUNTIME_MODE="{runtime_mode}"\n')
 		f.write(f'export QFW_REQUIRE_HET_GROUPS="{"yes" if require_het_groups else "no"}"\n')
+		f.write(f'export QFW_MPI_TRANSPORT_MODE="{mpi_transport_mode}"\n')
 		if tmp_dir:
 			f.write(f'export QFW_MASTER_SETUP_TMP_DIR="{tmp_dir}"\n')
 		if dep_build_version:
@@ -175,6 +185,8 @@ def qfw_configure(cy):
 			f.write(f'export QFW_MASTER_SETUP_FC="{fc}"\n')
 		if hip_arch:
 			f.write(f'export QFW_MASTER_SETUP_HIP_ARCH="{hip_arch}"\n')
+		for env_name, env_value in mpi_env_overrides.items():
+			f.write(f'export {env_name}="{env_value}"\n')
 
 		f.write(f'export QFW_VENV_PATH={os.path.dirname(os.path.dirname(python_activate))}\n')
 		f.write(f'source {python_activate}\n\n')
@@ -217,6 +229,7 @@ def qfw_configure(cy):
 		f.write('    unset QFW_DEP_BUILD_VERSION\n')
 		f.write('    unset QFW_RUNTIME_MODE\n')
 		f.write('    unset QFW_REQUIRE_HET_GROUPS\n')
+		f.write('    unset QFW_MPI_TRANSPORT_MODE\n')
 		f.write('    unset QFW_MASTER_SETUP_TMP_DIR\n')
 		f.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
 		f.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')

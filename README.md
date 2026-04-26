@@ -94,6 +94,15 @@ layout. Supported values are:
 - `container`: use the mounted workspace for temp files while still
   supporting the same Slurm heterogeneous startup flow
 
+`mpi-transport-mode` controls whether QFw forces Open MPI onto the OFI
+path:
+
+- `ofi`: export the existing OFI-focused MCA settings
+- `auto`: leave transport selection to the Open MPI installation
+
+You can also add an `mpi-env:` mapping in the config to export explicit
+MPI or MCA environment variables after activation.
+
 ### Run the installer
 
 ```bash
