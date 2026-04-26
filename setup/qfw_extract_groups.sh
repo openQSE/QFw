@@ -19,8 +19,8 @@ done
 
 # Check if any group was found
 if [ "$found_group" -eq 0 ]; then
-	# If no groups were found, set result to "GROUP_0:GROUP_1"
-	result="GROUP_0=$(hostname):GROUP_1=$(hostname)"
+	echo "QFw requires a Slurm heterogeneous allocation" >&2
+	exit 1
 else
 	# Join array elements with colon
 	result="${groups[*]}"

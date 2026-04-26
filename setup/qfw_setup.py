@@ -34,6 +34,35 @@ def execute_ssh_command(host, command, daemonize=False):
 	except Exception as e:
 		return -1, '', str(e)
 
+def runtime_mode():
+	return os.environ.get('QFW_RUNTIME_MODE', 'frontier').strip().lower()
+
+def in_container_mode():
+	return runtime_mode() == 'container'
+
+def qfw_tmp_dir():
+	return os.environ.get('QFW_TMP_PATH', os.path.join(os.environ['QFW_MASTER_SETUP_BASE_DIR'], 'tmp'))
+
+def execute_local_command(command, daemonize=False):
+	if daemonize:
+		process = subprocess.Popen(
+			command,
+			shell=True,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+			start_new_session=True,
+		)
+		return 0, '', ''
+	process = subprocess.Popen(
+		command,
+		shell=True,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+	)
+	stdout, stderr = process.communicate()
+	return process.returncode, stdout, stderr
+
 def get_external_defw_env():
 	env = {}
 	for key in ['DEFW_EXTERNAL_SERVICES_PATH',
@@ -69,16 +98,19 @@ def start_qfw(host, hetgroups):
 	#execute_ssh_command(host, cmd, daemonize=True)
 
 	qfw_activate = os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_activate')
-	cmd = f"source {qfw_activate} >& /tmp/qfw_activate_result && "
-	cmd += f'nohup qfw_run_setup.sh "{hetgroups}" >& /tmp/qfw_run_setup.out'
+	tmp_dir = qfw_tmp_dir()
+	cmd = f"source {qfw_activate} >& {tmp_dir}/qfw_activate_result && "
+	cmd += f'nohup qfw_run_setup.sh "{hetgroups}" >& {tmp_dir}/qfw_run_setup.out'
 	prformat(fg.cyan+fg.bold, f"Starting QFW: {cmd}")
-	defw_exec_remote_cmd(cmd, host, deamonize=True)
+	if in_container_mode() and host == socket.gethostname():
+		execute_local_command(cmd, daemonize=True)
+	else:
+		defw_exec_remote_cmd(cmd, host, deamonize=True)
 
 def start_dvm(node_list):
-	# get the job id of the head node
 	try:
 		job_id = os.environ['QFW_JOB_ID']
-	except:
+	except KeyError:
 		job_id = -1
 	host_list = ",".join(f"{node}:*" for node in node_list)
 	if 'QFW_DVM_URI_PATH' in os.environ:
@@ -87,7 +119,8 @@ def start_dvm(node_list):
 		uri = os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 					 'prte_dvm', 'dvm-uri')
 	qfw_activate = os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_activate')
-	cmd = f"source {qfw_activate} >& /tmp/qfw_activate_for_prte && "
+	tmp_dir = qfw_tmp_dir()
+	cmd = f"source {qfw_activate} >& {tmp_dir}/qfw_activate_for_prte && "
 	if job_id != -1 and 'QFW_HET_GROUP' in os.environ:
 		cmd += f'qfw_run_prte.sh {os.path.split(uri)[0]} "{host_list}" {job_id}'
 	else:
@@ -332,9 +365,9 @@ if __name__ == '__main__':
 	logging.debug(f"Running on {socket.gethostname()} with args {sys.argv}")
 	argv = sys.argv[1:]
 	try:
-		options, args = getopt.getopt(argv, "g:u:o:p:rdsxh",
+		options, args = getopt.getopt(argv, "g:u:o:p:rdsh",
 		 ["groups=", "use=", "mods=", "env=",
-		  "prun", "dvm", "shutdown", "dev-run", "help"])
+		  "prun", "dvm", "shutdown", "help"])
 	except:
 		prformat(fg.red+fg.bold, f"bad command line arguments")
 		me.exit()
@@ -346,7 +379,6 @@ if __name__ == '__main__':
 	env_vars = ''
 	shutdown = False
 	prun = False
-	dev_run = False
 	launcher = None
 	for name, value in options:
 			if name in ['-g', '--groups']:
@@ -363,8 +395,6 @@ if __name__ == '__main__':
 				prun = True
 			elif name in ['-s', '--shutdown']:
 				shutdown = True
-			elif name in ['x', '--dev-run']:
-				dev_run = True
 			else:
 				prformat(fg.red+fg.bold, f"Unknown parameters {name}:{value}")
 				me.exit()
@@ -387,12 +417,7 @@ if __name__ == '__main__':
 	if env_vars:
 		env_dict = parse_env_vars(env_vars)
 
-	if dev_run:
+	if hostname == g1_node_list[0] and not dvm and not shutdown:
+		# get a launcher object
 		launcher = svc_launcher.Launcher()
-		start(g0_node_list, g1_node_list, launcher, False, None, env_dict)
-	else:
-		if hostname == g1_node_list[0] and not dvm and not shutdown:
-			# get a launcher object
-			launcher = svc_launcher.Launcher()
-		start(g0_node_list, g1_node_list, launcher, shutdown, dvm, env_dict)
-
+	start(g0_node_list, g1_node_list, launcher, shutdown, dvm, env_dict)

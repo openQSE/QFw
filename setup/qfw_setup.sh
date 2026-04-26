@@ -12,7 +12,8 @@
 
 source $QFW_SETUP_PATH/qfw_venv.sh
 
-het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh)
+hostname=$(hostname)
+het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh) || exit 1
 
 # we need to propagate the environment to the other nodes. That's why
 # we're explicitly using srun. We can't run the dvm with srun, so we
