@@ -13,12 +13,49 @@ fi
 
 AMD_CURPATH="${QFW_MASTER_SETUP_DEV_INSTALL%/}"
 
-if [[ ! "${AMD_CURPATH}" =~ /rocm-([0-9]+(\.[0-9]+)*)$ ]]; then
-	echo "ERROR: QFW_MASTER_SETUP_DEV_INSTALL must end with /rocm-<version>"
-	return 1 2>/dev/null || exit 1
-fi
+detect_rocm_version() {
+	local root="$1"
+	local version_file
+	local candidate
 
-MOD_LEVEL="${BASH_REMATCH[1]}"
+	if [[ -n "${QFW_MASTER_SETUP_DEV_VERSION:-}" ]]; then
+		echo "${QFW_MASTER_SETUP_DEV_VERSION}"
+		return 0
+	fi
+
+	if [[ "${root}" =~ /rocm-([0-9]+(\.[0-9]+)*)$ ]]; then
+		echo "${BASH_REMATCH[1]}"
+		return 0
+	fi
+
+	for version_file in \
+		"${root}/.info/version" \
+		"${root}/.info/version-dev" \
+		"${root}/lib/hip/version"; do
+		if [[ -f "${version_file}" ]]; then
+			candidate=$(grep -Eo '[0-9]+(\.[0-9]+)+' "${version_file}" | head -n1)
+			if [[ -n "${candidate}" ]]; then
+				echo "${candidate}"
+				return 0
+			fi
+		fi
+	done
+
+	if command -v "${root}/bin/hipconfig" >/dev/null 2>&1; then
+		candidate=$("${root}/bin/hipconfig" --version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n1)
+		if [[ -n "${candidate}" ]]; then
+			echo "${candidate}"
+			return 0
+		fi
+	fi
+
+	return 1
+}
+
+MOD_LEVEL=$(detect_rocm_version "${AMD_CURPATH}") || {
+	echo "ERROR: Unable to detect ROCm version from ${AMD_CURPATH}. Set QFW_MASTER_SETUP_DEV_VERSION if needed."
+	return 1 2>/dev/null || exit 1
+}
 
 PKG_CONFIG_PREFIX="/usr/lib64"
 

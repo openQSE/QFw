@@ -11,6 +11,10 @@ export PATH_HIPBLAS_INC=$ROCM_PATH/include/hipblas
 export PATH_HIP_LIB=$ROCM_PATH/lib
 export PATH_HIPBLAS_LIB=$ROCM_PATH/lib
 
+CC_BIN=${QFW_MASTER_SETUP_CC:-gcc}
+CXX_BIN=${QFW_MASTER_SETUP_CXX:-g++}
+FC_BIN=${QFW_MASTER_SETUP_FC:-gfortran}
+
 # -------------------------------
 # Build configuration
 # -------------------------------
@@ -111,7 +115,7 @@ mkdir -p \
 echo "#### BUILDING EXATN"
 cd "${BASE_BUILD_DIR}/exatn"
 
-CC=gcc CXX=g++ FC=gfortran cmake \
+CC="${CC_BIN}" CXX="${CXX_BIN}" FC="${FC_BIN}" cmake \
   "${QSRC}/exatn" \
   -DGPU_CUDA=CUDA \
   -DPython_EXECUTABLE="${PYTHON_PATH}" \
@@ -134,7 +138,7 @@ make -j install
 echo "#### BUILDING XACC"
 cd "${BASE_BUILD_DIR}/xacc"
 
-CC=gcc CXX=g++ FC=gfortran cmake \
+CC="${CC_BIN}" CXX="${CXX_BIN}" FC="${FC_BIN}" cmake \
   "${QSRC}/xacc" \
   -DPython_EXECUTABLE="${PYTHON_PATH}" \
   -DCMAKE_INSTALL_PREFIX="${BASE_INSTALL_DIR}/xacc" \
@@ -153,7 +157,7 @@ make -j install
 echo "#### BUILDING TNQVM"
 cd "${BASE_BUILD_DIR}/tnqvm"
 
-CC=gcc CXX=g++ FC=gfortran cmake \
+CC="${CC_BIN}" CXX="${CXX_BIN}" FC="${FC_BIN}" cmake \
   "${QSRC}/tnqvm" \
   -DTNQVM_MPI_ENABLED=TRUE \
   -DXACC_DIR="${BASE_INSTALL_DIR}/xacc" \
@@ -169,4 +173,3 @@ make -j install
 cp ${BASE_BUILD_DIR}/tnqvm/examples/mpi/circuit_runner ${QFW_MASTER_SETUP_BASE_DIR}/QFw/bin/circuit_runner.tnqvm
 
 echo "### BUILD COMPLETE"
-
