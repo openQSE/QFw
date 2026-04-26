@@ -32,7 +32,7 @@ git clone --recursive git@github.com:openQSE/QFw.git
 
 ### Create an install configuration
 
-QFw supports two installation modes.
+QFw supports three installation modes.
 
 1. Module-based environment:
 
@@ -63,6 +63,24 @@ build-dependencies: [True | False]
 qfw-dep-build-version: <existing build version>       # required if
                                                       # no dependency build
 ```
+
+3. Container profile:
+
+```yaml
+install-profile: container
+base-dir: /workspace/qfw-container-base
+python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
+libfabric-install: /opt/qfw/libfabric
+mpi-install: /opt/qfw/openmpi
+dev-install: /workspace/qfw-container-base/rocm      # or /opt/rocm
+build-dependencies: [True | False]
+qfw-dep-build-version: <existing build version>      # required if
+                                                      # no dependency build
+```
+
+The container profile is a convenience wrapper around the explicit
+environment-variable mode. It does not load modules and defaults to the
+paths provided by the QFw Slurm container image.
 
 If `build-dependencies` is `True`, `qfw_install` generates a new
 `QFW_DEP_BUILD_VERSION` and uses it for TNQVM and NWQ-Sim builds. If
