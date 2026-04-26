@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import copy
-import yaml, sys, getopt, os, stat, subprocess
+import yaml, sys, getopt, os, stat
 from datetime import datetime
 
 
@@ -230,11 +230,17 @@ def qfw_configure(cy):
 		f.write(f'cd {base_dir}/QFw\n')
 
 	os.chmod(qfw_build_deps, os.stat(qfw_build_deps).st_mode | stat.S_IXUSR)
-	subprocess.run([qfw_build_deps], check=True)
 
 def print_help():
 	print("Usage:")
 	print("   ./qfw_install -c <config.yaml>")
+	print("")
+	print("This generates:")
+	print("   <base-dir>/QFw/setup/qfw_activate")
+	print("   <base-dir>/QFw/setup/qfw_build_deps.sh")
+	print("")
+	print("Run qfw_build_deps.sh separately to install Python requirements")
+	print("and build optional dependencies.")
 
 def main(argv):
 	try:

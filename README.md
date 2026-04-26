@@ -100,6 +100,15 @@ This generates:
 - `setup/qfw_build_deps.sh`: installs Python requirements, builds
   dependencies when requested, then deactivates
 
+The installer does not execute `qfw_build_deps.sh`. Run it as a separate
+step when you want to install Python requirements or build TNQVM,
+NWQ-Sim, and DEFw.
+
+```bash
+cd /path/to/QFw/setup
+./qfw_build_deps.sh
+```
+
 ## Run Instructions
 
 ### Activate the environment
