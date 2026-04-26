@@ -84,7 +84,6 @@ python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
 libfabric-install: /opt/qfw/libfabric
 mpi-install: /opt/qfw/openmpi
 dev-install: /workspace/qfw-container-base/rocm      # or /opt/rocm
-require-het-groups: False                             # optional, default False
 build-dependencies: [True | False]
 qfw-dep-build-version: <existing build version>      # required if
                                                       # no dependency build
@@ -122,7 +121,6 @@ dependency-build path include:
 - `cc`, `cxx`, `fc`
 - `hip-arch`
 - `tmp-dir`
-- `require-het-groups`
 - `mpi-env`
 - `openblas-root`, `cmake-root`, `gcc-root`
 
@@ -156,64 +154,171 @@ cd /workspace/qfw-container-base/QFw/setup
 ./qfw_build_deps.sh
 ```
 
-## Run Instructions
+## Step-By-Step Workflows
 
-### Activate the environment
+### Run QFw In The Containerized Slurm Environment
+
+This assumes:
+
+- the `QFw-SLURM-Cluster` repository is already up and running
+- the QFw checkout is mounted into the containers at
+  `/workspace/qfw-container-base/QFw`
+- you will run the commands below from inside the `slurmctld` container
+
+1. Enter the controller container:
+
+```bash
+cd /path/to/QFw-SLURM-Cluster
+./do_ssh.sh
+```
+
+2. Create the persistent venv in the mounted workspace if it does not
+   already exist:
+
+```bash
+python3 -m venv /workspace/qfw-container-base/venv
+source /workspace/qfw-container-base/venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+3. Go to the QFw setup directory:
+
+```bash
+cd /workspace/qfw-container-base/QFw/setup
+```
+
+4. Generate the activation and dependency-build scripts:
+
+```bash
+./qfw_install -c qfw_config_sample_container.yaml
+```
+
+5. Build QFw dependencies if needed:
+
+```bash
+./qfw_build_deps.sh
+```
+
+6. Activate the generated environment:
+
+```bash
+source /workspace/qfw-container-base/QFw/setup/qfw_activate
+```
+
+`qfw_activate` fails fast if `QFW_DEP_BUILD_VERSION` is missing, because
+the simulator runtime paths are versioned.
+
+7. Take a heterogeneous allocation when you want to mirror the normal
+   Frontier-style run shape:
+
+```bash
+salloc -N 1 -n 1 : -N 1 -n 1
+```
+
+8. Start QFw:
+
+```bash
+cd /workspace/qfw-container-base/QFw/setup
+./qfw_setup.sh
+```
+
+`qfw_setup.sh` is the primary startup path. It performs the PRTE startup
+phase and then launches the QFw framework phase.
+
+9. Run a simple smoke path or example:
+
+```bash
+./qfw_smoke_test.sh
+```
+
+or:
+
+```bash
+cd /workspace/qfw-container-base/QFw/examples
+./qfw_supermarq.sh async 1 4 100 0 ghz nwqsim
+```
+
+Example tests live under `examples/tests/` and can be run with:
+
+```bash
+cd /workspace/qfw-container-base/QFw
+pytest examples/tests
+```
+
+10. Tear down or deactivate when finished:
+
+```bash
+qfw_deactivate
+```
+
+QFw expects a Slurm heterogeneous allocation in both container and cluster
+mode. Use `qfw_setup.sh` as the supported startup path.
+
+### Run QFw On A Real Cluster
+
+This is the Frontier-style workflow using modules or explicit cluster
+installs.
+
+1. Clone the repository and submodules:
+
+```bash
+mkdir -p qhpc
+cd qhpc
+git clone git@github.com:openQSE/QFw.git
+cd QFw
+git submodule update --init --recursive
+```
+
+2. Choose a config file under `setup/` or create your own. For a
+   module-based install, start from `setup/qfw_config_sample.yaml`. For
+   an explicit-path install, start from `setup/qfw_config_sample_nomod.yaml`.
+
+3. Edit the config so the paths match the cluster:
+
+```bash
+cd setup
+cp qfw_config_sample.yaml my_cluster.yaml
+```
+
+4. Generate the activation and dependency-build scripts:
+
+```bash
+./qfw_install -c my_cluster.yaml
+```
+
+5. Build dependencies if required by the config:
+
+```bash
+./qfw_build_deps.sh
+```
+
+6. Activate QFw:
 
 ```bash
 source /path/to/QFw/setup/qfw_activate
 ```
 
-`qfw_activate` now fails fast if `QFW_DEP_BUILD_VERSION` is missing,
-because the simulator runtime paths are versioned.
+`qfw_activate` fails fast if `QFW_DEP_BUILD_VERSION` is missing, because
+the simulator runtime paths are versioned.
 
-### Allocate resources
-
-QFw is typically run on Frontier with two SLURM heterogeneous job components:
-
-- component 0: application side
-- component 1: simulation environment
+7. Take the two-component heterogeneous allocation:
 
 ```bash
 salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: \
   -N 1 -t 4:00:00 -A <project> --network=single_node_vni
 ```
 
-In container mode, heterogeneous groups are optional. A normal Slurm
-allocation is acceptable when `runtime-mode: container` and
-`require-het-groups: False` are used:
-
-```bash
-salloc -N 2 -n 2
-```
-
-### Start QFw
-
-After activation, start the framework from the setup scripts:
+8. Start QFw:
 
 ```bash
 cd /path/to/QFw/setup
 ./qfw_setup.sh
 ```
 
-`qfw_setup.sh` remains the primary startup path. It performs the PRTE
-startup phase and then launches the QFw framework phase.
+`qfw_setup.sh` is the primary startup path. It performs the PRTE startup
+phase and then launches the QFw framework phase.
 
-For container-oriented local development there is currently no
-`qfw_dev_setup.sh` wrapper in this repository. The nearest equivalents
-are:
-
-- `./qfw_smoke_test.sh` for a staged container validation path
-- `python3 qfw_setup.py -x --groups "$($QFW_SETUP_PATH/qfw_extract_groups.sh)"`
-  for direct local `--dev-run` startup from an activated environment
-
-The direct `--dev-run` path is a lower-level developer interface than
-`qfw_setup.sh`.
-
-### Run examples
-
-After `qfw_setup.sh` has started the framework, applications can be run
-through the normal example scripts.
+9. Run an example:
 
 ```bash
 cd /path/to/QFw/examples
@@ -223,6 +328,7 @@ cd /path/to/QFw/examples
 Example tests live under `examples/tests/` and can be run with:
 
 ```bash
+cd /path/to/QFw
 pytest examples/tests
 ```
 
@@ -239,7 +345,7 @@ This validates:
 
 - activation and import wiring
 - local PRTE DVM startup
-- local QPM startup through `qfw_setup.py --dev-run`
+- local QFw framework startup
 - the built-in DEFw smoke suite
 
 This helper is intended for the container-oriented workflow. It is not a
