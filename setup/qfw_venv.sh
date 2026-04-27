@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [ "$1" == "print_intro" ]; then
+if [ "${1:-}" == "print_intro" ]; then
 	echo "Welcome to the Quantum Framework"
 fi
 
@@ -32,8 +32,20 @@ export DEFW_DISABLE_RESMGR=yes
 source $QFW_SETUP_PATH/qfw_lib_path.sh
 
 PYTHONPATH=$PYTHONPATH:$QFW_SETUP_PATH python3 -c "from qfw_venv import setup_qfw_symlinks; setup_qfw_symlinks()"
+rc=$?
 
-if [[ $? -ne 0 ]]; then
+unset DEFW_CONFIG_PATH
+unset DEFW_SHELL_TYPE
+unset DEFW_AGENT_NAME
+unset DEFW_LISTEN_PORT
+unset DEFW_AGENT_TYPE
+unset DEFW_LOG_LEVEL
+unset DEFW_LOG_DIR
+unset DEFW_LOAD_NO_INIT
+unset DEFW_ONLY_LOAD_MODULE
+unset DEFW_DISABLE_RESMGR
+
+if [[ $rc -ne 0 ]]; then
 	echo "Command failed, exiting."
-	exit 1
+	return 1 2>/dev/null || exit 1
 fi

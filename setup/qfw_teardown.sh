@@ -1,5 +1,11 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z "${QFW_SETUP_PATH:-}" ]]; then
+	export QFW_SETUP_PATH="${SCRIPT_DIR}"
+fi
+
 if [[ -z "${_QFW_ACTIVE:-}" ]]; then
 	source $QFW_SETUP_PATH/qfw_activate --skip-patches
 fi
@@ -19,4 +25,3 @@ source $QFW_SETUP_PATH/qfw_lib_path.sh
 
 filtered_env=$($QFW_SETUP_PATH/qfw_extract_groups.sh)
 python3 $QFW_SETUP_PATH/qfw_setup.py --shutdown --groups "$filtered_env"
-$QFW_SETUP_PATH/qfw_restore_venv.sh
