@@ -45,10 +45,10 @@ qfw-module-path: </path/to/module/files>              # example:
 /sw/frontier/qhpc/QFw/environment/
 qfw-module-load: <module-name>                        # example: qsim
 python-venv-activate: </path/to/venv/bin/activate>
-install-py-requirements: [True | False]               # optional, default False
-build-dependencies: [True | False]                    # optional, default False
-qfw-dep-build-version: <existing build version>       # required if
-                                                      # no dependency build
+qfw-dep-build-version: <existing build version>       # required unless
+                                                      # generate-dep-build-version
+                                                      # is True
+generate-dep-build-version: [True | False]            # optional, default False
 ```
 
 2. Explicit environment-variable setup:
@@ -67,10 +67,13 @@ libfabric-install: </path/to/libfabric/install>
 mpi-install: </path/to/openmpi/install>
 dev-install: </path/to/rocm-or-cuda/root>             # example:
                                                       # /opt/rocm-6.2.4/
-install-py-requirements: [True | False]
-build-dependencies: [True | False]
-qfw-dep-build-version: <existing build version>       # required if
-                                                      # no dependency build
+dev-version: <toolchain version>                      # optional, helps when
+                                                      # dev-install is not
+                                                      # versioned in the path
+qfw-dep-build-version: <existing build version>       # required unless
+                                                      # generate-dep-build-version
+                                                      # is True
+generate-dep-build-version: [True | False]            # optional, default False
 ```
 
 3. Container profile:
@@ -84,19 +87,24 @@ python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
 libfabric-install: /opt/qfw/libfabric
 mpi-install: /opt/qfw/openmpi
 dev-install: /workspace/qfw-container-base/rocm      # or /opt/rocm
-build-dependencies: [True | False]
-qfw-dep-build-version: <existing build version>      # required if
-                                                      # no dependency build
+dev-version: 6.2.4                                    # optional when the
+                                                      # mounted ROCm root is
+                                                      # not versioned
+qfw-dep-build-version: <existing build version>      # required unless
+                                                      # generate-dep-build-version
+                                                      # is True
+generate-dep-build-version: [True | False]            # optional, default False
 ```
 
 The container profile is a convenience wrapper around the explicit
 environment-variable mode. It does not load modules and defaults to the
 paths provided by the QFw Slurm container image.
 
-If `build-dependencies` is `True`, `qfw_install` generates a new
-`QFW_DEP_BUILD_VERSION` and uses it for TNQVM and NWQ-Sim builds. If
-`build-dependencies` is `False`, `qfw-dep-build-version` must already be
-provided so activation can resolve the versioned runtime paths.
+`qfw-dep-build-version` identifies the versioned dependency install
+location used by activation and the generated build script. If
+`generate-dep-build-version` is `True`, `qfw_configure` generates a new
+timestamp-based version automatically. Otherwise, `qfw-dep-build-version`
+must already be provided.
 
 `runtime-mode` controls how QFw interprets the allocation and temp-path
 layout. Supported values are:
@@ -114,44 +122,52 @@ path:
 You can also add an `mpi-env:` mapping in the config to export explicit
 MPI or MCA environment variables after activation.
 
-Additional optional config keys used by the current installer and
-dependency-build path include:
+Additional optional config keys used by the current configurator and
+build path include:
 
-- `install-py-requirements`
 - `cc`, `cxx`, `fc`
 - `hip-arch`
 - `tmp-dir`
 - `mpi-env`
 - `openblas-root`, `cmake-root`, `gcc-root`
 
-### Run the installer
+### Run the configurator
 
 ```bash
 cd /path/to/QFw/setup
-./qfw_install -c /path/to/config.yaml
+./qfw_configure -c /path/to/config.yaml
 ```
 
 This generates:
 
 - `setup/qfw_activate`: activates the QFw environment only
-- `setup/qfw_build_deps.sh`: installs Python requirements, builds
-  dependencies when requested, then deactivates
+- `setup/qfw_build.sh`: installs Python requirements and builds
+  dependencies when requested on the command line, then deactivates
 
-The installer does not execute `qfw_build_deps.sh`. Run it as a separate
+The configurator does not execute `qfw_build.sh`. Run it as a separate
 step when you want to install Python requirements or build TNQVM,
 NWQ-Sim, and DEFw.
 
 ```bash
 cd /path/to/QFw/setup
-./qfw_build_deps.sh
+./qfw_build.sh
+```
+
+`qfw_build.sh` defaults to building everything. You can also target
+specific pieces explicitly:
+
+```bash
+./qfw_build.sh --python
+./qfw_build.sh --tnqvm --nwqsim
+./qfw_build.sh --defw
 ```
 
 For the container profile, the normal sequence is:
 
 ```bash
 cd /workspace/qfw-container-base/QFw/setup
-./qfw_install -c qfw_config_sample_container.yaml
-./qfw_build_deps.sh
+./qfw_configure -c qfw_config_sample_container.yaml
+./qfw_build.sh
 ```
 
 ## Step-By-Step Workflows
@@ -187,16 +203,23 @@ python -m pip install --upgrade pip
 cd /workspace/qfw-container-base/QFw/setup
 ```
 
-4. Generate the activation and dependency-build scripts:
+4. Generate the activation and build scripts:
 
 ```bash
-./qfw_install -c qfw_config_sample_container.yaml
+./qfw_configure -c qfw_config_sample_container.yaml
 ```
 
-5. Build QFw dependencies if needed:
+5. Build the QFw environment:
 
 ```bash
-./qfw_build_deps.sh
+./qfw_build.sh
+```
+
+To build only selected pieces instead of the full stack:
+
+```bash
+./qfw_build.sh --python --defw
+./qfw_build.sh --tnqvm --nwqsim
 ```
 
 6. Activate the generated environment:
@@ -280,16 +303,23 @@ cd setup
 cp qfw_config_sample.yaml my_cluster.yaml
 ```
 
-4. Generate the activation and dependency-build scripts:
+4. Generate the activation and build scripts:
 
 ```bash
-./qfw_install -c my_cluster.yaml
+./qfw_configure -c my_cluster.yaml
 ```
 
-5. Build dependencies if required by the config:
+5. Build the QFw environment:
 
 ```bash
-./qfw_build_deps.sh
+./qfw_build.sh
+```
+
+If you only need selected targets, pass them explicitly:
+
+```bash
+./qfw_build.sh --python --defw
+./qfw_build.sh --tnqvm --nwqsim
 ```
 
 6. Activate QFw:
