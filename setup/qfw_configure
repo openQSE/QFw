@@ -199,6 +199,8 @@ def qfw_configure(config):
 	tmp_dir = config.get('tmp-dir', None)
 	mpi_transport_mode = config.get('mpi-transport-mode', None)
 	mpi_env_overrides = config.get('mpi-env', {})
+	qfw_path = config.get('qfw-path', None)
+	qfw_libpath = config.get('qfw-libpath', None)
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: base-dir and python-venv-activate entries")
@@ -249,6 +251,10 @@ def qfw_configure(config):
 		stream.write(f'export QFW_MPI_TRANSPORT_MODE="{mpi_transport_mode}"\n')
 		if tmp_dir:
 			stream.write(f'export QFW_MASTER_SETUP_TMP_DIR="{tmp_dir}"\n')
+		if qfw_path:
+			stream.write(f'export QFW_EXTRA_PATHS="{qfw_path}"\n')
+		if qfw_libpath:
+			stream.write(f'export QFW_EXTRA_LIBPATHS="{qfw_libpath}"\n')
 		stream.write(f'export QFW_DEP_BUILD_VERSION="{dep_build_version}"\n')
 		stream.write('if [[ -z "${QFW_DEP_BUILD_VERSION:-}" ]]; then\n')
 		stream.write('    echo "ERROR: QFW_DEP_BUILD_VERSION is not set. Re-run qfw_configure with qfw-dep-build-version or generate-dep-build-version enabled." >&2\n')
@@ -385,6 +391,8 @@ def qfw_configure(config):
 		stream.write('    unset QFW_RUNTIME_MODE\n')
 		stream.write('    unset QFW_MPI_TRANSPORT_MODE\n')
 		stream.write('    unset QFW_MASTER_SETUP_TMP_DIR\n')
+		stream.write('    unset QFW_EXTRA_PATHS\n')
+		stream.write('    unset QFW_EXTRA_LIBPATHS\n')
 		stream.write('    unset QFW_JOB_ID\n')
 		stream.write('    unset QFW_HET_GROUP\n')
 		stream.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
