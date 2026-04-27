@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+
+import copy
+import getopt
+import os
+import stat
+import sys
+from datetime import datetime
+
+import yaml
+
+
+CONTAINER_PROFILE_DEFAULTS = {
+	'base-dir': '/workspace/qfw-container-base',
+	'python-venv-activate': '/workspace/qfw-container-base/venv/bin/activate',
+	'libfabric-install': '/opt/qfw/libfabric',
+	'mpi-install': '/opt/qfw/openmpi',
+	'dev-install': '/workspace/qfw-container-base/rocm',
+}
+
+
+def resolve_install_profile(config):
+	profile = config.get('install-profile', '').strip().lower()
+	if not profile:
+		return config
+	if profile != 'container':
+		raise ValueError(f"Unsupported install-profile '{profile}'")
+
+	resolved = copy.deepcopy(config)
+	for key, value in CONTAINER_PROFILE_DEFAULTS.items():
+		if not resolved.get(key):
+			resolved[key] = value
+
+	if resolved.get('qfw-module-path') or resolved.get('qfw-module-load'):
+		raise ValueError("install-profile=container cannot be combined with module-based configuration")
+
+	return resolved
+
+
+def choose_dep_build_version(config):
+	dep_build_version = config.get('qfw-dep-build-version', None)
+	generate_dep_build_version = bool(config.get('generate-dep-build-version', False))
+	if dep_build_version:
+		return dep_build_version
+	if generate_dep_build_version:
+		return datetime.now().strftime("%Y%m%d-%H%M%S")
+	raise ValueError(
+		"Configuration file needs to specify qfw-dep-build-version or set "
+		"generate-dep-build-version to true"
+	)
+
+
+def write_build_script(stream, base_dir, qfw_activate):
+	stream.write('#!/usr/bin/env bash\n')
+	stream.write('set -euo pipefail\n\n')
+	stream.write('build_python=0\n')
+	stream.write('build_tnqvm=0\n')
+	stream.write('build_nwqsim=0\n')
+	stream.write('build_defw=0\n\n')
+	stream.write('usage() {\n')
+	stream.write("    cat <<'EOF'\n")
+	stream.write('Usage: ./qfw_build.sh [--python] [--tnqvm] [--nwqsim] [--defw]\n\n')
+	stream.write('With no flags, qfw_build.sh installs Python requirements and builds all\n')
+	stream.write('dependency targets in the default order.\n')
+	stream.write('EOF\n')
+	stream.write('}\n\n')
+	stream.write('while [[ $# -gt 0 ]]; do\n')
+	stream.write('    case "$1" in\n')
+	stream.write('        --python)\n')
+	stream.write('            build_python=1\n')
+	stream.write('            ;;\n')
+	stream.write('        --tnqvm)\n')
+	stream.write('            build_tnqvm=1\n')
+	stream.write('            ;;\n')
+	stream.write('        --nwqsim)\n')
+	stream.write('            build_nwqsim=1\n')
+	stream.write('            ;;\n')
+	stream.write('        --defw)\n')
+	stream.write('            build_defw=1\n')
+	stream.write('            ;;\n')
+	stream.write('        -h|--help)\n')
+	stream.write('            usage\n')
+	stream.write('            exit 0\n')
+	stream.write('            ;;\n')
+	stream.write('        *)\n')
+	stream.write('            echo "Unknown option: $1" >&2\n')
+	stream.write('            usage >&2\n')
+	stream.write('            exit 1\n')
+	stream.write('            ;;\n')
+	stream.write('    esac\n')
+	stream.write('    shift\n')
+	stream.write('done\n\n')
+	stream.write('if [[ ${build_python} -eq 0 && ${build_tnqvm} -eq 0 && ${build_nwqsim} -eq 0 && ${build_defw} -eq 0 ]]; then\n')
+	stream.write('    build_python=1\n')
+	stream.write('    build_tnqvm=1\n')
+	stream.write('    build_nwqsim=1\n')
+	stream.write('    build_defw=1\n')
+	stream.write('fi\n\n')
+	stream.write('if [[ ${build_python} -eq 1 ]]; then\n')
+	stream.write(f'    cd "{base_dir}/QFw/backends"\n')
+	stream.write('    pip3 install -e .\n')
+	stream.write(f'    cd "{base_dir}/QFw/DEFw"\n')
+	stream.write('    python -m pip install -r requirements.txt\n')
+	stream.write(f'    cd "{base_dir}/QFw/setup"\n')
+	stream.write('    python -m pip install -r requirements.txt\n')
+	stream.write('fi\n\n')
+	stream.write('if [[ ${build_tnqvm} -eq 1 ]]; then\n')
+	stream.write(f'    "{os.path.join(base_dir, "QFw", "patches", "tnqvm", "build.sh")}"\n')
+	stream.write('fi\n\n')
+	stream.write('if [[ ${build_nwqsim} -eq 1 ]]; then\n')
+	stream.write(f'    "{os.path.join(base_dir, "QFw", "patches", "nwqsim", "build.sh")}"\n')
+	stream.write('fi\n\n')
+	stream.write('if [[ ${build_defw} -eq 1 ]]; then\n')
+	stream.write(f'    "{os.path.join(base_dir, "QFw", "DEFw", "build.sh")}"\n')
+	stream.write('fi\n\n')
+	stream.write(f'cd "{base_dir}/QFw"\n')
+
+
+def qfw_configure(config):
+	config = resolve_install_profile(config)
+	base_dir = config.get('base-dir', None)
+	module_path = config.get('qfw-module-path', None)
+	module_file = config.get('qfw-module-load', None)
+	unloads = config.get('module-unload', None)
+	extra_mod_loads = config.get('extra-module-load', None)
+	python_activate = config.get('python-venv-activate', None)
+	dep_build_version = choose_dep_build_version(config)
+	cc = config.get('cc', None)
+	cxx = config.get('cxx', None)
+	fc = config.get('fc', None)
+	hip_arch = config.get('hip-arch', None)
+	dev_version = config.get('dev-version', None)
+	runtime_mode = config.get('runtime-mode', None)
+	tmp_dir = config.get('tmp-dir', None)
+	mpi_transport_mode = config.get('mpi-transport-mode', None)
+	mpi_env_overrides = config.get('mpi-env', {})
+
+	if not base_dir or not python_activate:
+		raise ValueError("Configuration file needs to specify: base-dir and python-venv-activate entries")
+
+	if runtime_mode is None:
+		runtime_mode = 'container' if config.get('install-profile', '').strip().lower() == 'container' else 'frontier'
+	runtime_mode = runtime_mode.strip().lower()
+	if runtime_mode not in ['frontier', 'container']:
+		raise ValueError(f"Unsupported runtime-mode '{runtime_mode}'")
+	if mpi_transport_mode is None:
+		mpi_transport_mode = 'auto' if runtime_mode == 'container' else 'ofi'
+	mpi_transport_mode = mpi_transport_mode.strip().lower()
+	if mpi_transport_mode not in ['auto', 'ofi']:
+		raise ValueError(f"Unsupported mpi-transport-mode '{mpi_transport_mode}'")
+	if mpi_env_overrides and not isinstance(mpi_env_overrides, dict):
+		raise ValueError("mpi-env must be a mapping of environment variable names to values")
+
+	qfw_setup_dir = os.path.join(base_dir, 'QFw', 'setup')
+	qfw_env = os.path.join(base_dir, 'QFw', 'environment')
+	qfw_vars = os.path.join(qfw_env, 'qfw_set_envvars.sh')
+
+	os.makedirs(qfw_setup_dir, exist_ok=True)
+
+	qfw_activate = os.path.join(qfw_setup_dir, 'qfw_activate')
+	qfw_build = os.path.join(qfw_setup_dir, 'qfw_build.sh')
+
+	with open(qfw_activate, 'w', encoding='utf-8') as stream:
+		stream.write('#!/usr/bin/env bash\n')
+		stream.write('# QFW activate (must be sourced)\n\n')
+		stream.write('if [[ -n "${_QFW_ACTIVE:-}" ]]; then\n')
+		stream.write('    echo "QFW environment already active"\n')
+		stream.write('    return 0\n')
+		stream.write('fi\n\n')
+		stream.write('export _QFW_OLD_PWD="$PWD"\n')
+		stream.write('export _QFW_ACTIVE=1\n')
+		stream.write('export _QFW_OLD_CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}"\n')
+		stream.write('export _QFW_OLD_PE_PRODUCT_LIST="${PE_PRODUCT_LIST:-}"\n')
+		stream.write('export _QFW_OLD_PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"\n')
+		stream.write('export _QFW_OLD_PE_PKGCONFIG_LIBS="${PE_PKGCONFIG_LIBS:-}"\n')
+		stream.write('export _QFW_OLD_PATH="${PATH:-}"\n')
+		stream.write('export _QFW_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"\n')
+		stream.write('export _QFW_OLD_PYTHONPATH="${PYTHONPATH:-}"\n')
+		stream.write('export _QFW_OLD_BLASLIB="${BLASLIB:-}"\n')
+		stream.write('export _QFW_OLD_BLAS_LIB_DIR="${BLAS_LIB_DIR:-}"\n')
+		stream.write('export _QFW_OLD_ACLOCAL_PATH="${ACLOCAL_PATH:-}"\n')
+		stream.write(f'export QFW_MASTER_SETUP_BASE_DIR="{base_dir}"\n')
+		stream.write(f'export QFW_RUNTIME_MODE="{runtime_mode}"\n')
+		stream.write(f'export QFW_MPI_TRANSPORT_MODE="{mpi_transport_mode}"\n')
+		if tmp_dir:
+			stream.write(f'export QFW_MASTER_SETUP_TMP_DIR="{tmp_dir}"\n')
+		stream.write(f'export QFW_DEP_BUILD_VERSION="{dep_build_version}"\n')
+		stream.write('if [[ -z "${QFW_DEP_BUILD_VERSION:-}" ]]; then\n')
+		stream.write('    echo "ERROR: QFW_DEP_BUILD_VERSION is not set. Re-run qfw_configure with qfw-dep-build-version or generate-dep-build-version enabled." >&2\n')
+		stream.write('    unset _QFW_ACTIVE\n')
+		stream.write('    return 1\n')
+		stream.write('fi\n\n')
+
+		if module_path:
+			stream.write('export _QFW_USED_MODULES=1\n')
+			if extra_mod_loads:
+				stream.write(f'module load {extra_mod_loads}\n')
+			stream.write(f'module use {module_path}\n')
+			stream.write(f'module load {module_file}\n')
+			if unloads:
+				stream.write(f'module unload {unloads}\n')
+			stream.write('ml\n')
+			stream.write('export BLAS_LIB_DIR=$(pkg-config --variable=libdir openblas)\n')
+		else:
+			libfab_env = os.path.join(qfw_env, 'qfw_libfabric_env.sh')
+			mpi_env = os.path.join(qfw_env, 'qfw_mpi_env.sh')
+			dev_vars = os.path.join(qfw_env, 'qfw_dev_env.sh')
+
+			libfab = config.get('libfabric-install', None)
+			mpi = config.get('mpi-install', None)
+			if not mpi:
+				raise ValueError("MPI install path need to be specified")
+			dev = config.get('dev-install', None)
+			if not dev:
+				raise ValueError("Need to install Device Library")
+
+			openblas_root = config.get('openblas-root', None)
+			cmake_root = config.get('cmake-root', None)
+			gcc_root = config.get('gcc-root', None)
+
+			stream.write(f'export QFW_MASTER_SETUP_MPI_INSTALL="{mpi}"\n')
+			stream.write(f'export QFW_MASTER_SETUP_DEV_INSTALL="{dev}"\n')
+			if dev_version:
+				stream.write(f'export QFW_MASTER_SETUP_DEV_VERSION="{dev_version}"\n')
+			if libfab:
+				stream.write(f'export QFW_MASTER_SETUP_LIBFABRIC_INSTALL="{libfab}"\n')
+
+			if openblas_root:
+				stream.write('export BLASLIB=OPENBLAS\n')
+				stream.write(f'export PATH="{openblas_root}/bin:$PATH"\n')
+				stream.write(f'export LD_LIBRARY_PATH="{openblas_root}/lib:$LD_LIBRARY_PATH"\n')
+				stream.write(f'export BLAS_LIB_DIR={openblas_root}/lib\n')
+				stream.write(f'export PKG_CONFIG_PATH="{openblas_root}/lib/pkgconfig:$PKG_CONFIG_PATH"\n')
+				stream.write(f'export CMAKE_PREFIX_PATH="{openblas_root}:$CMAKE_PREFIX_PATH"\n\n')
+
+			if cmake_root:
+				stream.write(f'export PATH="{cmake_root}/bin:$PATH"\n')
+				stream.write(f'export ACLOCAL_PATH="{cmake_root}/share/aclocal:$ACLOCAL_PATH"\n')
+				stream.write(f'export CMAKE_PREFIX_PATH="{cmake_root}:$CMAKE_PREFIX_PATH"\n\n')
+
+			if gcc_root:
+				stream.write(f'export PATH="{gcc_root}/bin:$PATH"\n')
+				stream.write(f'export GCC_PATH={gcc_root}\n')
+				stream.write(f'export GCC_PREFIX={gcc_root}\n')
+
+		if cc:
+			stream.write(f'export QFW_MASTER_SETUP_CC="{cc}"\n')
+		if cxx:
+			stream.write(f'export QFW_MASTER_SETUP_CXX="{cxx}"\n')
+		if fc:
+			stream.write(f'export QFW_MASTER_SETUP_FC="{fc}"\n')
+		if hip_arch:
+			stream.write(f'export QFW_MASTER_SETUP_HIP_ARCH="{hip_arch}"\n')
+		for env_name, env_value in mpi_env_overrides.items():
+			stream.write(f'export {env_name}="{env_value}"\n')
+
+		stream.write(f'export QFW_VENV_PATH={os.path.dirname(os.path.dirname(python_activate))}\n')
+		stream.write(f'source {python_activate}\n\n')
+		if not module_path:
+			if libfab:
+				stream.write(f'source {libfab_env}\n')
+			stream.write(f'source {dev_vars}\n')
+			stream.write(f'source {mpi_env}\n')
+		stream.write(f'source {qfw_vars}\n')
+		stream.write('if [[ -n "${QFW_EXTRA_PATHS:-}" ]]; then\n')
+		stream.write('    IFS=\':\' read -r -a _qfw_extra_paths <<< "${QFW_EXTRA_PATHS}"\n')
+		stream.write('    for _qfw_path in "${_qfw_extra_paths[@]}"; do\n')
+		stream.write('        [[ -n "${_qfw_path}" ]] || continue\n')
+		stream.write('        export PATH="${_qfw_path}:${PATH}"\n')
+		stream.write('    done\n')
+		stream.write('    unset _qfw_path _qfw_extra_paths\n')
+		stream.write('fi\n')
+		stream.write('if [[ -n "${QFW_EXTRA_LIBPATHS:-}" ]]; then\n')
+		stream.write('    IFS=\':\' read -r -a _qfw_extra_libpaths <<< "${QFW_EXTRA_LIBPATHS}"\n')
+		stream.write('    for _qfw_libpath in "${_qfw_extra_libpaths[@]}"; do\n')
+		stream.write('        [[ -n "${_qfw_libpath}" ]] || continue\n')
+		stream.write('        export LD_LIBRARY_PATH="${_qfw_libpath}:${LD_LIBRARY_PATH}"\n')
+		stream.write('    done\n')
+		stream.write('    unset _qfw_libpath _qfw_extra_libpaths\n')
+		stream.write('fi\n')
+		stream.write('if ! source "$QFW_SETUP_PATH/qfw_venv.sh"; then\n')
+		stream.write('    unset _QFW_ACTIVE\n')
+		stream.write('    return 1 2>/dev/null || exit 1\n')
+		stream.write('fi\n')
+		stream.write('export PYTHON_PATH=$(which python3)\n')
+		stream.write('cd "$_QFW_OLD_PWD"\n\n')
+		stream.write('qfw_deactivate() {\n')
+		stream.write('    if [[ -z "${_QFW_ACTIVE:-}" ]]; then\n')
+		stream.write('        return 0\n')
+		stream.write('    fi\n\n')
+		if module_path:
+			stream.write(f'    module unload {module_file}\n')
+			stream.write(f'    module unuse {module_path}\n')
+		stream.write('    if [[ -x "${QFW_VENV_PATH}/bin/python3_defw_orig" ]] || [[ -x "${QFW_VENV_PATH}/bin/python3" ]]; then\n')
+		stream.write('        source "$QFW_SETUP_PATH/qfw_restore_venv.sh"\n')
+		stream.write('    fi\n\n')
+		stream.write('    if declare -f deactivate >/dev/null 2>&1; then\n')
+		stream.write('        deactivate\n')
+		stream.write('    fi\n\n')
+		stream.write('    export CMAKE_PREFIX_PATH=$_QFW_OLD_CMAKE_PREFIX_PATH\n')
+		stream.write('    export PE_PRODUCT_LIST=$_QFW_OLD_PE_PRODUCT_LIST\n')
+		stream.write('    export PKG_CONFIG_PATH=$_QFW_OLD_PKG_CONFIG_PATH\n')
+		stream.write('    export PE_PKGCONFIG_LIBS=$_QFW_OLD_PE_PKGCONFIG_LIBS\n')
+		stream.write('    export PATH="$_QFW_OLD_PATH"\n')
+		stream.write('    export LD_LIBRARY_PATH="$_QFW_OLD_LD_LIBRARY_PATH"\n')
+		stream.write('    export PYTHONPATH="$_QFW_OLD_PYTHONPATH"\n\n')
+		stream.write('    export BLASLIB=$_QFW_OLD_BLASLIB\n')
+		stream.write('    export BLAS_LIB_DIR=$_QFW_OLD_BLAS_LIB_DIR\n')
+		stream.write('    export ACLOCAL_PATH=$_QFW_OLD_ACLOCAL_PATH\n')
+		stream.write('    unset GCC_PATH\n')
+		stream.write('    unset GCC_PREFIX\n')
+		stream.write('    unset _QFW_ACTIVE\n')
+		stream.write('    unset _QFW_USED_MODULES\n')
+		stream.write('    unset _QFW_OLD_PATH\n')
+		stream.write('    unset _QFW_OLD_LD_LIBRARY_PATH\n')
+		stream.write('    unset _QFW_OLD_PYTHONPATH\n')
+		stream.write('    unset _QFW_OLD_PWD\n')
+		stream.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
+		stream.write('    unset QFW_DEP_BUILD_VERSION\n')
+		stream.write('    unset QFW_RUNTIME_MODE\n')
+		stream.write('    unset QFW_MPI_TRANSPORT_MODE\n')
+		stream.write('    unset QFW_MASTER_SETUP_TMP_DIR\n')
+		stream.write('    unset QFW_JOB_ID\n')
+		stream.write('    unset QFW_HET_GROUP\n')
+		stream.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
+		stream.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')
+		stream.write('    unset QFW_VENV_PATH\n')
+		stream.write('    unset PYTHON_PATH\n\n')
+		stream.write('    unset -f qfw_deactivate\n')
+		stream.write('}\n')
+
+	with open(qfw_build, 'w', encoding='utf-8') as stream:
+		write_build_script(stream, base_dir, qfw_activate)
+
+	os.chmod(qfw_activate, os.stat(qfw_activate).st_mode | stat.S_IXUSR)
+	os.chmod(qfw_build, os.stat(qfw_build).st_mode | stat.S_IXUSR)
+
+
+def print_help():
+	print("Usage:")
+	print("   ./qfw_configure -c <config.yaml>")
+	print("")
+	print("This generates:")
+	print("   <base-dir>/QFw/setup/qfw_activate")
+	print("   <base-dir>/QFw/setup/qfw_build.sh")
+	print("")
+	print("Run qfw_build.sh separately to install Python requirements and build")
+	print("DEFw, TNQVM, and NWQ-Sim.")
+
+
+def main(argv):
+	try:
+		options, _args = getopt.getopt(argv, "c:h", ["config=", "help"])
+	except Exception as exc:
+		print(f"Bad command line arguments {argv}")
+		raise exc
+
+	config_path = None
+	for name, value in options:
+		if name in ['-c', '--config']:
+			config_path = value
+		elif name in ['-h', '--help']:
+			print_help()
+			raise SystemExit(1)
+		else:
+			print(f"Unrecognized parameter: {name}")
+			print_help()
+			raise SystemExit(1)
+
+	if not config_path:
+		print_help()
+		raise SystemExit(1)
+
+	with open(config_path, 'r', encoding='utf-8') as stream:
+		config = yaml.load(stream, Loader=yaml.FullLoader)
+		qfw_configure(config)
+
+
+if __name__ == '__main__':
+	main(sys.argv[1:])

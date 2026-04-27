@@ -19,7 +19,7 @@ if [[ "${QFW_MPI_TRANSPORT_MODE:-ofi}" == "ofi" ]]; then
 	export OMPI_MCA_mtl=ofi
 fi
 
-export PATH="${PREFIX}/bin:${PATH}"
-export LD_LIBRARY_PATH="${PREFIX}/lib:${LD_LIBRARY_PATH}"
-export MANPATH="${PREFIX}/share/man:${MANPATH}"
-export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+export PATH="${PREFIX}/bin:${PATH:-}"
+export LD_LIBRARY_PATH="${PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+export MANPATH="${PREFIX}/share/man:${MANPATH:-}"
+export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"

@@ -25,6 +25,11 @@ export QFW_PATH="${BASE_DIR}/QFw"
 export QFW_SETUP_PATH="${BASE_DIR}/QFw/setup"
 export QFW_BIN_PATH="${BASE_DIR}/QFw/bin"
 export QFW_ENV_PATH="${BASE_DIR}/QFw/environment"
+export DEFW_SRC_PATH="${DEFW_PATH}/src"
+export DEFW_PY_PATH="${DEFW_PATH}/python"
+export DEFW_PY_INFRA_PATH="${DEFW_PY_PATH}/infra"
+export DEFW_PY_SERVICES_PATH="${DEFW_PY_PATH}/services"
+export DEFW_PY_SERVICE_APIS_PATH="${DEFW_PY_PATH}/service-apis"
 export TNQVM_BASE_INSTALL_DIR
 export TNQVM_BASE_BUILD_DIR
 export NWQSIM_BASE_INSTALL_DIR
@@ -45,9 +50,14 @@ mkdir -p "${QFW_TMP_PATH}"
 # ---- PATH setup (prepend semantics) ----
 export PATH="${BASE_DIR}/QFw/setup:${PATH}"
 export PATH="${BASE_DIR}/QFw/bin:${PATH}"
-export PATH="${BASE_DIR}/environment:${PATH}"
+export PATH="${BASE_DIR}/QFw/environment:${PATH}"
 export PATH="${BASE_DIR}/QFw/DEFw/src:${PATH}"
-export PYTHONPATH="${QFW_PATH}/services:${QFW_PATH}/service-apis${PYTHONPATH+:$PYTHONPATH}"
+export PYTHONPATH="${DEFW_SRC_PATH}${PYTHONPATH+:$PYTHONPATH}"
+export PYTHONPATH="${DEFW_PY_INFRA_PATH}${PYTHONPATH+:$PYTHONPATH}"
+export PYTHONPATH="${DEFW_PY_SERVICES_PATH}${PYTHONPATH+:$PYTHONPATH}"
+export PYTHONPATH="${DEFW_PY_SERVICE_APIS_PATH}${PYTHONPATH+:$PYTHONPATH}"
+export PYTHONPATH="${QFW_PATH}/services${PYTHONPATH+:$PYTHONPATH}"
+export PYTHONPATH="${QFW_PATH}/service-apis${PYTHONPATH+:$PYTHONPATH}"
 
 # ---- LD_LIBRARY_PATH setup (prepend semantics) ----
 export LD_LIBRARY_PATH="${BASE_DIR}/QFw/DEFw/src:${LD_LIBRARY_PATH}"

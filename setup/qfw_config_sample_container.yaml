@@ -6,5 +6,5 @@ python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
 libfabric-install: /opt/qfw/libfabric
 mpi-install: /opt/qfw/openmpi
 dev-install: /workspace/qfw-container-base/rocm
-build-dependencies: False
-qfw-dep-build-version: 20260311-150318
+dev-version: 6.2.4
+generate-dep-build-version: True

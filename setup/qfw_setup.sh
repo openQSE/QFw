@@ -10,8 +10,6 @@
 #  - The Application side Interface
 #     - QTM
 
-source $QFW_SETUP_PATH/qfw_venv.sh
-
 hostname=$(hostname)
 het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh) || exit 1
 
@@ -53,7 +51,6 @@ echo "*******START PHASE ONE SETUP: PRTE*******"
 python3 $QFW_SETUP_PATH/qfw_setup.py --dvm --groups "$het_groups"
 if [ $? -ne 0 ]; then
 	echo "Failed to setup Quantum Framework"
-	$QFW_SETUP_PATH/qfw_restore_venv.sh
 	exit -1
 fi
 echo "*******COMPLETED PHASE ONE SETUP: PRTE*******"
