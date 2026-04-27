@@ -4,11 +4,9 @@ import copy
 import getopt
 import os
 import stat
+import subprocess
 import sys
 from datetime import datetime
-
-import yaml
-
 
 CONTAINER_PROFILE_DEFAULTS = {
 	'base-dir': '/workspace/qfw-container-base',
@@ -17,6 +15,73 @@ CONTAINER_PROFILE_DEFAULTS = {
 	'mpi-install': '/opt/qfw/openmpi',
 	'dev-install': '/workspace/qfw-container-base/rocm',
 }
+
+
+def _extract_config_path(argv):
+	for index, arg in enumerate(argv[1:], start=1):
+		if arg in ('-c', '--config'):
+			if index + 1 >= len(argv):
+				raise ValueError("Missing configuration path after -c/--config")
+			return argv[index + 1]
+		if arg.startswith('--config='):
+			return arg.split('=', 1)[1]
+	return None
+
+
+def _extract_scalar_value(config_path, key):
+	if not config_path or not os.path.exists(config_path):
+		return None
+
+	prefix = f'{key}:'
+	with open(config_path, 'r', encoding='utf-8') as stream:
+		for line in stream:
+			line = line.split('#', 1)[0].strip()
+			if not line or not line.startswith(prefix):
+				continue
+			value = line.split(':', 1)[1].strip()
+			if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+				value = value[1:-1]
+			return value
+	return None
+
+
+def _configured_python():
+	config_path = _extract_config_path(sys.argv)
+	activate_path = _extract_scalar_value(config_path, 'python-venv-activate')
+	install_profile = (_extract_scalar_value(config_path, 'install-profile') or '').lower()
+
+	if not activate_path and install_profile == 'container':
+		activate_path = CONTAINER_PROFILE_DEFAULTS['python-venv-activate']
+
+	if not activate_path:
+		return sys.executable
+
+	python_path = os.path.join(os.path.dirname(activate_path), 'python')
+	if os.path.exists(python_path):
+		return python_path
+	return sys.executable
+
+
+def _ensure_configure_runtime():
+	target_python = _configured_python()
+
+	if os.path.realpath(target_python) != os.path.realpath(sys.executable):
+		os.execv(target_python, [target_python, os.path.abspath(__file__), *sys.argv[1:]])
+
+	try:
+		import yaml as _yaml
+	except ImportError:
+		subprocess.run(
+			[target_python, '-m', 'pip', 'install', 'PyYAML'],
+			check=True,
+		)
+		import yaml as _yaml
+
+	return _yaml
+
+
+yaml = _ensure_configure_runtime()
+
 
 
 def resolve_install_profile(config):
