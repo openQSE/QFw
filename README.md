@@ -251,7 +251,8 @@ phase and then launches the QFw framework phase.
 9. Run a simple smoke path or example:
 
 ```bash
-./qfw_smoke_test.sh
+cd /workspace/qfw-container-base/QFw/examples
+./qfw_mpi_smoke.sh
 ```
 
 or:
@@ -362,32 +363,30 @@ cd /path/to/QFw
 pytest examples/tests
 ```
 
-### Container smoke test
+### Container MPI Smoke Example
 
-After activation you can run the container-oriented smoke path:
+After activation and a heterogeneous Slurm allocation, run the MPI smoke
+example through the normal QFw startup and application path:
 
 ```bash
-cd /path/to/QFw/setup
-./qfw_smoke_test.sh
+cd /path/to/QFw/examples
+./qfw_mpi_smoke.sh
 ```
 
 This validates:
 
-- activation and import wiring
-- local PRTE DVM startup
-- local QFw framework startup
-- the built-in DEFw smoke suite
+- PRTE startup through `qfw_setup.sh`
+- Resource Manager startup through `qfw_setup.py`
+- `svc_mpi_smoke` startup from `qfw_mpi_smoke_services.yaml`
+- `api_mpi_smoke` use through `qfw_srun.sh`
+- an `mpirun` payload launched by the smoke service
 
-This helper is intended for the container-oriented workflow. It is not a
-replacement for a full multi-node Frontier run.
-
-Optional flags:
+The example uses the same teardown path as the other QFw examples:
 
 ```bash
-./qfw_smoke_test.sh --skip-prte
-./qfw_smoke_test.sh --skip-qpm
-./qfw_smoke_test.sh --skip-defw-suite
+qfw_teardown.sh
 ```
+
 ### Deactivate the environment
 
 ```bash

@@ -2,6 +2,37 @@
 
 echo "RUNNING APPLICATION"
 
+usage() {
+	echo "Usage: qfw_srun.sh [--load-modules <modules>] <script> [args...]"
+}
+
+load_modules="${QFW_SRUN_LOAD_MODULES:-api_qpm}"
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--load-modules)
+			if [[ $# -lt 2 ]]; then
+				echo "--load-modules requires a module list" >&2
+				exit 1
+			fi
+			load_modules="$2"
+			shift 2
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			break
+			;;
+	esac
+done
+
+if [[ $# -lt 1 ]]; then
+	usage >&2
+	exit 1
+fi
+
 source $QFW_SETUP_PATH/qfw_lib_path.sh
 
 hostname=$(hostname)
@@ -39,7 +70,7 @@ export DEFW_AGENT_TYPE=agent
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LOG_LEVEL=error
 export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}
-export DEFW_ONLY_LOAD_MODULE=api_qpm
+export DEFW_ONLY_LOAD_MODULE=$load_modules
 export DEFW_DISABLE_RESMGR=no
 export DEFW_PREF_PATH=${QFW_TMP_PATH}/defw_app_pref.yaml
 
