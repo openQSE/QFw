@@ -1,0 +1,16 @@
+services:
+  - name: nwqsim
+    module: svc_nwqsim_qpm
+    load-modules: svc_nwqsim_qpm,api_launcher
+    agent-prefix: qpm_nwqsim
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+
+  - name: tnqvm
+    module: svc_tnqvm_qpm
+    load-modules: svc_tnqvm_qpm,api_launcher
+    agent-prefix: qpm_tnqvm
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS

@@ -1,5 +1,5 @@
 import subprocess, os, sys, logging, socket, traceback, \
-		getopt, psutil, threading, yaml
+		getopt, psutil, threading, yaml, shlex
 from time import sleep, time
 import svc_launcher, cdefw_global
 from defw_util import expand_host_list, prformat, fg, bg
@@ -8,6 +8,8 @@ from defw import me
 from defw_cmd import defw_exec_remote_cmd
 
 # TODO: we can use prun to run all the processes instead of using the python launcher
+
+DEFAULT_SERVICES_CONFIG = 'qfw_services.yaml'
 
 def cleanup_system(targets):
 	prformat(fg.red+fg.bold, f"Shutting down targets: {targets}")
@@ -71,7 +73,7 @@ def get_external_defw_env():
 			env[key] = os.environ[key]
 	return env
 
-def start_qfw(host, hetgroups):
+def start_qfw(host, hetgroups, services_config):
 	name = 'qfw_base_setup'
 	if 'QFW_DVM_URI_PATH' in os.environ:
 		uri = os.environ['QFW_DVM_URI_PATH']
@@ -100,7 +102,9 @@ def start_qfw(host, hetgroups):
 	qfw_activate = os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_activate')
 	tmp_dir = qfw_tmp_dir()
 	cmd = f"source {qfw_activate} >& {tmp_dir}/qfw_activate_result && "
-	cmd += f'nohup qfw_run_setup.sh "{hetgroups}" >& {tmp_dir}/qfw_run_setup.out'
+	cmd += 'nohup qfw_run_setup.sh '
+	cmd += f'{shlex.quote(hetgroups)} {shlex.quote(services_config)} '
+	cmd += f'>& {tmp_dir}/qfw_run_setup.out'
 	prformat(fg.cyan+fg.bold, f"Starting QFW: {cmd}")
 	if in_container_mode() and host == socket.gethostname():
 		execute_local_command(cmd, daemonize=True)
@@ -126,9 +130,18 @@ def start_dvm(node_list):
 	else:
 		cmd += f'qfw_run_dev_prte.sh {os.path.split(uri)[0]} "{host_list}"'
 	rc, out, err = execute_ssh_command(node_list[0], cmd)
-	logging.critical(f"cmd = {cmd}; rc = {rc}; out: {out}; error: {err}")
+	logging.debug(f"cmd = {cmd}; rc = {rc}; out: {out}; error: {err}")
 	if rc:
+		logging.critical(
+			"DVM startup failed: cmd=%s rc=%s stdout=%s stderr=%s",
+			cmd,
+			rc,
+			out,
+			err,
+		)
 		raise DEFwExecutionError(f"Failed to start DVM. rc = {rc}")
+	logging.info("DVM started on hosts %s using URI %s", host_list, uri)
+	logging.debug("DVM startup output: stdout=%s stderr=%s", out, err)
 	return rc
 
 def start_resmgr(target, launcher, env_dict):
@@ -159,55 +172,108 @@ def start_resmgr(target, launcher, env_dict):
 	pid = launcher.launch('defwp -d', env=env)
 	return pid
 
-def start_qpm(resmgr, target, node_list, launcher, env_dict):
-	with open(os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_qpm_services.yaml'), 'r') as f:
+def resolve_config_path(config_path):
+	if config_path:
+		if os.path.isabs(config_path) or os.path.exists(config_path):
+			return config_path
+		return os.path.join(os.environ['QFW_SETUP_PATH'], config_path)
+	return os.path.join(os.environ['QFW_SETUP_PATH'], DEFAULT_SERVICES_CONFIG)
+
+def load_services_config(config_path):
+	config_path = resolve_config_path(config_path)
+	with open(config_path, 'r') as f:
 		cy = yaml.load(f, Loader=yaml.FullLoader)
+	if not cy or 'services' not in cy:
+		raise DEFwExecutionError(f"No services defined in {config_path}")
+	return cy['services']
 
-	qpm_names = cy['QPM']
+def resolve_node_policy(policy, g0, g1):
+	if not policy or policy == 'group1-head':
+		return g1[0]
+	if policy == 'group0-head':
+		return g0[0]
+	if policy == 'local':
+		return socket.gethostname()
+	return policy
 
+def resolve_host_policy(policy, g0, g1):
+	if not policy:
+		return ''
+	if policy == 'group1':
+		return ",".join(g1)
+	if policy == 'group0':
+		return ",".join(g0)
+	if policy == 'all':
+		return ",".join(list(dict.fromkeys(g0 + g1)))
+	return policy
+
+def start_service(service, resmgr, g0, g1, launcher, env_dict,
+				  listen_port, telnet_port):
+	name = service.get('name', None)
+	module = service.get('module', None)
+	if not name or not module:
+		raise DEFwExecutionError(f"Service needs name and module: {service}")
+
+	target = resolve_node_policy(service.get('target', 'group1-head'), g0, g1)
+	agent_name = service.get('name')
+	load_modules = service.get('load-modules', module)
+
+	env =  {'DEFW_AGENT_NAME': agent_name,
+			'DEFW_LISTEN_PORT': str(service.get('listen-port', listen_port)),
+			'DEFW_TELNET_PORT': str(service.get('telnet-port', telnet_port)),
+			'DEFW_ONLY_LOAD_MODULE': load_modules,
+			'DEFW_LOAD_NO_INIT': '',
+			'DEFW_SHELL_TYPE': 'daemon',
+			'DEFW_AGENT_TYPE': service.get('agent-type', 'service'),
+			'DEFW_PARENT_HOSTNAME': resmgr,
+			'DEFW_PARENT_PORT': str(8090),
+			'DEFW_PARENT_NAME': service.get('parent-name', f"resmgr_{resmgr}"),
+			'DEFW_LOG_LEVEL': service.get('log-level', "error"),
+			'DEFW_DISABLE_RESMGR': "no",
+			'DEFW_LOG_DIR': os.path.join(
+				os.path.split(cdefw_global.get_defw_tmp_dir())[0],
+				agent_name),
+			'DEFW_PY_LOGLEVEL': 'debug,DEFW_ALL'}
+
+	assigned_hosts = resolve_host_policy(service.get('assigned-hosts'), g0, g1)
+	if assigned_hosts:
+		env['QFW_SERVICE_ASSIGNED_HOSTS'] = assigned_hosts
+		assigned_hosts_env = service.get('assigned-hosts-env', None)
+		if assigned_hosts_env:
+			env[assigned_hosts_env] = assigned_hosts
+
+	if 'QFW_DVM_URI_PATH' in os.environ:
+		env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
+
+	env.update(get_external_defw_env())
+	env.update(env_dict)
+
+	logging.info(
+		"Starting service %s on %s with module %s",
+		agent_name,
+		target,
+		load_modules,
+	)
+	logging.debug("Service %s environment: %s", agent_name, env)
+	pid = launcher.launch('defwp -d', env=env, target=target)
+	logging.debug(
+		f"Service {name} STARTED: pid {pid} agent {agent_name} on {target}")
+	return pid, env['DEFW_LOG_DIR']
+
+def start_services(services_config, resmgr, g0, g1, launcher, env_dict):
+	services = load_services_config(services_config)
 	listen_port = 8290
 	telnet_port = 8291
 	pids = []
 	dirs = []
 
-	tmp_path = os.environ['QFW_TMP_PATH']
-	for n in qpm_names:
-		qpm = f"qpm_{n}_{resmgr}"
-		pref_fname = f"defw_{n}_pref.yaml"
-		pref_path = os.path.join(tmp_path, pref_fname)
-
-		env =  {'DEFW_AGENT_NAME': qpm,
-				'DEFW_LISTEN_PORT': str(listen_port),
-				'DEFW_TELNET_PORT': str(telnet_port),
-				'DEFW_ONLY_LOAD_MODULE': f'svc_{n}_qpm,api_launcher',
-				'DEFW_LOAD_NO_INIT': '',
-				'DEFW_SHELL_TYPE': 'daemon',
-				'DEFW_AGENT_TYPE': 'service',
-				'DEFW_PARENT_HOSTNAME': resmgr,
-				'DEFW_PARENT_PORT': str(8090),
-				'DEFW_PARENT_NAME': 'resmgr'+resmgr,
-				'DEFW_LOG_LEVEL': "error",
-				'DEFW_DISABLE_RESMGR': "no",
-				'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-									qpm),
-	#			'DEFW_LOG_DIR': os.path.join('/tmp', qpm),
-				'QFW_QPM_ASSIGNED_HOSTS': node_list,
-				'DEFW_PREF_PATH': pref_path
-			}
-
-		if 'QFW_DVM_URI_PATH' in os.environ:
-			env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
-
-		env.update(get_external_defw_env())
-		env.update(env_dict)
-
-		pid = launcher.launch('defwp -d', env=env, target=target)
+	for service in services:
+		pid, log_dir = start_service(service, resmgr, g0, g1, launcher,
+									 env_dict, listen_port, telnet_port)
 		pids.append(pid)
-		dirs.append(env['DEFW_LOG_DIR'])
+		dirs.append(log_dir)
 		listen_port += 100
 		telnet_port += 100
-
-		logging.debug(f"QPM {qpm} STARTED: with pid {pid} on {target}")
 
 	return pids, dirs
 
@@ -236,7 +302,7 @@ def print_stacktrace():
 	stacktrace = "\n".join(exception_list)
 	logging.critical(stacktrace)
 
-def get_qpm_proc(file_path):
+def get_service_proc(file_path):
 	proc = None
 	if os.path.exists(file_path):
 		with open(file_path, "r") as file:
@@ -250,52 +316,52 @@ def get_qpm_proc(file_path):
 			pass
 	return proc
 
-def wait_for_qpm_service(proc):
+def wait_for_service(proc):
 	while proc.is_running():
 		try:
-			logging.debug(f"waiting on {proc}")
+			logging.debug(f"waiting on service {proc}")
 			proc.wait(timeout=5)
 		except psutil.TimeoutExpired as e:
 			logging.debug(f"Expired because of timeout")
 			continue
 		except Exception as e:
-			logging.debug(f"Exception waiting on qpm: {e}")
+			logging.debug(f"Exception waiting on service: {e}")
 			break
 
-def wait_for_qpm_completion(qpm_log_dirs):
-	num_qpms = len(qpm_log_dirs)
+def wait_for_service_completion(service_log_dirs):
+	num_services = len(service_log_dirs)
 	file_paths = []
 	procs = []
-	for d in qpm_log_dirs:
+	for d in service_log_dirs:
 		file_paths.append(os.path.join(d, "pid"))
 	try:
 		wtimeout = os.environ['QFW_STARTUP_TIMEOUT']
 	except:
 		wtimeout = 40
 
-	logging.debug(f"qpm file paths = {file_paths}")
+	logging.debug(f"service file paths = {file_paths}")
 
 	start_time = time()
 	while (time() - start_time) <= wtimeout:
-		# wait for all the QPM processes to start
+		# wait for all service processes to start
 		for file_path in file_paths:
-			proc = get_qpm_proc(file_path)
+			proc = get_service_proc(file_path)
 			if proc:
 				procs.append(proc)
-				logging.debug(f"Waiting for QPM {proc.pid}")
+				logging.debug(f"Waiting for service {proc.pid}")
 				file_paths.remove(file_path)
 		if len(file_paths) == 0:
 			break
 		sleep(1)
 
-	logging.debug(f"qpm procs= {procs} num_qpms = {num_qpms}")
-	if len(procs) != num_qpms:
-		raise DEFwExecutionError("QPM services did not start properly")
+	logging.debug(f"service procs= {procs} num_services = {num_services}")
+	if len(procs) != num_services:
+		raise DEFwExecutionError("Services did not start properly")
 
 	threads = []
 	for proc in procs:
-		logging.debug(f"Starting thread to wait for qpm: {proc}")
-		thread = threading.Thread(target=wait_for_qpm_service, args=(proc,))
+		logging.debug(f"Starting thread to wait for service: {proc}")
+		thread = threading.Thread(target=wait_for_service, args=(proc,))
 		threads.append(thread)
 		thread.start()
 
@@ -313,7 +379,7 @@ def list_combine(l1, l2):
 			l1.append(l)
 	return l1
 
-def start(g0, g1, launcher, shutdown, dvm, env_dict):
+def start(g0, g1, launcher, shutdown, dvm, env_dict, services_config):
 	try:
 		# TODO: As part of the shutdown we need to collect all artifacts if they
 		# were in the /tmp directories
@@ -332,9 +398,9 @@ def start(g0, g1, launcher, shutdown, dvm, env_dict):
 		pid = start_resmgr(g1[0], launcher, env_dict)
 		logging.debug(f"RESMGR STARTED: {pid}")
 
-		# Start the QPM
-		qpm_pid, qpm_log_dirs  = start_qpm(g1[0], g1[0],
-						",".join(g1), launcher, env_dict)
+		# Start the configured services
+		service_pids, service_log_dirs = start_services(services_config, g1[0],
+						g0, g1, launcher, env_dict)
 
 	except Exception as e:
 		logging.critical(f"Hit an exception. Cleaning up system: {e}")
@@ -345,8 +411,8 @@ def start(g0, g1, launcher, shutdown, dvm, env_dict):
 		raise e
 
 	logging.debug("FINISHED QFW FRAMEWORK STARTUP")
-	logging.debug("Wait until the QPM exits");
-	wait_for_qpm_completion(qpm_log_dirs)
+	logging.debug("Wait until configured services exit");
+	wait_for_service_completion(service_log_dirs)
 	cleanup_system(list_combine(g0, g1))
 	if launcher:
 		launcher.shutdown()
@@ -367,7 +433,7 @@ if __name__ == '__main__':
 	try:
 		options, args = getopt.getopt(argv, "g:u:o:p:rdsh",
 		 ["groups=", "use=", "mods=", "env=",
-		  "prun", "dvm", "shutdown", "help"])
+		  "services-config=", "prun", "dvm", "shutdown", "help"])
 	except:
 		prformat(fg.red+fg.bold, f"bad command line arguments")
 		me.exit()
@@ -379,6 +445,8 @@ if __name__ == '__main__':
 	env_vars = ''
 	shutdown = False
 	prun = False
+	services_config = os.path.join(os.environ['QFW_SETUP_PATH'],
+								   DEFAULT_SERVICES_CONFIG)
 	launcher = None
 	for name, value in options:
 			if name in ['-g', '--groups']:
@@ -389,6 +457,8 @@ if __name__ == '__main__':
 				modules = value
 			elif name in ['-p', '--env']:
 				env_vars = value
+			elif name == '--services-config':
+				services_config = value
 			elif name in ['-d', '--dvm']:
 				dvm = True
 			elif name in ['-r', '--prun']:
@@ -405,7 +475,7 @@ if __name__ == '__main__':
 	hostname = socket.gethostname()
 
 	if prun:
-		start_qfw(g1_node_list[0], groups)
+		start_qfw(g1_node_list[0], groups, services_config)
 		me.exit()
 
 	# only run on node 0
@@ -420,4 +490,5 @@ if __name__ == '__main__':
 	if hostname == g1_node_list[0] and not dvm and not shutdown:
 		# get a launcher object
 		launcher = svc_launcher.Launcher()
-	start(g0_node_list, g1_node_list, launcher, shutdown, dvm, env_dict)
+	start(g0_node_list, g1_node_list, launcher, shutdown, dvm, env_dict,
+		services_config)
