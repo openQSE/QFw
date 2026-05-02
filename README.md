@@ -175,7 +175,7 @@ For the container profile, the normal sequence is:
 
 ```bash
 cd /workspace/qfw-container-base/QFw/setup
-./qfw_configure -c qfw_config_sample_container.yaml
+./qfw_configure -c config/qfw_config_sample_container.yaml
 ./qfw_build.sh
 ```
 
@@ -216,7 +216,7 @@ cd /workspace/qfw-container-base/QFw/setup
 4. Generate the activation and build scripts:
 
 ```bash
-./qfw_configure -c qfw_config_sample_container.yaml
+./qfw_configure -c config/qfw_config_sample_container.yaml
 ```
 
 5. Build the QFw environment:
@@ -303,15 +303,16 @@ cd QFw
 git submodule update --init --recursive
 ```
 
-2. Choose a config file under `setup/` or create your own. For a
-   module-based install, start from `setup/qfw_config_sample.yaml`. For
-   an explicit-path install, start from `setup/qfw_config_sample_nomod.yaml`.
+2. Choose a config file under `setup/config/` or create your own. For a
+   module-based install, start from `setup/config/qfw_config_sample.yaml`.
+   For an explicit-path install, start from
+   `setup/config/qfw_config_sample_nomod.yaml`.
 
 3. Edit the config so the paths match the cluster:
 
 ```bash
 cd setup
-cp qfw_config_sample.yaml my_cluster.yaml
+cp config/qfw_config_sample.yaml my_cluster.yaml
 python -m pip install -r build-requirements.txt
 ```
 
