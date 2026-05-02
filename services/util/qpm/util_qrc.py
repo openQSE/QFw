@@ -254,6 +254,7 @@ class UTIL_QRC:
 		cmd = self.form_cmd(circ, qasm_file)
 		try:
 			task_info = {}
+			logging.debug(f"Running -- {cmd}")
 			pid = self.launcher.launch(cmd)
 			logging.debug(f"Running -- {cmd} -- with pid {pid}")
 			circ.set_running()
