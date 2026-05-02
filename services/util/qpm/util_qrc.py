@@ -168,7 +168,10 @@ class UTIL_QRC:
 				try:
 					task_info = self.run_circuit_async(circ)
 				except Exception as e:
-					result = e
+					logging.critical(
+						f"Async circuit {circ.get_cid()} failed before launch: {e}")
+					circ.set_fail()
+					result = f"{type(e).__name__}: {e}"
 					rc = -1
 					pass
 
@@ -189,9 +192,19 @@ class UTIL_QRC:
 						'cq_enqueue_time': time.time(),
 						'cq_dequeue_time': -1
 					}
-					with self.circuit_results_lock:
-						self.circuit_results.append(r)
-						circ.free_resources(circ)
+					circ.free_resources(circ)
+					if self.push_info:
+						event = Event(self.push_info['evtype'], r)
+						try:
+							self.push_info['class'].put(event)
+						except Exception as e:
+							logging.critical(
+								"Failed to push event to client. "
+								f"Exception encountered {e}")
+							raise e
+					else:
+						with self.circuit_results_lock:
+							self.circuit_results.append(r)
 				else:
 					self.worker_pool[my_id]['active_tasks'].append(task_info)
 
