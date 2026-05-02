@@ -1,0 +1,13 @@
+diff --git a/src/exatn/CMakeLists.txt b/src/exatn/CMakeLists.txt
+index 158a06a..f5ea627 100644
+--- a/src/exatn/CMakeLists.txt
++++ b/src/exatn/CMakeLists.txt
+@@ -26,6 +26,8 @@ if(EXATN_BUILD_TESTS)
+ endif()
+ 
+ file(GLOB HEADERS *.hpp)
++file(GLOB HEADERS_H "../../tpls/ExaTensor/include/*.h*")
+ 
++install(FILES ${HEADERS_H} DESTINATION include/exatn)
+ install(FILES ${HEADERS} DESTINATION include/exatn)
+ install(TARGETS ${LIBRARY_NAME} DESTINATION lib)

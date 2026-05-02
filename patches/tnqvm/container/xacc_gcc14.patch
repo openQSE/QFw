@@ -1,0 +1,11 @@
+diff --git a/quantum/plugins/optimizers/simple/PhasePolynomialRepresentation.cpp b/quantum/plugins/optimizers/simple/PhasePolynomialRepresentation.cpp
+index 463e307..a9d8e81 100644
+--- a/quantum/plugins/optimizers/simple/PhasePolynomialRepresentation.cpp
++++ b/quantum/plugins/optimizers/simple/PhasePolynomialRepresentation.cpp
+@@ -1,5 +1,6 @@
+ #include "PhasePolynomialRepresentation.hpp"
+ #include "Instruction.hpp"
++#include <algorithm>
+ #include <cassert>
+ 
+ namespace {

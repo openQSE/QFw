@@ -1,0 +1,22 @@
+diff --git a/tpls/CMakeLists.txt b/tpls/CMakeLists.txt
+index 5f51bb4..f366d61 100644
+--- a/tpls/CMakeLists.txt
++++ b/tpls/CMakeLists.txt
+@@ -25,6 +25,17 @@ if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+   if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+     message(FATAL_ERROR "git submodule update --init failed with ${GIT_SUBMOD_RESULT}, please checkout submodules")
+   endif()
++
++  # Override the pinned pybind11 submodule revision with a Python-3.12-compatible release.
++  execute_process(COMMAND ${GIT_EXECUTABLE}
++                          checkout
++                          -f
++                          v3.0.2
++                  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/pybind11
++                  RESULT_VARIABLE GIT_PYBIND11_CHECKOUT_RESULT)
++  if(NOT GIT_PYBIND11_CHECKOUT_RESULT EQUAL "0")
++    message(FATAL_ERROR "git checkout v3.0.2 failed with ${GIT_PYBIND11_CHECKOUT_RESULT} in tpls/pybind11")
++  endif()
+ endif()
+ 
+ if(EXATN_BUILD_TESTS)

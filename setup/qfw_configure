@@ -115,9 +115,135 @@ def choose_dep_build_version(config):
 	)
 
 
-def write_build_script(stream, base_dir, qfw_activate):
+def shell_value(value):
+	return str(value).replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
+
+
+def write_default_export(stream, name, value):
+	if value is not None:
+		stream.write(f'export {name}="${{{name}:-{shell_value(value)}}}"\n')
+
+
+def write_build_environment(stream, config, base_dir, runtime_mode,
+							dep_build_version, python_activate,
+							mpi_transport_mode):
+	qfw_env = os.path.join(base_dir, 'QFw', 'environment')
+	libfab_env = os.path.join(qfw_env, 'qfw_libfabric_env.sh')
+	mpi_env = os.path.join(qfw_env, 'qfw_mpi_env.sh')
+	dev_vars = os.path.join(qfw_env, 'qfw_dev_env.sh')
+	qfw_vars = os.path.join(qfw_env, 'qfw_set_envvars.sh')
+	qfw_lib_path = os.path.join(base_dir, 'QFw', 'setup', 'qfw_lib_path.sh')
+
+	module_path = config.get('qfw-module-path', None)
+	module_file = config.get('qfw-module-load', None)
+	unloads = config.get('module-unload', None)
+	extra_mod_loads = config.get('extra-module-load', None)
+	libfab = config.get('libfabric-install', None)
+	mpi = config.get('mpi-install', None)
+	dev = config.get('dev-install', None)
+	dev_version = config.get('dev-version', None)
+	tmp_dir = config.get('tmp-dir', None)
+	qfw_path = config.get('qfw-path', None)
+	qfw_libpath = config.get('qfw-libpath', None)
+	openblas_root = config.get('openblas-root', None)
+	cmake_root = config.get('cmake-root', None)
+	gcc_root = config.get('gcc-root', None)
+
+	stream.write(f'export QFW_MASTER_SETUP_BASE_DIR="{shell_value(base_dir)}"\n')
+	write_default_export(stream, 'QFW_RUNTIME_MODE', runtime_mode)
+	write_default_export(stream, 'QFW_MPI_TRANSPORT_MODE', mpi_transport_mode)
+	write_default_export(stream, 'QFW_DEP_BUILD_VERSION', dep_build_version)
+	write_default_export(stream, 'QFW_MASTER_SETUP_TMP_DIR', tmp_dir)
+	write_default_export(stream, 'QFW_EXTRA_PATHS', qfw_path)
+	write_default_export(stream, 'QFW_EXTRA_LIBPATHS', qfw_libpath)
+	write_default_export(stream, 'QFW_MASTER_SETUP_MPI_INSTALL', mpi)
+	write_default_export(stream, 'QFW_MASTER_SETUP_DEV_INSTALL', dev)
+	write_default_export(stream, 'QFW_MASTER_SETUP_DEV_VERSION', dev_version)
+	write_default_export(stream, 'QFW_MASTER_SETUP_LIBFABRIC_INSTALL', libfab)
+	write_default_export(stream, 'QFW_MASTER_SETUP_CC', config.get('cc', None))
+	write_default_export(stream, 'QFW_MASTER_SETUP_CXX', config.get('cxx', None))
+	write_default_export(stream, 'QFW_MASTER_SETUP_FC', config.get('fc', None))
+	write_default_export(stream, 'QFW_MASTER_SETUP_HIP_ARCH', config.get('hip-arch', None))
+	write_default_export(stream, 'QFW_MASTER_SETUP_BUILD_JOBS', config.get('build-jobs', None))
+	for env_name, env_value in config.get('mpi-env', {}).items():
+		write_default_export(stream, env_name, env_value)
+	stream.write('\n')
+
+	stream.write(f'export QFW_VENV_PATH="{shell_value(os.path.dirname(os.path.dirname(python_activate)))}"\n')
+	stream.write(f'source "{shell_value(python_activate)}"\n')
+	stream.write(f'source "{shell_value(qfw_lib_path)}"\n')
+	stream.write('export PYTHON_PATH="${PYTHON_PATH:-$(command -v python3)}"\n\n')
+
+	if module_path:
+		stream.write('export _QFW_USED_MODULES=1\n')
+		if extra_mod_loads:
+			stream.write(f'module load {extra_mod_loads}\n')
+		stream.write(f'module use {module_path}\n')
+		stream.write(f'module load {module_file}\n')
+		if unloads:
+			stream.write(f'module unload {unloads}\n')
+		stream.write('ml\n')
+		stream.write('export BLASLIB="${BLASLIB:-OPENBLAS}"\n')
+		stream.write('export BLAS_LIB_DIR="${BLAS_LIB_DIR:-$(pkg-config --variable=libdir openblas)}"\n\n')
+	else:
+		if openblas_root:
+			stream.write('export BLASLIB="${BLASLIB:-OPENBLAS}"\n')
+			stream.write(f'export PATH="{shell_value(openblas_root)}/bin:$PATH"\n')
+			stream.write(f'export LD_LIBRARY_PATH="{shell_value(openblas_root)}/lib:${{LD_LIBRARY_PATH:-}}"\n')
+			stream.write(f'export BLAS_LIB_DIR="${{BLAS_LIB_DIR:-{shell_value(openblas_root)}/lib}}"\n')
+			stream.write(f'export PKG_CONFIG_PATH="{shell_value(openblas_root)}/lib/pkgconfig:${{PKG_CONFIG_PATH:-}}"\n')
+			stream.write(f'export CMAKE_PREFIX_PATH="{shell_value(openblas_root)}:${{CMAKE_PREFIX_PATH:-}}"\n\n')
+		stream.write('if [[ -z "${BLAS_LIB_DIR:-}" ]] && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists openblas; then\n')
+		stream.write('    export BLASLIB="${BLASLIB:-OPENBLAS}"\n')
+		stream.write('    export BLAS_LIB_DIR="$(pkg-config --variable=libdir openblas)"\n')
+		stream.write('fi\n')
+		if cmake_root:
+			stream.write(f'export PATH="{shell_value(cmake_root)}/bin:$PATH"\n')
+			stream.write(f'export ACLOCAL_PATH="{shell_value(cmake_root)}/share/aclocal:${{ACLOCAL_PATH:-}}"\n')
+			stream.write(f'export CMAKE_PREFIX_PATH="{shell_value(cmake_root)}:${{CMAKE_PREFIX_PATH:-}}"\n\n')
+		if gcc_root:
+			stream.write(f'export PATH="{shell_value(gcc_root)}/bin:$PATH"\n')
+			stream.write(f'export GCC_PATH="{shell_value(gcc_root)}"\n')
+			stream.write(f'export GCC_PREFIX="{shell_value(gcc_root)}"\n')
+		if libfab:
+			stream.write(f'source "{shell_value(libfab_env)}"\n')
+		stream.write('if [[ -n "${QFW_MASTER_SETUP_DEV_INSTALL:-}" ]]; then\n')
+		stream.write(f'    source "{shell_value(dev_vars)}"\n')
+		stream.write('fi\n')
+		stream.write(f'source "{shell_value(mpi_env)}"\n')
+	stream.write(f'source "{shell_value(qfw_vars)}"\n')
+	stream.write('if [[ -n "${QFW_EXTRA_PATHS:-}" ]]; then\n')
+	stream.write('    IFS=\':\' read -r -a _qfw_extra_paths <<< "${QFW_EXTRA_PATHS}"\n')
+	stream.write('    for _qfw_path in "${_qfw_extra_paths[@]}"; do\n')
+	stream.write('        [[ -n "${_qfw_path}" ]] || continue\n')
+	stream.write('        export PATH="${_qfw_path}:${PATH}"\n')
+	stream.write('    done\n')
+	stream.write('    unset _qfw_path _qfw_extra_paths\n')
+	stream.write('fi\n')
+	stream.write('if [[ -n "${QFW_EXTRA_LIBPATHS:-}" ]]; then\n')
+	stream.write('    IFS=\':\' read -r -a _qfw_extra_libpaths <<< "${QFW_EXTRA_LIBPATHS}"\n')
+	stream.write('    for _qfw_libpath in "${_qfw_extra_libpaths[@]}"; do\n')
+	stream.write('        [[ -n "${_qfw_libpath}" ]] || continue\n')
+	stream.write('        export LD_LIBRARY_PATH="${_qfw_libpath}:${LD_LIBRARY_PATH:-}"\n')
+	stream.write('    done\n')
+	stream.write('    unset _qfw_libpath _qfw_extra_libpaths\n')
+	stream.write('fi\n\n')
+
+
+def write_build_script(stream, config, base_dir, runtime_mode,
+					   dep_build_version, python_activate,
+					   mpi_transport_mode):
 	stream.write('#!/usr/bin/env bash\n')
 	stream.write('set -euo pipefail\n\n')
+	write_build_environment(
+		stream,
+		config,
+		base_dir,
+		runtime_mode,
+		dep_build_version,
+		python_activate,
+		mpi_transport_mode,
+	)
 	stream.write('build_python=0\n')
 	stream.write('build_tnqvm=0\n')
 	stream.write('build_nwqsim=0\n')
@@ -226,6 +352,7 @@ def qfw_configure(config):
 
 	qfw_activate = os.path.join(qfw_setup_dir, 'qfw_activate')
 	qfw_build = os.path.join(qfw_setup_dir, 'qfw_build.sh')
+	qfw_build_env = os.path.join(qfw_setup_dir, 'qfw_build_env.sh')
 
 	with open(qfw_activate, 'w', encoding='utf-8') as stream:
 		stream.write('#!/usr/bin/env bash\n')
@@ -435,10 +562,32 @@ def qfw_configure(config):
 		stream.write('}\n')
 
 	with open(qfw_build, 'w', encoding='utf-8') as stream:
-		write_build_script(stream, base_dir, qfw_activate)
+		write_build_script(
+			stream,
+			config,
+			base_dir,
+			runtime_mode,
+			dep_build_version,
+			python_activate,
+			mpi_transport_mode,
+		)
+
+	with open(qfw_build_env, 'w', encoding='utf-8') as stream:
+		stream.write('#!/usr/bin/env bash\n')
+		stream.write('set -euo pipefail\n\n')
+		write_build_environment(
+			stream,
+			config,
+			base_dir,
+			runtime_mode,
+			dep_build_version,
+			python_activate,
+			mpi_transport_mode,
+		)
 
 	os.chmod(qfw_activate, os.stat(qfw_activate).st_mode | stat.S_IXUSR)
 	os.chmod(qfw_build, os.stat(qfw_build).st_mode | stat.S_IXUSR)
+	os.chmod(qfw_build_env, os.stat(qfw_build_env).st_mode | stat.S_IXUSR)
 
 
 def print_help():
@@ -448,6 +597,7 @@ def print_help():
 	print("This generates:")
 	print("   <base-dir>/QFw/setup/qfw_activate")
 	print("   <base-dir>/QFw/setup/qfw_build.sh")
+	print("   <base-dir>/QFw/setup/qfw_build_env.sh")
 	print("")
 	print("Run qfw_build.sh separately to install Python requirements and build")
 	print("DEFw, TNQVM, and NWQ-Sim.")
