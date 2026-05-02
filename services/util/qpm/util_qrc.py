@@ -7,6 +7,7 @@ import queue
 import threading
 import sys
 import os
+import psutil
 from defw_exception import DEFwExecutionError, DEFwInProgress, DEFwOutOfResources
 import svc_launcher
 import cdefw_global
@@ -31,7 +32,7 @@ class UTIL_QRC:
 		self.worker_pool_rr = 0
 		self.num_workers = num_workers
 		self.num_worker_tasks = num_worker_tasks
-		self.num_cores = psutil.cpu_count(logical=False)  # noqa: F405
+		self.num_cores = psutil.cpu_count(logical=False)
 		logging.debug(f'num_cores = {self.num_cores} start = {start}')
 		if start:
 			self.launcher = svc_launcher.Launcher()
