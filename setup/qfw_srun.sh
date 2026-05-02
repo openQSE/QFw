@@ -71,10 +71,20 @@ export DEFW_PARENT_NAME=resmgr
 export DEFW_AGENT_TYPE=agent
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LOG_LEVEL=error
-export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
+export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}
 export DEFW_ONLY_LOAD_MODULE=$load_modules
 export DEFW_DISABLE_RESMGR=no
-export DEFW_PREF_PATH=${QFW_RUN_TMP_PATH}/defw_app_pref.yaml
+export DEFW_PY_LOGLEVEL=debug,DEFW_ALL
 
 set -xe
 srun --het-group=0 python3 $1 "${@:2}"
+
+set +xe
+unset DEFW_AGENT_NAME
+unset DEFW_LOG_DIR
+unset DEFW_SHELL_TYPE
+unset DEFW_LISTEN_PORT
+unset DEFW_AGENT_TYPE
+unset DEFW_LOG_LEVEL
+unset DEFW_DISABLE_RESMGR
+unset DEFW_PY_LOGLEVEL
