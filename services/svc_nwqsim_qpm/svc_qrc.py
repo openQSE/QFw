@@ -2,6 +2,7 @@ from defw_agent_info import *  # noqa: F401,F403
 import sys
 import os
 from defw_exception import DEFwError, DEFwExecutionError
+from util.mpi import backend_wrapper, build_mpi_command_string
 from util.qpm.util_qrc import UTIL_QRC
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
@@ -42,44 +43,43 @@ class QRC(UTIL_QRC):
 		info = circ.info
 
 		nwqsim_executable = shutil.which(info['qfw_backend'])
-		gpuwrapper = shutil.which("gpuwrapper.sh")
 
-		if not nwqsim_executable or not gpuwrapper:
-			raise DEFwExecutionError("Couldn't find nwqsim_executable or gpuwrapper. Check paths")
+		if not nwqsim_executable:
+			raise DEFwExecutionError("Couldn't find nwqsim_executable. Check paths")
 
-		if not os.path.exists(info["qfw_dvm_uri_path"].split('file:')[1]):
-			raise DEFwExecutionError(f"dvm-uri {info['qfw_dvm_uri_path']} doesn't exist")
+		dvm = os.environ.get("QFW_DVM_URI_PATH", "").strip()
+		if dvm and not os.path.exists(dvm):
+			raise DEFwExecutionError(f"dvm-uri {dvm} doesn't exist")
 
-		hosts = ''
-		for k, v in info["hosts"].items():
-			if hosts:
-				hosts += ','
-			hosts += f"{k}:{v}"
+		executable = nwqsim_executable
+		executable_args = []
+		wrapper = backend_wrapper('nwqsim')
+		if wrapper:
+			executable = shutil.which(wrapper)
+			if not executable:
+				raise DEFwExecutionError(f"Couldn't find {wrapper}. Check paths")
+			executable_args.extend(['-v', nwqsim_executable])
 
-		try:
-			dvm = info["qfw_dvm_uri_path"]
-		except KeyError:
-			dvm = "search"
-		exec_cmd = shutil.which(info["exec"])
-
-		cmd = (
-			f'{exec_cmd} --dvm {dvm} -x LD_LIBRARY_PATH '
-			f'--mca btl ^tcp,ofi,vader,openib '
-			f'--mca pml ^ucx --mca mtl ofi --mca opal_common_ofi_provider_include '
-			f'{info["provider"]} --bind-to core '
-			f'--np {info["np"]} --host {hosts} -v {nwqsim_executable} '
-			f'-q {qasm_file} ')
+		executable_args.extend(['-q', qasm_file])
 
 		if "num_shots" in info:
-			cmd += f' -shots {info["num_shots"]} '
+			executable_args.extend(['-shots', info["num_shots"]])
 
 		if "backend" in info:
-			cmd += f'-backend {info["backend"]} '
+			executable_args.extend(['-backend', info["backend"]])
 		else:
-			cmd += '-backend OPENMP'
+			executable_args.extend(['-backend', 'OPENMP'])
 
 		if "method" in info:
-			cmd += f' -sim {info["method"]}'
+			executable_args.extend(['-sim', info["method"]])
+
+		cmd = build_mpi_command_string(
+			executable,
+			executable_args=executable_args,
+			np=info["np"],
+			hosts=info.get("hosts", None),
+			dvm_uri=dvm
+		)
 
 		return cmd
 
