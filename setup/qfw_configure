@@ -118,6 +118,32 @@ def shell_value(value):
 	return str(value).replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
 
 
+def normalize_runtime_mode(runtime_mode):
+	if runtime_mode is None:
+		return None
+	runtime_mode = runtime_mode.strip().lower()
+	if runtime_mode == 'frontier':
+		return 'cluster'
+	return runtime_mode
+
+
+def resolve_service_runtime_config(config, base_dir, runtime_mode):
+	service_runtime_config = config.get('service-runtime-config', None)
+	if not service_runtime_config:
+		if runtime_mode == 'container':
+			service_runtime_config = 'services/config/container.yaml'
+		else:
+			raise ValueError(
+				"Configuration file needs to specify service-runtime-config "
+				"when runtime-mode is cluster"
+			)
+
+	service_runtime_config = os.path.expanduser(str(service_runtime_config))
+	if not os.path.isabs(service_runtime_config):
+		service_runtime_config = os.path.join(base_dir, 'QFw', service_runtime_config)
+	return service_runtime_config
+
+
 def write_default_export(stream, name, value):
 	if value is not None:
 		stream.write(f'export {name}="${{{name}:-{shell_value(value)}}}"\n')
@@ -331,10 +357,11 @@ def qfw_configure(config):
 		raise ValueError("Configuration file needs to specify: base-dir and python-venv-activate entries")
 
 	if runtime_mode is None:
-		runtime_mode = 'container' if config.get('install-profile', '').strip().lower() == 'container' else 'frontier'
-	runtime_mode = runtime_mode.strip().lower()
-	if runtime_mode not in ['frontier', 'container']:
+		runtime_mode = 'container' if config.get('install-profile', '').strip().lower() == 'container' else 'cluster'
+	runtime_mode = normalize_runtime_mode(runtime_mode)
+	if runtime_mode not in ['cluster', 'container']:
 		raise ValueError(f"Unsupported runtime-mode '{runtime_mode}'")
+	service_runtime_config = resolve_service_runtime_config(config, base_dir, runtime_mode)
 	if mpi_transport_mode is None:
 		mpi_transport_mode = 'auto' if runtime_mode == 'container' else 'ofi'
 	mpi_transport_mode = mpi_transport_mode.strip().lower()
@@ -388,6 +415,7 @@ def qfw_configure(config):
 		stream.write('fi\n')
 		stream.write(f'export QFW_MASTER_SETUP_BASE_DIR="{base_dir}"\n')
 		stream.write(f'export QFW_RUNTIME_MODE="{runtime_mode}"\n')
+		stream.write(f'export QFW_SERVICE_RUNTIME_CONFIG="{shell_value(service_runtime_config)}"\n')
 		stream.write(f'export QFW_MPI_TRANSPORT_MODE="{mpi_transport_mode}"\n')
 		if tmp_dir:
 			stream.write(f'export QFW_MASTER_SETUP_TMP_DIR="{tmp_dir}"\n')
@@ -547,6 +575,7 @@ def qfw_configure(config):
 		stream.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
 		stream.write('    unset QFW_DEP_BUILD_VERSION\n')
 		stream.write('    unset QFW_RUNTIME_MODE\n')
+		stream.write('    unset QFW_SERVICE_RUNTIME_CONFIG\n')
 		stream.write('    unset QFW_MPI_TRANSPORT_MODE\n')
 		stream.write('    unset QFW_MASTER_SETUP_TMP_DIR\n')
 		stream.write('    unset QFW_EXTRA_PATHS\n')

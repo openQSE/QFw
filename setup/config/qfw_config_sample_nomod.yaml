@@ -1,5 +1,6 @@
 base-dir: /sw/frontier/qhpc
-runtime-mode: frontier
+runtime-mode: cluster
+service-runtime-config: services/config/frontier.yaml
 mpi-transport-mode: ofi
 python-venv-activate: /ccs/home/shehataa/tmp/qfw_venv/bin/activate
 libfabric-install: /sw/frontier/ums/ums024/cce/18.0.1/install/libfabric-2.3.1-20251111.dbg

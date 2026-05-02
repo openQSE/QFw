@@ -1,0 +1,11 @@
+mpi-launch:
+  launcher: mpirun
+  allow-run-as-root: auto
+  export-env:
+    - LD_LIBRARY_PATH
+
+backends:
+  tnqvm:
+    wrapper: null
+  nwqsim:
+    wrapper: null

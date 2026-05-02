@@ -1,7 +1,6 @@
 from defw_agent_info import *  # noqa: F401,F403
 from defw_util import round_half_up, round_to_nearest_power_of_two
 import logging
-import os
 import time
 
 # Maximum number of processes per node
@@ -48,42 +47,6 @@ class Circuit:
 		self.resources_consumed_time = -1
 
 	def setup_circuit_run_details(self, max_qubits):
-		# TODO: Make MPI configuration decisions based
-		# on the circuit meta data
-
-		try:
-			self.info['exec'] = os.environ['QFW_LAUNCHER_BIN']
-		except KeyError:
-			self.info['exec'] = 'mpirun'
-
-		try:
-			# QFW_MODULE_USE_PATH is in the format:
-			#	path/to/use1:path/to/use2:...
-			module_use = os.environ['QFW_MODULE_USE_PATH']
-			self.info['modules'] = {'use': module_use.split(':')}
-			# QFW_MODULE_LOADS is in the format:
-			#	mod1,mod2,...
-			mods = os.environ['QFW_MODULE_LOADS']
-			self.info['modules']['mods'] = mods.split(',')
-		except KeyError:
-			self.info['modules'] = {}
-			self.info['modules']['use'] = ''
-			self.info['modules']['mods'] = ''
-
-		# These must be defined
-		try:
-			self.info['provider'] = os.environ['QFW_OMPI_LIBFABRIC_PROV']
-		except KeyError:
-			self.info['provider'] = 'shm+cxi:linkx'
-
-		try:
-			self.info['mapping'] = os.environ['QFW_OMPI_MAPPING']
-		except KeyError:
-			self.info['mapping'] = 'ppr:1:l3cache'
-			#self.info['mapping'] = 'l3cache:pe=6'
-
-		self.info['qfw_dvm_uri_path'] = f"file:{os.environ['QFW_DVM_URI_PATH']}"
-
 		# each 10 qubits requires 1 node added to the simulation
 		np = round_half_up(self.info['num_qubits'] / max_qubits)
 		if np < 1:

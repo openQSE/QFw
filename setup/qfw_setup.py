@@ -37,7 +37,7 @@ def execute_ssh_command(host, command, daemonize=False):
 		return -1, '', str(e)
 
 def runtime_mode():
-	return os.environ.get('QFW_RUNTIME_MODE', 'frontier').strip().lower()
+	return os.environ.get('QFW_RUNTIME_MODE', 'cluster').strip().lower()
 
 def in_container_mode():
 	return runtime_mode() == 'container'

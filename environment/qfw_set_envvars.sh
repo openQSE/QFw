@@ -39,7 +39,7 @@ export DEFW_EXTERNAL_SERVICE_APIS_PATH="${QFW_PATH}/service-apis"
 
 if [[ -n "${QFW_MASTER_SETUP_TMP_DIR:-}" ]]; then
 	QFW_TMP_PATH="${QFW_MASTER_SETUP_TMP_DIR}"
-elif [[ "${QFW_RUNTIME_MODE:-frontier}" == "container" ]]; then
+elif [[ "${QFW_RUNTIME_MODE:-cluster}" == "container" ]]; then
 	QFW_TMP_PATH="${BASE_DIR}/tmp"
 else
 	QFW_TMP_PATH="${HOME}/QFwTmp"

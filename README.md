@@ -39,7 +39,8 @@ QFw supports three installation modes.
 ```yaml
 base-dir: </path/to/QFw/base/directory>               # example:
 /sw/frontier/qhpc
-runtime-mode: frontier
+runtime-mode: cluster
+service-runtime-config: services/config/frontier.yaml
 mpi-transport-mode: ofi
 qfw-module-path: </path/to/module/files>              # example:
 /sw/frontier/qhpc/QFw/environment/
@@ -55,12 +56,14 @@ generate-dep-build-version: [True | False]            # optional, default False
 
 ```yaml
 base-dir: </path/to/QFw/base/directory>
-runtime-mode: frontier | container                    # optional, default:
-                                                      # frontier unless
+runtime-mode: cluster | container                     # optional, default:
+                                                      # cluster unless
                                                       # install-profile is
                                                       # container
+service-runtime-config: services/config/frontier.yaml # required for cluster;
+                                                      # optional for container
 mpi-transport-mode: ofi | auto                        # optional, default:
-                                                      # ofi for frontier,
+                                                      # ofi for cluster,
                                                       # auto for container
 python-venv-activate: </path/to/venv/bin/activate>
 libfabric-install: </path/to/libfabric/install>
@@ -81,6 +84,7 @@ generate-dep-build-version: [True | False]            # optional, default False
 ```yaml
 install-profile: container
 runtime-mode: container
+service-runtime-config: services/config/container.yaml
 mpi-transport-mode: auto
 base-dir: /workspace/qfw-container-base
 python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
@@ -109,14 +113,22 @@ must already be provided.
 `runtime-mode` controls how QFw interprets the allocation and temp-path
 layout. Supported values are:
 
-- `frontier`: keep the Frontier-oriented assumptions
+- `cluster`: use the cluster-oriented startup and temp-path behavior
 - `container`: use the mounted workspace for temp files while still
   supporting the same Slurm heterogeneous startup flow
+
+`service-runtime-config` points to the runtime policy used by QFw services.
+It controls MPI launch details such as MCA parameters, binding, mapping,
+and backend wrappers. Relative paths are resolved under `QFW_PATH`.
+Container installs default to `services/config/container.yaml`; cluster
+installs should set this explicitly. QFw ships
+`services/config/frontier.yaml` as the Frontier example, and sites such as
+Aurora should provide their own YAML and point this key at it.
 
 `mpi-transport-mode` controls whether QFw forces Open MPI onto the OFI
 path:
 
-- `ofi`: export the existing OFI-focused MCA settings
+- `ofi`: export the existing OFI-focused MCA environment settings
 - `auto`: leave transport selection to the Open MPI installation
 
 You can also add an `mpi-env:` mapping in the config to export explicit
@@ -315,6 +327,10 @@ cd setup
 cp config/qfw_config_sample.yaml my_cluster.yaml
 python -m pip install -r build-requirements.txt
 ```
+
+For non-Frontier clusters, also create a site runtime config and point
+`service-runtime-config` at it. The bundled Frontier example is
+`services/config/frontier.yaml`.
 
 4. Generate the activation and build scripts:
 

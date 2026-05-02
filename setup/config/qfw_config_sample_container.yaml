@@ -1,5 +1,6 @@
 install-profile: container
 runtime-mode: container
+service-runtime-config: services/config/container.yaml
 mpi-transport-mode: auto
 base-dir: /workspace/qfw-container-base
 python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
