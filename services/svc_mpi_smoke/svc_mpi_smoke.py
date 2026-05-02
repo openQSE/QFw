@@ -10,6 +10,7 @@ import sys
 import defw_common_def as common
 from defw_agent_info import Capability, DEFwServiceInfo
 from defw_exception import DEFwError
+from util.mpi import build_mpi_command
 
 
 class MPISmoke:
@@ -57,13 +58,12 @@ class MPISmoke:
 		)
 		python = shutil.which("python3_defw_orig") or sys.executable
 
-		cmd = ["mpirun"]
-		if os.geteuid() == 0:
-			cmd.append("--allow-run-as-root")
-		dvm_uri = os.environ.get("QFW_DVM_URI_PATH", "").strip()
-		if dvm_uri:
-			cmd.extend(["--dvm", f"file:{dvm_uri}"])
-		cmd.extend(["-np", str(np), python, "-c", payload])
+		cmd = build_mpi_command(
+			python,
+			executable_args=["-c", payload],
+			np=np,
+			dvm_uri=os.environ.get("QFW_DVM_URI_PATH", "").strip(),
+		)
 
 		logging.debug("MPI smoke command: %s", shlex.join(cmd))
 
