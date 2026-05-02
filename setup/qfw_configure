@@ -4,7 +4,6 @@ import copy
 import getopt
 import os
 import stat
-import subprocess
 import sys
 from datetime import datetime
 
@@ -65,17 +64,17 @@ def _configured_python():
 def _ensure_configure_runtime():
 	target_python = _configured_python()
 
-	if os.path.realpath(target_python) != os.path.realpath(sys.executable):
+	if os.path.abspath(target_python) != os.path.abspath(sys.executable):
 		os.execv(target_python, [target_python, os.path.abspath(__file__), *sys.argv[1:]])
 
 	try:
 		import yaml as _yaml
-	except ImportError:
-		subprocess.run(
-			[target_python, '-m', 'pip', 'install', 'PyYAML'],
-			check=True,
-		)
-		import yaml as _yaml
+	except ImportError as exc:
+		raise SystemExit(
+			"Missing configure dependency: PyYAML. Install "
+			"setup/build-requirements.txt into the Python environment "
+			"used by python-venv-activate before running qfw_configure."
+		) from exc
 
 	return _yaml
 

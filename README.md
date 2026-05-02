@@ -133,6 +133,15 @@ build path include:
 
 ### Run the configurator
 
+Install the configure-time Python requirements into the Python
+environment named by `python-venv-activate` before running
+`qfw_configure`:
+
+```bash
+source /path/to/venv/bin/activate
+python -m pip install -r /path/to/QFw/setup/build-requirements.txt
+```
+
 ```bash
 cd /path/to/QFw/setup
 ./qfw_configure -c /path/to/config.yaml
@@ -195,6 +204,7 @@ cd /path/to/QFw-SLURM-Cluster
 python3 -m venv /workspace/qfw-container-base/venv
 source /workspace/qfw-container-base/venv/bin/activate
 python -m pip install --upgrade pip
+python -m pip install -r /workspace/qfw-container-base/QFw/setup/build-requirements.txt
 ```
 
 3. Go to the QFw setup directory:
@@ -302,6 +312,7 @@ git submodule update --init --recursive
 ```bash
 cd setup
 cp qfw_config_sample.yaml my_cluster.yaml
+python -m pip install -r build-requirements.txt
 ```
 
 4. Generate the activation and build scripts:
