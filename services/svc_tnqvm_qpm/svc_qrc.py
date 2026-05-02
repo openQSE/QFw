@@ -4,6 +4,7 @@ import sys
 import os
 import json
 from defw_exception import DEFwError, DEFwExecutionError
+from util.mpi import backend_wrapper, build_mpi_command_string
 from util.qpm.util_qrc import UTIL_QRC
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
@@ -50,37 +51,39 @@ class QRC(UTIL_QRC):
 			compiler = info['compiler']
 
 		circuit_runner = shutil.which(info['qfw_backend'])
-		gpuwrapper = shutil.which("gpuwrapper.sh")
 
-		if not circuit_runner or not gpuwrapper:
+		if not circuit_runner:
 			logging.debug(f"{os.environ['PATH']}")
 			logging.debug(f"{os.environ['LD_LIBRARY_PATH']}")
-			raise DEFwExecutionError("Couldn't find circuit_runner or gpuwrapper. Check paths")
+			raise DEFwExecutionError("Couldn't find circuit_runner. Check paths")
 
-		if not os.path.exists(info["qfw_dvm_uri_path"].split('file:')[1]):
-			raise DEFwExecutionError(f"dvm-uri {info['qfw_dvm_uri_path']} doesn't exist")
+		dvm = os.environ.get("QFW_DVM_URI_PATH", "").strip()
+		if dvm and not os.path.exists(dvm):
+			raise DEFwExecutionError(f"dvm-uri {dvm} doesn't exist")
 
-		hosts = ''
-		for k, v in info["hosts"].items():
-			if hosts:
-				hosts += ','
-			hosts += f"{k}:{v}"
+		executable = circuit_runner
+		executable_args = []
+		wrapper = backend_wrapper('tnqvm')
+		if wrapper:
+			executable = shutil.which(wrapper)
+			if not executable:
+				raise DEFwExecutionError(f"Couldn't find {wrapper}. Check paths")
+			executable_args.extend(['-v', circuit_runner])
 
-		try:
-			dvm = info["qfw_dvm_uri_path"]
-		except KeyError:
-			dvm = "search"
+		executable_args.extend([
+			'-q', qasm_file,
+			'-b', info["num_qubits"],
+			'-s', info["num_shots"],
+			'-c', compiler
+		])
 
-		exec_cmd = shutil.which(info["exec"])
-
-		cmd = (
-			f'{exec_cmd} --dvm {dvm} -x LD_LIBRARY_PATH '
-			f'--mca btl ^tcp,ofi,vader,openib '
-			f'--mca pml ^ucx --mca mtl ofi --mca opal_common_ofi_provider_include '
-			f'{info["provider"]} --map-by {info["mapping"]} --bind-to core '
-			f'--np {info["np"]} --host {hosts} {gpuwrapper} -v {circuit_runner} '
-			f'-q {qasm_file} -b {info["num_qubits"]} -s {info["num_shots"]} '
-			f'-c {compiler}')
+		cmd = build_mpi_command_string(
+			executable,
+			executable_args=executable_args,
+			np=info["np"],
+			hosts=info.get("hosts", None),
+			dvm_uri=dvm
+		)
 
 		return cmd
 
