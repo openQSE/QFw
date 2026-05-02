@@ -34,6 +34,8 @@ if [[ $# -lt 1 ]]; then
 fi
 
 source $QFW_SETUP_PATH/qfw_lib_path.sh
+source "$QFW_SETUP_PATH/qfw_run_tmp.sh"
+qfw_use_current_run_tmp || exit 1
 
 hostname=$(hostname)
 export DEFW_CONFIG_PATH=$DEFW_PATH/python/config/defw_generic.yaml
@@ -42,7 +44,7 @@ export DEFW_AGENT_NAME=ExtractInfo
 export DEFW_LISTEN_PORT=10095
 export DEFW_AGENT_TYPE=agent
 export DEFW_LOG_LEVEL=error
-export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}_${hostname}
+export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_LOAD_NO_INIT=svc_launcher
 export DEFW_ONLY_LOAD_MODULE=svc_resmgr
 export DEFW_DISABLE_RESMGR=yes
@@ -69,10 +71,10 @@ export DEFW_PARENT_NAME=resmgr
 export DEFW_AGENT_TYPE=agent
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LOG_LEVEL=error
-export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}
+export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_ONLY_LOAD_MODULE=$load_modules
 export DEFW_DISABLE_RESMGR=no
-export DEFW_PREF_PATH=${QFW_TMP_PATH}/defw_app_pref.yaml
+export DEFW_PREF_PATH=${QFW_RUN_TMP_PATH}/defw_app_pref.yaml
 
 set -xe
 srun --het-group=0 python3 $1 "${@:2}"

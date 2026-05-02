@@ -4,6 +4,9 @@ if [[ -z "${_QFW_ACTIVE:-}" ]]; then
 	source $QFW_SETUP_PATH/qfw_activate --skip-patches
 fi
 
+source "$QFW_SETUP_PATH/qfw_run_tmp.sh"
+qfw_use_current_run_tmp || exit 1
+
 groups="$1"
 services_config="${2:-${QFW_SETUP_PATH}/qfw_services.yaml}"
 hostname=$(hostname)
@@ -17,8 +20,8 @@ export DEFW_LOAD_NO_INIT=svc_launcher
 export DEFW_ONLY_LOAD_MODULE=svc_resmgr
 export DEFW_DISABLE_RESMGR=yes
 export DEFW_AGENT_NAME=qfw_setup_phase_2.1
-export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
-export QFW_DVM_URI_PATH=$QFW_TMP_PATH/prte_dvm/dvm-uri
+export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
+export QFW_DVM_URI_PATH=$QFW_RUN_TMP_PATH/prte_dvm/dvm-uri
 
 set -x
 source $QFW_SETUP_PATH/qfw_lib_path.sh

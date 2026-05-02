@@ -43,7 +43,19 @@ def in_container_mode():
 	return runtime_mode() == 'container'
 
 def qfw_tmp_dir():
-	return os.environ.get('QFW_TMP_PATH', os.path.join(os.environ['QFW_MASTER_SETUP_BASE_DIR'], 'tmp'))
+	base_tmp = os.environ.get('QFW_TMP_PATH',
+		os.path.join(os.environ['QFW_MASTER_SETUP_BASE_DIR'], 'tmp'))
+	if 'QFW_RUN_TMP_PATH' in os.environ:
+		return os.environ['QFW_RUN_TMP_PATH']
+	if 'QFW_RUN_ID' in os.environ:
+		return os.path.join(base_tmp, os.environ['QFW_RUN_ID'])
+	current_path = os.path.join(base_tmp, 'current')
+	if os.path.exists(current_path):
+		with open(current_path, 'r') as f:
+			run_id = f.readline().strip()
+		if run_id:
+			return os.path.join(base_tmp, run_id)
+	return base_tmp
 
 def execute_local_command(command, daemonize=False):
 	if daemonize:
@@ -146,7 +158,7 @@ def start_dvm(node_list):
 
 def start_resmgr(target, launcher, env_dict):
 	resmgr = f"resmgr_{target}"
-	tmp_path = os.environ['QFW_TMP_PATH']
+	tmp_path = qfw_tmp_dir()
 	pref_path = os.path.join(tmp_path, 'defw_resmgr_pref.yaml')
 
 	env =  {'DEFW_AGENT_NAME': resmgr,

@@ -35,6 +35,9 @@ done
 
 hostname=$(hostname)
 het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh) || exit 1
+source "$QFW_SETUP_PATH/qfw_run_tmp.sh"
+qfw_create_run_tmp || exit 1
+echo "QFw run logs: ${QFW_RUN_TMP_PATH}"
 
 # we need to propagate the environment to the other nodes. That's why
 # we're explicitly using srun. We can't run the dvm with srun, so we
@@ -66,9 +69,9 @@ het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh) || exit 1
 #  under the launcher, and the launcher should have the correct
 #  environment; therefore, the QRC will have the correct inherited
 #  environment as well.
-export QFW_DVM_URI_PATH=$QFW_TMP_PATH/prte_dvm/dvm-uri
+export QFW_DVM_URI_PATH=$QFW_RUN_TMP_PATH/prte_dvm/dvm-uri
 export DEFW_AGENT_NAME=qfw_setup_phase_1
-export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
+export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LISTEN_PORT=9095
 export DEFW_AGENT_TYPE=agent
@@ -95,7 +98,7 @@ echo "*******COMPLETED PHASE ONE SETUP: PRTE*******"
 
 echo "*******START PHASE TWO SETUP*******"
 export DEFW_AGENT_NAME=qfw_setup_phase_2
-export DEFW_LOG_DIR=$QFW_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
+export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LISTEN_PORT=9095
 export DEFW_AGENT_TYPE=agent

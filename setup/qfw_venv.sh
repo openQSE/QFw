@@ -5,6 +5,11 @@ if [ "${1:-}" == "print_intro" ]; then
 fi
 
 hostname=$(hostname)
+if [[ -f "$QFW_SETUP_PATH/qfw_run_tmp.sh" ]]; then
+	source "$QFW_SETUP_PATH/qfw_run_tmp.sh"
+	qfw_use_current_run_tmp >/dev/null 2>&1 || true
+fi
+qfw_log_base="${QFW_RUN_TMP_PATH:-/tmp}"
 
 unset QFW_HET_GROUP
 for var in "${!SLURM_JOB_NODELIST_HET_GROUP_@}"; do
@@ -24,7 +29,7 @@ export DEFW_AGENT_NAME=qfw_setup
 export DEFW_LISTEN_PORT=8095
 export DEFW_AGENT_TYPE=agent
 export DEFW_LOG_LEVEL=all
-export DEFW_LOG_DIR=/tmp/${DEFW_AGENT_NAME}_${hostname}
+export DEFW_LOG_DIR=${qfw_log_base}/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_LOAD_NO_INIT=svc_launcher
 export DEFW_ONLY_LOAD_MODULE=svc_resmgr
 export DEFW_DISABLE_RESMGR=yes
@@ -44,6 +49,7 @@ unset DEFW_LOG_DIR
 unset DEFW_LOAD_NO_INIT
 unset DEFW_ONLY_LOAD_MODULE
 unset DEFW_DISABLE_RESMGR
+unset qfw_log_base
 
 if [[ $rc -ne 0 ]]; then
 	echo "Command failed, exiting."
