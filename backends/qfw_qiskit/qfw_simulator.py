@@ -97,6 +97,12 @@ class QFwBackend(BackendV2):
 		self.options.set_validator("seed_simulator", int)
 		self.options.set_validator("seed", int)
 
+	def __copy__(self):
+		return self
+
+	def __deepcopy__(self, memo):
+		return self
+
 	# This is unique to the QFw backend. We need to cleanly shutdown the
 	# QFw infrastructure.
 	def shutdown(self):
