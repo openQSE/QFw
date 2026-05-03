@@ -27,7 +27,7 @@ noise_model.add_all_qubit_quantum_error(error_2, ['cx'])
 backend_instance = QFwBackend(
 	betype=QFwBackendType.QFW_TYPE_NWQSIM,
 	capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
-dev = qml.device('qiskit.remote', wires=2, backend=backend_instance)
+dev = qml.device('qiskit.remote', wires=2, backend=backend_instance, shots=1024)
 # -------------------------------------------------------------------------- #
 
 
