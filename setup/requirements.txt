@@ -6,3 +6,11 @@ supermarq
 pennylane
 pennylane-qiskit
 qiskit-ibm-runtime
+qiskit_nature
+mpi4py
+networkx
+matplotlib
+numpy
+scipy
+pyscf
+PyYAML
