@@ -492,3 +492,41 @@ QFw-specific services and APIs are loaded into DEFw through:
 
 This keeps the DEFw framework generic while allowing QFw to evolve its
 simulator services independently.
+
+### Service Statevector Contract
+
+QPM services may expose simulator statevectors when a backend requests
+`QFW_CAP_STATEVECTOR`. Each service owns parsing of its simulator-native
+output, but services should publish statevectors through the common
+builder in `services/util/qpm/statevector.py`.
+
+The common service payload is:
+
+```python
+{
+    "type": "statevector",
+    "format": "complex128",
+    "num_qubits": 4,
+    "num_amplitudes": 16,
+    "data": [[real, imag], ...],
+    "source": "nwqsim",
+}
+```
+
+Services should return this structure under the `statevector` key:
+
+```python
+{
+    "counts": counts,
+    "statevector": statevector.to_dict(),
+}
+```
+
+Count-only services may continue to return the existing plain counts
+dictionary. The QFw backend accepts both forms.
+
+NWQ-Sim writes statevectors through its native `--dump_file` option when
+QFw requests statevector data. QFw names the dump file from the circuit
+UUID with a `.dump` extension, parses it as the NWQ-Sim native
+`complex128` statevector, converts it to the common payload, and removes
+the dump file after parsing or failure cleanup.
