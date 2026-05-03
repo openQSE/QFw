@@ -1,14 +1,21 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 import time
-from qiskit.primitives import BackendSampler
 from qiskit_algorithms import QAOA
 from qiskit_algorithms.optimizers import COBYLA
 from qiskit_optimization.algorithms import MinimumEigenOptimizer
 from qiskit_optimization.applications.max_cut import Maxcut
 
 # ------------------ QFW simulator ------------------ #
-from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+try:
+    from qfw_qiskit import (
+        QFwBackend,
+        QFwBackendCapability,
+        QFwBackendType,
+        QFwSamplerV2,
+    )
+except ImportError as exc:
+    raise RuntimeError("test_qiskit_qaoa.py only runs against Qiskit V2 primitives") from exc
 # --------------------------------------------------- #
 
 import sys
@@ -49,10 +56,9 @@ else:
 # --------------------------------------------------- #
 
 
-backend_sampler = BackendSampler(
+backend_sampler = QFwSamplerV2(
     backend=simulator_obj,
-    skip_transpilation=False,
-    options={"shots": 1024}
+    options={"default_shots": 1024}
 )
 
 # Define QAOA
