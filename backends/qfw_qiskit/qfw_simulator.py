@@ -144,7 +144,7 @@ class QFwBackend(BackendV2):
 
 		# Create a simple Target for BackendV2 compatibility
 		# For a simulator, we create a fully-connected target with all basis gates
-		tgt = Target(description="Quantum Framework (QFw) Target")
+		tgt = Target(description="Quantum Framework (QFw) Target", num_qubits=400)
 
 		# Note: For a generic simulator, we don't add specific gate instructions
 		# The backend will handle any gates in the basis_gates list
