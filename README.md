@@ -103,6 +103,9 @@ generate-dep-build-version: [True | False]            # optional, default False
 The container profile is a convenience wrapper around the explicit
 environment-variable mode. It does not load modules and defaults to the
 paths provided by the QFw Slurm container image.
+In container mode, activation appends image-built QFw runtime paths as
+fallbacks. Mounted workspace binaries and libraries stay ahead of those
+fallbacks, so local development builds take precedence when present.
 
 `qfw-dep-build-version` identifies the versioned dependency install
 location used by activation and the generated build script. If

@@ -118,6 +118,31 @@ def shell_value(value):
 	return str(value).replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
 
 
+def container_image_runtime_paths():
+	image_base = os.environ.get('QFW_IMAGE_BASE', '/opt/qfw/qhpc').rstrip('/')
+	image_qfw = os.environ.get('QFW_IMAGE_QFW', os.path.join(image_base, 'QFw')).rstrip('/')
+	build_version = os.environ.get('QFW_IMAGE_BUILD_VERSION', 'image')
+	build_base = os.path.join(image_base, 'build', build_version)
+	install_base = os.path.join(image_base, 'install', build_version)
+
+	return (
+		[
+			os.path.join(image_qfw, 'bin'),
+		],
+		[
+			os.path.join(image_qfw, 'DEFw', 'src'),
+			os.path.join(install_base, 'TNQVM', 'exatn', 'lib'),
+			os.path.join(install_base, 'TNQVM', 'xacc', 'lib'),
+			os.path.join(build_base, 'TNQVM', 'tnqvm', 'plugins'),
+			os.path.join(install_base, 'NWQSIM', 'lib'),
+		],
+	)
+
+
+def joined_path_list(paths):
+	return ':'.join(path for path in paths if path)
+
+
 def normalize_runtime_mode(runtime_mode):
 	if runtime_mode is None:
 		return None
@@ -352,6 +377,8 @@ def qfw_configure(config):
 	mpi_env_overrides = config.get('mpi-env', {})
 	qfw_path = config.get('qfw-path', None)
 	qfw_libpath = config.get('qfw-libpath', None)
+	container_runtime_paths = []
+	container_runtime_libpaths = []
 
 	if not base_dir or not python_activate:
 		raise ValueError("Configuration file needs to specify: base-dir and python-venv-activate entries")
@@ -362,6 +389,8 @@ def qfw_configure(config):
 	if runtime_mode not in ['cluster', 'container']:
 		raise ValueError(f"Unsupported runtime-mode '{runtime_mode}'")
 	service_runtime_config = resolve_service_runtime_config(config, base_dir, runtime_mode)
+	if runtime_mode == 'container':
+		container_runtime_paths, container_runtime_libpaths = container_image_runtime_paths()
 	if mpi_transport_mode is None:
 		mpi_transport_mode = 'auto' if runtime_mode == 'container' else 'ofi'
 	mpi_transport_mode = mpi_transport_mode.strip().lower()
@@ -423,6 +452,16 @@ def qfw_configure(config):
 			stream.write(f'export QFW_EXTRA_PATHS="{qfw_path}"\n')
 		if qfw_libpath:
 			stream.write(f'export QFW_EXTRA_LIBPATHS="{qfw_libpath}"\n')
+		if container_runtime_paths:
+			stream.write(
+				'export QFW_CONTAINER_FALLBACK_PATHS="'
+				f'{shell_value(joined_path_list(container_runtime_paths))}"\n'
+			)
+		if container_runtime_libpaths:
+			stream.write(
+				'export QFW_CONTAINER_FALLBACK_LIBPATHS="'
+				f'{shell_value(joined_path_list(container_runtime_libpaths))}"\n'
+			)
 		stream.write(f'export QFW_DEP_BUILD_VERSION="{dep_build_version}"\n')
 		stream.write('if [[ -z "${QFW_DEP_BUILD_VERSION:-}" ]]; then\n')
 		stream.write('    echo "ERROR: QFW_DEP_BUILD_VERSION is not set. Re-run qfw_configure with qfw-dep-build-version or generate-dep-build-version enabled." >&2\n')
@@ -518,6 +557,22 @@ def qfw_configure(config):
 		stream.write('    done\n')
 		stream.write('    unset _qfw_libpath _qfw_extra_libpaths\n')
 		stream.write('fi\n')
+		stream.write('if [[ -n "${QFW_CONTAINER_FALLBACK_PATHS:-}" ]]; then\n')
+		stream.write('    IFS=\':\' read -r -a _qfw_fallback_paths <<< "${QFW_CONTAINER_FALLBACK_PATHS}"\n')
+		stream.write('    for _qfw_path in "${_qfw_fallback_paths[@]}"; do\n')
+		stream.write('        [[ -n "${_qfw_path}" ]] || continue\n')
+		stream.write('        export PATH="${PATH}:${_qfw_path}"\n')
+		stream.write('    done\n')
+		stream.write('    unset _qfw_path _qfw_fallback_paths\n')
+		stream.write('fi\n')
+		stream.write('if [[ -n "${QFW_CONTAINER_FALLBACK_LIBPATHS:-}" ]]; then\n')
+		stream.write('    IFS=\':\' read -r -a _qfw_fallback_libpaths <<< "${QFW_CONTAINER_FALLBACK_LIBPATHS}"\n')
+		stream.write('    for _qfw_libpath in "${_qfw_fallback_libpaths[@]}"; do\n')
+		stream.write('        [[ -n "${_qfw_libpath}" ]] || continue\n')
+		stream.write('        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${_qfw_libpath}"\n')
+		stream.write('    done\n')
+		stream.write('    unset _qfw_libpath _qfw_fallback_libpaths\n')
+		stream.write('fi\n')
 		stream.write('if ! source "$QFW_SETUP_PATH/qfw_venv.sh"; then\n')
 		stream.write('    unset _QFW_ACTIVE\n')
 		stream.write('    return 1 2>/dev/null || exit 1\n')
@@ -580,6 +635,8 @@ def qfw_configure(config):
 		stream.write('    unset QFW_MASTER_SETUP_TMP_DIR\n')
 		stream.write('    unset QFW_EXTRA_PATHS\n')
 		stream.write('    unset QFW_EXTRA_LIBPATHS\n')
+		stream.write('    unset QFW_CONTAINER_FALLBACK_PATHS\n')
+		stream.write('    unset QFW_CONTAINER_FALLBACK_LIBPATHS\n')
 		stream.write('    unset QFW_JOB_ID\n')
 		stream.write('    unset QFW_HET_GROUP\n')
 		stream.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')

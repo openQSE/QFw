@@ -1,5 +1,9 @@
 import os, sys, subprocess, sysconfig
 
+def _path_points_to(path, target):
+	return os.path.islink(path) and os.path.realpath(path) == os.path.realpath(target)
+
+
 def setup_qfw_symlinks():
 	defw = os.path.join(os.environ['DEFW_PATH'], 'src', 'defwp')
 	venv_path = os.path.join(os.environ['QFW_VENV_PATH'], 'bin')
@@ -20,10 +24,21 @@ def setup_qfw_symlinks():
 						  "DEFW must be compiled with the same version as the venv python version")
 
 	py= f"python{sys.version_info.major}.{sys.version_info.minor}"
-	if os.path.exists(os.path.join(venv_path, "python_defw_orig")) or \
-	   os.path.exists(os.path.join(venv_path, "python3_defw_orig")) or \
-	   os.path.exists(os.path.join(venv_path, py+"_defw_orig")):
-		   raise RuntimeError("System is in an unexpected state")
+	python_paths = [
+		os.path.join(venv_path, "python"),
+		os.path.join(venv_path, "python3"),
+		os.path.join(venv_path, py),
+	]
+	backup_paths = [
+		os.path.join(venv_path, "python_defw_orig"),
+		os.path.join(venv_path, "python3_defw_orig"),
+		os.path.join(venv_path, py+"_defw_orig"),
+	]
+	backups_exist = [os.path.exists(path) for path in backup_paths]
+	if any(backups_exist):
+		if all(backups_exist) and all(_path_points_to(path, defw) for path in python_paths):
+			return
+		raise RuntimeError("System is in an unexpected state")
 
 	try:
 		os.replace(os.path.join(venv_path, "python"), os.path.join(venv_path, "python_defw_orig"))
@@ -51,4 +66,3 @@ def restore_symlinks():
 	os.replace(os.path.join(venv_path, "python_defw_orig"), os.path.join(venv_path, "python"))
 	os.replace(os.path.join(venv_path, "python3_defw_orig"), os.path.join(venv_path, "python3"))
 	os.replace(os.path.join(venv_path, py+"_defw_orig"), os.path.join(venv_path, py))
-
