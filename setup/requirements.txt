@@ -1,5 +1,7 @@
 qiskit==2.2.3
 qiskit_aer==0.17.2
+qiskit-algorithms
+qiskit-optimization
 supermarq
 pennylane
 pennylane-qiskit
