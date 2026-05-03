@@ -100,9 +100,24 @@ class QFwJob(Job):
 	def _get_memory_from_counts(self, counts):
 		m = []
 		for k, v in counts.items():
+			sample = self._normalize_memory_sample(k)
 			for i in range(v):
-				m.append(k)
+				m.append(sample)
 		return m
+
+	def _normalize_memory_sample(self, sample):
+		if isinstance(sample, int):
+			return hex(sample)
+
+		sample = str(sample).strip()
+		if sample.startswith(("0x", "0X")):
+			return sample
+
+		compact = sample.replace(" ", "")
+		if compact and all(bit in "01" for bit in compact):
+			return hex(int(compact, 2))
+
+		return sample
 
 	def result(self):
 		result_list = []
