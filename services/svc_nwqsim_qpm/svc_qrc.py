@@ -1,9 +1,11 @@
 from defw_agent_info import *  # noqa: F401,F403
 import sys
 import os
+import numpy as np
 from defw_exception import DEFwError, DEFwExecutionError
 from util.mpi import backend_wrapper, build_mpi_command_string
 from util.qpm.util_qrc import UTIL_QRC
+from util.qpm.statevector import QFwStatevector
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
@@ -37,6 +39,36 @@ class QRC(UTIL_QRC):
 		except Exception as e:
 			raise DEFwError({"Error": str(e)})
 			return {"Error": str(e)}
+
+	def parse_task_result(self, out, circ, task_info):
+		counts = self.parse_result(out)
+		info = circ.info
+		if not info.get("return_statevector", False):
+			return counts
+
+		dump_file = info.get("_qfw_statevector_dump", None)
+		if not dump_file or not os.path.exists(dump_file):
+			raise DEFwError({"Error": "Statevector dump file was not created"})
+
+		statevector = self.parse_statevector_dump(
+			dump_file, info.get("num_qubits", None))
+		return {
+			"counts": counts,
+			"statevector": statevector.to_dict()
+		}
+
+	def parse_statevector_dump(self, dump_file, num_qubits):
+		amplitudes = np.fromfile(dump_file, dtype=np.complex128)
+		return QFwStatevector.from_complex_sequence(
+			amplitudes, num_qubits=num_qubits, source="nwqsim")
+
+	def cleanup_task(self, circ, task_info):
+		dump_file = circ.info.get("_qfw_statevector_dump", None)
+		if dump_file:
+			try:
+				os.remove(dump_file)
+			except OSError:
+				pass
 
 	def form_cmd(self, circ, qasm_file):
 		import shutil
@@ -72,6 +104,11 @@ class QRC(UTIL_QRC):
 
 		if "method" in info:
 			executable_args.extend(['-sim', info["method"]])
+
+		if info.get("return_statevector", False):
+			dump_file = os.path.splitext(qasm_file)[0] + ".dump"
+			info["_qfw_statevector_dump"] = dump_file
+			executable_args.extend(['--dump_file', dump_file])
 
 		cmd = build_mpi_command_string(
 			executable,

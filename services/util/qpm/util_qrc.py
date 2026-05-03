@@ -56,6 +56,12 @@ class UTIL_QRC:
 			for v in self.worker_pool:
 				v['queue'].put(None)
 
+	def parse_task_result(self, stdout, circ, task_info):
+		return self.parse_result(stdout)
+
+	def cleanup_task(self, circ, task_info):
+		pass
+
 	def check_active_tasks(self, wid):
 		complete = []
 		for task_info in self.worker_pool[wid]['active_tasks']:
@@ -74,20 +80,23 @@ class UTIL_QRC:
 			cid = circ.get_cid()
 			qasm_file = task_info['qasm_file']
 
-			if rc == 0:
-				try:
-					output = self.parse_result(stdout)
-					circ.set_exec_done()
-				except Exception as e:
-					logging.critical(f"parse result failure = {e}")
-					output = "{result: missing, exception: " + f"{e}" + "}"
+			try:
+				if rc == 0:
+					try:
+						output = self.parse_task_result(stdout, circ, task_info)
+						circ.set_exec_done()
+					except Exception as e:
+						logging.critical(f"parse result failure = {e}")
+						output = "{result: missing, exception: " + f"{e}" + "}"
+						circ.set_fail()
+				else:
+					stdout = stdout.decode('utf-8')
+					stderr = stderr.decode('utf-8')
+					res = stdout + '\n' + stderr
+					output = "{result: " + f"{res}" + "}"
 					circ.set_fail()
-			else:
-				stdout = stdout.decode('utf-8')
-				stderr = stderr.decode('utf-8')
-				res = stdout + '\n' + stderr
-				output = "{result: " + f"{res}" + "}"
-				circ.set_fail()
+			finally:
+				self.cleanup_task(circ, task_info)
 
 			try:
 				os.remove(qasm_file)
@@ -287,15 +296,18 @@ class UTIL_QRC:
 			logging.debug(f"Running -- {cmd}")
 			circ.set_running()
 			output, error, rc = launcher.launch(cmd, wait=True)
-			output = self.parse_result(output)
+			task_info = {'qasm_file': qasm_file}
+			output = self.parse_task_result(output, circ, task_info)
 			launcher.shutdown()
 			logging.debug(f"Completed -- {cmd} -- returned {rc} -- {output} -- {error}")
 		except Exception as e:
 			launcher.shutdown()
+			self.cleanup_task(circ, {'qasm_file': qasm_file})
 			os.remove(qasm_file)
 			logging.critical(f"Failed to launch {cmd}")
 			raise e
 
+		self.cleanup_task(circ, {'qasm_file': qasm_file})
 		os.remove(qasm_file)
 
 		if rc == 0:
