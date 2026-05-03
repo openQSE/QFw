@@ -6,9 +6,9 @@ import sys
 from collections import deque
 
 from qiskit.providers import BackendV2, Options
-from qiskit.transpiler import Target
 
 from .qfw_job import QFwJob
+from .qfw_target import QFW_NUM_QUBITS, build_qfw_target, qfw_basis_gates
 from defw_exception import DEFwDumper
 from defw import me
 from .qfw_lookup_service import get_qpm
@@ -74,7 +74,8 @@ class QFwBackend(BackendV2):
 	BACKEND_VERSION = "1.0"
 	COMPLETION_TIMEOUT_SEC = 200
 
-	def __init__(self, betype=-1, capability=-1, target=None, properties=None):
+	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
+				 num_qubits=QFW_NUM_QUBITS):
 		self.log_time = time.time()
 		self.qpm = get_qpm(betype, capability)
 		# register for events with the qpm
@@ -86,6 +87,7 @@ class QFwBackend(BackendV2):
 		super().__init__(name=self.my_name())
 		self._target = target
 		self._properties = properties
+		self._num_qubits = num_qubits
 
 		# Custom option values for config, properties
 		self._options_configuration = {}
@@ -108,18 +110,8 @@ class QFwBackend(BackendV2):
 		configuration_dict = {
 			"backend_name": self.my_name(),
 			"backend_version": self.my_version(),
-			"n_qubits": 400,
-			"basis_gates": [
-				'x', 'y', 'z', 'h', 's',
-				'sdg', 't', 'tdg', 'ri',
-				'rx', 'ry', 'rz', 'sx',
-				'p', 'u', 'cx', 'cy',
-				'cz', 'ch', 'cs', 'csdg',
-				'ct', 'ctdg', 'crx', 'cry',
-				'crz', 'csx', 'cp', 'cu',
-				'id', 'swap', 'm', 'ma',
-				'reset', 'u1', 'u2', 'u3',
-				'ccx', 'cswap', 'rxx', 'ryy', 'rzz'],
+			"n_qubits": self._num_qubits,
+			"basis_gates": qfw_basis_gates(),
 			"coupling_map": None,
 			"simulator": True,
 			"local": True,
@@ -142,16 +134,8 @@ class QFwBackend(BackendV2):
 		if self._target is not None:
 			return self._target
 
-		# Create a simple Target for BackendV2 compatibility
-		# For a simulator, we create a fully-connected target with all basis gates
-		tgt = Target(description="Quantum Framework (QFw) Target", num_qubits=400)
-
-		# Note: For a generic simulator, we don't add specific gate instructions
-		# The backend will handle any gates in the basis_gates list
-		# This is sufficient for primitives that will transpile circuits before submission
-
-		self._target = tgt
-		return tgt
+		self._target = build_qfw_target(self._num_qubits)
+		return self._target
 
 	@property
 	def max_circuits(self):

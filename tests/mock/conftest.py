@@ -302,8 +302,13 @@ def _install_qiskit_stubs():
 	transpiler = types.ModuleType("qiskit.transpiler")
 
 	class Target:
-		def __init__(self, description=None):
+		def __init__(self, description=None, num_qubits=0, **kwargs):
 			self.description = description
+			self.num_qubits = num_qubits
+			self.operation_names = set()
+
+		def add_instruction(self, instruction, properties=None, name=None):
+			self.operation_names.add(name or instruction.name)
 
 	class PassManager:
 		def __init__(self, passes=None):
@@ -334,7 +339,64 @@ def _install_qiskit_stubs():
 	circuit_mod.QuantumCircuit = QuantumCircuit
 	circuit_mod.ClassicalRegister = ClassicalRegister
 	circuit_mod.QuantumRegister = QuantumRegister
+	circuit_mod.Measure = type("Measure", (), {"name": "measure"})
+	circuit_mod.Reset = type("Reset", (), {"name": "reset"})
 	sys.modules["qiskit.circuit"] = circuit_mod
+
+	library_mod = types.ModuleType("qiskit.circuit.library")
+
+	class _Gate:
+		name = None
+
+		def __init__(self, *args, **kwargs):
+			self.args = args
+			self.kwargs = kwargs
+
+	def _gate_class(class_name, gate_name):
+		return type(class_name, (_Gate,), {"name": gate_name})
+
+	for class_name, gate_name in {
+		"CCXGate": "ccx",
+		"CHGate": "ch",
+		"CSGate": "cs",
+		"CSXGate": "csx",
+		"CSdgGate": "csdg",
+		"CSwapGate": "cswap",
+		"CUGate": "cu",
+		"CXGate": "cx",
+		"CYGate": "cy",
+		"CZGate": "cz",
+		"CPhaseGate": "cp",
+		"CRXGate": "crx",
+		"CRYGate": "cry",
+		"CRZGate": "crz",
+		"HGate": "h",
+		"IGate": "id",
+		"PhaseGate": "p",
+		"RXGate": "rx",
+		"RXXGate": "rxx",
+		"RYGate": "ry",
+		"RYYGate": "ryy",
+		"RZGate": "rz",
+		"RZZGate": "rzz",
+		"SGate": "s",
+		"SXGate": "sx",
+		"SXdgGate": "sxdg",
+		"SdgGate": "sdg",
+		"SwapGate": "swap",
+		"TGate": "t",
+		"TdgGate": "tdg",
+		"U1Gate": "u1",
+		"U2Gate": "u2",
+		"U3Gate": "u3",
+		"UGate": "u",
+		"XGate": "x",
+		"YGate": "y",
+		"ZGate": "z",
+	}.items():
+		setattr(library_mod, class_name, _gate_class(class_name, gate_name))
+
+	sys.modules["qiskit.circuit.library"] = library_mod
 
 	exceptions_mod = types.ModuleType("qiskit.exceptions")
 	exceptions_mod.QiskitError = QiskitError
