@@ -1,3 +1,6 @@
 qiskit==2.2.3
 qiskit_aer==0.17.2
 supermarq
+pennylane
+pennylane-qiskit
+qiskit-ibm-runtime
