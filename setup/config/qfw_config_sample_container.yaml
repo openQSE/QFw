@@ -8,5 +8,5 @@ libfabric-install: /opt/qfw/libfabric
 mpi-install: /opt/qfw/openmpi
 dev-install: /workspace/qfw-container-base/rocm
 dev-version: 6.2.4
-build-jobs: 2
+build-jobs: 4
 generate-dep-build-version: True

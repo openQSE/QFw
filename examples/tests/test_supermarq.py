@@ -7,9 +7,10 @@ import traceback
 import sys
 import supermarq
 import getopt
+from defw import me
 from defw_exception import DEFwInProgress, DEFwNotReady, DEFwError
 from defw_util import prformat, fg
-from defw_app_util import me, defw_get_resource_mgr, defw_reserve_service_by_name
+from defw_app_util import defw_get_resource_mgr, defw_reserve_service_by_name
 from time import sleep, time
 from defw_event_baseapi import BaseEventAPI
 

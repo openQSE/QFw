@@ -80,7 +80,9 @@ def execute_local_command(command, daemonize=False):
 def get_external_defw_env():
 	env = {}
 	for key in ['DEFW_EXTERNAL_SERVICES_PATH',
-				'DEFW_EXTERNAL_SERVICE_APIS_PATH']:
+				'DEFW_EXTERNAL_SERVICE_APIS_PATH',
+				'PATH',
+				'LD_LIBRARY_PATH']:
 		if key in os.environ:
 			env[key] = os.environ[key]
 	return env
