@@ -77,6 +77,7 @@ class QFwBackend(BackendV2):
 	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
 				 num_qubits=QFW_NUM_QUBITS):
 		self.log_time = time.time()
+		self._capability = capability
 		self.qpm = get_qpm(betype, capability)
 		# register for events with the qpm
 		self.event_api = BaseEventAPI()
@@ -102,6 +103,11 @@ class QFwBackend(BackendV2):
 
 	def __deepcopy__(self, memo):
 		return self
+
+	def returns_statevector(self):
+		if self._capability == -1:
+			return False
+		return bool(self._capability & QFwBackendCapability.QFW_CAP_STATEVECTOR)
 
 	# This is unique to the QFw backend. We need to cleanly shutdown the
 	# QFw infrastructure.

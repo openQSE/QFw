@@ -6,6 +6,7 @@ import select
 from qiskit import qasm2, QuantumCircuit
 from qiskit.providers import JobV1 as Job
 from qiskit.providers.jobstatus import JobStatus
+from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError, DEFwInProgress, DEFwNotFound
 
@@ -41,6 +42,9 @@ class QFwJob(Job):
 			"num_shots": self.options()["shots"],
 			"compiler": "staq",
 		}
+		if self._backend.returns_statevector():
+			info["return_statevector"] = True
+
 		try:
 			cid = self._qpm.async_run(info)
 			return cid
@@ -99,6 +103,8 @@ class QFwJob(Job):
 
 	def _get_memory_from_counts(self, counts):
 		m = []
+		if not isinstance(counts, dict):
+			return m
 		for k, v in counts.items():
 			sample = self._normalize_memory_sample(k)
 			for i in range(v):
@@ -119,6 +125,30 @@ class QFwJob(Job):
 
 		return sample
 
+	def _split_result_payload(self, output):
+		if isinstance(output, dict) and (
+			"counts" in output or "statevector" in output):
+			counts = output.get("counts", {})
+			statevector = self._build_statevector(
+				output.get("statevector", None))
+			return counts, statevector
+
+		return output, []
+
+	def _build_statevector(self, payload):
+		if not payload:
+			return []
+
+		if not isinstance(payload, dict):
+			return Statevector(payload)
+
+		if payload.get("type") != "statevector":
+			raise DEFwError(f"Unsupported statevector payload: {payload}")
+
+		data = payload.get("data", [])
+		amplitudes = [complex(real, imag) for real, imag in data]
+		return Statevector(amplitudes)
+
 	def result(self):
 		result_list = []
 
@@ -130,11 +160,12 @@ class QFwJob(Job):
 			res = qr['res']
 			self._backend.log_statistics(res)
 			output = res.get("result", {})
+			counts, statevector = self._split_result_payload(output)
 
 			out = {
-				"counts": output,
-				"statevector": [],
-				"memory": self._get_memory_from_counts(output),
+				"counts": counts,
+				"statevector": statevector,
+				"memory": self._get_memory_from_counts(counts),
 				"time_taken": res['completion_time'] - res['exec_time']
 			}
 
