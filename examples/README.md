@@ -26,6 +26,24 @@ Each wrapper starts QFw with `qfw_setup.sh`, runs one application through
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
 
+To run the standard examples sequentially and collect per-example logs:
+
+```bash
+./qfw_run_all.sh
+```
+
+The runner continues after failures, prints a final summary, and exits
+nonzero if any example fails. Logs are written under
+`$QFW_TMP_PATH/examples-run-<timestamp>` or `/tmp` when `QFW_TMP_PATH` is
+unset.
+
+Useful overrides:
+
+```bash
+QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
+QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
+```
+
 ## Example Wrappers
 
 ### `qfw_init_test.sh`
