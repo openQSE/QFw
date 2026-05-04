@@ -18,9 +18,12 @@ set -xe
 qfw_setup.sh
 
 # takes:
+#   the framework: qiskit or pennylane
 #   number of qubits
-#   simtype: nwqsim, tnqvm or qiskit-aer
+#   simtype: nwqsim, tnqvm
 #   number of iterations
+#
+#   ex: ./qfw_ghz.sh qiskit 4 nwqsim 4
 #
 echo "Running $1 for $2 #qubits with $3 for $4 itrs"
 if [[ $1 == "qiskit" ]]; then
