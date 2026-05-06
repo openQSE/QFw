@@ -137,6 +137,37 @@ path:
 You can also add an `mpi-env:` mapping in the config to export explicit
 MPI or MCA environment variables after activation.
 
+### Shared Filesystem Behavior
+
+QFw does not enforce a shared filesystem across the nodes in a Slurm
+allocation. The setup layer treats the run id as global state, propagates
+it to remote setup commands, and creates the required QFw temp directories
+on each node before writing logs or startup artifacts there.
+
+This means the QFw infrastructure itself can operate with node-local temp
+directories for startup logs, service logs, pid files, and the PRTE DVM URI
+as long as the producer and consumer of each file run on the same node. In
+the current QFw startup model, the resource manager, QPM services, and DVM
+startup run on the group-1 head node, so those local files do not require a
+cluster-wide shared directory.
+
+Backend simulators can have stricter requirements. QFw does not rewrite or
+stage simulator-specific files automatically. In particular:
+
+- QASM input files are written by QFw on the service node. This is safe for
+  backends that only read the QASM file from rank 0 on that same node.
+- NWQ-Sim count output is rank-0 guarded and does not require every MPI rank
+  to write a shared output file.
+- NWQ-Sim statevector dumps use NWQ-Sim's native `--dump_file` path. In the
+  MPI statevector backend, every MPI rank participates in writing the same
+  dump file in rank order. That requires the dump path to be visible and
+  writable from all MPI ranks, unless the run is single-rank or head-local.
+
+For node-local filesystems, avoid multi-node NWQ-Sim statevector dumps unless
+the dump directory is placed on shared storage or explicit staging is added.
+QFw can run without a shared filesystem, but individual simulator modes may
+still require one.
+
 Additional optional config keys used by the current configurator and
 build path include:
 
@@ -452,37 +483,87 @@ The current repository is organized around:
 - `bin/`: simulator runner binaries copied from dependency builds
 - `examples/`: runnable examples and integration-style tests
 
-At runtime:
-
-1. `qfw_activate` exports the QFw and DEFw environment.
-2. `qfw_setup.sh` starts PRTE, DEFw resource-manager/launcher
-   processes, and QPM services.
-3. Applications connect through `api_qpm` and reserve QPM services.
-4. QPM services launch simulator-specific QRC executions through the
-   installed backend runners.
+The current runtime model expects a Slurm heterogeneous allocation. Group 0
+is the application group. Group 1 is the service and simulator group. The
+resource manager, QPM services, PRTE DVM, and simulator runners are started
+from the group-1 head node. Applications run through `qfw_srun.sh` on
+group 0 and talk to those services through QFw service APIs.
 
 ```mermaid
 flowchart LR
-    User[Python App or Example] --> API[QFw Service APIs]
-    API --> DEFwAgent[DEFw Agent]
-    DEFwAgent --> ResMgr[DEFw Resource Manager]
-    ResMgr --> Launcher[DEFw Launcher]
-    ResMgr --> QPM[QFw QPM Services]
-    QPM --> QRC[Simulator QRC Execution]
-    QRC --> Backend[TNQVM or NWQ-Sim Runner]
-
-    subgraph Runtime["DEFw Runtime"]
-        DEFwAgent
-        ResMgr
-        Launcher
+    subgraph G0["Slurm het-group 0: application group"]
+        App["Application process<br/>Python example or user code"]
+        API["QFw client API<br/>api_qpm"]
     end
 
-    subgraph QFw["QFw Layer"]
-        API
-        QPM
-        QRC
-        Backend
+    subgraph G1["Slurm het-group 1: service and simulator group"]
+        RM["DEFw resource manager"]
+        DVM["PRTE DVM"]
+        QPM["QPM services<br/>NWQ-Sim and TNQVM"]
+        MPI["MPI launch path<br/>mpirun with DVM URI"]
+        Target["Execution target<br/>simulator runner or hardware"]
     end
+
+    App --> API
+    API <--> RM
+    API <--> QPM
+    RM <--> QPM
+    QPM --> MPI
+    MPI --> DVM
+    MPI --> Target
+    QPM -. direct service path .-> Target
+```
+
+The default service configuration, `setup/qfw_services.yaml`, starts both
+`svc_nwqsim_qpm` and `svc_tnqvm_qpm` on the group-1 head node. Each service
+is assigned the group-1 node list through `QFW_QPM_ASSIGNED_HOSTS`, so the
+service can launch simulator work across the service allocation while the
+application remains on group 0. The QPM service does not talk to PRTE
+directly. The NWQ-Sim and TNQVM services launch their simulator runners
+through MPI and pass MPI the DVM URI. Other services may use a different
+execution path, such as talking directly to a simulator process or to
+hardware.
+
+The `examples/qfw_qiskit_simple.sh` workflow follows this message flow:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as "qfw_qiskit_simple.sh"
+    participant Setup as "qfw_setup.sh"
+    participant SetupPy as "qfw_setup.py"
+    participant G1 as "group 1 head"
+    participant DVM as "PRTE DVM"
+    participant RM as "DEFw resource manager"
+    participant QPM as "svc_nwqsim_qpm"
+    participant SRun as "qfw_srun.sh"
+    participant App as "test_qiskit_simple.py"
+    participant API as "api_qpm"
+    participant Runner as "circuit_runner.nwqsim"
+    participant TD as "qfw_teardown.sh"
+
+    W->>Setup: start QFw infrastructure
+    Setup->>SetupPy: phase 1 dvm setup
+    SetupPy->>G1: activate QFw and run PRTE startup
+    G1->>DVM: start PRTE for het-group 1
+    DVM-->>SetupPy: write DVM URI
+    Setup->>SetupPy: phase 2 service startup
+    SetupPy->>G1: qfw_run_setup.sh on group-1 head
+    G1->>RM: start DEFw resource manager
+    G1->>QPM: start configured QPM services
+    W->>SRun: run test_qiskit_simple.py
+    SRun->>App: launch application in het-group 0
+    App->>API: QFwBackend.run(circuit)
+    API->>RM: discover and reserve NWQ-Sim QPM
+    RM-->>API: return service endpoint
+    API->>QPM: submit circuit execution request
+    QPM->>Runner: launch NWQ-Sim through PRTE DVM
+    Runner-->>QPM: counts and optional statevector dump
+    QPM-->>API: return normalized result payload
+    API-->>App: build Qiskit Result
+    App-->>W: print counts and statevector
+    W->>TD: qfw_teardown.sh
+    TD->>G1: stop services and DVM-side runtime
 ```
 
 QFw-specific services and APIs are loaded into DEFw through:
@@ -529,4 +610,7 @@ NWQ-Sim writes statevectors through its native `--dump_file` option when
 QFw requests statevector data. QFw names the dump file from the circuit
 UUID with a `.dump` extension, parses it as the NWQ-Sim native
 `complex128` statevector, converts it to the common payload, and removes
-the dump file after parsing or failure cleanup.
+the dump file after parsing or failure cleanup. For MPI statevector runs,
+NWQ-Sim expects that dump path to be visible to all MPI ranks. Use shared
+storage for the dump directory or keep the run single-rank/head-local when
+running on node-local filesystems.
