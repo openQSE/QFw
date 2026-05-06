@@ -12,10 +12,14 @@ fi
 qfw_log_base="${QFW_RUN_TMP_PATH:-/tmp}"
 
 unset QFW_HET_GROUP
-for var in "${!SLURM_JOB_NODELIST_HET_GROUP_@}"; do
+if [[ -f "$QFW_SETUP_PATH/qfw_allocation.sh" ]]; then
+	source "$QFW_SETUP_PATH/qfw_allocation.sh"
+	qfw_detect_allocation >/dev/null 2>&1 || true
+fi
+
+if [[ "${QFW_ALLOCATION_MODE:-}" == "heterogeneous" ]]; then
 	export QFW_HET_GROUP=1
-	break
-done
+fi
 
 if [ -n "${SLURM_JOB_ID:-}" ]; then
 	export QFW_JOB_ID=$SLURM_JOB_ID

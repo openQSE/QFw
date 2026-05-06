@@ -1,34 +1,14 @@
 #!/bin/bash
 
-# Initialize an empty array to store the groups
-declare -a groups
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-found_group=0
-
-# Loop through all environment variables
-for var in "${!SLURM_JOB_NODELIST_HET_GROUP_@}"; do
-	# Extract the group number from the variable name
-	group_number=${var#SLURM_JOB_NODELIST_HET_GROUP_}
-	# Extract the hostname
-	hostname=${!var}
-	# Append to the array with format GROUP_<number>=<hostname>
-	groups+=("GROUP_${group_number}=${hostname}")
-
-	((found_group++))
-done
-
-# Check if any group was found
-if [ "$found_group" -eq 0 ]; then
-	echo "QFw requires a Slurm heterogeneous allocation" >&2
-	exit 1
-else
-	# Join array elements with colon
-	result="${groups[*]}"
-	# Replace space with colon for proper format
-	result="${result// /:}"
+if [[ -z "${QFW_SETUP_PATH:-}" ]]; then
+	export QFW_SETUP_PATH="${SCRIPT_DIR}"
 fi
 
-# Print the result
-echo "$result"
+source "${QFW_SETUP_PATH}/qfw_allocation.sh"
+qfw_detect_allocation --force || exit 1
+
+echo "${QFW_GROUPS}"
 
 exit 0

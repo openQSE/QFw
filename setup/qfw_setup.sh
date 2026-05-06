@@ -34,7 +34,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 hostname=$(hostname)
-het_groups=$($QFW_SETUP_PATH/qfw_extract_groups.sh) || exit 1
+source "$QFW_SETUP_PATH/qfw_allocation.sh"
+qfw_detect_allocation --force || exit 1
+het_groups="${QFW_GROUPS}"
 source "$QFW_SETUP_PATH/qfw_run_tmp.sh"
 qfw_create_run_tmp || exit 1
 echo "QFw run logs: ${QFW_RUN_TMP_PATH}"

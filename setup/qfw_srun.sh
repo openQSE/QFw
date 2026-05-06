@@ -34,6 +34,9 @@ if [[ $# -lt 1 ]]; then
 fi
 
 source $QFW_SETUP_PATH/qfw_lib_path.sh
+source "$QFW_SETUP_PATH/qfw_allocation.sh"
+qfw_detect_allocation --force || exit 1
+source "$QFW_SETUP_PATH/qfw_launch.sh"
 source "$QFW_SETUP_PATH/qfw_run_tmp.sh"
 qfw_use_current_run_tmp || exit 1
 
@@ -49,15 +52,7 @@ export DEFW_LOAD_NO_INIT=svc_launcher
 export DEFW_ONLY_LOAD_MODULE=svc_resmgr
 export DEFW_DISABLE_RESMGR=yes
 
-if env | grep -q "^SLURM_JOB_NODELIST_HET_GROUP_1="; then
-	filtered_env=$(env | grep "SLURM_JOB_NODELIST_HET_GROUP_1")
-	output=$(python3 $QFW_SETUP_PATH/extract_head_node.py "$filtered_env")
-else
-	output="${SLURM_JOB_NODELIST:-$(hostname)}"
-fi
-
-node=$(echo "$output" | tr '\n' ' ' | \
-	/usr/bin/python3 -c "import sys;print(sys.stdin.read().split()[0])")
+node=$(qfw_group_head "${QFW_GROUP_1_NODELIST}")
 
 echo "resource manager is located on: ****$node****"
 
@@ -77,7 +72,7 @@ export DEFW_DISABLE_RESMGR=no
 export DEFW_PY_LOGLEVEL=debug,DEFW_ALL
 
 set -xe
-srun --het-group=0 python3 $1 "${@:2}"
+qfw_launch_app python3 "$1" "${@:2}"
 
 set +xe
 unset DEFW_AGENT_NAME

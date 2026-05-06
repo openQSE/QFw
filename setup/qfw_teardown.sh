@@ -26,9 +26,10 @@ export DEFW_AGENT_NAME=qfw_teardown
 export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 
 source $QFW_SETUP_PATH/qfw_lib_path.sh
+source "$QFW_SETUP_PATH/qfw_allocation.sh"
+qfw_detect_allocation --force || exit 1
 
-filtered_env=$($QFW_SETUP_PATH/qfw_extract_groups.sh)
-python3 $QFW_SETUP_PATH/qfw_setup.py --shutdown --groups "$filtered_env"
+python3 $QFW_SETUP_PATH/qfw_setup.py --shutdown --groups "$QFW_GROUPS"
 teardown_rc=$?
 qfw_clear_current_run_tmp || true
 exit $teardown_rc

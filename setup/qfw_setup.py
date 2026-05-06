@@ -14,11 +14,12 @@ DEFAULT_SERVICES_CONFIG = 'qfw_services.yaml'
 def cleanup_system(targets):
 	prformat(fg.red+fg.bold, f"Shutting down targets: {targets}")
 	for target in targets:
-		defw_exec_remote_cmd("pterm", target, deamonize=True)
-		defw_exec_remote_cmd("pkill -9 prte", target, deamonize=True)
-		defw_exec_remote_cmd("pkill -9 prted", target, deamonize=True)
-		defw_exec_remote_cmd("rm -Rf /tmp/prte*", target, deamonize=True)
-		defw_exec_remote_cmd("pkill -6 -f  'defwp -d -x'", target, deamonize=True)
+		execute_runtime_command(target, "pterm", daemonize=True)
+		execute_runtime_command(target, "pkill -9 prte", daemonize=True)
+		execute_runtime_command(target, "pkill -9 prted", daemonize=True)
+		execute_runtime_command(target, "rm -Rf /tmp/prte*", daemonize=True)
+		execute_runtime_command(target, "pkill -6 -f  'defwp -d -x'",
+								daemonize=True)
 
 def execute_ssh_command(host, command, daemonize=False):
 	ssh_command = f"ssh {host} '{command}'"
@@ -42,6 +43,15 @@ def runtime_mode():
 def in_container_mode():
 	return runtime_mode() == 'container'
 
+def allocation_mode():
+	if 'QFW_ALLOCATION_MODE' in os.environ:
+		return os.environ['QFW_ALLOCATION_MODE'].strip().lower()
+	if 'QFW_HET_GROUP' in os.environ:
+		return 'heterogeneous'
+	if 'SLURM_JOB_ID' in os.environ:
+		return 'slurm'
+	return 'local'
+
 def qfw_tmp_dir():
 	base_tmp = os.environ.get('QFW_TMP_PATH',
 		os.path.join(os.environ['QFW_MASTER_SETUP_BASE_DIR'], 'tmp'))
@@ -59,8 +69,13 @@ def qfw_tmp_dir():
 
 def qfw_remote_run_prefix(tmp_dir):
 	exports = []
-	if 'QFW_RUN_ID' in os.environ:
-		exports.append(f'export QFW_RUN_ID={shlex.quote(os.environ["QFW_RUN_ID"])}')
+	for key in ['QFW_RUN_ID',
+				'QFW_ALLOCATION_MODE',
+				'QFW_GROUP_0_NODELIST',
+				'QFW_GROUP_1_NODELIST',
+				'QFW_GROUPS']:
+		if key in os.environ:
+			exports.append(f'export {key}={shlex.quote(os.environ[key])}')
 	exports.append(f'export QFW_RUN_TMP_PATH={shlex.quote(tmp_dir)}')
 	exports.append(f'mkdir -p {shlex.quote(tmp_dir)}')
 	return '; '.join(exports) + '; '
@@ -93,10 +108,28 @@ def get_external_defw_env():
 				'LD_LIBRARY_PATH',
 				'QFW_TMP_PATH',
 				'QFW_RUN_ID',
-				'QFW_RUN_TMP_PATH']:
+				'QFW_RUN_TMP_PATH',
+				'QFW_ALLOCATION_MODE',
+				'QFW_GROUP_0_NODELIST',
+				'QFW_GROUP_1_NODELIST',
+				'QFW_GROUPS']:
 		if key in os.environ:
 			env[key] = os.environ[key]
 	return env
+
+def execute_runtime_command(host, command, daemonize=True):
+	if host == socket.gethostname() and (
+			in_container_mode() or allocation_mode() in ['local', 'slurm']):
+		return execute_local_command(command, daemonize=daemonize)
+
+	defw_exec_remote_cmd(command, host, deamonize=daemonize)
+	return 0, '', ''
+
+def execute_dvm_command(host, command):
+	if host == socket.gethostname() and (
+			in_container_mode() or allocation_mode() in ['local', 'slurm']):
+		return execute_local_command(command)
+	return execute_ssh_command(host, command)
 
 def start_qfw(host, hetgroups, services_config):
 	name = 'qfw_base_setup'
@@ -134,10 +167,7 @@ def start_qfw(host, hetgroups, services_config):
 	cmd += f'{shlex.quote(hetgroups)} {shlex.quote(services_config)} '
 	cmd += f'>& {shlex.quote(setup_log)}'
 	prformat(fg.cyan+fg.bold, f"Starting QFW: {cmd}")
-	if in_container_mode() and host == socket.gethostname():
-		execute_local_command(cmd, daemonize=True)
-	else:
-		defw_exec_remote_cmd(cmd, host, deamonize=True)
+	execute_runtime_command(host, cmd, daemonize=True)
 
 def start_dvm(node_list):
 	try:
@@ -155,11 +185,10 @@ def start_dvm(node_list):
 	activate_log = os.path.join(tmp_dir, 'qfw_activate_for_prte')
 	cmd = qfw_remote_run_prefix(tmp_dir)
 	cmd += f"source {shlex.quote(qfw_activate)} >& {shlex.quote(activate_log)} && "
-	if job_id != -1 and 'QFW_HET_GROUP' in os.environ:
-		cmd += f'qfw_run_prte.sh {os.path.split(uri)[0]} "{host_list}" {job_id}'
-	else:
-		cmd += f'qfw_run_dev_prte.sh {os.path.split(uri)[0]} "{host_list}"'
-	rc, out, err = execute_ssh_command(node_list[0], cmd)
+	cmd += f'qfw_run_prte.sh {os.path.split(uri)[0]} "{host_list}"'
+	if job_id != -1:
+		cmd += f' {job_id}'
+	rc, out, err = execute_dvm_command(node_list[0], cmd)
 	logging.debug(f"cmd = {cmd}; rc = {rc}; out: {out}; error: {err}")
 	if rc:
 		logging.critical(

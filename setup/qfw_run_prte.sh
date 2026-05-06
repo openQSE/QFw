@@ -2,21 +2,35 @@
 
 set -euo pipefail
 
-export SLURM_JOBID="$3"
-export SLURM_JOB_ID="$3"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z "${QFW_SETUP_PATH:-}" ]]; then
+    export QFW_SETUP_PATH="${SCRIPT_DIR}"
+fi
+
+source "${QFW_SETUP_PATH}/qfw_allocation.sh"
+qfw_detect_allocation
+source "${QFW_SETUP_PATH}/qfw_launch.sh"
+
+job_id="${3:-${QFW_JOB_ID:-}}"
+if [[ -n "${job_id}" && "${job_id}" != "-1" ]]; then
+    export SLURM_JOBID="${job_id}"
+    export SLURM_JOB_ID="${job_id}"
+fi
 
 PRTE_ARGS=(
     --host "$2"
     --report-uri "$1/dvm-uri"
-    -x "SLURM_JOB_ID=$3"
-    -x "SLURM_JOBID=$3"
-    --prtemca ras ^slurm
-    --prtemca plm slurm
-    --prtemca plm_slurm_verbose 100
-    --prtemca plm_base_verbose 100
-    --prtemca ras_base_verbose 100
-    --prtemca plm_slurm_args "--het-group 1"
 )
+
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    PRTE_ARGS+=(
+        -x "SLURM_JOB_ID=${SLURM_JOB_ID}"
+        -x "SLURM_JOBID=${SLURM_JOB_ID}"
+    )
+fi
+
+qfw_add_prte_runtime_args PRTE_ARGS
 
 if [ "$(id -u)" -eq 0 ]; then
     PRTE_ARGS+=(--allow-run-as-root)
