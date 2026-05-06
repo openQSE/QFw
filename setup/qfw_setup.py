@@ -57,6 +57,14 @@ def qfw_tmp_dir():
 			return os.path.join(base_tmp, run_id)
 	return base_tmp
 
+def qfw_remote_run_prefix(tmp_dir):
+	exports = []
+	if 'QFW_RUN_ID' in os.environ:
+		exports.append(f'export QFW_RUN_ID={shlex.quote(os.environ["QFW_RUN_ID"])}')
+	exports.append(f'export QFW_RUN_TMP_PATH={shlex.quote(tmp_dir)}')
+	exports.append(f'mkdir -p {shlex.quote(tmp_dir)}')
+	return '; '.join(exports) + '; '
+
 def execute_local_command(command, daemonize=False):
 	if daemonize:
 		process = subprocess.Popen(
@@ -82,7 +90,10 @@ def get_external_defw_env():
 	for key in ['DEFW_EXTERNAL_SERVICES_PATH',
 				'DEFW_EXTERNAL_SERVICE_APIS_PATH',
 				'PATH',
-				'LD_LIBRARY_PATH']:
+				'LD_LIBRARY_PATH',
+				'QFW_TMP_PATH',
+				'QFW_RUN_ID',
+				'QFW_RUN_TMP_PATH']:
 		if key in os.environ:
 			env[key] = os.environ[key]
 	return env
@@ -115,10 +126,13 @@ def start_qfw(host, hetgroups, services_config):
 
 	qfw_activate = os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_activate')
 	tmp_dir = qfw_tmp_dir()
-	cmd = f"source {qfw_activate} >& {tmp_dir}/qfw_activate_result && "
+	activate_log = os.path.join(tmp_dir, 'qfw_activate_result')
+	setup_log = os.path.join(tmp_dir, 'qfw_run_setup.out')
+	cmd = qfw_remote_run_prefix(tmp_dir)
+	cmd += f"source {shlex.quote(qfw_activate)} >& {shlex.quote(activate_log)} && "
 	cmd += 'nohup qfw_run_setup.sh '
 	cmd += f'{shlex.quote(hetgroups)} {shlex.quote(services_config)} '
-	cmd += f'>& {tmp_dir}/qfw_run_setup.out'
+	cmd += f'>& {shlex.quote(setup_log)}'
 	prformat(fg.cyan+fg.bold, f"Starting QFW: {cmd}")
 	if in_container_mode() and host == socket.gethostname():
 		execute_local_command(cmd, daemonize=True)
@@ -138,7 +152,9 @@ def start_dvm(node_list):
 					 'prte_dvm', 'dvm-uri')
 	qfw_activate = os.path.join(os.environ['QFW_SETUP_PATH'], 'qfw_activate')
 	tmp_dir = qfw_tmp_dir()
-	cmd = f"source {qfw_activate} >& {tmp_dir}/qfw_activate_for_prte && "
+	activate_log = os.path.join(tmp_dir, 'qfw_activate_for_prte')
+	cmd = qfw_remote_run_prefix(tmp_dir)
+	cmd += f"source {shlex.quote(qfw_activate)} >& {shlex.quote(activate_log)} && "
 	if job_id != -1 and 'QFW_HET_GROUP' in os.environ:
 		cmd += f'qfw_run_prte.sh {os.path.split(uri)[0]} "{host_list}" {job_id}'
 	else:
