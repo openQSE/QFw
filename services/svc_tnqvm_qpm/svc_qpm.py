@@ -21,5 +21,46 @@ class QPM(UTIL_QPM):
 		info['qfw_backend'] = 'circuit_runner.tnqvm'
 		return super().create_circuit(info)
 
+	def get_backend_info(self):
+		return {
+			'backend': 'tnqvm',
+			'metadata_supported': False,
+		}
+
+	def get_dynamic_backend_info(self, calibration_set_id=None):
+		return {
+			'backend': 'tnqvm',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_calibration_snapshot(self, calibration_set_id=None):
+		return {
+			'backend': 'tnqvm',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_coupling_graph(self, calibration_set_id=None):
+		return {
+			'backend': 'tnqvm',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_last_job_timing(self, cid=None):
+		return {
+			'backend': 'tnqvm',
+			'cid': cid,
+			'metadata_supported': False,
+		}
+
+	def get_last_job_metadata(self, cid=None):
+		return {
+			'backend': 'tnqvm',
+			'cid': cid,
+			'metadata_supported': False,
+		}
+
 	def test(self):
 		return "****TNQVM QPM Test Successful****"
