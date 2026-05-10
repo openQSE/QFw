@@ -14,3 +14,10 @@ services:
     target: group1-head
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+
+  - name: iqm-ornl-20q
+    module: svc_iqm_qpm
+    load-modules: svc_iqm_qpm,api_launcher
+    agent-prefix: qpm_iqm
+    target: group1-head
+    device-id: ornl-iqm-20q

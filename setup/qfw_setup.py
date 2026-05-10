@@ -301,6 +301,10 @@ def start_service(service, resmgr, g0, g1, launcher, env_dict,
 		if assigned_hosts_env:
 			env[assigned_hosts_env] = assigned_hosts
 
+	device_id = service.get('device-id', None)
+	if device_id:
+		env['QFW_QPU_DEVICE_ID'] = device_id
+
 	if 'QFW_DVM_URI_PATH' in os.environ:
 		env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
 
