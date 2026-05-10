@@ -67,3 +67,32 @@ def test_backend_run_and_shutdown_use_job_and_runtime(monkeypatch):
 	assert job.options == {"seed_simulator": 34, "shots": 12, "seed": 21}
 	assert fake_qpm.shutdown_called is True
 	assert fake_runtime.exit_called is True
+
+
+def test_qfw_job_metadata_keeps_only_qhw_result():
+	from qfw_qiskit.qfw_job import QFwJob
+
+	class FakeBackend:
+		def returns_statevector(self):
+			return False
+
+	job = QFwJob(
+		FakeBackend(),
+		FakeQPM(),
+		FakeEventAPI(),
+		FakeCircuit(1),
+		{"seed_simulator": 34, "shots": 12, "seed": 21},
+	)
+	qhw_result = {"schema": "qhw-result-v1", "timing": {}}
+
+	counts, statevector, metadata = job._split_result_payload({
+		"counts": {"0x0": 12},
+		"statevector": [],
+		"qhw_result": qhw_result,
+		"_raw_iqm": {"job": "raw-provider-payload"},
+		"iqm": {"timing_summary": {"provider": "legacy"}},
+	})
+
+	assert counts == {"0x0": 12}
+	assert statevector == []
+	assert metadata == {"qhw_result": qhw_result}

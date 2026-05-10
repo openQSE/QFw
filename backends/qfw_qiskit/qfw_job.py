@@ -131,13 +131,17 @@ class QFwJob(Job):
 			counts = output.get("counts", {})
 			statevector = self._build_statevector(
 				output.get("statevector", None))
-			metadata = {
-				key: value for key, value in output.items()
-				if key not in ("counts", "statevector")
-			}
+			metadata = self._result_metadata(output)
 			return counts, statevector, metadata
 
 		return output, [], {}
+
+	def _result_metadata(self, output):
+		metadata = {}
+		qhw_result = output.get("qhw_result")
+		if isinstance(qhw_result, dict):
+			metadata["qhw_result"] = qhw_result
+		return metadata
 
 	def _build_statevector(self, payload):
 		if not payload:
