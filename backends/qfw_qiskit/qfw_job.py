@@ -131,9 +131,13 @@ class QFwJob(Job):
 			counts = output.get("counts", {})
 			statevector = self._build_statevector(
 				output.get("statevector", None))
-			return counts, statevector
+			metadata = {
+				key: value for key, value in output.items()
+				if key not in ("counts", "statevector")
+			}
+			return counts, statevector, metadata
 
-		return output, []
+		return output, [], {}
 
 	def _build_statevector(self, payload):
 		if not payload:
@@ -160,11 +164,12 @@ class QFwJob(Job):
 			res = qr['res']
 			self._backend.log_statistics(res)
 			output = res.get("result", {})
-			counts, statevector = self._split_result_payload(output)
+			counts, statevector, metadata = self._split_result_payload(output)
 
 			out = {
 				"counts": counts,
 				"statevector": statevector,
+				"metadata": metadata,
 				"memory": self._get_memory_from_counts(counts),
 				"time_taken": res['completion_time'] - res['exec_time']
 			}
@@ -185,6 +190,7 @@ class QFwJob(Job):
 				"data": {
 					"counts": out["counts"],
 					"statevector": out["statevector"],
+					"metadata": out["metadata"],
 					"memory": out["memory"]
 				},
 				"success": True,
