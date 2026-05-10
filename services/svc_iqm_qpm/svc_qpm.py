@@ -1,4 +1,5 @@
 import logging
+import os
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
@@ -12,12 +13,17 @@ class QPM(UTIL_QPM):
 		set_max_qubits_pp(MAX_IQM_QUBITS)
 
 	def query(self):
-		from . import SERVICE_NAME, SERVICE_DESC
+		from . import SERVICE_NAME, SERVICE_DESC, svc_info
 		from api_qpm import QPMType, QPMCapability
+		properties = dict(svc_info.get('properties', {}))
+		device_id = os.environ.get('QFW_QPU_DEVICE_ID')
+		if device_id:
+			properties['device_id'] = device_id
 		info = self.query_helper(
 			QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE,
 			QPMCapability.QPM_CAP_SUPERCONDUCTING,
-			SERVICE_NAME, SERVICE_DESC)
+			SERVICE_NAME, SERVICE_DESC,
+			properties=properties)
 		logging.debug(f"IQM {SERVICE_DESC}: {info}")
 		return info
 

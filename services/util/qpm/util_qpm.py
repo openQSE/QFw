@@ -243,7 +243,8 @@ class UTIL_QPM:
 
 		return True
 
-	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc):
+	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc,
+					 properties=None):
 		from api_qpm import QPMType, QPMCapability
 		from defw_agent_info import get_bit_list, get_bit_desc, Capability, DEFwServiceInfo
 		t = get_bit_list(type_bits, QPMType)
@@ -253,7 +254,8 @@ class UTIL_QPM:
 			svc_name, svc_desc,
 			self.__class__.__name__,
 			self.__class__.__module__,
-			cap, -1)
+			cap, -1,
+			properties=properties)
 		return info
 
 	def reserve(self, svc, client_ep, *args, **kwargs):
