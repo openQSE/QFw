@@ -1,0 +1,18 @@
+{
+  "users": {
+    "dummy-user": {
+      "devices": {
+        "ornl-iqm-20q": {
+          "api_key": "dummy-api-key"
+        }
+      }
+    },
+    "root": {
+      "devices": {
+        "ornl-iqm-20q": {
+          "api_key": "dummy-api-key"
+        }
+      }
+    }
+  }
+}

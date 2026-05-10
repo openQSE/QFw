@@ -1,0 +1,4 @@
+qpus:
+  ornl-iqm-20q:
+    url: https://qccsw.ccs.ornl.gov/
+    credential-db: qpu_users.json

@@ -1,6 +1,8 @@
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from defw_exception import DEFwExecutionError
+from util.device_access import (
+	QPU_DEVICE_ENV, resolve_device_access, resolve_qpu_user)
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 import inspect
@@ -223,6 +225,20 @@ def get_required_env():
 		"api_key": os.environ["QFW_API_KEY"].strip(),
 		"quantum_computer": os.environ.get("QFW_IQM_QUANTUM_COMPUTER"),
 	}
+
+
+def load_iqm_service_config():
+	if all(os.environ.get(name) for name in REQUIRED_ENV):
+		config = get_required_env()
+		config["device_id"] = os.environ.get(QPU_DEVICE_ENV, "env")
+		config["user"] = resolve_qpu_user()
+		return config
+
+	config = resolve_device_access(provider="iqm")
+	if not config.get("quantum_computer"):
+		config["quantum_computer"] = os.environ.get(
+			"QFW_IQM_QUANTUM_COMPUTER")
+	return config
 
 
 def create_iqm_client(client_type, config):
@@ -514,11 +530,12 @@ class IQMServiceClient:
 		with self._client_lock:
 			if self._client is not None:
 				return self._client
-			config = get_required_env()
+			config = load_iqm_service_config()
 			client_type = load_iqm_client_module()
 			self._client = create_iqm_client(client_type, config)
 			logging.debug(
-				f"created IQM client for {sanitize_url(config['url'])}")
+				"created IQM client for "
+				f"{sanitize_url(config['url'])} as {config['user']}")
 			return self._client
 
 	def get_static_architecture(self):
