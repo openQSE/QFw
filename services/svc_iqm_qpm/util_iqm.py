@@ -66,6 +66,26 @@ def load_iqm_pulse_module():
 	return Circuit, CircuitOperation
 
 
+def normalize_qhw_iqm(kind, raw_payload, device_id=None):
+	try:
+		from qhw_iqm import normalize_calibration, normalize_coupling
+		from qhw_iqm import normalize_device, normalize_result
+	except Exception as exc:
+		raise DEFwExecutionError(
+			"failed to import qhw-iqm. Install qhw-iqm and qhw-data "
+			f"before starting the IQM QPM service. Import error: {exc}") from exc
+
+	if kind == "device":
+		return normalize_device(raw_payload, device_id=device_id)
+	if kind == "coupling":
+		return normalize_coupling(raw_payload, device_id=device_id)
+	if kind == "calibration":
+		return normalize_calibration(raw_payload, device_id=device_id)
+	if kind == "result":
+		return normalize_result(raw_payload, device_id=device_id)
+	raise DEFwExecutionError(f"unsupported qhw-iqm normalization kind {kind!r}")
+
+
 def method_accepts(method, name):
 	try:
 		signature = inspect.signature(method)
@@ -621,6 +641,7 @@ class IQMServiceClient:
 		self._last_metadata = {}
 		self._last_timing = {}
 		self._latest_cid = None
+		self._config = None
 
 	def client(self):
 		with self._client_lock:
@@ -629,10 +650,21 @@ class IQMServiceClient:
 			config = load_iqm_service_config()
 			client_type = load_iqm_client_module()
 			self._client = create_iqm_client(client_type, config)
+			self._config = config
 			logging.debug(
 				"created IQM client for "
 				f"{sanitize_url(config['url'])} as {config['user']}")
 			return self._client
+
+	def device_id(self):
+		if self._config is None:
+			self.client()
+		if self._config:
+			return self._config.get("device_id")
+		return os.environ.get(QPU_DEVICE_ENV)
+
+	def normalize_qhw(self, kind, raw_payload):
+		return normalize_qhw_iqm(kind, raw_payload, device_id=self.device_id())
 
 	def get_static_architecture(self):
 		return call_iqm_method(
@@ -649,12 +681,18 @@ class IQMServiceClient:
 	def get_backend_info(self):
 		static = to_jsonable(self.get_static_architecture())
 		dynamic = to_jsonable(self.get_dynamic_architecture())
+		raw_payload = {
+			"static_architecture": static,
+			"dynamic_architecture": dynamic,
+		}
 		return {
 			"backend": "iqm",
 			"metadata_supported": True,
 			"static_architecture": static,
 			"active_qubits": get_dynamic_qubits(dynamic),
 			"calibration_set_id": dynamic.get("calibration_set_id"),
+			"qhw_device": self.normalize_qhw("device", raw_payload),
+			"_raw_iqm": raw_payload,
 		}
 
 	def get_dynamic_backend_info(self, calibration_set_id=None):
@@ -688,6 +726,12 @@ class IQMServiceClient:
 			for result in (calibration, quality)
 			if not result["ok"]
 		}
+		raw_payload = {
+			"dynamic_architecture": dynamic,
+			"calibration_set": calibration["data"],
+			"quality_metric_set": quality["data"],
+			"errors": errors,
+		}
 		return {
 			"backend": "iqm",
 			"metadata_supported": True,
@@ -705,16 +749,25 @@ class IQMServiceClient:
 			"errors": errors,
 			"qubits": dynamic.get("qubits"),
 			"couplers": dynamic.get("couplers"),
+			"qhw_calibration": self.normalize_qhw(
+				"calibration", raw_payload),
+			"_raw_iqm": raw_payload,
 		}
 
 	def get_coupling_graph(self, calibration_set_id=None):
 		static = to_jsonable(self.get_static_architecture())
 		dynamic = to_jsonable(
 			self.get_dynamic_architecture(calibration_set_id))
+		raw_payload = {
+			"static_architecture": static,
+			"dynamic_architecture": dynamic,
+		}
 		return {
 			"backend": "iqm",
 			"metadata_supported": True,
 			"calibration_set_id": dynamic.get("calibration_set_id"),
+			"qhw_coupling": self.normalize_qhw("coupling", raw_payload),
+			"_raw_iqm": raw_payload,
 			**build_coupling_graph(static, dynamic),
 		}
 
@@ -783,6 +836,12 @@ class IQMServiceClient:
 
 		counts_data = to_jsonable(measurement_counts)
 		counts = normalize_counts(measurement_counts)
+		raw_payload = {
+			"circuits": to_jsonable([iqm_circuit]),
+			"run_request": to_jsonable(run_request),
+			"job": job_data,
+			"measurement_counts": counts_data,
+		}
 		record = {
 			"cid": cid,
 			"input": {
@@ -802,17 +861,15 @@ class IQMServiceClient:
 			},
 		}
 		timing_summary = build_timing_summary(record)
+		qhw_result = self.normalize_qhw("result", raw_payload)
+		record["qhw_result"] = qhw_result
+		record["_raw_iqm"] = raw_payload
 		self._latest_cid = cid
 		self._last_metadata[cid] = record
 		self._last_timing[cid] = timing_summary
 
 		return {
 			"counts": counts,
-			"iqm": {
-				"job_id": str(job.job_id),
-				"status": status,
-				"measurement_counts": counts_data,
-				"timing_summary": timing_summary,
-				"metadata": record,
-			},
+			"qhw_result": qhw_result,
+			"_raw_iqm": raw_payload,
 		}
