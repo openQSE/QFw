@@ -4,8 +4,16 @@ def _path_points_to(path, target):
 	return os.path.islink(path) and os.path.realpath(path) == os.path.realpath(target)
 
 
+def _set_python_links(python_paths, target):
+	for path in python_paths:
+		if os.path.lexists(path):
+			os.unlink(path)
+		os.symlink(target, path)
+
+
 def setup_qfw_symlinks():
 	defw = os.path.join(os.environ['DEFW_PATH'], 'src', 'defwp')
+	defw_wrapper = os.path.join(os.environ['DEFW_PATH'], 'src', 'defwp-wrapper')
 	venv_path = os.path.join(os.environ['QFW_VENV_PATH'], 'bin')
 #	libdir = sysconfig.get_config_var("LIBDIR")
 
@@ -36,17 +44,19 @@ def setup_qfw_symlinks():
 	]
 	backups_exist = [os.path.exists(path) for path in backup_paths]
 	if any(backups_exist):
-		if all(backups_exist) and all(_path_points_to(path, defw) for path in python_paths):
-			return
+		if all(backups_exist):
+			if all(_path_points_to(path, defw_wrapper) for path in python_paths):
+				return
+			if all(_path_points_to(path, defw) for path in python_paths):
+				_set_python_links(python_paths, defw_wrapper)
+				return
 		raise RuntimeError("System is in an unexpected state")
 
 	try:
 		os.replace(os.path.join(venv_path, "python"), os.path.join(venv_path, "python_defw_orig"))
 		os.replace(os.path.join(venv_path, "python3"), os.path.join(venv_path, "python3_defw_orig"))
 		os.replace(os.path.join(venv_path, py), os.path.join(venv_path, py+"_defw_orig"))
-		os.symlink(defw, os.path.join(venv_path, "python"))
-		os.symlink(defw, os.path.join(venv_path, "python3"))
-		os.symlink(defw, os.path.join(venv_path, py))
+		_set_python_links(python_paths, defw_wrapper)
 	except Exception as e:
 		print("Failed to configure system properly")
 		raise e
