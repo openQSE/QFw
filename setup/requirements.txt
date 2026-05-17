@@ -12,6 +12,8 @@ iqm-exa-common==27.5.1
 iqm-pulse==13.0.1
 iqm-station-control-client==12.1.1
 qiskit_nature
+qhw-data>=0.1.0
+qhw-iqm>=0.1.0
 mpi4py
 networkx
 matplotlib
