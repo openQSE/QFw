@@ -47,6 +47,9 @@ class QPM(BaseRemote):
 	def get_backend_info(self):
 		pass
 
+	def get_device_info(self):
+		pass
+
 	def get_dynamic_backend_info(self, calibration_set_id=None):
 		pass
 
