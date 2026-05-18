@@ -9,6 +9,7 @@ from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError, DEFwInProgress, DEFwNotFound
+from .qfw_metadata import get_qubit_mapping
 
 
 class QFwJob(Job):
@@ -42,6 +43,9 @@ class QFwJob(Job):
 			"num_shots": self.options()["shots"],
 			"compiler": "staq",
 		}
+		qubit_mapping = get_qubit_mapping(circuit)
+		if qubit_mapping:
+			info["qubit_mapping"] = qubit_mapping
 		if self._backend.returns_statevector():
 			info["return_statevector"] = True
 
