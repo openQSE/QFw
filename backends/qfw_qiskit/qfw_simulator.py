@@ -8,6 +8,7 @@ from collections import deque
 from qiskit.providers import BackendV2, Options
 
 from .qfw_job import QFwJob
+from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
 from .qfw_target import QFW_NUM_QUBITS, build_qfw_target, qfw_basis_gates
 from defw_exception import DEFwDumper
 from defw import me
@@ -108,6 +109,12 @@ class QFwBackend(BackendV2):
 		if self._capability == -1:
 			return False
 		return bool(self._capability & QFwBackendCapability.QFW_CAP_STATEVECTOR)
+
+	def set_qubit_mapping(self, circuit, mapping):
+		return set_qubit_mapping(circuit, mapping)
+
+	def get_qubit_mapping(self, circuit):
+		return get_qubit_mapping(circuit)
 
 	# This is unique to the QFw backend. We need to cleanly shutdown the
 	# QFw infrastructure.

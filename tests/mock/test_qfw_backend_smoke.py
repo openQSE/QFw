@@ -96,3 +96,63 @@ def test_qfw_job_metadata_keeps_only_qhw_result():
 	assert counts == {"0x0": 12}
 	assert statevector == []
 	assert metadata == {"qhw_result": qhw_result}
+
+
+def test_backend_sets_qubit_mapping_metadata(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-9")
+	fake_runtime = FakeRuntime(endpoint="endpoint-3")
+
+	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+
+	backend = qfw_simulator.QFwBackend()
+	circuit = FakeCircuit(1, name="mapped")
+
+	mapped = backend.set_qubit_mapping(circuit, {0: "QB7"})
+
+	assert mapped is circuit
+	assert backend.get_qubit_mapping(circuit) == {"0": "QB7"}
+	assert circuit.metadata == {
+		"qfw": {
+			"qubit_mapping": {"0": "QB7"},
+		}
+	}
+
+
+def test_qfw_job_forwards_qubit_mapping_to_qpm():
+	from qfw_qiskit.qfw_job import QFwJob
+	from qfw_qiskit.qfw_metadata import set_qubit_mapping
+
+	class FakeBackend:
+		COMPLETION_TIMEOUT_SEC = 1
+
+		def returns_statevector(self):
+			return False
+
+	fake_qpm = FakeQPM(cids=["cid-mapped"])
+	circuit = FakeCircuit(1, name="mapped")
+	set_qubit_mapping(circuit, {0: "QB7"})
+	job = QFwJob(
+		FakeBackend(),
+		fake_qpm,
+		FakeEventAPI(),
+		circuit,
+		{"seed_simulator": 34, "shots": 12, "seed": 21},
+	)
+
+	cid = job._run_experiment_async(circuit)
+
+	assert cid == "cid-mapped"
+	assert fake_qpm.submitted_payloads == [
+		{
+			"qasm": "OPENQASM 2.0; // mapped",
+			"num_qubits": 1,
+			"num_shots": 12,
+			"compiler": "staq",
+			"qubit_mapping": {"0": "QB7"},
+		}
+	]
