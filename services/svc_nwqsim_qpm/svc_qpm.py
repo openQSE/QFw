@@ -31,6 +31,12 @@ class QPM(UTIL_QPM):
 			'metadata_supported': False,
 		}
 
+	def get_device_info(self):
+		return {
+			'backend': 'nwqsim',
+			'metadata_supported': False,
+		}
+
 	def get_dynamic_backend_info(self, calibration_set_id=None):
 		return {
 			'backend': 'nwqsim',
