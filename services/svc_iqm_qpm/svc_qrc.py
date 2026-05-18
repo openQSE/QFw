@@ -105,6 +105,9 @@ class QRC:
 	def get_backend_info(self):
 		return self.iqm.get_backend_info()
 
+	def get_device_info(self):
+		return self.iqm.get_device_info()
+
 	def get_dynamic_backend_info(self, calibration_set_id=None):
 		return self.iqm.get_dynamic_backend_info(calibration_set_id)
 
