@@ -1,175 +1,300 @@
 # QFw
 
-QFw is a multi-node quantum execution framework built around DEFw,
-simulator-specific QPM services, and application-side APIs. It is
-designed to start a distributed simulation environment, launch
-simulator backends such as TNQVM and NWQ-Sim on allocated resources,
-and expose those services to Python applications and examples.
+QFw is a quantum execution framework for running quantum applications
+against simulator or hardware services. It uses
+[DEFw](https://github.com/openQSE/DEFw) as the distributed runtime, adds
+QFw service APIs, and provides QPM services for execution targets such as
+[TNQVM](https://github.com/ORNL-QCI/tnqvm) and
+[NWQ-Sim](https://github.com/pnnl/NWQ-Sim).
 
-## Installation Instructions
+A QPM is a Quantum Platform Manager. In QFw, a QPM service represents one
+execution target, advertises its type and capabilities, accepts circuit
+submissions through the `api_qpm` interface, and returns backend,
+device, and job information to applications.
 
-### Clone the repositories
+The same QFw application workflow can run on a local node, in a Slurm
+allocation, or inside the containerized
+[QFw-SLURM-Cluster](https://github.com/openQSE/QFw-SLURM-Cluster)
+environment. The top-level scripts hide most of the differences between
+those launch modes.
 
-```bash
-mkdir -p qhpc
-cd qhpc
-git clone git@github.com:openQSE/QFw.git
-cd QFw
-git submodule update --init --recursive
-```
+## Table Of Contents
 
-The `DEFw` submodule is currently configured from:
+- [Build QFw](#build-qfw)
+- [Run QFw Locally](#run-qfw-locally)
+- [Run Examples](#run-examples)
+- [Run On A Real Cluster](#run-on-a-real-cluster)
+- [Run With QFw-SLURM-Cluster](#run-with-qfw-slurm-cluster)
+- [Install Configuration Reference](#install-configuration-reference)
+- [Shared Filesystem Behavior](#shared-filesystem-behavior)
+- [Developer Testing](#developer-testing)
+- [High Level Design](#high-level-design)
+- [Service Statevector Contract](#service-statevector-contract)
 
-```bash
-git@github.com:openQSE/DEFw.git
-```
+## Build QFw
 
-### Clone from Git (includes submodules)
+Clone QFw with its submodules:
 
 ```bash
 git clone --recursive git@github.com:openQSE/QFw.git
+cd QFw
 ```
 
-### Create an install configuration
+Create or activate the Python environment that QFw should use:
 
-QFw supports three installation modes.
-
-1. Module-based environment:
-
-```yaml
-base-dir: </path/to/QFw/base/directory>               # example:
-/sw/frontier/qhpc
-runtime-mode: cluster
-service-runtime-config: services/config/frontier.yaml
-mpi-transport-mode: ofi
-qfw-module-path: </path/to/module/files>              # example:
-/sw/frontier/qhpc/QFw/environment/
-qfw-module-load: <module-name>                        # example: qsim
-python-venv-activate: </path/to/venv/bin/activate>
-qfw-dep-build-version: <existing build version>       # required unless
-                                                      # generate-dep-build-version
-                                                      # is True
-generate-dep-build-version: [True | False]            # optional, default False
+```bash
+python3 -m venv /path/to/qfw-venv
+source /path/to/qfw-venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r setup/build-requirements.txt
 ```
 
-2. Explicit environment-variable setup:
+Choose one of the existing install configurations under `setup/config/`:
 
-```yaml
-base-dir: </path/to/QFw/base/directory>
-runtime-mode: cluster | container                     # optional, default:
-                                                      # cluster unless
-                                                      # install-profile is
-                                                      # container
-service-runtime-config: services/config/frontier.yaml # required for cluster;
-                                                      # optional for container
-mpi-transport-mode: ofi | auto                        # optional, default:
-                                                      # ofi for cluster,
-                                                      # auto for container
-python-venv-activate: </path/to/venv/bin/activate>
-libfabric-install: </path/to/libfabric/install>
-mpi-install: </path/to/openmpi/install>
-dev-install: </path/to/rocm-or-cuda/root>             # example:
-                                                      # /opt/rocm-6.2.4/
-dev-version: <toolchain version>                      # optional, helps when
-                                                      # dev-install is not
-                                                      # versioned in the path
-qfw-dep-build-version: <existing build version>       # required unless
-                                                      # generate-dep-build-version
-                                                      # is True
-generate-dep-build-version: [True | False]            # optional, default False
+- `qfw_config_sample_container.yaml`: container or QFw-SLURM-Cluster use.
+- `qfw_config_sample.yaml`: module-based cluster use.
+- `qfw_config_sample_nomod.yaml`: explicit path cluster use without modules.
+
+For a same-node run or a normal local computer, start from
+`qfw_config_sample_nomod.yaml` and replace the paths with local paths.
+There is no separate `runtime-mode: local`. Local execution is detected at
+launch time. For most local installs, use `services/config/container.yaml`
+as the service runtime policy and `mpi-transport-mode: auto`, because the
+Frontier runtime policy contains system-specific MPI assumptions.
+
+Configure QFw from the selected file:
+
+```bash
+cd setup
+./qfw_configure -c config/qfw_config_sample_container.yaml
 ```
 
-3. Container profile:
+Build the QFw pieces required by your environment:
 
-```yaml
-install-profile: container
-runtime-mode: container
-service-runtime-config: services/config/container.yaml
-mpi-transport-mode: auto
-base-dir: /workspace/qfw-container-base
-python-venv-activate: /workspace/qfw-container-base/venv/bin/activate
-libfabric-install: /opt/qfw/libfabric
-mpi-install: /opt/qfw/openmpi
-dev-install: /workspace/qfw-container-base/rocm      # or /opt/rocm
-dev-version: 6.2.4                                    # optional when the
-                                                      # mounted ROCm root is
-                                                      # not versioned
-qfw-dep-build-version: <existing build version>      # required unless
-                                                      # generate-dep-build-version
-                                                      # is True
-generate-dep-build-version: [True | False]            # optional, default False
+```bash
+./qfw_build.sh --python --defw
 ```
 
-The container profile is a convenience wrapper around the explicit
-environment-variable mode. It does not load modules and defaults to the
-paths provided by the QFw Slurm container image.
-In container mode, activation appends image-built QFw runtime paths as
-fallbacks. Mounted workspace binaries and libraries stay ahead of those
-fallbacks, so local development builds take precedence when present.
+Use `--python --defw` when simulator runners are already available, such
+as inside the QFw-SLURM-Cluster image. Build simulator dependencies only
+when this checkout must provide them:
 
-`qfw-dep-build-version` identifies the versioned dependency install
-location used by activation and the generated build script. If
-`generate-dep-build-version` is `True`, `qfw_configure` generates a new
-timestamp-based version automatically. Otherwise, `qfw-dep-build-version`
-must already be provided.
+```bash
+./qfw_build.sh --tnqvm --nwqsim
+```
 
-`runtime-mode` controls how QFw interprets the allocation and temp-path
-layout. Supported values are:
+The configurator generates `setup/qfw_activate` and `setup/qfw_build.sh`.
+It does not run the build script automatically.
 
-- `cluster`: use the cluster-oriented startup and temp-path behavior
-- `container`: use the mounted workspace for temp files while still
-  supporting the same Slurm heterogeneous startup flow
+## Run QFw Locally
 
-`service-runtime-config` points to the runtime policy used by QFw services.
-It controls MPI launch details such as MCA parameters, binding, mapping,
-and backend wrappers. Relative paths are resolved under `QFW_PATH`.
-Container installs default to `services/config/container.yaml`; cluster
-installs should set this explicitly. QFw ships
-`services/config/frontier.yaml` as the Frontier example, and sites such as
-Aurora should provide their own YAML and point this key at it.
+Activate QFw and run one of the example wrappers. When QFw is not inside a
+Slurm allocation, the launcher scripts use the local node for both the
+application and the services.
 
-`mpi-transport-mode` controls whether QFw forces Open MPI onto the OFI
-path:
+Use a locally edited copy of `setup/config/qfw_config_sample_nomod.yaml`
+for this mode. The allocation detector will set both QFw groups to the
+current hostname.
 
-- `ofi`: export the existing OFI-focused MCA environment settings
-- `auto`: leave transport selection to the Open MPI installation
+```bash
+source /path/to/QFw/setup/qfw_activate
+cd "$QFW_PATH/examples"
+./qfw_mpi_smoke.sh
+qfw_deactivate
+```
 
-You can also add an `mpi-env:` mapping in the config to export explicit
-MPI or MCA environment variables after activation.
+The example wrappers call `qfw_setup.sh`, run one application through the
+QFw launch path, and then call `qfw_teardown.sh`. Do not call
+`qfw_deactivate` until the wrapper completes.
 
-### Shared Filesystem Behavior
+## Run Examples
 
-QFw does not enforce a shared filesystem across the nodes in a Slurm
-allocation. The setup layer treats the run id as global state, propagates
-it to remote setup commands, and creates the required QFw temp directories
-on each node before writing logs or startup artifacts there.
+Activate QFw first, then run examples from the `examples/` directory:
 
-This means the QFw infrastructure itself can operate with node-local temp
-directories for startup logs, service logs, pid files, and the PRTE DVM URI
-as long as the producer and consumer of each file run on the same node. In
-the current QFw startup model, the resource manager, QPM services, and DVM
-startup run on the group-1 head node, so those local files do not require a
-cluster-wide shared directory.
+```bash
+source /path/to/QFw/setup/qfw_activate
+cd "$QFW_PATH/examples"
+```
 
-Backend simulators can have stricter requirements. QFw does not rewrite or
-stage simulator-specific files automatically. In particular:
+Validate framework startup and Qiskit backend construction:
 
-- QASM input files are written by QFw on the service node. This is safe for
-  backends that only read the QASM file from rank 0 on that same node.
-- NWQ-Sim count output is rank-0 guarded and does not require every MPI rank
-  to write a shared output file.
-- NWQ-Sim statevector dumps use NWQ-Sim's native `--dump_file` path. In the
-  MPI statevector backend, every MPI rank participates in writing the same
-  dump file in rank order. That requires the dump path to be visible and
-  writable from all MPI ranks, unless the run is single-rank or head-local.
+```bash
+./qfw_init_test.sh
+```
 
-For node-local filesystems, avoid multi-node NWQ-Sim statevector dumps unless
-the dump directory is placed on shared storage or explicit staging is added.
-QFw can run without a shared filesystem, but individual simulator modes may
-still require one.
+Run the MPI smoke service and verify an MPI payload can launch:
 
-Additional optional config keys used by the current configurator and
-build path include:
+```bash
+./qfw_mpi_smoke.sh
+```
+
+Run a simple Qiskit circuit through the NWQ-Sim backend:
+
+```bash
+./qfw_qiskit_simple.sh 4
+```
+
+Run GHZ through Qiskit:
+
+```bash
+./qfw_ghz.sh qiskit 4 nwqsim 4
+```
+
+Run GHZ through PennyLane:
+
+```bash
+./qfw_ghz.sh pennylane 4 nwqsim 4
+```
+
+Run the fixed PennyLane remote-backend example:
+
+```bash
+./qfw_pennylane.sh
+```
+
+Run the Qiskit QAOA Max-Cut example:
+
+```bash
+./qfw_qaoa.sh nwqsim
+./qfw_qaoa.sh tnqvm
+```
+
+Run the Qiskit VQE example. The argument is the optimizer iteration limit:
+
+```bash
+./qfw_qiskit_vqe.sh 1
+```
+
+Run a SupermarQ workflow:
+
+```bash
+./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
+```
+
+Run a chemistry application script when the chemistry application tree is
+available:
+
+```bash
+./qfw_chem_app.sh <script-name.py>
+```
+
+Run the standard example set sequentially:
+
+```bash
+./qfw_run_all.sh
+```
+
+Useful `qfw_run_all.sh` overrides:
+
+```bash
+QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
+QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
+```
+
+`qfw_supermarq.batch` is a Frontier-oriented batch template. Edit the
+account, node counts, paths, and arguments before submitting it with
+`sbatch`:
+
+```bash
+sbatch qfw_supermarq.batch
+```
+
+For per-wrapper argument details, see
+[examples/README.md](examples/README.md).
+
+## Run On A Real Cluster
+
+<details>
+<summary>Cluster workflow</summary>
+
+Use the same build and example commands from the earlier sections. The
+cluster-specific work is selecting the right install configuration and
+taking the right allocation before running examples.
+
+Start from one of these configuration files:
+
+- `setup/config/qfw_config_sample.yaml` for a module-based cluster setup.
+- `setup/config/qfw_config_sample_nomod.yaml` for explicit cluster paths.
+- `services/config/frontier.yaml` as the bundled Frontier runtime policy.
+
+For other systems, create a site runtime policy under `services/config/`
+or another site-controlled path and point the install configuration at it.
+
+After configuring, building, and activating QFw, take the cluster
+allocation required by the site. On Frontier-style systems this is usually
+a two-component heterogeneous allocation:
+
+```bash
+salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: \
+  -N 1 -t 4:00:00 -A <project> --network=single_node_vni
+```
+
+Then run the wrappers from [Run Examples](#run-examples). The example
+commands are the same as the local workflow.
+
+</details>
+
+## Run With QFw-SLURM-Cluster
+
+<details>
+<summary>Containerized Slurm workflow</summary>
+
+Use the
+[QFw-SLURM-Cluster README](https://github.com/openQSE/QFw-SLURM-Cluster#readme)
+for the container build, image pull, shared directory setup, and cluster
+startup steps.
+
+Inside the container, QFw normally lives at:
+
+```bash
+/workspace/qfw-container-base/QFw
+```
+
+Use the container configuration files when building a development checkout
+inside that environment:
+
+- `setup/config/qfw_config_sample_container.yaml`
+- `services/config/container.yaml`
+
+The QFw-SLURM-Cluster image already contains the simulator runners, so a
+development checkout normally only needs:
+
+```bash
+cd /workspace/qfw-container-base/QFw/setup
+./qfw_configure -c config/qfw_config_sample_container.yaml
+./qfw_build.sh --python --defw
+```
+
+After activation, run the wrappers from [Run Examples](#run-examples).
+The example commands are the same as the local workflow.
+
+</details>
+
+## Install Configuration Reference
+
+<details>
+<summary>Configuration files and generated scripts</summary>
+
+`qfw_configure` reads an install configuration and generates:
+
+- `setup/qfw_activate`: activates the QFw runtime environment.
+- `setup/qfw_build.sh`: installs Python requirements and builds requested
+  components.
+
+The most important install configuration keys are:
+
+- `base-dir`: base directory for QFw runtime files, builds, and installs.
+- `runtime-mode`: `container` or `cluster`.
+- `service-runtime-config`: service runtime policy YAML.
+- `mpi-transport-mode`: `auto` or `ofi`.
+- `python-venv-activate`: Python virtual environment activation script.
+- `libfabric-install`: Libfabric install prefix.
+- `mpi-install`: Open MPI install prefix.
+- `dev-install`: accelerator development root, such as ROCm.
+- `qfw-dep-build-version`: dependency build version used for paths.
+- `generate-dep-build-version`: generate a new timestamped build version.
+
+Optional build and runtime keys include:
 
 - `cc`, `cxx`, `fc`
 - `hip-arch`
@@ -177,331 +302,122 @@ build path include:
 - `mpi-env`
 - `openblas-root`, `cmake-root`, `gcc-root`
 
-### Run the configurator
+`runtime-mode` controls allocation and temp-path behavior:
 
-Install the configure-time Python requirements into the Python
-environment named by `python-venv-activate` before running
-`qfw_configure`:
+- `container`: use the mounted workspace layout used by QFw-SLURM-Cluster.
+- `cluster`: use the cluster-oriented runtime layout.
 
-```bash
-source /path/to/venv/bin/activate
-python -m pip install -r /path/to/QFw/setup/build-requirements.txt
-```
+`service-runtime-config` controls service-level MPI launch policy. QFw
+ships two examples:
 
-```bash
-cd /path/to/QFw/setup
-./qfw_configure -c /path/to/config.yaml
-```
+- `services/config/container.yaml`
+- `services/config/frontier.yaml`
 
-This generates:
+`mpi-transport-mode` controls whether QFw forces Open MPI onto the OFI
+path:
 
-- `setup/qfw_activate`: activates the QFw environment only
-- `setup/qfw_build.sh`: installs Python requirements and builds
-  dependencies when requested on the command line, then deactivates
+- `ofi`: export the existing OFI-focused MCA environment settings.
+- `auto`: leave transport selection to the Open MPI installation.
 
-The configurator does not execute `qfw_build.sh`. Run it as a separate
-step when you want to install Python requirements or build TNQVM,
-NWQ-Sim, and DEFw.
+Add `mpi-env` to the install configuration when a site needs explicit MPI
+or MCA environment variables after activation.
 
-```bash
-cd /path/to/QFw/setup
-./qfw_build.sh
-```
+</details>
 
-`qfw_build.sh` defaults to building everything. You can also target
-specific pieces explicitly:
+## Shared Filesystem Behavior
 
-```bash
-./qfw_build.sh --python
-./qfw_build.sh --tnqvm --nwqsim
-./qfw_build.sh --defw
-```
+<details>
+<summary>Node-local and shared directory expectations</summary>
 
-For the container profile, the normal sequence is:
+QFw does not enforce a shared filesystem across nodes in a Slurm
+allocation. The setup layer treats the run id as global state, propagates
+it to remote setup commands, and creates the required QFw temp directories
+on each node before writing logs or startup artifacts there.
 
-```bash
-cd /workspace/qfw-container-base/QFw/setup
-./qfw_configure -c config/qfw_config_sample_container.yaml
-./qfw_build.sh
-```
+This means the QFw infrastructure can operate with node-local temp
+directories for startup logs, service logs, pid files, and the PRTE DVM
+URI as long as the producer and consumer of each file run on the same
+node. In the current startup model, the resource manager, QPM services,
+and DVM startup run on the group-1 head node, so those local files do not
+require a cluster-wide shared directory.
 
-## Step-By-Step Workflows
+Backend simulators can have stricter requirements. QFw does not rewrite
+or stage simulator-specific files automatically.
 
-### Run QFw In The Containerized Slurm Environment
+QASM input files are written by QFw on the service node. This is safe for
+backends that only read the QASM file from rank 0 on that same node.
 
-This assumes:
+NWQ-Sim count output is rank-0 guarded and does not require every MPI rank
+to write a shared output file.
 
-- the `QFw-SLURM-Cluster` repository is already up and running
-- the QFw checkout is mounted into the containers at
-  `/workspace/qfw-container-base/QFw`
-- you will run the commands below from inside the `slurmctld` container
+NWQ-Sim statevector dumps use NWQ-Sim's native `--dump_file` path. In the
+MPI statevector backend, every MPI rank participates in writing the same
+dump file in rank order. That requires the dump path to be visible and
+writable from all MPI ranks, unless the run is single-rank or head-local.
 
-1. Enter the controller container:
+For node-local filesystems, avoid multi-node NWQ-Sim statevector dumps
+unless the dump directory is placed on shared storage or explicit staging
+is added. QFw can run without a shared filesystem, but individual
+simulator modes may still require one.
 
-```bash
-cd /path/to/QFw-SLURM-Cluster
-./do_ssh.sh
-```
-
-2. Create the persistent venv in the mounted workspace if it does not
-   already exist:
-
-```bash
-python3 -m venv /workspace/qfw-container-base/venv
-source /workspace/qfw-container-base/venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r /workspace/qfw-container-base/QFw/setup/build-requirements.txt
-```
-
-3. Go to the QFw setup directory:
-
-```bash
-cd /workspace/qfw-container-base/QFw/setup
-```
-
-4. Generate the activation and build scripts:
-
-```bash
-./qfw_configure -c config/qfw_config_sample_container.yaml
-```
-
-5. Build the QFw environment:
-
-```bash
-./qfw_build.sh
-```
-
-To build only selected pieces instead of the full stack:
-
-```bash
-./qfw_build.sh --python --defw
-./qfw_build.sh --tnqvm --nwqsim
-```
-
-6. Activate the generated environment:
-
-```bash
-source /workspace/qfw-container-base/QFw/setup/qfw_activate
-```
-
-`qfw_activate` fails fast if `QFW_DEP_BUILD_VERSION` is missing, because
-the simulator runtime paths are versioned.
-
-7. Take a heterogeneous allocation when you want to mirror the normal
-   Frontier-style run shape:
-
-```bash
-salloc -N 1 -n 1 : -N 1 -n 1
-```
-
-8. Start QFw:
-
-```bash
-cd /workspace/qfw-container-base/QFw/setup
-./qfw_setup.sh
-```
-
-`qfw_setup.sh` is the primary startup path. It performs the PRTE startup
-phase and then launches the QFw framework phase.
-
-9. Run a simple smoke path or example:
-
-```bash
-cd /workspace/qfw-container-base/QFw/examples
-./qfw_mpi_smoke.sh
-```
-
-or:
-
-```bash
-cd /workspace/qfw-container-base/QFw/examples
-./qfw_supermarq.sh async 1 4 100 0 ghz nwqsim
-```
-
-Example tests live under `examples/tests/` and can be run with:
-
-```bash
-cd /workspace/qfw-container-base/QFw
-pytest examples/tests
-```
-
-10. Tear down or deactivate when finished:
-
-```bash
-qfw_deactivate
-```
-
-QFw expects a Slurm heterogeneous allocation in both container and cluster
-mode. Use `qfw_setup.sh` as the supported startup path.
-
-### Run QFw On A Real Cluster
-
-This is the Frontier-style workflow using modules or explicit cluster
-installs.
-
-1. Clone the repository and submodules:
-
-```bash
-mkdir -p qhpc
-cd qhpc
-git clone git@github.com:openQSE/QFw.git
-cd QFw
-git submodule update --init --recursive
-```
-
-2. Choose a config file under `setup/config/` or create your own. For a
-   module-based install, start from `setup/config/qfw_config_sample.yaml`.
-   For an explicit-path install, start from
-   `setup/config/qfw_config_sample_nomod.yaml`.
-
-3. Edit the config so the paths match the cluster:
-
-```bash
-cd setup
-cp config/qfw_config_sample.yaml my_cluster.yaml
-python -m pip install -r build-requirements.txt
-```
-
-For non-Frontier clusters, also create a site runtime config and point
-`service-runtime-config` at it. The bundled Frontier example is
-`services/config/frontier.yaml`.
-
-4. Generate the activation and build scripts:
-
-```bash
-./qfw_configure -c my_cluster.yaml
-```
-
-5. Build the QFw environment:
-
-```bash
-./qfw_build.sh
-```
-
-If you only need selected targets, pass them explicitly:
-
-```bash
-./qfw_build.sh --python --defw
-./qfw_build.sh --tnqvm --nwqsim
-```
-
-6. Activate QFw:
-
-```bash
-source /path/to/QFw/setup/qfw_activate
-```
-
-`qfw_activate` fails fast if `QFW_DEP_BUILD_VERSION` is missing, because
-the simulator runtime paths are versioned.
-
-7. Take the two-component heterogeneous allocation:
-
-```bash
-salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: \
-  -N 1 -t 4:00:00 -A <project> --network=single_node_vni
-```
-
-8. Start QFw:
-
-```bash
-cd /path/to/QFw/setup
-./qfw_setup.sh
-```
-
-`qfw_setup.sh` is the primary startup path. It performs the PRTE startup
-phase and then launches the QFw framework phase.
-
-9. Run an example:
-
-```bash
-cd /path/to/QFw/examples
-./qfw_supermarq.sh async 1 4 100 0 ghz nwqsim
-```
-
-Example tests live under `examples/tests/` and can be run with:
-
-```bash
-cd /path/to/QFw
-pytest examples/tests
-```
-
-### Container MPI Smoke Example
-
-After activation and a heterogeneous Slurm allocation, run the MPI smoke
-example through the normal QFw startup and application path:
-
-```bash
-cd /path/to/QFw/examples
-./qfw_mpi_smoke.sh
-```
-
-This validates:
-
-- PRTE startup through `qfw_setup.sh`
-- Resource Manager startup through `qfw_setup.py`
-- `svc_mpi_smoke` startup from `qfw_mpi_smoke_services.yaml`
-- `api_mpi_smoke` use through `qfw_srun.sh`
-- an `mpirun` payload launched by the smoke service
-
-The example uses the same teardown path as the other QFw examples:
-
-```bash
-qfw_teardown.sh
-```
-
-### Deactivate the environment
-
-```bash
-qfw_deactivate
-```
+</details>
 
 ## Developer Testing
 
-To run the same checks as CI locally (not part of the QFw build or installation):
+<details>
+<summary>Local CI-style checks</summary>
+
+Run these checks when editing QFw itself:
 
 ```bash
-pip install flake8 pytest       # one-time dependency install
-./.github/scripts/ci-syntax.sh  # lint and syntax
-./.github/scripts/ci-mock.sh    # CI-safe mock tests
+python -m pip install flake8 pytest
+./.github/scripts/ci-syntax.sh
+./.github/scripts/ci-mock.sh
 ```
+
+The example wrappers under `examples/` are integration paths. They expect
+a configured and activated QFw environment.
+
+</details>
 
 ## High Level Design
 
-QFw uses DEFw as the distributed runtime and layers QFw-specific
-services and APIs on top. DEFw handles process startup, messaging, role
-management, and remote execution. QFw adds simulator-specific QPM
-services, QRC execution paths, installation helpers, and example
-applications.
+<details>
+<summary>Runtime architecture</summary>
 
-The current repository is organized around:
+QFw uses DEFw as the distributed runtime and layers QFw-specific services
+and APIs on top. DEFw handles process startup, messaging, role management,
+and remote execution. QFw adds simulator-specific QPM services, QRC
+execution paths, installation helpers, and example applications.
 
-- `setup/`: activation, installation, SLURM orchestration, and startup scripts
-- `services/`: QFw-owned external DEFw services such as
-  `svc_tnqvm_qpm` and `svc_nwqsim_qpm`
-- `service-apis/`: QFw-owned external DEFw service APIs such as `api_qpm`
-- `DEFw/`: the distributed runtime submodule
-- `bin/`: simulator runner binaries copied from dependency builds
-- `examples/`: runnable examples and integration-style tests
+The repository is organized around:
 
-The current runtime model expects a Slurm heterogeneous allocation. Group 0
-is the application group. Group 1 is the service and simulator group. The
-resource manager, QPM services, PRTE DVM, and simulator runners are started
-from the group-1 head node. Applications run through `qfw_srun.sh` on
-group 0 and talk to those services through QFw service APIs.
+- `setup/`: activation, installation, allocation handling, and startup
+  scripts.
+- `services/`: QFw-owned DEFw services such as `svc_tnqvm_qpm` and
+  `svc_nwqsim_qpm`.
+- `service-apis/`: QFw-owned DEFw service APIs such as `api_qpm`.
+- `DEFw/`: the distributed runtime submodule.
+- `bin/`: simulator runner binaries copied from dependency builds.
+- `examples/`: runnable examples and integration-style tests.
+
+The Slurm runtime model uses group 0 for applications and group 1 for
+services and simulator execution. Local mode maps those roles onto the
+same node.
 
 ```mermaid
 flowchart LR
-    subgraph G0["Slurm het-group 0: application group"]
-        App["Application process<br/>Python example or user code"]
-        API["QFw client API<br/>api_qpm"]
+    subgraph G0["Application role"]
+        App["Application process"]
+        API["QFw client API"]
     end
 
-    subgraph G1["Slurm het-group 1: service and simulator group"]
+    subgraph G1["Service and execution role"]
         RM["DEFw resource manager"]
         DVM["PRTE DVM"]
-        QPM["QPM services<br/>NWQ-Sim and TNQVM"]
-        MPI["MPI launch path<br/>mpirun with DVM URI"]
-        Target["Execution target<br/>simulator runner or hardware"]
+        QPM["QPM services"]
+        MPI["MPI launch path"]
+        Target["Simulator or hardware"]
     end
 
     App --> API
@@ -514,67 +430,26 @@ flowchart LR
     QPM -. direct service path .-> Target
 ```
 
-The default service configuration, `setup/qfw_services.yaml`, starts both
-`svc_nwqsim_qpm` and `svc_tnqvm_qpm` on the group-1 head node. Each service
-is assigned the group-1 node list through `QFW_QPM_ASSIGNED_HOSTS`, so the
-service can launch simulator work across the service allocation while the
-application remains on group 0. The QPM service does not talk to PRTE
-directly. The NWQ-Sim and TNQVM services launch their simulator runners
-through MPI and pass MPI the DVM URI. Other services may use a different
-execution path, such as talking directly to a simulator process or to
-hardware.
-
-The `examples/qfw_qiskit_simple.sh` workflow follows this message flow:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant W as "qfw_qiskit_simple.sh"
-    participant Setup as "qfw_setup.sh"
-    participant SetupPy as "qfw_setup.py"
-    participant G1 as "group 1 head"
-    participant DVM as "PRTE DVM"
-    participant RM as "DEFw resource manager"
-    participant QPM as "svc_nwqsim_qpm"
-    participant SRun as "qfw_srun.sh"
-    participant App as "test_qiskit_simple.py"
-    participant API as "api_qpm"
-    participant Runner as "circuit_runner.nwqsim"
-    participant TD as "qfw_teardown.sh"
-
-    W->>Setup: start QFw infrastructure
-    Setup->>SetupPy: phase 1 dvm setup
-    SetupPy->>G1: activate QFw and run PRTE startup
-    G1->>DVM: start PRTE for het-group 1
-    DVM-->>SetupPy: write DVM URI
-    Setup->>SetupPy: phase 2 service startup
-    SetupPy->>G1: qfw_run_setup.sh on group-1 head
-    G1->>RM: start DEFw resource manager
-    G1->>QPM: start configured QPM services
-    W->>SRun: run test_qiskit_simple.py
-    SRun->>App: launch application in het-group 0
-    App->>API: QFwBackend.run(circuit)
-    API->>RM: discover and reserve NWQ-Sim QPM
-    RM-->>API: return service endpoint
-    API->>QPM: submit circuit execution request
-    QPM->>Runner: launch NWQ-Sim through PRTE DVM
-    Runner-->>QPM: counts and optional statevector dump
-    QPM-->>API: return normalized result payload
-    API-->>App: build Qiskit Result
-    App-->>W: print counts and statevector
-    W->>TD: qfw_teardown.sh
-    TD->>G1: stop services and DVM-side runtime
-```
+The default service configuration, `setup/qfw_services.yaml`, starts the
+configured QPM services on the service node. The NWQ-Sim and TNQVM
+services launch simulator runners through MPI and pass MPI the DVM URI.
+Other services may use a different path, such as calling hardware APIs
+directly.
 
 QFw-specific services and APIs are loaded into DEFw through:
 
 - `DEFW_EXTERNAL_SERVICES_PATH`
 - `DEFW_EXTERNAL_SERVICE_APIS_PATH`
 
-This keeps the DEFw framework generic while allowing QFw to evolve its
-simulator services independently.
+This keeps DEFw generic while allowing QFw services to evolve
+independently.
 
-### Service Statevector Contract
+</details>
+
+## Service Statevector Contract
+
+<details>
+<summary>Common statevector payload</summary>
 
 QPM services may expose simulator statevectors when a backend requests
 `QFW_CAP_STATEVECTOR`. Each service owns parsing of its simulator-native
@@ -610,7 +485,10 @@ NWQ-Sim writes statevectors through its native `--dump_file` option when
 QFw requests statevector data. QFw names the dump file from the circuit
 UUID with a `.dump` extension, parses it as the NWQ-Sim native
 `complex128` statevector, converts it to the common payload, and removes
-the dump file after parsing or failure cleanup. For MPI statevector runs,
-NWQ-Sim expects that dump path to be visible to all MPI ranks. Use shared
-storage for the dump directory or keep the run single-rank/head-local when
-running on node-local filesystems.
+the dump file after parsing or failure cleanup.
+
+For MPI statevector runs, NWQ-Sim expects that dump path to be visible to
+all MPI ranks. Use shared storage for the dump directory or keep the run
+single-rank/head-local when running on node-local filesystems.
+
+</details>
