@@ -2,3 +2,9 @@
 	path = DEFw
 	url = git@github.com:openQSE/DEFw.git
 	branch = master
+[submodule "external/qhw-data"]
+	path = external/qhw-data
+	url = git@github.com:openQSE/qhw-data.git
+[submodule "external/qhw-iqm"]
+	path = external/qhw-iqm
+	url = git@github.com:openQSE/qhw-iqm.git
