@@ -33,11 +33,21 @@ those launch modes.
 
 ## Build QFw
 
-Clone QFw with its submodules:
+Clone QFw with its submodules. This pulls
+[DEFw](https://github.com/openQSE/DEFw),
+[qhw-data](https://github.com/openQSE/qhw-data), and
+[qhw-iqm](https://github.com/openQSE/qhw-iqm):
 
 ```bash
 git clone --recursive git@github.com:openQSE/QFw.git
 cd QFw
+```
+
+For an existing checkout that was not cloned with `--recursive`, initialize
+or update submodules before building:
+
+```bash
+git submodule update --init --recursive
 ```
 
 Create or activate the Python environment that QFw should use:
@@ -76,7 +86,9 @@ Build the QFw pieces required by your environment:
 ```
 
 Use `--python --defw` when simulator runners are already available, such
-as inside the QFw-SLURM-Cluster image. Build simulator dependencies only
+as inside the QFw-SLURM-Cluster image. The `--python` target installs
+`qhw-data` and `qhw-iqm` from the `external/` submodules before installing
+the remaining QFw Python requirements. Build simulator dependencies only
 when this checkout must provide them:
 
 ```bash
