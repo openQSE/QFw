@@ -322,6 +322,18 @@ path:
 Add `mpi-env` to the install configuration when a site needs explicit MPI
 or MCA environment variables after activation.
 
+The IQM service does not return `_raw_iqm` as a separate result field.
+Instead, it embeds the full native IQM result payload in
+`qhw_result["raw"]` by default. To turn that off, set this before starting
+the IQM service:
+
+```bash
+export QFW_IQM_INCLUDE_RAW_RESULT=false
+```
+
+With that setting, QFw still returns `qhw_result`, including
+`qhw_result["extensions"]["iqm.v1"]`, but omits the full raw IQM payload.
+
 </details>
 
 ## Shared Filesystem Behavior

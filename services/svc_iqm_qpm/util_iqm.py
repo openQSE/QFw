@@ -66,7 +66,7 @@ def load_iqm_pulse_module():
 	return Circuit, CircuitOperation
 
 
-def normalize_qhw_iqm(kind, raw_payload, device_id=None):
+def normalize_qhw_iqm(kind, raw_payload, device_id=None, include_raw=False):
 	try:
 		from qhw_iqm import normalize_calibration, normalize_coupling
 		from qhw_iqm import normalize_device, normalize_result
@@ -76,13 +76,17 @@ def normalize_qhw_iqm(kind, raw_payload, device_id=None):
 			f"before starting the IQM QPM service. Import error: {exc}") from exc
 
 	if kind == "device":
-		return normalize_device(raw_payload, device_id=device_id)
+		return normalize_device(
+			raw_payload, device_id=device_id, include_raw=include_raw)
 	if kind == "coupling":
-		return normalize_coupling(raw_payload, device_id=device_id)
+		return normalize_coupling(
+			raw_payload, device_id=device_id, include_raw=include_raw)
 	if kind == "calibration":
-		return normalize_calibration(raw_payload, device_id=device_id)
+		return normalize_calibration(
+			raw_payload, device_id=device_id, include_raw=include_raw)
 	if kind == "result":
-		return normalize_result(raw_payload, device_id=device_id)
+		return normalize_result(
+			raw_payload, device_id=device_id, include_raw=include_raw)
 	raise DEFwExecutionError(f"unsupported qhw-iqm normalization kind {kind!r}")
 
 
@@ -232,6 +236,19 @@ def get_env_float(name, default):
 	except ValueError as exc:
 		raise DEFwExecutionError(
 			f"{name} must be a floating point number: {value!r}") from exc
+
+
+def get_env_bool(name, default):
+	value = os.environ.get(name)
+	if value is None or not value.strip():
+		return default
+	normalized = value.strip().lower()
+	if normalized in ("1", "true", "yes", "on"):
+		return True
+	if normalized in ("0", "false", "no", "off"):
+		return False
+	raise DEFwExecutionError(
+		f"{name} must be a boolean value: {value!r}")
 
 
 def get_required_env():
@@ -638,6 +655,8 @@ class IQMServiceClient:
 			"QFW_IQM_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 		self._job_timeout = get_env_float(
 			"QFW_IQM_JOB_TIMEOUT", DEFAULT_JOB_TIMEOUT)
+		self._include_raw_results = get_env_bool(
+			"QFW_IQM_INCLUDE_RAW_RESULT", True)
 		self._last_metadata = {}
 		self._last_timing = {}
 		self._latest_cid = None
@@ -663,8 +682,10 @@ class IQMServiceClient:
 			return self._config.get("device_id")
 		return os.environ.get(QPU_DEVICE_ENV)
 
-	def normalize_qhw(self, kind, raw_payload):
-		return normalize_qhw_iqm(kind, raw_payload, device_id=self.device_id())
+	def normalize_qhw(self, kind, raw_payload, include_raw=False):
+		return normalize_qhw_iqm(
+			kind, raw_payload, device_id=self.device_id(),
+			include_raw=include_raw)
 
 	def get_static_architecture(self):
 		return call_iqm_method(
@@ -844,9 +865,9 @@ class IQMServiceClient:
 			},
 		}
 		timing_summary = build_timing_summary(record)
-		qhw_result = self.normalize_qhw("result", raw_payload)
+		qhw_result = self.normalize_qhw(
+			"result", raw_payload, include_raw=self._include_raw_results)
 		record["qhw_result"] = qhw_result
-		record["_raw_iqm"] = raw_payload
 		self._latest_cid = cid
 		self._last_metadata[cid] = record
 		self._last_timing[cid] = timing_summary
@@ -854,5 +875,4 @@ class IQMServiceClient:
 		return {
 			"counts": counts,
 			"qhw_result": qhw_result,
-			"_raw_iqm": raw_payload,
 		}
