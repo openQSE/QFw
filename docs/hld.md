@@ -1,4 +1,4 @@
-# Scheduling And Resource Management HLD
+# openQSE Software Architecture High level Design
 
 ## Overview
 
