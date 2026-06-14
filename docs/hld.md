@@ -2,79 +2,84 @@
 
 ## Overview
 
-This document defines a reference workflow for quantum resource management,
-starting at the application and ending at execution on a selected quantum
-device. The design describes how an application expresses quantum work, how the
-runtime exposes available resources, how scheduling decisions are made, and how
-the selected task is submitted for execution.
+This document is a detailed design companion to the openQSE reference
+architecture introduced in [Quantum-HPC Software Stacks and the openQSE
+Reference Architecture: A Survey](https://arxiv.org/pdf/2604.20912). That paper
+surveys nine production QHPC stacks. Its main contribution is a vendor-neutral
+reference architecture that captures common layer boundaries across those
+systems.
 
-The workflow must support both single-QPU and multi-QPU deployments. The
-runtime should not assume that work is always a single quantum task or a single
-local queue. Applications may submit individual quantum tasks, linear streams,
-or dependency graphs that contain both classical and quantum operations. The
-runtime normalizes these forms into a runtime graph, resolves dependencies,
-and releases ready tasks to either a bound Device or a Device Mesh.
+This HLD expands those layer boundaries into a concrete runtime design. It
+defines the responsibilities of each layer. It also identifies the information
+that crosses each boundary and the policies that should remain pluggable. The
+goal is to expose interfaces that can become interoperable across
+implementations, and eventually serve as candidates for standardization.
 
-In the single-QPU case, a runtime graph can be bound to one Device. In the
-multi-QPU case, a runtime graph can be bound to a construct that exposes
-multiple scheduling devices through a common view. This construct is the
-Device Mesh. It provides the abstraction needed to schedule ready quantum tasks
-across several devices while still preserving each device's capabilities, queue
-state, and telemetry.
-
-Applications may have domain-specific information that is not visible to a
-system scheduler. For example, an application may know that one circuit should
-run on a high-fidelity superconducting device, while another can run on a
-simulator or a less busy QPU. An application may choose to use the Device Mesh
-and configure how cross-device scheduling should operate, or it may bind the
-runtime graph to an individual Device when it needs explicit control. The runtime
-layer should provide both paths through granular APIs for resource discovery,
-admission, scheduling hints, telemetry, device information, and submission
-rather than hiding all decisions behind one opaque submit call. Some device
-information is needed for scheduling, while richer calibration, quality, and
-execution metadata is useful to applications for statistics, provenance, and
-adaptive workflows.
-
-The design separates admission, scheduling, submission, and telemetry so each
-layer has a clear responsibility. A concrete system, such as QFw, can implement
-these layers directly or map them onto existing service APIs.
+The first part of the document describes the reference design without binding
+it to one implementation. Later sections apply that design to ORNL's Quantum
+Framework as one concrete implementation path.
 
 ## Requirements
 
-- The system should support multi-level scheduling:
-  - System-level scheduling reserves QPU resources before the application
-    starts, using admission control based on device capability, credit policy,
-    allocation state, and site policy.
-  - Application-level scheduling places ready quantum tasks across the QPUs
-    granted to the running application.
-  - Device-level scheduling applies local device policy before accepted tasks
-    are submitted for execution.
-- The system should support credit-based admission control for quantum resource
-  requests. Crediting should allow sites to express QoS, fairness, allocation
-  limits, and device-specific cost models before a job is admitted.
-- The system should provide pluggable policy interfaces at each scheduling
-  level. System-level admission, application-level placement, and device-level
-  scheduling should be replaceable independently so sites can tune each layer
-  without changing the rest of the runtime stack.
-- Applications should be able to express dependencies between classical and
-  quantum tasks. These dependencies may represent a single execution path or
-  multi-level conditional execution that is resolved while the application is
-  running.
-- Applications should be able to target a single QPU or a set of QPUs without
-  changing the higher-level workload expression.
-- Multi-device placement should be governed by default runtime policies, site
-  policies, or application-configured policies.
-- The system should expose job lifecycle operations that allow applications to
-  submit work, cancel work, query status, retrieve results, and inspect
-  execution metadata without depending on the underlying provider.
-- The system should separate scheduling from lower-level job submission. This
-  allows user, site, and dynamic runtime policies to govern how quantum tasks
-  are distributed across reserved resources before any provider-specific
-  submission occurs.
-- The system should expose telemetry and device-state data through
-  provider-neutral interfaces. That data should support application scheduling
-  decisions, runtime policy decisions, and external services such as
-  monitoring, accounting, provenance tracking, and telemetry collection.
+The requirements start from the application view. An application needs a path
+to express work, bind that work to available resources, and receive results.
+That path is the application workflow. The runtime must support this workflow
+for current single-QPU systems and for future systems with multiple QPUs.
+
+The workflow should not assume that work is always one quantum task or one
+local queue. An application may submit a single quantum task, or qtask, a
+linear stream, or a dependency graph that mixes classical and quantum
+operations. The runtime therefore needs an internal representation that can
+track dependencies and release ready work. Later sections call this
+representation the runtime graph.
+
+Ready quantum work must be able to target one execution resource or a group of
+resources. Later sections call these abstractions Device and Device Mesh. A
+Device is one schedulable target. A Device Mesh provides a common view over
+several compatible devices so the runtime can place work according to policy.
+
+Applications may also have domain-specific information that is not visible to
+the system scheduler. One circuit may need a high-fidelity superconducting
+device. Another may be able to run on a simulator or a less busy QPU. The
+runtime should support both explicit device binding and policy-driven
+placement through a mesh.
+
+The runtime should expose granular interfaces for discovery, admission,
+scheduling, telemetry, job lifecycle management, and submission. It should not
+hide all decisions behind one opaque submit call. The requirements below define
+the behavior those interfaces need to support.
+
+| Req ID | Category | Requirement |
+| --- | --- | --- |
+| APP-01 | Application workflow | Applications must be able to express work as a single qtask, a linear stream, or a dependency graph. |
+| APP-02 | Application workflow | Applications must be able to express dependencies between classical and quantum tasks. |
+| APP-03 | Application workflow | Runtime dependencies may include single-path execution and coarse conditional execution resolved while the application is running. |
+| APP-04 | Application workflow | Applications must be able to target a single QPU or a set of QPUs without changing the higher-level workload expression. |
+| RT-01 | Runtime representation | The runtime must normalize supported workload forms into an internal runtime graph. |
+| RT-02 | Runtime representation | The runtime graph must track dependency readiness and release ready work for scheduling. |
+| DEV-01 | Device abstraction | The runtime must expose one schedulable execution target as a Device. |
+| DEV-02 | Device abstraction | The runtime must expose compatible sets of devices through a Device Mesh. |
+| DEV-03 | Device abstraction | A Device Mesh must preserve per-device capabilities, queue state, and telemetry. |
+| DISC-01 | Discovery | The runtime must expose discovery interfaces for device and mesh capabilities. |
+| SCHED-01 | Scheduling | The system must support system-level scheduling before the application starts. |
+| SCHED-02 | Scheduling | The system must support application-level placement across QPUs granted to a running application. |
+| SCHED-03 | Scheduling | The system must support device-level scheduling before accepted tasks are submitted for execution. |
+| SCHED-04 | Scheduling | Scheduling must remain separate from lower-level provider job submission. |
+| SCHED-05 | Scheduling | Multi-device placement must be governed by default runtime policies, site policies, or application-configured policies. |
+| POL-01 | Policy | System-level admission, application-level placement, and device-level scheduling policies must be replaceable independently. |
+| POL-02 | Policy | Sites must be able to tune policy at one layer without changing the rest of the runtime stack. |
+| ADM-01 | Admission | The system must support admission control before quantum resources are granted to a job. |
+| ADM-02 | Admission | Admission control must support pluggable policy implementations. |
+| ADM-03 | Admission | Admission control must support unlimited, rate-based, and credit-based policies. |
+| ADM-04 | Admission | Sites must be able to add site-specific admission policies. |
+| ADM-05 | Admission | Admission policies must support quality of service, fairness, allocation limits, and device-specific cost models. |
+| LIFE-01 | Job lifecycle | The system must expose provider-neutral operations to submit work. |
+| LIFE-02 | Job lifecycle | The system must expose provider-neutral operations to cancel work. |
+| LIFE-03 | Job lifecycle | The system must expose provider-neutral operations to query status and retrieve results. |
+| LIFE-04 | Job lifecycle | The system must expose provider-neutral operations to inspect execution metadata. |
+| TLM-01 | Telemetry | The system must expose telemetry and device-state data through provider-neutral interfaces. |
+| TLM-02 | Telemetry | Telemetry must support application scheduling decisions and runtime policy decisions. |
+| TLM-03 | Telemetry | Telemetry must support monitoring, accounting, provenance tracking, and telemetry collection services. |
 
 ## Design
 
