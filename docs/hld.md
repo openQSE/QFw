@@ -68,6 +68,13 @@ the behavior those interfaces need to support.
 | APP-02 | Application workflow | Applications must be able to express dependencies between classical and quantum tasks. |
 | APP-03 | Application workflow | Runtime dependencies may include single-path execution and coarse conditional execution resolved while the application is running. |
 | APP-04 | Application workflow | Applications must be able to target a single QPU or a set of QPUs without changing the higher-level workload expression. |
+| APP-05 | Application compilation | It must be possible to write quantum circuit portions of an application more than one common quantum SDK. |
+| APP-06 | Application compilation | Applications can be written with quantum circuits that do not use QPU-specific features. If they are written in this way, they can be run on any supported QPU with only minor changes to scheduling requests. |
+| APP-07 | Application compilation | Applications can be written with quantum circuits that use QPU-specific features. If they are written in this way, they are not automatically portable to other types of QPUs. However, they can be written to use QPU-specific features while still using the QPU-independent OpenQSE facilities for writing workflows, scheduling, and enforcing policy. |
+| APP-08 | Application compilation | Applications should be able to request QPU and HPC resources are scheduled at the same time. When co-scheduling is requested, it should be possible for QPU and HPC components of the application to communicate. |
+| APP-09 | Application compilation | Applications should be able to use dynamic circuits that include mid-circuit measurements followed by gates conditional on the measurement. |
+| APP-10 | Application compilation | Applications should be able to request QEC at a particular logical error rate & the system should provide this QEC or an indication that it is not possible. |
+| APP-11 | Application compilation | Applications should be able to request specific compilation passes be applied to a quantum circuit before running it. |
 | RT-01 | Runtime representation | The runtime must normalize supported workload forms into an internal runtime graph. |
 | RT-02 | Runtime representation | The runtime graph must track dependency readiness and release ready work for scheduling. |
 | DEV-01 | Device abstraction | The runtime must expose one schedulable execution target as a Device. |
