@@ -76,7 +76,7 @@ negotiation and a concurrency rule **per facet**.
 | Facet | Consumed by | QRMI | QDMI | Concurrency rule | Routing rule |
 |---|---|---|---|---|---|
 | Resource Management | SLURM + SPANK | rich (acquire/release) | session-based | single session | session owner |
-| Device Introspection | applications | thin | rich | freely composable | per-call; overlaps by preference |
+| Device Introspection | applications | yes (via `target()`) | rich (session) | freely composable | per-call; overlaps by preference |
 | Execution | applications | provider-defined | rich | single library, whole transaction | bound to session owner |
 
 The QRMI/QDMI columns here are **representative**; because each library is itself
@@ -167,8 +167,8 @@ Multiple QPU resources plug in below QRMI (IBM Quantum, Pasqal, …) — exactly
 providers plug into **libfabric** — and QDMI has per-device drivers below it
 (e.g. QDMI-on-IQM). A capability therefore belongs to the **resource-plus-library
 leaf**, not to "QRMI" or "QDMI" as a whole: QRMI's coverage for an IBM Heron
-differs from a Pasqal device, and QRMI has no IQM provider today (so IQM is
-reached via QDMI / QDMI-on-IQM).
+differs from a Pasqal or IQM device, each reached through its own QRMI provider
+(for IQM, `qrmi.qiskit_iqm`).
 
 Consequence: **there is one descriptor and one capability map per resource.** The
 per-library columns shown in Sections 3, 6, and 9 are *illustrative*; the
@@ -177,8 +177,9 @@ authoritative capabilities are always read from the resource's own descriptor.
 In the implementation (Section 10) the `Frontend` is built **per resource** from
 its descriptor and routes on `descriptor.caps`; a driver's static `CAPABILITIES`
 is only the full set of calls that library can serve, which the descriptor narrows. So the same code yields a
-different capability map per deployment — `get_device_info` resolves to QDMI on
-the IQM q20 but is a NULL-out on a QRMI-only resource where QDMI isn't wired.
+different capability map per deployment — `get_device_info` is composable on the
+IQM q20 (QDMI preferred, QRMI serves it too) and resolves to QRMI on a
+QRMI-only resource, while a call no wired library covers is a NULL-out.
 
 ## 6. Call surfaces by facet
 
@@ -199,13 +200,15 @@ the IQM q20 but is a NULL-out on a QRMI-only resource where QDMI isn't wired.
 
 | Contract call | QRMI | QDMI |
 |---|---|---|
-| `architecture()` (sites/qubits) | partial (target meta) | rich |
-| `coupling()` | partial | yes |
-| `calibration()` | partial | yes |
-| `operations()` (native gates) | partial | yes |
-| `quality_metrics()` | no | no (NULL today — gap) |
+| `architecture()` (sites/qubits) | yes (via `target()`) | yes (session) |
+| `coupling()` | yes | yes |
+| `calibration()` | yes (via `target()`) | yes (session) |
+| `operations()` (native gates) | yes | yes |
+| `quality_metrics()` | — (future contract growth) | — (future contract growth) |
 
-This is where the preference environment variable applies.
+Both libraries serve this facet (QRMI builds it from `target()`, QDMI from its
+session), so it is genuinely composable and this is where the preference
+environment variable applies.
 
 ### Facet C — Execution (single library, whole transaction; bound to session owner)
 
@@ -255,8 +258,9 @@ Inverting the `caps` matrix across resources produces a vendor scorecard:
 capability         qrmi   qdmi
 acquire/release      x      -    <- QDMI gap: no reservation lifecycle
 accounting           x      -    <- QDMI gap
-coupling/calib       ~      x    <- QRMI gap: thin device introspection
-quality_metrics      -      -    <- neither: user-driven future contract growth
+device/coupling      x      x    <- both introspect the device (composable)
+calibration          ~      x    <- QRMI target() carries it; shim wiring pending
+quality_metrics      -      -    <- neither yet: user-driven future contract growth
 ```
 
 Because it is generated from conformance declarations rather than maintained by
