@@ -13,10 +13,17 @@ import os
 
 QPU_DEVICE_ENV = "QFW_QPU_DEVICE_ID"
 
-# Default descriptor for the ORNL IQM q20: introspection via QDMI, execution
-# via QRMI (the reservation owner). caps[call] = libraries that cover that call
-# FOR THIS RESOURCE. A list of length > 1 is a composable overlap broken by
-# preference; an empty list (or missing key) is a NULL-out / gap-map entry.
+# Default descriptor for the ORNL IQM q20. Device introspection is a
+# COMPOSABLE facet: both QRMI (via QuantumResource.target()) and QDMI serve it,
+# with QDMI preferred (it introspects without holding a reservation, while
+# QRMI's target() is reservation-bound). Execution is QRMI's (the reservation
+# owner). caps[call] = libraries that cover that call FOR THIS RESOURCE. A list
+# of length > 1 is a composable overlap broken by preference; an empty list (or
+# missing key) is a NULL-out / gap-map entry.
+#
+# get_calibration_snapshot / get_dynamic_backend_info stay QDMI-only here for
+# now; QRMI's target() also carries that data (calibration_set / dynamic
+# architecture), so wiring QRMI for them is a follow-up.
 _DEFAULT_DESCRIPTORS = {
 	"ornl-iqm-20q": {
 		"id": "ornl-iqm-20q",
@@ -25,8 +32,8 @@ _DEFAULT_DESCRIPTORS = {
 		"preference": "qdmi",
 		"execution_owner": "qrmi",
 		"caps": {
-			"get_device_info":          ["qdmi"],
-			"get_coupling_graph":       ["qdmi"],
+			"get_device_info":          ["qdmi", "qrmi"],
+			"get_coupling_graph":       ["qdmi", "qrmi"],
 			"get_calibration_snapshot": ["qdmi"],
 			"get_dynamic_backend_info": ["qdmi"],
 			"get_backend_info":         ["qdmi", "qrmi"],
