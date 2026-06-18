@@ -356,12 +356,36 @@ concern.
    Only a language-neutral definition can serve as the open specification that
    QRMI (Rust + C + Python) and QDMI (C) each implement against (Section 14).
 
-## 13. Suggested first milestone
+## 13. First milestone: Device Introspection
 
-Implement **Device Introspection only** through both shims —
-`get_device_info` / `coupling()` — before touching execution. This exercises
-the factory, the descriptor, capability negotiation, and qhw normalization
-without the job-lifecycle and reservation-binding complexity.
+**Status: implemented.** The Device Introspection facet — `get_device_info`
+and `get_coupling_graph` (`coupling()`) — is wired end to end through the shim
+ahead of any execution work. This exercises the driver factory, the
+per-resource descriptor, capability negotiation, and qhw normalization without
+the job-lifecycle and reservation-binding complexity.
+
+It is a **composable** facet: both libraries serve it, so it is wired for both.
+Each opens the IQM device as a Qiskit `BackendV2` — QDMI via
+`iqm.qdmi.qiskit.IQMBackend`, QRMI via `qrmi.qiskit_iqm.IQMProvider().get_backend()`
+(QRMI's `target()` carries the device configuration) — and a shared, pure
+adapter (`drivers/backend_normalize.py`) normalizes that backend's topology
+into the provider-neutral `qhw-device-v1` / `qhw-coupling-v1` records,
+regardless of which library produced the backend. That is the same schema the
+native IQM path emits via `qhw-iqm`, so a consumer sees one shape no matter
+which library served the call. Splitting extraction (the only Qiskit-touching
+step) from the record builders keeps normalization testable without hardware.
+In the default IQM q20 descriptor both calls list `[qdmi, qrmi]` and the
+preference (QDMI) wins; on a QRMI-only resource they resolve to QRMI. The QDMI
+driver resolves connection settings from the same source as the native service
+(`QFW_QC_URL` / `QFW_API_KEY` / `QFW_IQM_QUANTUM_COMPUTER`, then
+`util.device_access`); the QRMI driver reads QRMI's own resource environment
+(populated by the SPANK plugin inside a reservation).
+
+Still stubbed for later milestones: execution (`run_circuit` and its job
+timing/metadata, which stay with the QRMI reservation owner) and the remaining
+introspection calls (`get_backend_info`, dynamic/calibration snapshots — QRMI's
+`target()` also carries calibration/dynamic data, so wiring those is a natural
+follow-up).
 
 ## 14. Strategic positioning: implementation-first to a specification
 
