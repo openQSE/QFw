@@ -12,6 +12,7 @@
 | [QFw Runtime Integration](#qfw-runtime-integration) |
 | [QFw Scheduler Integration](#qfw-scheduler-integration) |
 | [Implementation Plan](#implementation-plan) |
+| [QPU Front-End Contract](qpu-frontend-contract.md) |
 
 ## Overview
 
