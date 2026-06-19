@@ -14,10 +14,11 @@ import os
 QPU_DEVICE_ENV = "QFW_QPU_DEVICE_ID"
 
 # Default descriptor for the ORNL IQM q20. Device introspection is a
-# COMPOSABLE facet: both QRMI (via QuantumResource.target()) and QDMI serve it,
-# with QDMI preferred (it introspects without holding a reservation, while
-# QRMI's target() is reservation-bound). Execution is QRMI's (the reservation
-# owner). caps[call] = libraries that cover that call FOR THIS RESOURCE. A list
+# COMPOSABLE facet: both QRMI (via QuantumResource.target()) and QDMI serve it.
+# The preference is a configurable tiebreaker (default QDMI here, env-
+# overridable) -- introspection is not reservation-bound for either. Execution
+# is QRMI's (the execution owner). caps[call] = libraries that cover that call
+# FOR THIS RESOURCE. A list
 # of length > 1 is a composable overlap broken by preference; an empty list (or
 # missing key) is a NULL-out / gap-map entry.
 #
