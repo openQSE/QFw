@@ -364,22 +364,25 @@ ahead of any execution work. This exercises the driver factory, the
 per-resource descriptor, capability negotiation, and qhw normalization without
 the job-lifecycle and reservation-binding complexity.
 
-It is a **composable** facet: both libraries serve it, so it is wired for both.
-Each opens the IQM device as a Qiskit `BackendV2` — QDMI via
-`iqm.qdmi.qiskit.IQMBackend`, QRMI via `qrmi.qiskit_iqm.IQMProvider().get_backend()`
-(QRMI's `target()` carries the device configuration) — and a shared, pure
-adapter (`drivers/backend_normalize.py`) normalizes that backend's topology
-into the provider-neutral `qhw-device-v1` / `qhw-coupling-v1` records,
-regardless of which library produced the backend. That is the same schema the
-native IQM path emits via `qhw-iqm`, so a consumer sees one shape no matter
-which library served the call. Splitting extraction (the only Qiskit-touching
-step) from the record builders keeps normalization testable without hardware.
+It is a **composable** facet: both libraries serve it, so it is wired for both —
+but they are normalized differently, because they expose different things. QDMI
+presents the device as a *vendor-neutral* Qiskit `BackendV2`
+(`iqm.qdmi.qiskit.IQMBackend`) with no raw IQM data, so the QDMI driver reads
+the topology off the `Target` and normalizes it with a small adapter
+(`drivers/backend_normalize.py`). QRMI's `QuantumResource.target()` returns the
+*raw IQM data* (dynamic architecture / calibration / quality sets), so the QRMI
+driver feeds that straight to **`qhw-iqm`** — the same normalizer the native
+`svc_iqm_qpm` path uses. Either way the output is the same provider-neutral
+`qhw-device-v1` / `qhw-coupling-v1`, so a consumer sees one shape no matter which
+library served the call.
+
 In the default IQM q20 descriptor both calls list `[qdmi, qrmi]` and the
 preference (QDMI) wins; on a QRMI-only resource they resolve to QRMI. The QDMI
 driver resolves connection settings from the same source as the native service
 (`QFW_QC_URL` / `QFW_API_KEY` / `QFW_IQM_QUANTUM_COMPUTER`, then
-`util.device_access`); the QRMI driver reads QRMI's own resource environment
-(populated by the SPANK plugin inside a reservation).
+`util.device_access`); the QRMI driver opens a `QuantumResource` for that alias
+and reads QRMI's own resource environment (populated by the SPANK plugin inside
+a reservation; `target()` itself is not reservation-bound).
 
 Still stubbed for later milestones: execution (`run_circuit` and its job
 timing/metadata, which stay with the QRMI reservation owner) and the remaining

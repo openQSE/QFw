@@ -1,12 +1,13 @@
 # Qiskit BackendV2 -> qhw normalization for the device-introspection facet.
 #
-# Both lower-level libraries expose an IQM device as a Qiskit BackendV2:
-# QDMI-on-IQM via iqm.qdmi.qiskit.IQMBackend, and QRMI via
-# qrmi.qiskit_iqm.IQMProvider().get_backend(). The introspection milestone
-# (design doc qpu-frontend-contract.md section 13) reads the device topology off
-# that backend -- whichever library produced it -- and normalizes it into the
-# provider-neutral qhw-data schema, the same shape the native IQM path emits via
-# qhw-iqm, so a consumer sees one device/coupling record regardless of which
+# Used by the QDMI driver: QDMI-on-IQM (iqm.qdmi.qiskit.IQMBackend) is a
+# vendor-neutral Qiskit BackendV2 with no raw IQM data to reuse, so its topology
+# is read straight off the Target and normalized here. (The QRMI driver does
+# NOT use this module: QRMI's target() returns raw IQM data, which it feeds to
+# qhw-iqm directly — the same normalizer the native svc_iqm_qpm path uses.)
+#
+# The output is the same provider-neutral qhw-data schema the native IQM path
+# emits, so a consumer sees one device/coupling record regardless of which
 # library served the call.
 #
 # The module is split into two layers so normalization is testable without
