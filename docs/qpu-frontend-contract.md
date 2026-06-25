@@ -245,10 +245,29 @@ vs `qdmi`.
   declares what each library ingests; the front-end transcodes. (This
   generalizes today's QASM -> `iqm.pulse` step in
   `services/svc_iqm_qpm/util_iqm.py`.)
-- **Out:** every `result()` is normalized to the existing **qhw schema** via a
-  per-library normalizer (`qhw-qdmi`, `qhw-qrmi`) modeled on today's
-  `qhw-iqm`. This invariant keeps the `backends/qfw_qiskit` primitives and the
-  statevector contract untouched.
+- **Out:** every contract payload — introspection records today, `result()`
+  later — is normalized to the existing **qhw schema** by a normalizer that is a
+  **separate, pluggable step from the device-access library**. This invariant
+  keeps the `backends/qfw_qiskit` primitives and the statevector contract
+  untouched.
+
+**The normalizer is selected by the *shape* of the data a library returns, not
+by the library itself.** Two shapes cover what we have:
+
+- **Raw vendor data** — a library that hands back its provider's native payload
+  (the native IQM client, and QRMI via `QuantumResource.target()`) is normalized
+  by a provider adapter (`qhw-iqm`), which also captures provider-specific extras
+  such as calibration and quality metrics.
+- **Neutral Qiskit `Target`** — a library that hands back a vendor-neutral
+  `BackendV2` (QDMI-on-IQM, and any future `BackendV2` vendor) is normalized from
+  the `Target` by `drivers/backend_normalize.py`.
+
+This keeps normalization decoupled from the libraries and lets the shim absorb
+both "thick" libraries (raw vendor data) and "thin"/neutral ones (a standard
+`Target`). A *single* universal normalizer would have to be the `Target`-based
+one — it works for any `BackendV2`, whereas `qhw-iqm` is provider-specific —
+which would trade the provider adapter's richer output (calibration/quality) for
+one code path. That trade-off is an open decision (Section 12), not settled here.
 
 ## 9. The gap map
 
@@ -355,6 +374,12 @@ concern.
    from day one, versus a Python-first prototype with the spec extracted later.
    Only a language-neutral definition can serve as the open specification that
    QRMI (Rust + C + Python) and QDMI (C) each implement against (Section 14).
+5. **Normalization strategy** — shape-driven (today: `qhw-iqm` for libraries
+   that expose raw IQM data, `backend_normalize` for those that expose a neutral
+   Qiskit `Target`) versus a single `Target`-based normalizer for all libraries.
+   The latter is uniform and works for any `BackendV2`, but gives up the provider
+   adapter's calibration/quality richness for libraries that could supply it
+   (Section 8).
 
 ## 13. First milestone: Device Introspection
 
