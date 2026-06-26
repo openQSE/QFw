@@ -6,12 +6,16 @@
 # Execution/job calls stay with QRMI (the reservation owner) in the default
 # wiring.
 #
-# Milestone status (design doc qpu-frontend-contract.md section 13): the
-# introspection facet's get_device_info / get_coupling_graph now make real
-# QDMI calls and normalize the device topology into the provider-neutral qhw
-# schema. The remaining introspection calls (backend/calibration snapshots)
-# are wired for routing; binding them to QDMI is a later milestone, and
-# execution stays with QRMI.
+# Milestone status (design doc qpu-frontend-contract.md section 13):
+# get_device_info / get_coupling_graph normalize the device topology into the
+# provider-neutral qhw schema. When QDMI-on-IQM provides raw IQM data via
+# raw_device_config() (QDMI_DEVICE_PROPERTY_CUSTOM1), this driver feeds it to
+# qhw-iqm -- the SAME normalizer the QRMI driver and the native path use, so both
+# libraries yield one identical qhw shape (incl. IQM "QB" qubit ids). It falls
+# back to normalizing the Qiskit Target (backend_normalize) when the raw
+# passthrough is unavailable. The remaining introspection calls
+# (backend/calibration snapshots) stay wired for routing; execution stays with
+# QRMI.
 
 from .base_driver import BaseDriver
 from .backend_normalize import extract_topology, to_coupling_record, to_device_record
@@ -90,15 +94,50 @@ class QdmiDriver(BaseDriver):
 		return (self._descriptor.get("provider", "iqm"),
 				self._descriptor.get("id", "iqm-device"))
 
-	# --- introspection facet: real QDMI calls (section 13 milestone) -----
+	# --- introspection facet: raw IQM data -> qhw-iqm (section 13) --------
+
+	def _iqm_raw(self):
+		# QDMI-on-IQM publishes the raw IQM data via raw_device_config() -- the
+		# same payload QRMI's target() returns -- so map it to the
+		# {static_architecture, dynamic_architecture} shape qhw-iqm expects and
+		# reuse that normalizer, exactly as the QRMI driver does. Returns None
+		# when the raw passthrough is unavailable (older iqm-qdmi without the
+		# accessor, or a device that does not populate CUSTOM1) so callers fall
+		# back to normalizing the Qiskit Target.
+		getter = getattr(self._backend(), "raw_device_config", None)
+		if getter is None:
+			return None
+		try:
+			target = getter()
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"failed to read QDMI raw_device_config(): {exc}") from exc
+		if not target:
+			return None
+		dyn = target.get("dynamic_quantum_architecture") or {}
+		raw = {"dynamic_architecture": dyn}
+		static = target.get("static_quantum_architecture")
+		if static:
+			raw["static_architecture"] = static
+		return raw
 
 	def get_device_info(self):
 		provider, device_id = self._ids()
+		raw = self._iqm_raw()
+		if raw is not None:
+			from qhw_iqm import normalize_device
+			return normalize_device(raw, device_id=device_id)
+		# Fallback: no raw passthrough -> normalize from the Qiskit Target.
 		topo = extract_topology(self._backend())
 		return to_device_record(topo, provider, device_id)
 
 	def get_coupling_graph(self, calibration_set_id=None):
 		provider, device_id = self._ids()
+		raw = self._iqm_raw()
+		if raw is not None:
+			from qhw_iqm import normalize_coupling
+			return normalize_coupling(raw, device_id=device_id)
+		# Fallback: no raw passthrough -> normalize from the Qiskit Target.
 		topo = extract_topology(self._backend())
 		return to_coupling_record(topo, provider, device_id)
 
