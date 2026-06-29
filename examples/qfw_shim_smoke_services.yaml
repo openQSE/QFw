@@ -1,0 +1,9 @@
+services:
+  - name: shim-ornl-20q
+    module: svc_lib_qpm
+    load-modules: svc_lib_qpm,api_launcher
+    agent-prefix: qpm_shim
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: ornl-iqm-20q

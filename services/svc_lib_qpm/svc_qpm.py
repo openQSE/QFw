@@ -36,26 +36,26 @@ class QPM(UTIL_QPM):
 	def capability_map(self):
 		return self.qrc.capability_map()
 
-	def get_backend_info(self):
-		return self.qrc.get_backend_info()
+	def get_backend_info(self, lib=None):
+		return self.qrc.get_backend_info(lib=lib)
 
-	def get_device_info(self):
-		return self.qrc.get_device_info()
+	def get_device_info(self, lib=None):
+		return self.qrc.get_device_info(lib=lib)
 
-	def get_dynamic_backend_info(self, calibration_set_id=None):
-		return self.qrc.get_dynamic_backend_info(calibration_set_id)
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None):
+		return self.qrc.get_dynamic_backend_info(calibration_set_id, lib=lib)
 
-	def get_calibration_snapshot(self, calibration_set_id=None):
-		return self.qrc.get_calibration_snapshot(calibration_set_id)
+	def get_calibration_snapshot(self, calibration_set_id=None, lib=None):
+		return self.qrc.get_calibration_snapshot(calibration_set_id, lib=lib)
 
-	def get_coupling_graph(self, calibration_set_id=None):
-		return self.qrc.get_coupling_graph(calibration_set_id)
+	def get_coupling_graph(self, calibration_set_id=None, lib=None):
+		return self.qrc.get_coupling_graph(calibration_set_id, lib=lib)
 
-	def get_last_job_timing(self, cid=None):
-		return self.qrc.get_last_job_timing(cid)
+	def get_last_job_timing(self, cid=None, lib=None):
+		return self.qrc.get_last_job_timing(cid, lib=lib)
 
-	def get_last_job_metadata(self, cid=None):
-		return self.qrc.get_last_job_metadata(cid)
+	def get_last_job_metadata(self, cid=None, lib=None):
+		return self.qrc.get_last_job_metadata(cid, lib=lib)
 
 	def test(self):
 		return "****Shim (QRMI/QDMI) QPM Test Successful****"

@@ -86,6 +86,14 @@ class Frontend:
 
 	# --- routing -----------------------------------------------------
 
+	def _normalize_lib(self, lib):
+		if lib is None:
+			return None
+		lib = str(lib).strip().lower()
+		if not lib or lib == "default":
+			return None
+		return lib
+
 	def _candidates(self, call):
 		# per-resource caps  ∩  wired libraries  ∩  calls the driver can serve
 		return [n for n in self._caps.get(call, [])
@@ -93,13 +101,28 @@ class Frontend:
 				and n in self._drivers
 				and self._drivers[n].implements(call)]
 
-	def route(self, call):
+	def route(self, call, lib=None):
 		"""Return the driver chosen to handle `call` (the routing decision)."""
 		cands = self._candidates(call)
 		if not cands:
 			raise NotImplementedByLibrary(
 				f"no wired library implements {call!r} for "
 				f"resource {self._id!r}")
+		lib = self._normalize_lib(lib)
+		if lib:
+			if lib not in self._wired:
+				raise NotImplementedByLibrary(
+					f"library {lib!r} is not wired for resource "
+					f"{self._id!r}")
+			if lib not in self._drivers:
+				raise NotImplementedByLibrary(
+					f"library {lib!r} does not have a driver for resource "
+					f"{self._id!r}")
+			if lib not in cands:
+				raise NotImplementedByLibrary(
+					f"library {lib!r} does not implement {call!r} for "
+					f"resource {self._id!r}")
+			return self._drivers[lib]
 		if call in EXECUTION_CALLS and self._execution_owner in cands:
 			return self._drivers[self._execution_owner]
 		if len(cands) == 1:
@@ -109,8 +132,8 @@ class Frontend:
 		# stable default: first candidate listed in the descriptor
 		return self._drivers[cands[0]]
 
-	def _dispatch(self, call, *args, **kwargs):
-		driver = self.route(call)
+	def _dispatch(self, call, *args, lib=None, **kwargs):
+		driver = self.route(call, lib=lib)
 		logging.debug("shim: routing %s -> %s", call, driver.name)
 		return getattr(driver, call)(*args, **kwargs)
 
@@ -120,26 +143,28 @@ class Frontend:
 
 	# --- contract surface (delegates to the routed driver) -----------
 
-	def get_backend_info(self):
-		return self._dispatch("get_backend_info")
+	def get_backend_info(self, lib=None):
+		return self._dispatch("get_backend_info", lib=lib)
 
-	def get_device_info(self):
-		return self._dispatch("get_device_info")
+	def get_device_info(self, lib=None):
+		return self._dispatch("get_device_info", lib=lib)
 
-	def get_dynamic_backend_info(self, calibration_set_id=None):
-		return self._dispatch("get_dynamic_backend_info", calibration_set_id)
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None):
+		return self._dispatch(
+			"get_dynamic_backend_info", calibration_set_id, lib=lib)
 
-	def get_calibration_snapshot(self, calibration_set_id=None):
-		return self._dispatch("get_calibration_snapshot", calibration_set_id)
+	def get_calibration_snapshot(self, calibration_set_id=None, lib=None):
+		return self._dispatch(
+			"get_calibration_snapshot", calibration_set_id, lib=lib)
 
-	def get_coupling_graph(self, calibration_set_id=None):
-		return self._dispatch("get_coupling_graph", calibration_set_id)
+	def get_coupling_graph(self, calibration_set_id=None, lib=None):
+		return self._dispatch("get_coupling_graph", calibration_set_id, lib=lib)
 
-	def run_circuit(self, circuit):
-		return self._dispatch("run_circuit", circuit)
+	def run_circuit(self, circuit, lib=None):
+		return self._dispatch("run_circuit", circuit, lib=lib)
 
-	def get_last_job_timing(self, cid=None):
-		return self._dispatch("get_last_job_timing", cid)
+	def get_last_job_timing(self, cid=None, lib=None):
+		return self._dispatch("get_last_job_timing", cid, lib=lib)
 
-	def get_last_job_metadata(self, cid=None):
-		return self._dispatch("get_last_job_metadata", cid)
+	def get_last_job_metadata(self, cid=None, lib=None):
+		return self._dispatch("get_last_job_metadata", cid, lib=lib)

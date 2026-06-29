@@ -18,6 +18,7 @@ Each wrapper starts QFw with `qfw_setup.sh`, runs one application through
 ```bash
 ./qfw_init_test.sh
 ./qfw_mpi_smoke.sh
+./qfw_shim_smoke.sh --lib qrmi
 ./qfw_qiskit_simple.sh 4
 ./qfw_ghz.sh qiskit 4 nwqsim 1
 ./qfw_pennylane.sh
@@ -68,6 +69,21 @@ Optional environment overrides:
 
 ```bash
 QFW_MPI_SMOKE_NP=2 QFW_MPI_SMOKE_TIMEOUT=40 ./qfw_mpi_smoke.sh
+```
+
+### `qfw_shim_smoke.sh`
+
+Starts only the QRMI/QDMI bifurcation shim service from
+`qfw_shim_smoke_services.yaml`, reserves the shim QPM through the resource
+manager, and calls the shim service over DEFw RPC. The test covers device
+introspection, coupling graph, calibration snapshot, backend info, async
+circuit execution, completion notification, and last-job metadata.
+
+```bash
+./qfw_shim_smoke.sh --lib qdmi
+./qfw_shim_smoke.sh --lib qrmi
+./qfw_shim_smoke.sh --lib qdmi --call get_device_info
+./qfw_shim_smoke.sh --lib qrmi --call async_run
 ```
 
 ### `qfw_qiskit_simple.sh`

@@ -64,7 +64,8 @@ class QRC:
 		try:
 			circ.set_launching()
 			circ.set_running()
-			output = self.frontend.run_circuit(circ)
+			output = self.frontend.run_circuit(
+				circ, lib=circ.info.get("lib"))
 			circ.set_exec_done()
 			return self._result_dict(circ, output, 0)
 		except Exception as e:
@@ -121,26 +122,28 @@ class QRC:
 	def capability_map(self):
 		return self.frontend.capability_map()
 
-	def get_backend_info(self):
-		return self.frontend.get_backend_info()
+	def get_backend_info(self, lib=None):
+		return self.frontend.get_backend_info(lib=lib)
 
-	def get_device_info(self):
-		return self.frontend.get_device_info()
+	def get_device_info(self, lib=None):
+		return self.frontend.get_device_info(lib=lib)
 
-	def get_dynamic_backend_info(self, calibration_set_id=None):
-		return self.frontend.get_dynamic_backend_info(calibration_set_id)
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None):
+		return self.frontend.get_dynamic_backend_info(
+			calibration_set_id, lib=lib)
 
-	def get_calibration_snapshot(self, calibration_set_id=None):
-		return self.frontend.get_calibration_snapshot(calibration_set_id)
+	def get_calibration_snapshot(self, calibration_set_id=None, lib=None):
+		return self.frontend.get_calibration_snapshot(
+			calibration_set_id, lib=lib)
 
-	def get_coupling_graph(self, calibration_set_id=None):
-		return self.frontend.get_coupling_graph(calibration_set_id)
+	def get_coupling_graph(self, calibration_set_id=None, lib=None):
+		return self.frontend.get_coupling_graph(calibration_set_id, lib=lib)
 
-	def get_last_job_timing(self, cid=None):
-		return self.frontend.get_last_job_timing(cid)
+	def get_last_job_timing(self, cid=None, lib=None):
+		return self.frontend.get_last_job_timing(cid, lib=lib)
 
-	def get_last_job_metadata(self, cid=None):
-		return self.frontend.get_last_job_metadata(cid)
+	def get_last_job_metadata(self, cid=None, lib=None):
+		return self.frontend.get_last_job_metadata(cid, lib=lib)
 
 	def shutdown(self):
 		self.shutdown_workers = True
