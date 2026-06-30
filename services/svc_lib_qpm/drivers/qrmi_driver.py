@@ -10,9 +10,9 @@
 #
 # Because that payload is the same IQM data the native svc_iqm_qpm path handles,
 # this driver reuses `qhw-iqm` to normalize it to qhw — rather than a separate
-# adapter. (QDMI is different: it presents a vendor-neutral Qiskit BackendV2
-# with no raw IQM data, so the QDMI driver normalizes from the Target via
-# backend_normalize.) target() is not reservation-bound, so introspection works
+# adapter. (QDMI is different: it presents a vendor-neutral query interface, so
+# the QDMI driver reads device info via MQT Core's FoMaC API and normalizes it
+# with fomac_normalize.) target() is not reservation-bound, so introspection works
 # without acquire().
 #
 # Milestone status (design doc qpu-frontend-contract.md section 13):
