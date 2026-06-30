@@ -174,6 +174,87 @@ def write_default_export(stream, name, value):
 		stream.write(f'export {name}="${{{name}:-{shell_value(value)}}}"\n')
 
 
+def resolve_local_path(value, base_dir):
+	if value is None:
+		return None
+	value = os.path.expanduser(str(value))
+	if not os.path.isabs(value):
+		value = os.path.join(base_dir, value)
+	return value
+
+
+def qpu_lib_build_config(config, base_dir, dep_build_version):
+	build_dir = resolve_local_path(
+		config.get(
+			'qpu-lib-build-dir',
+			os.path.join(base_dir, 'build', dep_build_version, 'qpu-libs'),
+		),
+		base_dir,
+	)
+	qrmi_prefix = resolve_local_path(
+		config.get(
+			'qrmi-prefix',
+			os.path.join(base_dir, 'install', dep_build_version, 'QRMI'),
+		),
+		base_dir,
+	)
+
+	return {
+		'QFW_QPU_LIB_BUILD_DIR': build_dir,
+		'QFW_QRMI_REPO': config.get(
+			'qrmi-repo',
+			'https://github.com/qiskit-community/qrmi.git',
+		),
+		'QFW_QRMI_REF': config.get('qrmi-ref', '0.17.2'),
+		'QFW_QRMI_PREFIX': qrmi_prefix,
+		'QFW_QRMI_SRC_DIR': resolve_local_path(
+			config.get('qrmi-src-dir', os.path.join(build_dir, 'qrmi')),
+			base_dir,
+		),
+		'QFW_MQT_CORE_REPO': config.get(
+			'mqt-core-repo',
+			'https://github.com/munich-quantum-toolkit/core.git',
+		),
+		'QFW_MQT_CORE_REF': config.get(
+			'mqt-core-ref',
+			'v3.6.1',
+		),
+		'QFW_MQT_CORE_SRC_DIR': resolve_local_path(
+			config.get('mqt-core-src-dir', os.path.join(build_dir, 'mqt-core')),
+			base_dir,
+		),
+		'QFW_MQT_CORE_PRETEND_VERSION': config.get(
+			'mqt-core-pretend-version',
+			'',
+		),
+		'QFW_IQM_QDMI_REPO': config.get(
+			'iqm-qdmi-repo',
+			'https://github.com/iqm-finland/QDMI-on-IQM.git',
+		),
+		'QFW_IQM_QDMI_REF': config.get(
+			'iqm-qdmi-ref',
+			'v1.1.1',
+		),
+		'QFW_IQM_QDMI_SRC_DIR': resolve_local_path(
+			config.get(
+				'iqm-qdmi-src-dir',
+				os.path.join(build_dir, 'QDMI-on-IQM'),
+			),
+			base_dir,
+		),
+	}
+
+
+def write_qpu_lib_environment(stream, config, base_dir, dep_build_version):
+	for name, value in qpu_lib_build_config(config, base_dir, dep_build_version).items():
+		write_default_export(stream, name, value)
+	stream.write('export QFW_QRMI_PYTHON_PACKAGE="${QFW_QRMI_PYTHON_PACKAGE:-qrmi==${QFW_QRMI_REF}}"\n')
+	stream.write('export QRMI_PREFIX="${QRMI_PREFIX:-${QFW_QRMI_PREFIX}}"\n')
+	stream.write('if [[ -d "${QRMI_PREFIX}/lib" ]]; then\n')
+	stream.write('    export LD_LIBRARY_PATH="${QRMI_PREFIX}/lib:${LD_LIBRARY_PATH:-}"\n')
+	stream.write('fi\n')
+
+
 def write_build_environment(stream, config, base_dir, runtime_mode,
 							dep_build_version, python_activate,
 							mpi_transport_mode):
@@ -217,6 +298,7 @@ def write_build_environment(stream, config, base_dir, runtime_mode,
 	write_default_export(stream, 'QFW_MASTER_SETUP_BUILD_JOBS', config.get('build-jobs', None))
 	for env_name, env_value in config.get('mpi-env', {}).items():
 		write_default_export(stream, env_name, env_value)
+	write_qpu_lib_environment(stream, config, base_dir, dep_build_version)
 	stream.write('\n')
 
 	stream.write(f'export QFW_VENV_PATH="{shell_value(os.path.dirname(os.path.dirname(python_activate)))}"\n')
@@ -298,12 +380,75 @@ def write_build_script(stream, config, base_dir, runtime_mode,
 	stream.write('build_tnqvm=0\n')
 	stream.write('build_nwqsim=0\n')
 	stream.write('build_defw=0\n\n')
+	stream.write('build_qrmi=0\n')
+	stream.write('build_qdmi=0\n\n')
 	stream.write('usage() {\n')
 	stream.write("    cat <<'EOF'\n")
-	stream.write('Usage: ./qfw_build.sh [--python] [--tnqvm] [--nwqsim] [--defw]\n\n')
+	stream.write('Usage: ./qfw_build.sh [--python] [--tnqvm] [--nwqsim] [--defw] [--qrmi] [--qdmi] [--qpu-libs]\n\n')
 	stream.write('With no flags, qfw_build.sh installs Python requirements and builds all\n')
-	stream.write('dependency targets in the default order.\n')
+	stream.write('core dependency targets in the default order. QRMI and QDMI-on-IQM are\n')
+	stream.write('optional development targets and are built only when requested.\n')
 	stream.write('EOF\n')
+	stream.write('}\n\n')
+	stream.write('qfw_build_jobs() {\n')
+	stream.write('    if [[ -n "${QFW_MASTER_SETUP_BUILD_JOBS:-}" ]]; then\n')
+	stream.write('        echo "${QFW_MASTER_SETUP_BUILD_JOBS}"\n')
+	stream.write('    elif command -v nproc >/dev/null 2>&1; then\n')
+	stream.write('        nproc\n')
+	stream.write('    else\n')
+	stream.write('        echo 4\n')
+	stream.write('    fi\n')
+	stream.write('}\n\n')
+	stream.write('qfw_clone_or_update() {\n')
+	stream.write('    local repo="$1"\n')
+	stream.write('    local ref="$2"\n')
+	stream.write('    local dst="$3"\n\n')
+	stream.write('    mkdir -p "$(dirname "${dst}")"\n')
+	stream.write('    if [[ -d "${dst}/.git" ]]; then\n')
+	stream.write('        git -C "${dst}" fetch --tags origin\n')
+	stream.write('    else\n')
+	stream.write('        git clone "${repo}" "${dst}"\n')
+	stream.write('    fi\n')
+	stream.write('    git -C "${dst}" checkout "${ref}"\n')
+	stream.write('    if git -C "${dst}" rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then\n')
+	stream.write('        git -C "${dst}" pull --ff-only\n')
+	stream.write('    fi\n')
+	stream.write('}\n\n')
+	stream.write('qfw_build_qrmi() {\n')
+	stream.write('    qfw_clone_or_update "${QFW_QRMI_REPO}" "${QFW_QRMI_REF}" "${QFW_QRMI_SRC_DIR}"\n')
+	stream.write('    cd "${QFW_QRMI_SRC_DIR}"\n')
+	stream.write('    cargo build --locked --release --lib\n')
+	stream.write('    mkdir -p "${QFW_QRMI_PREFIX}/lib" "${QFW_QRMI_PREFIX}/include"\n')
+	stream.write('    cp target/release/libqrmi.so "${QFW_QRMI_PREFIX}/lib/"\n')
+	stream.write('    if [[ -f target/release/libqrmi.a ]]; then\n')
+	stream.write('        cp target/release/libqrmi.a "${QFW_QRMI_PREFIX}/lib/"\n')
+	stream.write('    fi\n')
+	stream.write('    cp qrmi.h "${QFW_QRMI_PREFIX}/include/"\n')
+	stream.write('    export QRMI_PREFIX="${QFW_QRMI_PREFIX}"\n')
+	stream.write('    export LD_LIBRARY_PATH="${QRMI_PREFIX}/lib:${LD_LIBRARY_PATH:-}"\n')
+	stream.write('    if [[ -f "${QFW_QRMI_SRC_DIR}/pyproject.toml" || -f "${QFW_QRMI_SRC_DIR}/setup.py" ]]; then\n')
+	stream.write('        if ! python -m pip install "${QFW_QRMI_SRC_DIR}"; then\n')
+	stream.write('            python -m pip install "${QFW_QRMI_PYTHON_PACKAGE}"\n')
+	stream.write('        fi\n')
+	stream.write('    else\n')
+	stream.write('        python -m pip install "${QFW_QRMI_PYTHON_PACKAGE}"\n')
+	stream.write('    fi\n')
+	stream.write('}\n\n')
+	stream.write('qfw_build_qdmi() {\n')
+	stream.write('    local qfw_jobs\n')
+	stream.write('    qfw_jobs="$(qfw_build_jobs)"\n')
+	stream.write('    qfw_clone_or_update "${QFW_MQT_CORE_REPO}" "${QFW_MQT_CORE_REF}" "${QFW_MQT_CORE_SRC_DIR}"\n')
+	stream.write('    if [[ -n "${QFW_MQT_CORE_PRETEND_VERSION:-}" ]]; then\n')
+	stream.write('        CMAKE_BUILD_PARALLEL_LEVEL="${qfw_jobs}" \\\n')
+	stream.write('            SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MQT_CORE="${QFW_MQT_CORE_PRETEND_VERSION}" \\\n')
+	stream.write('            python -m pip install "${QFW_MQT_CORE_SRC_DIR}"\n')
+	stream.write('    else\n')
+	stream.write('        CMAKE_BUILD_PARALLEL_LEVEL="${qfw_jobs}" \\\n')
+	stream.write('            python -m pip install "${QFW_MQT_CORE_SRC_DIR}"\n')
+	stream.write('    fi\n')
+	stream.write('    qfw_clone_or_update "${QFW_IQM_QDMI_REPO}" "${QFW_IQM_QDMI_REF}" "${QFW_IQM_QDMI_SRC_DIR}"\n')
+	stream.write('    CMAKE_BUILD_PARALLEL_LEVEL="${qfw_jobs}" \\\n')
+	stream.write('        python -m pip install "${QFW_IQM_QDMI_SRC_DIR}[qiskit]"\n')
 	stream.write('}\n\n')
 	stream.write('while [[ $# -gt 0 ]]; do\n')
 	stream.write('    case "$1" in\n')
@@ -319,6 +464,16 @@ def write_build_script(stream, config, base_dir, runtime_mode,
 	stream.write('        --defw)\n')
 	stream.write('            build_defw=1\n')
 	stream.write('            ;;\n')
+	stream.write('        --qrmi)\n')
+	stream.write('            build_qrmi=1\n')
+	stream.write('            ;;\n')
+	stream.write('        --qdmi)\n')
+	stream.write('            build_qdmi=1\n')
+	stream.write('            ;;\n')
+	stream.write('        --qpu-libs)\n')
+	stream.write('            build_qrmi=1\n')
+	stream.write('            build_qdmi=1\n')
+	stream.write('            ;;\n')
 	stream.write('        -h|--help)\n')
 	stream.write('            usage\n')
 	stream.write('            exit 0\n')
@@ -331,7 +486,7 @@ def write_build_script(stream, config, base_dir, runtime_mode,
 	stream.write('    esac\n')
 	stream.write('    shift\n')
 	stream.write('done\n\n')
-	stream.write('if [[ ${build_python} -eq 0 && ${build_tnqvm} -eq 0 && ${build_nwqsim} -eq 0 && ${build_defw} -eq 0 ]]; then\n')
+	stream.write('if [[ ${build_python} -eq 0 && ${build_tnqvm} -eq 0 && ${build_nwqsim} -eq 0 && ${build_defw} -eq 0 && ${build_qrmi} -eq 0 && ${build_qdmi} -eq 0 ]]; then\n')
 	stream.write('    build_python=1\n')
 	stream.write('    build_tnqvm=1\n')
 	stream.write('    build_nwqsim=1\n')
@@ -357,6 +512,12 @@ def write_build_script(stream, config, base_dir, runtime_mode,
 	stream.write('    python -m pip install -r requirements.txt\n')
 	stream.write(f'    cd "{base_dir}/QFw/setup"\n')
 	stream.write('    python -m pip install -r requirements.txt\n')
+	stream.write('fi\n\n')
+	stream.write('if [[ ${build_qrmi} -eq 1 ]]; then\n')
+	stream.write('    qfw_build_qrmi\n')
+	stream.write('fi\n\n')
+	stream.write('if [[ ${build_qdmi} -eq 1 ]]; then\n')
+	stream.write('    qfw_build_qdmi\n')
 	stream.write('fi\n\n')
 	stream.write('if [[ ${build_tnqvm} -eq 1 ]]; then\n')
 	stream.write(f'    "{os.path.join(base_dir, "QFw", "patches", "tnqvm", "build.sh")}"\n')
@@ -441,6 +602,13 @@ def qfw_configure(config):
 		stream.write('export _QFW_OLD_BLASLIB="${BLASLIB:-}"\n')
 		stream.write('export _QFW_OLD_BLAS_LIB_DIR="${BLAS_LIB_DIR:-}"\n')
 		stream.write('export _QFW_OLD_ACLOCAL_PATH="${ACLOCAL_PATH:-}"\n')
+		stream.write('if [[ -v QRMI_PREFIX ]]; then\n')
+		stream.write('    export _QFW_OLD_QRMI_PREFIX="$QRMI_PREFIX"\n')
+		stream.write('    export _QFW_OLD_QRMI_PREFIX_SET=1\n')
+		stream.write('else\n')
+		stream.write('    export _QFW_OLD_QRMI_PREFIX=""\n')
+		stream.write('    unset _QFW_OLD_QRMI_PREFIX_SET\n')
+		stream.write('fi\n')
 		stream.write('if [[ -v PS1 ]]; then\n')
 		stream.write('    export _QFW_OLD_PS1="$PS1"\n')
 		stream.write('    export _QFW_OLD_PS1_SET=1\n')
@@ -481,6 +649,8 @@ def qfw_configure(config):
 		stream.write('    unset _QFW_ACTIVE\n')
 		stream.write('    return 1\n')
 		stream.write('fi\n\n')
+		write_qpu_lib_environment(stream, config, base_dir, dep_build_version)
+		stream.write('\n')
 
 		if module_path:
 			stream.write('export _QFW_USED_MODULES=1\n')
@@ -628,6 +798,11 @@ def qfw_configure(config):
 		stream.write('    export BLASLIB=$_QFW_OLD_BLASLIB\n')
 		stream.write('    export BLAS_LIB_DIR=$_QFW_OLD_BLAS_LIB_DIR\n')
 		stream.write('    export ACLOCAL_PATH=$_QFW_OLD_ACLOCAL_PATH\n')
+		stream.write('    if [[ "${_QFW_OLD_QRMI_PREFIX_SET:-}" == "1" ]]; then\n')
+		stream.write('        export QRMI_PREFIX="$_QFW_OLD_QRMI_PREFIX"\n')
+		stream.write('    else\n')
+		stream.write('        unset QRMI_PREFIX\n')
+		stream.write('    fi\n')
 		stream.write('    unset GCC_PATH\n')
 		stream.write('    unset GCC_PREFIX\n')
 		stream.write('    unset _QFW_ACTIVE\n')
@@ -640,6 +815,8 @@ def qfw_configure(config):
 		stream.write('    unset _QFW_OLD_PS1_SET\n')
 		stream.write('    unset _QFW_OLD_VIRTUAL_ENV_DISABLE_PROMPT\n')
 		stream.write('    unset _QFW_OLD_VIRTUAL_ENV_DISABLE_PROMPT_SET\n')
+		stream.write('    unset _QFW_OLD_QRMI_PREFIX\n')
+		stream.write('    unset _QFW_OLD_QRMI_PREFIX_SET\n')
 		stream.write('    unset QFW_MASTER_SETUP_BASE_DIR\n')
 		stream.write('    unset QFW_DEP_BUILD_VERSION\n')
 		stream.write('    unset QFW_RUNTIME_MODE\n')
@@ -658,6 +835,19 @@ def qfw_configure(config):
 		stream.write('    unset QFW_GROUPS\n')
 		stream.write('    unset QFW_MASTER_SETUP_MPI_INSTALL\n')
 		stream.write('    unset QFW_MASTER_SETUP_LIBFABRIC_INSTALL\n\n')
+		stream.write('    unset QFW_QPU_LIB_BUILD_DIR\n')
+		stream.write('    unset QFW_QRMI_REPO\n')
+		stream.write('    unset QFW_QRMI_REF\n')
+		stream.write('    unset QFW_QRMI_PREFIX\n')
+		stream.write('    unset QFW_QRMI_SRC_DIR\n')
+		stream.write('    unset QFW_QRMI_PYTHON_PACKAGE\n')
+		stream.write('    unset QFW_MQT_CORE_REPO\n')
+		stream.write('    unset QFW_MQT_CORE_REF\n')
+		stream.write('    unset QFW_MQT_CORE_SRC_DIR\n')
+		stream.write('    unset QFW_MQT_CORE_PRETEND_VERSION\n')
+		stream.write('    unset QFW_IQM_QDMI_REPO\n')
+		stream.write('    unset QFW_IQM_QDMI_REF\n')
+		stream.write('    unset QFW_IQM_QDMI_SRC_DIR\n\n')
 		stream.write('    unset QFW_VENV_PATH\n')
 		stream.write('    unset PYTHON_PATH\n\n')
 		stream.write('    unset -f qfw_deactivate\n')
@@ -702,7 +892,7 @@ def print_help():
 	print("   <base-dir>/QFw/setup/qfw_build_env.sh")
 	print("")
 	print("Run qfw_build.sh separately to install Python requirements and build")
-	print("DEFw, TNQVM, and NWQ-Sim.")
+	print("DEFw, TNQVM, NWQ-Sim, and optional QRMI/QDMI developer libraries.")
 
 
 def main(argv):

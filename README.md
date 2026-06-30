@@ -95,6 +95,63 @@ when this checkout must provide them:
 ./qfw_build.sh --tnqvm --nwqsim
 ```
 
+QRMI and QDMI-on-IQM are optional developer builds. They are not included
+in the default no-argument build, and they are not built by `--python`.
+Build them only when the local QFw venv needs to import `qrmi` or
+`iqm.qdmi.qiskit`, for example when testing `svc_lib_qpm`:
+
+```bash
+./qfw_build.sh --qpu-libs
+```
+
+`--qpu-libs` is equivalent to running both optional targets:
+
+```bash
+./qfw_build.sh --qrmi
+./qfw_build.sh --qdmi
+```
+
+The QRMI target clones QRMI, builds `libqrmi.so`, installs the QRMI native
+library under the QFw install tree, and installs the QRMI Python package
+into the active QFw venv. The QDMI target clones and installs MQT Core,
+then clones and installs QDMI-on-IQM with its Qiskit extra into the same
+venv. The QRMI SPANK plugin is still provided by the Slurm/container image;
+the QFw build target only installs what QFw services need at runtime.
+
+The generated build scripts use upstream repositories and release tags by
+default:
+
+```bash
+export QFW_QRMI_REPO=https://github.com/qiskit-community/qrmi.git
+export QFW_QRMI_REF=0.17.2
+export QFW_MQT_CORE_REPO=https://github.com/munich-quantum-toolkit/core.git
+export QFW_MQT_CORE_REF=v3.6.1
+export QFW_IQM_QDMI_REPO=https://github.com/iqm-finland/QDMI-on-IQM.git
+export QFW_IQM_QDMI_REF=v1.1.1
+```
+
+Override these before running `qfw_build.sh` when testing local branches,
+forks, or a different release.
+
+QRMI/QDMI build variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `QFW_QPU_LIB_BUILD_DIR` | Parent directory for QRMI, MQT Core, and QDMI-on-IQM source checkouts. |
+| `QFW_QRMI_REPO` | Git repository used for QRMI source. |
+| `QFW_QRMI_REF` | QRMI git ref to check out. This can be a tag, branch, or SHA. |
+| `QFW_QRMI_SRC_DIR` | Local QRMI source checkout path. |
+| `QFW_QRMI_PREFIX` | QFw-local install prefix for QRMI native headers and libraries. |
+| `QFW_QRMI_PYTHON_PACKAGE` | Fallback pip package spec for QRMI Python bindings. Defaults to `qrmi==${QFW_QRMI_REF}`. |
+| `QRMI_PREFIX` | Runtime QRMI prefix exported by `qfw_activate`. Defaults to `QFW_QRMI_PREFIX`. |
+| `QFW_MQT_CORE_REPO` | Git repository used for MQT Core source. |
+| `QFW_MQT_CORE_REF` | MQT Core git ref to check out. This can be a tag, branch, or SHA. |
+| `QFW_MQT_CORE_SRC_DIR` | Local MQT Core source checkout path. |
+| `QFW_MQT_CORE_PRETEND_VERSION` | Optional `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MQT_CORE` value for unreleased fork commits. Empty by default. |
+| `QFW_IQM_QDMI_REPO` | Git repository used for QDMI-on-IQM source. |
+| `QFW_IQM_QDMI_REF` | QDMI-on-IQM git ref to check out. This can be a tag, branch, or SHA. |
+| `QFW_IQM_QDMI_SRC_DIR` | Local QDMI-on-IQM source checkout path. |
+
 The configurator generates `setup/qfw_activate` and `setup/qfw_build.sh`.
 It does not run the build script automatically.
 
@@ -313,6 +370,11 @@ Optional build and runtime keys include:
 - `tmp-dir`
 - `mpi-env`
 - `openblas-root`, `cmake-root`, `gcc-root`
+- `qpu-lib-build-dir`
+- `qrmi-repo`, `qrmi-ref`, `qrmi-prefix`, `qrmi-src-dir`
+- `mqt-core-repo`, `mqt-core-ref`, `mqt-core-src-dir`
+- `mqt-core-pretend-version`
+- `iqm-qdmi-repo`, `iqm-qdmi-ref`, `iqm-qdmi-src-dir`
 
 `runtime-mode` controls allocation and temp-path behavior:
 
