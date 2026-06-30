@@ -61,6 +61,19 @@ class QdmiDriver(BaseDriver):
 			base_url = base_url or cfg.get("url")
 			token = token or cfg.get("api_key")
 			qc_alias = qc_alias or cfg.get("quantum_computer")
+		# The IQM QDMI library refuses to initialize a device session without a
+		# base URL + token, and every device-property query then fails with a
+		# bad-session-state error. Catch the missing credentials here so the
+		# failure names what to set instead of surfacing deep inside FoMaC.
+		missing = []
+		if not base_url:
+			missing.append("base URL (QFW_QC_URL or device-access url)")
+		if not token:
+			missing.append("API token (QFW_API_KEY or device-access api_key)")
+		if missing:
+			raise DEFwExecutionError(
+				"QDMI driver cannot open a device session without " +
+				" and ".join(missing))
 		return {"base_url": base_url, "token": token, "qc_alias": qc_alias}
 
 	def _device(self):
@@ -81,6 +94,11 @@ class QdmiDriver(BaseDriver):
 				"iqm.qdmi). Install iqm-qdmi[qiskit] before using the QDMI "
 				f"driver: {exc}") from exc
 		access = self._access()
+		# add_dynamic_device_library allocates the QDMI device session, applies
+		# these parameters, and initializes it (the IQM library fetches the
+		# device/calibration data during init). A query before a session is
+		# initialized returns a bad-session-state error, so surface an init
+		# failure here as exactly that: the session could not be opened.
 		try:
 			self._device_obj = add_dynamic_device_library(
 				library_path=str(IQM_QDMI_LIBRARY_PATH),
@@ -91,7 +109,9 @@ class QdmiDriver(BaseDriver):
 			)
 		except Exception as exc:
 			raise DEFwExecutionError(
-				f"failed to open QDMI device: {exc}") from exc
+				"failed to open the QDMI device session (FoMaC could not "
+				"initialize it; device introspection requires an initialized "
+				f"session): {exc}") from exc
 		logging.debug("shim: QDMI device opened (%s)",
 				access.get("qc_alias") or access.get("base_url"))
 		return self._device_obj
