@@ -86,6 +86,16 @@ circuit execution, completion notification, and last-job metadata.
 ./qfw_shim_smoke.sh --lib qrmi --call async_run
 ```
 
+`--lib` selects one shim library from the client for every call. To compare
+libraries, `--libs` takes an ordered preference list and runs each
+introspection call through those libraries in turn (a library that does not
+serve a call is skipped), so you can see QDMI and QRMI results back-to-back:
+
+```bash
+./qfw_shim_smoke.sh --libs qdmi,qrmi
+./qfw_shim_smoke.sh --libs qdmi,qrmi --call get_device_info
+```
+
 ### `qfw_qiskit_simple.sh`
 
 Runs a simple Qiskit GHZ-style circuit through the NWQ-Sim QFw backend.

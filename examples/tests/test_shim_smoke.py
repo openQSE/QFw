@@ -25,6 +25,15 @@ DEFAULT_CALL_SEQUENCE = (
 	"async_run",
 	"get_last_job_metadata",
 )
+# The composable device-introspection facet. Each of these can be routed to a
+# specific shim library from the client (lib=...), so --libs fans them out
+# across the requested libraries in order for a side-by-side comparison.
+INTROSPECTION_CALLS = (
+	"get_backend_info",
+	"get_device_info",
+	"get_coupling_graph",
+	"get_calibration_snapshot",
+)
 
 
 def exposed_qpm_api_names():
@@ -46,12 +55,34 @@ def validate_call_name(call):
 	return call
 
 
+def parse_lib_list(value):
+	# Parse an ordered, comma-separated preference list of shim libraries
+	# (e.g. "qdmi,qrmi"), preserving order and dropping duplicates.
+	libs = []
+	for item in (value or "").split(","):
+		item = item.strip().lower()
+		if not item:
+			continue
+		if item not in ("qrmi", "qdmi"):
+			raise argparse.ArgumentTypeError(
+				f"--libs entries must be qrmi or qdmi, got {item!r}")
+		if item not in libs:
+			libs.append(item)
+	return libs
+
+
 def parse_args():
 	parser = argparse.ArgumentParser(
 		description="Run the QRMI/QDMI shim QPM smoke test over DEFw RPC.")
 	parser.add_argument(
 		"--lib", choices=("qrmi", "qdmi", "default"), default="default",
 		help="Optional shim library override for test calls.")
+	parser.add_argument(
+		"--libs", type=parse_lib_list, default=[], metavar="LIB[,LIB]",
+		help="Ordered preference list of shim libraries to run each "
+		     "introspection call through (e.g. 'qdmi,qrmi'), for a "
+		     "side-by-side comparison. Overrides --lib for introspection "
+		     "calls; a library that does not serve a call is skipped.")
 	parser.add_argument(
 		"--call", default=None,
 		help="Run only one server-side QPM API by name.")
@@ -74,6 +105,57 @@ def requested_lib(args):
 	if args.lib == "default":
 		return None
 	return args.lib
+
+
+def introspection_libs(args):
+	# Ordered libraries to run each introspection call through. The client-driven
+	# --libs preference list wins; otherwise fall back to the single --lib
+	# selection ([None] means let the descriptor's preference route it).
+	if args.libs:
+		return list(args.libs)
+	return [requested_lib(args)]
+
+
+def introspection_api(call, qpm):
+	return {
+		"get_backend_info": qpm.get_backend_info,
+		"get_device_info": qpm.get_device_info,
+		"get_coupling_graph": qpm.get_coupling_graph,
+		"get_calibration_snapshot": qpm.get_calibration_snapshot,
+	}[call]
+
+
+def fetch_capability_map(qpm):
+	# Best-effort per-resource gap map {call: [libs]}, used only to skip an
+	# introspection call a library does not serve during a --libs comparison.
+	# If unavailable, the fan-out simply attempts every requested library.
+	try:
+		cap_map = qpm.capability_map()
+		dump_result("capability_map", cap_map)
+		return cap_map
+	except Exception as exc:
+		prformat(
+			fg.red + fg.bold,
+			f"[shim-smoke] capability_map unavailable: {exc}")
+		return {}
+
+
+def run_introspection(call, qpm, libs, cap_map, failures):
+	# Run one introspection call once per requested library, in order, so the
+	# results can be compared back-to-back (e.g. QDMI then QRMI). In fan-out
+	# mode (more than one library) a library that does not serve the call is
+	# skipped with a note rather than recorded as a failure.
+	func = introspection_api(call, qpm)
+	fanout = len(libs) > 1
+	served = cap_map.get(call) if cap_map else None
+	for lib in libs:
+		if fanout and lib and served is not None and lib not in served:
+			print(f"[shim-smoke] {call}[{lib}]: SKIPPED "
+			      f"(library does not serve {call})")
+			continue
+		label = f"{call}[{lib}]" if lib else call
+		kwargs = {"lib": lib} if lib else {}
+		call_api(label, func, failures, **kwargs)
 
 
 def reserve_shim_qpm(device_id, timeout):
@@ -194,31 +276,21 @@ def run_circuit(qpm, lib, shots, timeout):
 	return cid, result
 
 
-def run_named_call(call, qpm, lib_kwargs, failures, args, cid=None):
+def run_named_call(call, qpm, libs, cap_map, failures, args, cid=None):
 	if call == "test":
 		call_api("test", qpm.test, failures)
 		return cid
-	if call == "get_backend_info":
-		call_api("get_backend_info", qpm.get_backend_info, failures,
-		         **lib_kwargs)
-		return cid
-	if call == "get_device_info":
-		call_api("get_device_info", qpm.get_device_info, failures,
-		         **lib_kwargs)
-		return cid
-	if call == "get_coupling_graph":
-		call_api("get_coupling_graph", qpm.get_coupling_graph, failures,
-		         **lib_kwargs)
-		return cid
-	if call == "get_calibration_snapshot":
-		call_api(
-			"get_calibration_snapshot", qpm.get_calibration_snapshot,
-			failures, **lib_kwargs)
+	if call in INTROSPECTION_CALLS:
+		run_introspection(call, qpm, libs, cap_map, failures)
 		return cid
 	if call == "get_last_job_metadata":
+		# Execution-facet call: stays with the single --lib selection (bound to
+		# the execution owner), not the introspection preference list.
+		exec_lib = requested_lib(args)
+		kwargs = {"lib": exec_lib} if exec_lib else {}
 		call_api(
 			"get_last_job_metadata", qpm.get_last_job_metadata,
-			failures, cid=cid, **lib_kwargs)
+			failures, cid=cid, **kwargs)
 		return cid
 	if call == "async_run":
 		try:
@@ -252,17 +324,18 @@ def summarize_failures(failures):
 def main():
 	args = parse_args()
 	args.call = validate_call_name(args.call)
-	lib = requested_lib(args)
-	lib_kwargs = {"lib": lib} if lib else {}
+	libs = introspection_libs(args)
 	failures = []
 
 	qpm = reserve_shim_qpm(args.device_id, args.system_up_timeout)
 	try:
 		wait_ready(qpm, args.system_up_timeout)
+		# Only needed to skip unsupported libraries during a --libs comparison.
+		cap_map = fetch_capability_map(qpm) if len(libs) > 1 else {}
 		cid = None
 		calls = (args.call,) if args.call else DEFAULT_CALL_SEQUENCE
 		for call in calls:
-			cid = run_named_call(call, qpm, lib_kwargs, failures, args, cid)
+			cid = run_named_call(call, qpm, libs, cap_map, failures, args, cid)
 	finally:
 		try:
 			qpm.shutdown()
