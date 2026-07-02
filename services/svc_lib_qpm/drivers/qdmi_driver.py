@@ -10,10 +10,12 @@
 # wiring.
 #
 # Milestone status (design doc qpu-frontend-contract.md section 13):
-# get_device_info / get_coupling_graph make real QDMI calls and normalize the
-# device topology into qhw, with the device's real qubit labels (e.g. "QB1").
-# The remaining introspection calls (backend/calibration snapshots) are wired
-# for routing; binding them to QDMI is a later milestone.
+# get_device_info / get_coupling_graph normalize the device topology, and
+# get_calibration_snapshot reads the device's live per-qubit coherence (T1/T2)
+# and per-gate fidelity through FoMaC -- all with the device's real qubit labels
+# (e.g. "QB1"). get_backend_info / get_dynamic_backend_info stay with QRMI for
+# now (their native shape carries raw IQM architecture data QDMI does not
+# expose); binding them to QDMI's neutral model is a later milestone.
 
 from .base_driver import BaseDriver
 from . import fomac_normalize
@@ -25,11 +27,9 @@ import os
 class QdmiDriver(BaseDriver):
 	name = "qdmi"
 	CAPABILITIES = frozenset({
-		"get_backend_info",
 		"get_device_info",
-		"get_dynamic_backend_info",
-		"get_calibration_snapshot",
 		"get_coupling_graph",
+		"get_calibration_snapshot",
 	})
 
 	def __init__(self, descriptor=None):
@@ -132,17 +132,11 @@ class QdmiDriver(BaseDriver):
 		topo = fomac_normalize.extract_topology(self._device())
 		return fomac_normalize.to_coupling_record(topo, provider, device_id)
 
-	# --- remaining introspection: routing wired, QDMI binding is a later
-	#     milestone (docs/qpu-frontend-contract.md section 13) -----------
-
-	def get_backend_info(self):
-		self._device()
-		return self._pending("get_backend_info", "mqt.core.fomac")
-
-	def get_dynamic_backend_info(self, calibration_set_id=None):
-		self._device()
-		return self._pending("get_dynamic_backend_info", "mqt.core.fomac")
-
 	def get_calibration_snapshot(self, calibration_set_id=None):
-		self._device()
-		return self._pending("get_calibration_snapshot", "mqt.core.fomac")
+		# FoMaC exposes the device's live per-qubit coherence (T1/T2) and
+		# per-gate fidelity; normalize them to qhw-calibration-v1. The device
+		# session already reflects the active calibration set, so selecting a
+		# specific calibration_set_id is a follow-up.
+		provider, device_id = self._ids()
+		cal = fomac_normalize.extract_calibration(self._device())
+		return fomac_normalize.to_calibration_record(cal, provider, device_id)

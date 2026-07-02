@@ -258,9 +258,9 @@ by the library itself.** Two shapes cover what we have:
   (the native IQM client, and QRMI via `QuantumResource.target()`) is normalized
   by a provider adapter (`qhw-iqm`), which also captures provider-specific extras
   such as calibration and quality metrics.
-- **Neutral Qiskit `Target`** — a library that hands back a vendor-neutral
-  `BackendV2` (QDMI-on-IQM, and any future `BackendV2` vendor) is normalized from
-  the `Target` by `drivers/backend_normalize.py`.
+- **Neutral query interface** — a library that exposes the device through a
+  vendor-neutral query interface (QDMI-on-IQM via MQT Core's FoMaC API) is
+  normalized from the FoMaC `Device` by `drivers/fomac_normalize.py`.
 
 This keeps normalization decoupled from the libraries and lets the shim absorb
 both "thick" libraries (raw vendor data) and "thin"/neutral ones (a standard
@@ -375,11 +375,11 @@ concern.
    Only a language-neutral definition can serve as the open specification that
    QRMI (Rust + C + Python) and QDMI (C) each implement against (Section 14).
 5. **Normalization strategy** — shape-driven (today: `qhw-iqm` for libraries
-   that expose raw IQM data, `backend_normalize` for those that expose a neutral
-   Qiskit `Target`) versus a single `Target`-based normalizer for all libraries.
-   The latter is uniform and works for any `BackendV2`, but gives up the provider
-   adapter's calibration/quality richness for libraries that could supply it
-   (Section 8).
+   that expose raw IQM data, `fomac_normalize` for those that expose QDMI's
+   neutral FoMaC query interface) versus a single `Target`-based normalizer for
+   all libraries. The latter is uniform and works for any `BackendV2`, but gives
+   up the provider adapter's calibration/quality richness for libraries that
+   could supply it (Section 8).
 
 ## 13. First milestone: Device Introspection
 
@@ -391,15 +391,23 @@ the job-lifecycle and reservation-binding complexity.
 
 It is a **composable** facet: both libraries serve it, so it is wired for both —
 but they are normalized differently, because they expose different things. QDMI
-presents the device as a *vendor-neutral* Qiskit `BackendV2`
-(`iqm.qdmi.qiskit.IQMBackend`) with no raw IQM data, so the QDMI driver reads
-the topology off the `Target` and normalizes it with a small adapter
-(`drivers/backend_normalize.py`). QRMI's `QuantumResource.target()` returns the
-*raw IQM data* (dynamic architecture / calibration / quality sets), so the QRMI
-driver feeds that straight to **`qhw-iqm`** — the same normalizer the native
-`svc_iqm_qpm` path uses. Either way the output is the same provider-neutral
-`qhw-device-v1` / `qhw-coupling-v1`, so a consumer sees one shape no matter which
-library served the call.
+is *vendor-neutral*: MQT Core's FoMaC query interface (`mqt.core.fomac`) exposes
+the device's real qubit labels, coupling map, gate loci, and calibration
+directly, so the QDMI driver reads them off the FoMaC `Device` and normalizes
+with `drivers/fomac_normalize.py` — no Qiskit `Target`, no raw vendor data.
+QRMI's `QuantumResource.target()` returns the *raw IQM data* (dynamic
+architecture / calibration / quality sets), so the QRMI driver feeds that
+straight to **`qhw-iqm`** — the same normalizer the native `svc_iqm_qpm` path
+uses. Either way the output is the same provider-neutral `qhw-device-v1` /
+`qhw-coupling-v1`, so a consumer sees one shape no matter which library served
+the call.
+
+`get_calibration_snapshot` is composable in the same way, and shows the "one
+schema, two adapters" pattern most clearly: QRMI populates the IQM
+calibration/quality *observation* identity (set ids, counts, timestamps) from
+`target()`, while QDMI populates the *measured values* — per-qubit T1/T2 and
+per-gate fidelity read live off the FoMaC `Device`, carried under the
+`qdmi.fomac.v1` extension. Both validate as `qhw-calibration-v1`.
 
 In the default IQM q20 descriptor both calls list `[qdmi, qrmi]` and the
 preference (QDMI) wins; on a QRMI-only resource they resolve to QRMI. The QDMI
@@ -409,11 +417,11 @@ driver resolves connection settings from the same source as the native service
 and reads QRMI's own resource environment (populated by the SPANK plugin inside
 a reservation; `target()` itself is not reservation-bound).
 
-Still stubbed for later milestones: execution (`run_circuit` and its job
-timing/metadata, which stay with the QRMI reservation owner) and the remaining
-introspection calls (`get_backend_info`, dynamic/calibration snapshots — QRMI's
-`target()` also carries calibration/dynamic data, so wiring those is a natural
-follow-up).
+`get_backend_info` and `get_dynamic_backend_info` are wired on QRMI (a native
+composite / the dynamic architecture, from `target()`); they stay QRMI-only for
+now because their shape carries raw IQM architecture data QDMI's neutral model
+does not expose. Still stubbed for a later milestone: execution (`run_circuit`
+and its job timing/metadata, which stay with the QRMI reservation owner).
 
 ## 14. Strategic positioning: implementation-first to a specification
 

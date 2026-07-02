@@ -22,9 +22,12 @@ QPU_DEVICE_ENV = "QFW_QPU_DEVICE_ID"
 # of length > 1 is a composable overlap broken by preference; an empty list (or
 # missing key) is a NULL-out / gap-map entry.
 #
-# get_calibration_snapshot / get_dynamic_backend_info stay QDMI-only here for
-# now; QRMI's target() also carries that data (calibration_set / dynamic
-# architecture), so wiring QRMI for them is a follow-up.
+# get_calibration_snapshot is COMPOSABLE: QRMI serves it from target()'s IQM
+# calibration/quality sets, and QDMI serves it from FoMaC's live T1/T2 + gate
+# fidelity (different populated fields, same qhw-calibration-v1 shape). Preference
+# (QDMI) wins by default. get_dynamic_backend_info / get_backend_info stay
+# QRMI-only: their native shape carries raw IQM architecture data that QDMI's
+# neutral model does not expose.
 _DEFAULT_DESCRIPTORS = {
 	"ornl-iqm-20q": {
 		"id": "ornl-iqm-20q",
@@ -35,9 +38,9 @@ _DEFAULT_DESCRIPTORS = {
 		"caps": {
 			"get_device_info":          ["qdmi", "qrmi"],
 			"get_coupling_graph":       ["qdmi", "qrmi"],
-			"get_calibration_snapshot": ["qdmi"],
-			"get_dynamic_backend_info": ["qdmi"],
-			"get_backend_info":         ["qdmi", "qrmi"],
+			"get_calibration_snapshot": ["qdmi", "qrmi"],
+			"get_dynamic_backend_info": ["qrmi"],
+			"get_backend_info":         ["qrmi"],
 			"run_circuit":              ["qrmi"],
 			"get_last_job_timing":      ["qrmi"],
 			"get_last_job_metadata":    ["qrmi"],
