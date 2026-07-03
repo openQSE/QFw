@@ -107,6 +107,11 @@ class QrmiDriver(BaseDriver):
 				provider_device_id
 				or cfg.get("provider_device_id")
 				or cfg.get("quantum_computer"))
+		# Strip trailing slashes: QRMI's IQM client builds URLs as
+		# f"{endpoint}/api/v1/...", so a configured base URL ending in "/"
+		# yields "//api/v1/..." which the IQM server rejects (empty target).
+		if base_url:
+			base_url = base_url.rstrip("/")
 		return {
 			"base_url": base_url,
 			"token": token,

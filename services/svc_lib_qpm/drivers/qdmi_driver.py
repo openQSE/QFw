@@ -80,6 +80,9 @@ class QdmiDriver(BaseDriver):
 			raise DEFwExecutionError(
 				"QDMI driver cannot open a device session without " +
 				" and ".join(missing))
+		# Strip trailing slashes so URL construction can't produce "//" (the
+		# IQM server rejects a doubled slash); keeps the base URL canonical.
+		base_url = base_url.rstrip("/")
 		return {
 			"base_url": base_url,
 			"token": token,
