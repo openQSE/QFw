@@ -1,4 +1,5 @@
 qpus:
   ornl-iqm-20q:
+    provider-device-id: default
     url: https://qccsw.ccs.ornl.gov/
     credential-db: qpu_users.json
