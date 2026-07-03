@@ -117,14 +117,20 @@ def select_qpu(device_config, path, provider=None):
 			f"QPU device {device_id!r} in {path} does not define "
 			"credential-db")
 
+	provider_device_id = (
+		device.get("provider-device-id")
+		or device.get("provider_device_id")
+		or device.get("quantum-computer")
+		or device.get("quantum_computer")
+		or device_id)
+
 	return {
 		"device_id": device_id,
+		"provider_device_id": str(provider_device_id).strip(),
 		"provider": device_provider or (provider.lower() if provider else ""),
 		"url": str(url).strip(),
 		"credential_db": resolve_relative_path(str(credential_db), path),
-		"quantum_computer": (
-			device.get("quantum-computer")
-			or device.get("quantum_computer")),
+		"quantum_computer": str(provider_device_id).strip(),
 	}
 
 
@@ -135,20 +141,25 @@ def get_user_records(credential_db):
 	return users
 
 
-def get_api_key_from_user_record(record, device_id):
+def get_api_key_from_user_record(record, device_id, provider_device_id=None):
 	if isinstance(record, str):
 		return record.strip()
 	if not isinstance(record, dict):
 		return None
 
 	devices = record.get("devices")
-	if isinstance(devices, dict) and device_id in devices:
-		device_record = devices[device_id]
-		if isinstance(device_record, str):
-			return device_record.strip()
-		if isinstance(device_record, dict):
-			value = device_record.get("api_key") or device_record.get("api-key")
-			return str(value).strip() if value else None
+	if isinstance(devices, dict):
+		for key in (device_id, provider_device_id):
+			if not key or key not in devices:
+				continue
+			device_record = devices[key]
+			if isinstance(device_record, str):
+				return device_record.strip()
+			if isinstance(device_record, dict):
+				value = (
+					device_record.get("api_key")
+					or device_record.get("api-key"))
+				return str(value).strip() if value else None
 
 	value = record.get("api_key") or record.get("api-key")
 	return str(value).strip() if value else None
@@ -164,7 +175,8 @@ def resolve_qpu_credentials(device):
 			f"QPU credential DB does not contain credentials for user "
 			f"{user!r}")
 
-	api_key = get_api_key_from_user_record(record, device["device_id"])
+	api_key = get_api_key_from_user_record(
+		record, device["device_id"], device.get("provider_device_id"))
 	if not api_key:
 		raise DEFwExecutionError(
 			f"QPU credential DB does not contain an API key for user "
@@ -184,9 +196,10 @@ def resolve_device_access(provider=None):
 
 	return {
 		"device_id": device["device_id"],
+		"provider_device_id": device["provider_device_id"],
 		"provider": device["provider"],
 		"url": device["url"],
 		"api_key": credentials["api_key"],
 		"user": credentials["user"],
-		"quantum_computer": device.get("quantum_computer"),
+		"quantum_computer": device["provider_device_id"],
 	}

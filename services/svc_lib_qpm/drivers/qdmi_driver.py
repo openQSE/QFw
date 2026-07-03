@@ -43,12 +43,14 @@ class QdmiDriver(BaseDriver):
 	def _access(self):
 		# Resolve connection settings for the QDMI device. Honor the same env
 		# vars the native svc_iqm_qpm uses, then fall back to the shared
-		# device-access config (util.device_access). Returns base_url / token /
-		# qc_alias for the FoMaC loader.
+		# device-access config (util.device_access).
 		provider = self._descriptor.get("provider", "iqm")
+		device_id = self._descriptor.get("id")
+		provider_device_id = (
+			self._descriptor.get("provider_device_id")
+			or self._descriptor.get("provider-device-id"))
 		base_url = os.environ.get("QFW_QC_URL")
 		token = os.environ.get("QFW_API_KEY")
-		qc_alias = os.environ.get("QFW_IQM_QUANTUM_COMPUTER")
 		if not (base_url and token):
 			try:
 				from util.device_access import resolve_device_access
@@ -60,7 +62,11 @@ class QdmiDriver(BaseDriver):
 					f"configure device access: {exc}") from exc
 			base_url = base_url or cfg.get("url")
 			token = token or cfg.get("api_key")
-			qc_alias = qc_alias or cfg.get("quantum_computer")
+			device_id = device_id or cfg.get("device_id")
+			provider_device_id = (
+				provider_device_id
+				or cfg.get("provider_device_id")
+				or cfg.get("quantum_computer"))
 		# The IQM QDMI library refuses to initialize a device session without a
 		# base URL + token, and every device-property query then fails with a
 		# bad-session-state error. Catch the missing credentials here so the
@@ -74,7 +80,11 @@ class QdmiDriver(BaseDriver):
 			raise DEFwExecutionError(
 				"QDMI driver cannot open a device session without " +
 				" and ".join(missing))
-		return {"base_url": base_url, "token": token, "qc_alias": qc_alias}
+		return {
+			"base_url": base_url,
+			"token": token,
+			"qc_alias": provider_device_id or device_id,
+		}
 
 	def _device(self):
 		# Lazy: open the QDMI device through MQT Core's FoMaC loader once. Import

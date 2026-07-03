@@ -68,18 +68,19 @@ class QrmiDriver(BaseDriver):
 	# --- QRMI resource binding ------------------------------------------
 
 	def _qc_alias(self):
-		# IQM resource alias for QuantumResource. Honor the env var the native
-		# svc_iqm_qpm uses, else the shared device-access config.
-		alias = os.environ.get("QFW_IQM_QUANTUM_COMPUTER")
-		if alias:
-			return alias
+		value = (
+			self._descriptor.get("provider_device_id")
+			or self._descriptor.get("provider-device-id"))
+		if value:
+			return value
 		try:
-			from util.device_access import resolve_device_access
-			cfg = resolve_device_access(
-					provider=self._descriptor.get("provider", "iqm"))
-			return cfg.get("quantum_computer")
+			access = self._access()
 		except Exception:
-			return None
+			return self._descriptor.get("id")
+		return (
+			access.get("provider_device_id")
+			or access.get("quantum_computer")
+			or self._descriptor.get("id"))
 
 	def _access(self):
 		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
@@ -88,6 +89,9 @@ class QrmiDriver(BaseDriver):
 		provider = self._descriptor.get("provider", "iqm")
 		base_url = os.environ.get("QFW_QC_URL")
 		token = os.environ.get("QFW_API_KEY")
+		provider_device_id = (
+			self._descriptor.get("provider_device_id")
+			or self._descriptor.get("provider-device-id"))
 		if not (base_url and token):
 			try:
 				from util.device_access import resolve_device_access
@@ -99,7 +103,16 @@ class QrmiDriver(BaseDriver):
 					f"configure device access: {exc}") from exc
 			base_url = base_url or cfg.get("url")
 			token = token or cfg.get("api_key")
-		return {"base_url": base_url, "token": token}
+			provider_device_id = (
+				provider_device_id
+				or cfg.get("provider_device_id")
+				or cfg.get("quantum_computer"))
+		return {
+			"base_url": base_url,
+			"token": token,
+			"provider_device_id": provider_device_id,
+			"quantum_computer": provider_device_id,
+		}
 
 	def _ensure_iqm_isa_env(self, alias):
 		# QRMI's IQM resource reads its endpoint/token from
@@ -142,8 +155,8 @@ class QrmiDriver(BaseDriver):
 		alias = self._qc_alias()
 		if not alias:
 			raise DEFwExecutionError(
-				"QRMI introspection needs an IQM resource alias; set "
-				"QFW_IQM_QUANTUM_COMPUTER or configure device access")
+				"QRMI introspection needs a QFw device id; set "
+				"QFW_QPU_DEVICE_ID or configure a device descriptor")
 		self._ensure_iqm_isa_env(alias)
 		try:
 			self._resource_obj = qrmi.QuantumResource(
