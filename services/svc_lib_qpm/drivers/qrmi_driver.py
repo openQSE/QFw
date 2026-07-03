@@ -10,9 +10,9 @@
 #
 # Because that payload is the same IQM data the native svc_iqm_qpm path handles,
 # this driver reuses `qhw-iqm` to normalize it to qhw — rather than a separate
-# adapter. (QDMI is different: it presents a vendor-neutral Qiskit BackendV2
-# with no raw IQM data, so the QDMI driver normalizes from the Target via
-# backend_normalize.) target() is not reservation-bound, so introspection works
+# adapter. (QDMI is different: it presents a vendor-neutral query interface, so
+# the QDMI driver reads device info via MQT Core's FoMaC API and normalizes it
+# with fomac_normalize.) target() is not reservation-bound, so introspection works
 # without acquire().
 #
 # Milestone status (design doc qpu-frontend-contract.md section 13):
@@ -74,11 +74,61 @@ class QrmiDriver(BaseDriver):
 		except Exception:
 			return None
 
+	def _access(self):
+		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
+		# env vars the native svc_iqm_qpm uses, then fall back to the shared
+		# device-access config (util.device_access). Mirrors QdmiDriver._access.
+		provider = self._descriptor.get("provider", "iqm")
+		base_url = os.environ.get("QFW_QC_URL")
+		token = os.environ.get("QFW_API_KEY")
+		if not (base_url and token):
+			try:
+				from util.device_access import resolve_device_access
+				cfg = resolve_device_access(provider=provider)
+			except Exception as exc:
+				raise DEFwExecutionError(
+					"QRMI driver could not resolve IQM device access for "
+					f"provider {provider!r}: set QFW_QC_URL/QFW_API_KEY or "
+					f"configure device access: {exc}") from exc
+			base_url = base_url or cfg.get("url")
+			token = token or cfg.get("api_key")
+		return {"base_url": base_url, "token": token}
+
+	def _ensure_iqm_isa_env(self, alias):
+		# QRMI's IQM resource reads its endpoint/token from
+		# {backend}_QRMI_IQM_ISA_ENDPOINT / {backend}_QRMI_IQM_ISA_TOKEN at
+		# construction (IQMServer::new). Inside a SLURM reservation the SPANK
+		# plugin populates these; outside one (e.g. a bare introspection call)
+		# they are unset and QuantumResource() fails before target() ever runs.
+		# Resolve them from device-access config and export whichever is missing
+		# -- never overriding values the SPANK plugin already set. QRMI keys the
+		# env vars by the resource id up to the first comma
+		# (backend_name,calibration_set_id), so match that prefix here.
+		backend = alias.split(",")[0]
+		endpoint_var = f"{backend}_QRMI_IQM_ISA_ENDPOINT"
+		token_var = f"{backend}_QRMI_IQM_ISA_TOKEN"
+		if os.environ.get(endpoint_var) and os.environ.get(token_var):
+			return
+		access = self._access()
+		if not os.environ.get(endpoint_var) and access.get("base_url"):
+			os.environ[endpoint_var] = access["base_url"]
+		if not os.environ.get(token_var) and access.get("token"):
+			os.environ[token_var] = access["token"]
+		missing = [v for v in (endpoint_var, token_var)
+				if not os.environ.get(v)]
+		if missing:
+			raise DEFwExecutionError(
+				"QRMI IQM introspection needs " + " and ".join(missing) +
+				"; set them, or set QFW_QC_URL/QFW_API_KEY, or configure "
+				"device access (these are normally injected by the SPANK "
+				"plugin inside a reservation)")
+
 	def _qpu(self):
 		# Lazy: open the QRMI QuantumResource for this resource's IQM server.
-		# QRMI reads its own credentials/config from the environment (the SPANK
-		# plugin populates it inside a reservation); target() is not
-		# reservation-bound, so introspection works without acquire().
+		# QRMI reads its credentials/config from the environment; target() is not
+		# reservation-bound, so introspection works without acquire() as long as
+		# the endpoint/token env vars are present (_ensure_iqm_isa_env supplies
+		# them from device-access config when no reservation has).
 		if self._resource_obj is not None:
 			return self._resource_obj
 		qrmi = self._resource()
@@ -87,6 +137,7 @@ class QrmiDriver(BaseDriver):
 			raise DEFwExecutionError(
 				"QRMI introspection needs an IQM resource alias; set "
 				"QFW_IQM_QUANTUM_COMPUTER or configure device access")
+		self._ensure_iqm_isa_env(alias)
 		try:
 			self._resource_obj = qrmi.QuantumResource(
 					alias, qrmi.ResourceType.IQMServer)
