@@ -2,50 +2,16 @@
 
 ## Purpose
 
-This document analyzes how `qhw-admission` and `qhw-scheduler` should integrate
-with QFw. The immediate target is the QPM service. QPM already exposes the
-client-visible service API through DEFw, runs as a Python service, and delegates
-quantum execution to QRC/provider code. That makes it the natural integration
-point for admission control, scheduler policy, reservation accounting, and
-provider submission.
+This document first frames `qhw-admission` and `qhw-scheduler` as managed
+quantum-resource components. It then applies that model to the QFw QPM/QRC
+service path. The split matters because the same libraries should support QFw,
+QRMI, QDMI, and standalone site resource services.
 
 The main design question is where the active controller should live. The two C
 libraries are passive. They provide policy, state, and ordering primitives, but
 they do not own provider execution, service APIs, authentication, result queues,
-or shutdown. QFw already owns those concerns in the QPM/QRC service path.
-
-## Current QFw Shape
-
-QFw exposes the QPM API through `service-apis/api_qpm/api_qpm.py`. The public
-methods include `sync_run()`, `async_run()`, `read_cq()`, `peek_cq()`,
-notification registration, backend discovery, calibration discovery, and
-shutdown.
-
-The shared QPM utility layer in `services/util/qpm/util_qpm.py` owns the common
-client-facing flow. It creates circuit records, tracks local compute-resource
-availability, queues work that cannot obtain local resources, and delegates
-execution to `self.qrc`.
-
-Provider-specific QPM services such as `svc_iqm_qpm` and `svc_lib_qpm` derive
-from `UTIL_QPM`. They set provider-specific metadata and delegate hardware
-operations to a provider-specific QRC object.
-
-The QRC layer owns the current execution mechanics. In the IQM and shim paths,
-QRC starts Python threads for async execution, calls the provider frontend or
-client, stores completion records, and pushes completion events when callback
-delivery is configured.
-
-The current execution flow is:
-
-```text
-client
-  -> api_qpm.sync_run()/async_run()
-  -> QPM service method
-  -> UTIL_QPM creates Circuit
-  -> QPM/QRC execution path
-  -> provider client or frontend
-  -> QRC completion queue or event callback
-```
+or shutdown. Those concerns belong to the managed-resource implementation that
+hosts the libraries.
 
 ## Library Responsibilities
 
@@ -58,9 +24,10 @@ state.
 task queue state, scheduler policy plugins, task lifecycle state, slicing, and
 selection of the next qtask to occupy the QPU.
 
-Neither library should own QFw's remote API, DEFw service registration,
-provider authentication, provider submission, result transport, or event
-notification. Those responsibilities remain in the active QFw service.
+Neither library should own the hosting framework's remote API, service
+registration, provider authentication, provider submission, result transport,
+or event notification. Those responsibilities remain in the active managed
+resource implementation.
 
 ## Placement Relative To QRMI, QDMI, And QPM
 
@@ -289,6 +256,45 @@ resource interface. They are implementation hooks. A standard can name that
 boundary explicitly as the device-adapter boundary. Calls below that boundary
 submit selected work to the device provider. Calls above that boundary enforce
 admission, scheduling, authentication, accounting, and telemetry semantics.
+
+## QFw Integration Context
+
+The generic managed-resource model maps naturally onto the QFw QPM service.
+QPM already exposes the client-visible service API through DEFw, runs as a
+Python service, and delegates quantum execution to QRC/provider code. That
+makes it the natural QFw integration point for admission control, scheduler
+policy, reservation accounting, and provider submission.
+
+QFw exposes the QPM API through `service-apis/api_qpm/api_qpm.py`. The public
+methods include `sync_run()`, `async_run()`, `read_cq()`, `peek_cq()`,
+notification registration, backend discovery, calibration discovery, and
+shutdown.
+
+The shared QPM utility layer in `services/util/qpm/util_qpm.py` owns the common
+client-facing flow. It creates circuit records, tracks local compute-resource
+availability, queues work that cannot obtain local resources, and delegates
+execution to `self.qrc`.
+
+Provider-specific QPM services such as `svc_iqm_qpm` and `svc_lib_qpm` derive
+from `UTIL_QPM`. They set provider-specific metadata and delegate hardware
+operations to a provider-specific QRC object.
+
+The QRC layer owns the current execution mechanics. In the IQM and shim paths,
+QRC starts Python threads for async execution, calls the provider frontend or
+client, stores completion records, and pushes completion events when callback
+delivery is configured.
+
+The current execution flow is:
+
+```text
+client
+  -> api_qpm.sync_run()/async_run()
+  -> QPM service method
+  -> UTIL_QPM creates Circuit
+  -> QPM/QRC execution path
+  -> provider client or frontend
+  -> QRC completion queue or event callback
+```
 
 ## Controller Placement Options
 
