@@ -28,6 +28,17 @@ from defw_exception import DEFwExecutionError
 import json
 import logging
 import os
+import time
+
+
+def _status_str(status):
+	# QRMI task_status returns a TaskStatus enum; reduce it to a lowercase
+	# string regardless of whether the binding exposes .name/.value/repr.
+	for attr in ("name", "value"):
+		value = getattr(status, attr, None)
+		if value is not None:
+			return str(value).lower()
+	return str(status).lower()
 
 
 class QrmiDriver(BaseDriver):
@@ -50,6 +61,7 @@ class QrmiDriver(BaseDriver):
 		self._qrmi = None
 		self._resource_obj = None
 		self._target_cache = None
+		self._last_job = None
 
 	def _resource(self):
 		# Lazy import so the service/Frontend construct and route even where
@@ -254,17 +266,166 @@ class QrmiDriver(BaseDriver):
 					self._arch_raw(), device_id=self._device_id()),
 		}
 
-	# --- execution + metadata (routing wired; binding to qrmi is a later
-	#     milestone — docs/qpu-frontend-contract.md section 13) -----------
+	# --- execution: OpenQASM -> IQM JSON -> QRMI task lifecycle ----------
 
 	def run_circuit(self, circuit):
-		self._resource()
-		return self._pending("run_circuit", "qrmi")
+		# Canonical form is OpenQASM (circuit.info["qasm"]). Transcode it to an
+		# IQM circuit with the shared util, submit through QRMI's task lifecycle,
+		# poll to completion, and normalize the counts to qhw-result-v1 (the same
+		# normalizer the native svc_iqm_qpm path uses). QRMI-for-IQM has no
+		# acquire/release, so there is no reservation step.
+		qrmi = self._resource()
+		info = getattr(circuit, "info", None) or {}
+		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
+		qasm = info.get("qasm")
+		if not qasm:
+			raise DEFwExecutionError(
+				"QRMI run_circuit requires OpenQASM in circuit info['qasm']")
+		shots = int(info.get("num_shots", info.get("shots", 1024)))
+		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
+		use_timeslot = bool(info.get("use_timeslot", False))
+		timeout = float(info.get("timeout", 300.0))
+		poll = float(info.get("poll_interval", 1.0))
+
+		target = self._target()
+		dynamic = target.get("dynamic_quantum_architecture") or {}
+		calibration_set_id = (
+			info.get("calibration_set_id")
+			or info.get("iqm_calibration_set_id")
+			or dynamic.get("calibration_set_id"))
+
+		from util.iqm_transcode import build_iqm_circuit
+		iqm_circuit = build_iqm_circuit(qasm, dynamic, mapping)
+		iqmjson, run_request = self._build_iqmjson(
+				iqm_circuit, shots, calibration_set_id)
+
+		payload = qrmi.Payload.IQMServer(
+			iqmjson=iqmjson, job_type="circuit",
+			use_timeslot=use_timeslot, tag=None)
+
+		timing = {}
+		start = time.monotonic()
+		try:
+			job_id = self._qpu().task_start(payload)
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"QRMI task_start failed: {exc}") from exc
+		timing["submit_seconds"] = time.monotonic() - start
+
+		status = self._poll_task(job_id, timeout, poll)
+		timing["wait_seconds"] = (
+			time.monotonic() - start - timing["submit_seconds"])
+		if status != "completed":
+			self._last_job = {
+				"id": str(job_id), "status": status, "cid": cid,
+				"timing": timing, "shots": shots}
+			raise DEFwExecutionError(
+				f"QRMI job {job_id} finished with status {status!r}")
+
+		result_started = time.monotonic()
+		try:
+			result_json = json.loads(self._qpu().task_result(job_id).value)
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"QRMI task_result failed: {exc}") from exc
+		timing["result_fetch_seconds"] = time.monotonic() - result_started
+		timing["total_wall_seconds"] = time.monotonic() - start
+
+		measurement_counts = result_json.get("measurement_counts")
+		circuits = run_request.get("circuits") if isinstance(
+				run_request, dict) else None
+		raw = {
+			"job": {"id": str(job_id), "status": "completed"},
+			"run_request": run_request if isinstance(run_request, dict) else {},
+			"measurement_counts": measurement_counts,
+			"circuits": circuits or [],
+		}
+		from qhw_iqm import normalize_result
+		record = normalize_result(raw, device_id=self._device_id())
+
+		self._last_job = {
+			"id": str(job_id), "status": "completed", "cid": cid,
+			"timing": timing, "shots": shots,
+			"measurements": result_json.get("measurements")}
+		return record
+
+	def _build_iqmjson(self, iqm_circuit, shots, calibration_set_id):
+		# Build an iqm-client RunRequest the same way QRMI's own Qiskit adapter
+		# (qrmi.qiskit_iqm) does, then serialize it: QRMI's task_start expects the
+		# RunRequest JSON as the IQM Server job body. This is the QASM -> IQM JSON
+		# step; the exact RunRequest schema is validated against the live IQM
+		# Server on hardware. Returns (json_str, parsed_dict).
+		try:
+			from iqm.iqm_client import CircuitCompilationOptions
+			from iqm.station_control.interface.models import _build_run_request
+		except Exception as exc:
+			raise DEFwExecutionError(
+				"iqm-client is required to build the IQM job payload for QRMI "
+				f"execution: {exc}") from exc
+		calset = calibration_set_id
+		if calset is not None and not isinstance(calset, str):
+			calset = str(calset)
+		try:
+			run_request = _build_run_request(
+				[iqm_circuit],
+				calibration_set_id=calset,
+				shots=int(shots),
+				options=CircuitCompilationOptions())
+			iqmjson = run_request.model_dump_json()
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"failed to build the IQM run-request JSON for QRMI: {exc}") \
+				from exc
+		return iqmjson, json.loads(iqmjson)
+
+	def _poll_task(self, job_id, timeout, poll):
+		# Poll QRMI task_status until a terminal state; returns
+		# completed/failed/cancelled (or raises on timeout).
+		deadline = time.monotonic() + max(timeout, 0.0)
+		while True:
+			try:
+				raw = self._qpu().task_status(job_id)
+			except Exception as exc:
+				raise DEFwExecutionError(
+					f"QRMI task_status failed: {exc}") from exc
+			state = _status_str(raw)
+			if "complet" in state:
+				return "completed"
+			if "fail" in state or "error" in state:
+				return "failed"
+			if "cancel" in state:
+				return "cancelled"
+			if time.monotonic() >= deadline:
+				raise DEFwExecutionError(
+					f"QRMI job {job_id} timed out after {timeout}s "
+					f"(last status {state!r})")
+			time.sleep(max(poll, 0.0))
+
+	# --- last-job timing / metadata (from the cached run_circuit job) ----
+
+	def _last_job_for(self, cid):
+		job = self._last_job
+		if not job:
+			raise DEFwExecutionError("QRMI has not run a circuit yet")
+		if cid is not None and str(job.get("cid")) != str(cid):
+			raise DEFwExecutionError(
+				f"QRMI has no job for cid {cid!r} (last job cid "
+				f"{job.get('cid')!r})")
+		return job
 
 	def get_last_job_timing(self, cid=None):
-		self._resource()
-		return self._pending("get_last_job_timing", "qrmi")
+		job = self._last_job_for(cid)
+		return {
+			"cid": job.get("cid"),
+			"job_id": job.get("id"),
+			"status": job.get("status"),
+			"timing": job.get("timing") or {}}
 
 	def get_last_job_metadata(self, cid=None):
-		self._resource()
-		return self._pending("get_last_job_metadata", "qrmi")
+		job = self._last_job_for(cid)
+		return {
+			"cid": job.get("cid"),
+			"job_id": job.get("id"),
+			"status": job.get("status"),
+			"shots": job.get("shots"),
+			"backend": self._descriptor.get("provider", "iqm")}
