@@ -44,6 +44,40 @@ def extract_topology(device):
 	}
 
 
+def extract_calibration(device):
+	"""Read provider-neutral calibration metrics off a FoMaC Device.
+
+	Returns a dict with:
+	  qubits:        list[str]  -- real device labels (e.g. "QB1")
+	  qubit_metrics: list[dict] -- {qubit, t1?, t2?} per qubit that reports one
+	  gate_metrics:  list[dict] -- {operation, locus, fidelity?, duration?} per
+	                               operation locus that reports one
+	  duration_unit: str | None -- unit for the duration values
+
+	QDMI exposes coherence (QDMI_SITE_PROPERTY_T1/T2) per site and fidelity /
+	duration per operation locus; this reads them vendor-neutrally. Like
+	extract_topology, this is the only calibration function that touches the
+	live FoMaC Device -- to_calibration_record is pure over the returned dict.
+	"""
+	sites = list(device.regular_sites() or [])
+	qubit_metrics = []
+	for site in sites:
+		entry = {"qubit": _site_label(site)}
+		t1 = _site_metric(site, "t1")
+		if t1 is not None:
+			entry["t1"] = t1
+		t2 = _site_metric(site, "t2")
+		if t2 is not None:
+			entry["t2"] = t2
+		qubit_metrics.append(entry)
+	return {
+		"qubits": [_site_label(site) for site in sites],
+		"qubit_metrics": qubit_metrics,
+		"gate_metrics": _operation_metrics(device),
+		"duration_unit": _device_duration_unit(device),
+	}
+
+
 def to_device_record(topo, provider, device_id, include_raw=False,
 		validate=True):
 	"""Build a `qhw-device-v1` record from an extracted topology dict."""
@@ -83,6 +117,50 @@ def to_coupling_record(topo, provider, device_id, include_raw=False,
 		builder.operation(name, arity, supported_loci=loci)
 	if include_raw:
 		builder.raw_payload(topo, format="qdmi-fomac-topology")
+	return builder.build(validate_schema=validate)
+
+
+def to_calibration_record(cal, provider, device_id, include_raw=False,
+		validate=True):
+	"""Build a `qhw-calibration-v1` record from an extracted calibration dict.
+
+	QDMI (via FoMaC) reports the current per-qubit coherence and per-gate
+	fidelity rather than IQM's calibration/quality observation sets, so the
+	record carries counts + summaries in the core fields and the measured
+	values under the `qdmi.fomac.v1` extension. The output still validates as
+	`qhw-calibration-v1`, so a consumer sees one calibration shape regardless of
+	which library served the call (QRMI populates the IQM observation identity;
+	QDMI populates the measured metrics).
+	"""
+	from qhw_data import new_calibration
+	qubits = cal.get("qubits") or []
+	qubit_metrics = cal.get("qubit_metrics") or []
+	gate_metrics = cal.get("gate_metrics") or []
+	coherence_qubits = sum(
+		1 for m in qubit_metrics if "t1" in m or "t2" in m)
+	operations_measured = sorted(
+		{m["operation"] for m in gate_metrics if m.get("operation")})
+	builder = (
+		new_calibration(provider, device_id, num_qubits=len(qubits) or None)
+		.calibration(
+			observation_count=coherence_qubits,
+			quality_metric_count=len(gate_metrics))
+		.summaries({
+			"source": "qdmi",
+			"via": "mqt.core.fomac",
+			"qubits_with_coherence": coherence_qubits,
+			"gate_loci_measured": len(gate_metrics),
+			"operations_measured": operations_measured,
+			"duration_unit": cal.get("duration_unit"),
+		})
+		.extension("qdmi.fomac.v1", {
+			"qubit_metrics": qubit_metrics,
+			"gate_metrics": gate_metrics,
+			"duration_unit": cal.get("duration_unit"),
+		})
+	)
+	if include_raw:
+		builder.raw_payload(cal, format="qdmi-fomac-calibration")
 	return builder.build(validate_schema=validate)
 
 
@@ -149,6 +227,92 @@ def _operation_loci(op):
 			seen.add(key)
 			loci.append(locus)
 	return sorted(loci, key=_locus_key)
+
+
+def _site_metric(site, attr):
+	# Read a per-site coherence metric (t1/t2); None when absent/unsupported.
+	getter = getattr(site, attr, None)
+	if getter is None:
+		return None
+	try:
+		return getter()
+	except Exception:
+		return None
+
+
+def _operation_metrics(device):
+	# Per-operation-locus fidelity/duration. Mirrors _operations() but keeps the
+	# Site objects so the metric accessors can be queried per locus. Only loci
+	# that actually report a metric are recorded.
+	try:
+		ops = list(device.operations() or [])
+	except Exception:
+		return []
+	metrics = []
+	for op in ops:
+		try:
+			name = op.name()
+		except Exception:
+			continue
+		for locus_sites in _operation_loci_sites(op):
+			entry = {
+				"operation": name,
+				"locus": [_site_label(site) for site in locus_sites],
+			}
+			fidelity = _op_metric(op, "fidelity", locus_sites)
+			if fidelity is not None:
+				entry["fidelity"] = fidelity
+			duration = _op_metric(op, "duration", locus_sites)
+			if duration is not None:
+				entry["duration"] = duration
+			if "fidelity" in entry or "duration" in entry:
+				metrics.append(entry)
+	return sorted(metrics,
+			key=lambda m: (m["operation"], _locus_key(m["locus"])))
+
+
+def _operation_loci_sites(op):
+	# The loci an operation supports, as lists of FoMaC Site objects (parallel
+	# to _operation_loci, which returns labels). An operation with neither
+	# site_pairs() nor sites() is treated as a single global locus ([]).
+	pairs = None
+	try:
+		pairs = op.site_pairs()
+	except Exception:
+		pairs = None
+	if pairs:
+		return [[pair[0], pair[1]] for pair in pairs]
+	sites = None
+	try:
+		sites = op.sites()
+	except Exception:
+		sites = None
+	if sites:
+		return [[site] for site in sites]
+	return [[]]
+
+
+def _op_metric(op, attr, locus_sites):
+	# Read a per-locus operation metric (fidelity/duration); None when absent.
+	getter = getattr(op, attr, None)
+	if getter is None:
+		return None
+	try:
+		if locus_sites:
+			return getter(sites=locus_sites)
+		return getter()
+	except Exception:
+		return None
+
+
+def _device_duration_unit(device):
+	getter = getattr(device, "duration_unit", None)
+	if getter is None:
+		return None
+	try:
+		return getter()
+	except Exception:
+		return None
 
 
 def _coupling_edges(device, operations):

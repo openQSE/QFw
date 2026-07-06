@@ -15,9 +15,13 @@
 # with fomac_normalize.) target() is not reservation-bound, so introspection works
 # without acquire().
 #
-# Milestone status (design doc qpu-frontend-contract.md section 13):
-# get_device_info / get_coupling_graph are wired. Execution and the richer
-# backend/calibration snapshots remain stubbed for a later milestone.
+# Milestone status (design doc qpu-frontend-contract.md section 13): the whole
+# introspection facet is wired from one cached target() payload —
+# get_device_info / get_coupling_graph (-> qhw-iqm device/coupling),
+# get_calibration_snapshot (-> qhw-iqm calibration), get_dynamic_backend_info
+# (the dynamic architecture, native shape), and get_backend_info (native
+# composite with an embedded qhw device). Execution remains stubbed for a later
+# milestone.
 
 from .base_driver import BaseDriver
 from defw_exception import DEFwExecutionError
@@ -29,9 +33,11 @@ import os
 class QrmiDriver(BaseDriver):
 	name = "qrmi"
 	CAPABILITIES = frozenset({
-		"get_device_info",       # QRMI target() -> raw IQM data -> qhw-iqm
-		"get_coupling_graph",    # QRMI target() -> connectivity  -> qhw-iqm
-		"get_backend_info",      # QRMI target/metadata (composable with QDMI)
+		"get_device_info",          # target() -> qhw-iqm device
+		"get_coupling_graph",       # target() -> qhw-iqm coupling
+		"get_calibration_snapshot", # target() -> qhw-iqm calibration
+		"get_dynamic_backend_info", # target() -> dynamic architecture
+		"get_backend_info",         # target() -> native composite + qhw device
 		"run_circuit",
 		"get_last_job_timing",
 		"get_last_job_metadata",
@@ -43,6 +49,7 @@ class QrmiDriver(BaseDriver):
 		self._descriptor = descriptor or {}
 		self._qrmi = None
 		self._resource_obj = None
+		self._target_cache = None
 
 	def _resource(self):
 		# Lazy import so the service/Frontend construct and route even where
@@ -61,18 +68,19 @@ class QrmiDriver(BaseDriver):
 	# --- QRMI resource binding ------------------------------------------
 
 	def _qc_alias(self):
-		# IQM resource alias for QuantumResource. Honor the env var the native
-		# svc_iqm_qpm uses, else the shared device-access config.
-		alias = os.environ.get("QFW_IQM_QUANTUM_COMPUTER")
-		if alias:
-			return alias
+		value = (
+			self._descriptor.get("provider_device_id")
+			or self._descriptor.get("provider-device-id"))
+		if value:
+			return value
 		try:
-			from util.device_access import resolve_device_access
-			cfg = resolve_device_access(
-					provider=self._descriptor.get("provider", "iqm"))
-			return cfg.get("quantum_computer")
+			access = self._access()
 		except Exception:
-			return None
+			return self._descriptor.get("id")
+		return (
+			access.get("provider_device_id")
+			or access.get("quantum_computer")
+			or self._descriptor.get("id"))
 
 	def _access(self):
 		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
@@ -81,6 +89,9 @@ class QrmiDriver(BaseDriver):
 		provider = self._descriptor.get("provider", "iqm")
 		base_url = os.environ.get("QFW_QC_URL")
 		token = os.environ.get("QFW_API_KEY")
+		provider_device_id = (
+			self._descriptor.get("provider_device_id")
+			or self._descriptor.get("provider-device-id"))
 		if not (base_url and token):
 			try:
 				from util.device_access import resolve_device_access
@@ -92,7 +103,21 @@ class QrmiDriver(BaseDriver):
 					f"configure device access: {exc}") from exc
 			base_url = base_url or cfg.get("url")
 			token = token or cfg.get("api_key")
-		return {"base_url": base_url, "token": token}
+			provider_device_id = (
+				provider_device_id
+				or cfg.get("provider_device_id")
+				or cfg.get("quantum_computer"))
+		# Strip trailing slashes: QRMI's IQM client builds URLs as
+		# f"{endpoint}/api/v1/...", so a configured base URL ending in "/"
+		# yields "//api/v1/..." which the IQM server rejects (empty target).
+		if base_url:
+			base_url = base_url.rstrip("/")
+		return {
+			"base_url": base_url,
+			"token": token,
+			"provider_device_id": provider_device_id,
+			"quantum_computer": provider_device_id,
+		}
 
 	def _ensure_iqm_isa_env(self, alias):
 		# QRMI's IQM resource reads its endpoint/token from
@@ -135,8 +160,8 @@ class QrmiDriver(BaseDriver):
 		alias = self._qc_alias()
 		if not alias:
 			raise DEFwExecutionError(
-				"QRMI introspection needs an IQM resource alias; set "
-				"QFW_IQM_QUANTUM_COMPUTER or configure device access")
+				"QRMI introspection needs a QFw device id; set "
+				"QFW_QPU_DEVICE_ID or configure a device descriptor")
 		self._ensure_iqm_isa_env(alias)
 		try:
 			self._resource_obj = qrmi.QuantumResource(
@@ -147,14 +172,23 @@ class QrmiDriver(BaseDriver):
 		logging.debug("shim: QRMI IQM resource opened (%s)", alias)
 		return self._resource_obj
 
-	def _iqm_raw(self):
-		# QRMI target() returns raw IQM data; map it to the
-		# {static_architecture, dynamic_architecture} shape qhw-iqm expects.
-		try:
-			target = json.loads(self._qpu().target().value)
-		except Exception as exc:
-			raise DEFwExecutionError(
-				f"failed to read QRMI target(): {exc}") from exc
+	def _target(self):
+		# QRMI target() is a remote call returning raw IQM JSON (dynamic
+		# architecture / calibration_set / quality_metrics). Parse it once per
+		# driver instance and serve every introspection call from the cache, so
+		# the four calls don't each re-fetch the same payload.
+		if self._target_cache is None:
+			try:
+				self._target_cache = json.loads(self._qpu().target().value)
+			except Exception as exc:
+				raise DEFwExecutionError(
+					f"failed to read QRMI target(): {exc}") from exc
+		return self._target_cache
+
+	def _arch_raw(self):
+		# Map target() to the {static_architecture, dynamic_architecture} shape
+		# qhw-iqm's device/coupling normalizers expect.
+		target = self._target()
 		raw = {"dynamic_architecture":
 				target.get("dynamic_quantum_architecture") or {}}
 		static = target.get("static_quantum_architecture")
@@ -162,26 +196,66 @@ class QrmiDriver(BaseDriver):
 			raw["static_architecture"] = static
 		return raw
 
+	def _device_id(self):
+		return self._descriptor.get("id", "iqm-device")
+
 	# --- introspection facet: reuse qhw-iqm on QRMI's raw IQM data ------
 
 	def get_device_info(self):
 		from qhw_iqm import normalize_device
-		return normalize_device(
-				self._iqm_raw(),
-				device_id=self._descriptor.get("id", "iqm-device"))
+		return normalize_device(self._arch_raw(), device_id=self._device_id())
 
 	def get_coupling_graph(self, calibration_set_id=None):
 		from qhw_iqm import normalize_coupling
-		return normalize_coupling(
-				self._iqm_raw(),
-				device_id=self._descriptor.get("id", "iqm-device"))
+		return normalize_coupling(self._arch_raw(), device_id=self._device_id())
+
+	def get_calibration_snapshot(self, calibration_set_id=None):
+		# target() carries the IQM calibration_set + quality_metrics; feed them
+		# (with the dynamic architecture) to qhw-iqm — the same normalizer the
+		# native svc_iqm_qpm path uses — to build a qhw-calibration-v1 record.
+		# Selecting a specific calibration_set_id is a follow-up; this returns
+		# the resource's current/default calibration.
+		from qhw_iqm import normalize_calibration
+		target = self._target()
+		raw = {
+			"dynamic_architecture":
+				target.get("dynamic_quantum_architecture") or {},
+			"calibration_set": target.get("calibration_set") or {},
+			"quality_metric_set": target.get("quality_metrics") or {},
+		}
+		return normalize_calibration(raw, device_id=self._device_id())
+
+	def get_dynamic_backend_info(self, calibration_set_id=None):
+		# The dynamic architecture as-is, matching the native svc_iqm_qpm shape
+		# (a provider dict, not a qhw record).
+		return {
+			"backend": self._descriptor.get("provider", "iqm"),
+			"metadata_supported": True,
+			"dynamic_architecture":
+				self._target().get("dynamic_quantum_architecture") or {},
+		}
+
+	def get_backend_info(self):
+		# Native composite shape (mirrors svc_iqm_qpm.get_backend_info): the
+		# provider fields plus an embedded qhw device record. QRMI's target()
+		# does not carry the static architecture, so that field is present only
+		# when the resource reports it.
+		from qhw_iqm import normalize_device
+		target = self._target()
+		dynamic = target.get("dynamic_quantum_architecture") or {}
+		return {
+			"backend": self._descriptor.get("provider", "iqm"),
+			"metadata_supported": True,
+			"static_architecture":
+				target.get("static_quantum_architecture") or {},
+			"active_qubits": dynamic.get("qubits") or [],
+			"calibration_set_id": dynamic.get("calibration_set_id"),
+			"qhw_device": normalize_device(
+					self._arch_raw(), device_id=self._device_id()),
+		}
 
 	# --- execution + metadata (routing wired; binding to qrmi is a later
 	#     milestone — docs/qpu-frontend-contract.md section 13) -----------
-
-	def get_backend_info(self):
-		self._resource()
-		return self._pending("get_backend_info", "qrmi")
 
 	def run_circuit(self, circuit):
 		self._resource()
