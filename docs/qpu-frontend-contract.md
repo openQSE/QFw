@@ -420,8 +420,19 @@ a reservation; `target()` itself is not reservation-bound).
 `get_backend_info` and `get_dynamic_backend_info` are wired on QRMI (a native
 composite / the dynamic architecture, from `target()`); they stay QRMI-only for
 now because their shape carries raw IQM architecture data QDMI's neutral model
-does not expose. Still stubbed for a later milestone: execution (`run_circuit`
-and its job timing/metadata, which stay with the QRMI reservation owner).
+does not expose.
+
+Execution is wired on QRMI as of the next milestone: `run_circuit` takes the
+canonical **OpenQASM** form, transcodes it to an IQM circuit with the shared
+`util/iqm_transcode.py` (the same transcode the native `svc_iqm_qpm` path uses),
+submits it through QRMI's task lifecycle (`Payload.IQMServer` → `task_start` →
+poll `task_status` → `task_result`), and normalizes the counts to
+`qhw-result-v1` via `qhw-iqm`. QRMI-for-IQM has no `acquire`/`release`, so this
+first cut runs without the reservation/SPANK machinery. `get_last_job_timing`
+and `get_last_job_metadata` report the cached last job. Still to come: QDMI
+execution (via FoMaC `submit_job`) as the comparison path, and the richer job
+lifecycle. The canonical-form decision (OpenQASM3 vs QIR) is recorded in the
+`openQSE/development-analysis` comparison.
 
 ## 14. Strategic positioning: implementation-first to a specification
 
