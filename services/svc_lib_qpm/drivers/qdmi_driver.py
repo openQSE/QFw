@@ -20,8 +20,19 @@
 from .base_driver import BaseDriver
 from . import fomac_normalize
 from defw_exception import DEFwExecutionError
+import json
 import logging
 import os
+import time
+
+
+def _job_status(status):
+	# FoMaC Job.check() returns a Status enum; reduce it to a lowercase name.
+	for attr in ("name", "value"):
+		value = getattr(status, attr, None)
+		if value is not None:
+			return str(value).lower()
+	return str(status).lower()
 
 
 class QdmiDriver(BaseDriver):
@@ -30,6 +41,9 @@ class QdmiDriver(BaseDriver):
 		"get_device_info",
 		"get_coupling_graph",
 		"get_calibration_snapshot",
+		"run_circuit",
+		"get_last_job_timing",
+		"get_last_job_metadata",
 	})
 
 	def __init__(self, descriptor=None):
@@ -37,6 +51,7 @@ class QdmiDriver(BaseDriver):
 		# binding/creds and, later, dynamic capability discovery.
 		self._descriptor = descriptor or {}
 		self._device_obj = None
+		self._last_job = None
 
 	# --- QDMI session / device binding -------------------------------
 
@@ -153,3 +168,145 @@ class QdmiDriver(BaseDriver):
 		provider, device_id = self._ids()
 		cal = fomac_normalize.extract_calibration(self._device())
 		return fomac_normalize.to_calibration_record(cal, provider, device_id)
+
+	# --- execution: OpenQASM -> IQM circuit -> FoMaC submit_job ----------
+
+	def run_circuit(self, circuit):
+		# Canonical form is OpenQASM (circuit.info["qasm"]). Transcode it to an
+		# IQM circuit with the shared util, then submit through QDMI's FoMaC job
+		# interface as an IQM_JSON program. Note the QRMI/QDMI difference: QDMI's
+		# IQM_JSON program is a SINGLE circuit -- QDMI-on-IQM wraps it into the
+		# run request (circuits/shots/calibration_set) itself -- whereas QRMI
+		# submits the whole run request. Poll to completion and normalize the
+		# counts to qhw-result-v1 (the same record the QRMI path produces).
+		device = self._device()
+		info = getattr(circuit, "info", None) or {}
+		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
+		qasm = info.get("qasm")
+		if not qasm:
+			raise DEFwExecutionError(
+				"QDMI run_circuit requires OpenQASM in circuit info['qasm']")
+		shots = int(info.get("num_shots", info.get("shots", 1024)))
+		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
+		timeout = float(info.get("timeout", 300.0))
+		poll = float(info.get("poll_interval", 1.0))
+		provider, device_id = self._ids()
+
+		# The transcode needs the device's active qubits; FoMaC sites supply
+		# them (QDMI has no raw dynamic-architecture dict like QRMI's target()).
+		from util.iqm_transcode import build_iqm_circuit
+		topo = fomac_normalize.extract_topology(device)
+		dynamic = {"qubits": topo.get("qubits") or []}
+		iqm_circuit = build_iqm_circuit(qasm, dynamic, mapping)
+		program = self._serialize_program(iqm_circuit)
+
+		try:
+			from mqt.core.fomac import ProgramFormat
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"failed to import mqt.core.fomac ProgramFormat: {exc}") from exc
+
+		timing = {}
+		start = time.monotonic()
+		try:
+			job = device.submit_job(program, ProgramFormat.IQM_JSON, int(shots))
+		except Exception as exc:
+			raise DEFwExecutionError(f"QDMI submit_job failed: {exc}") from exc
+		timing["submit_seconds"] = time.monotonic() - start
+
+		status = self._poll_job(job, timeout, poll)
+		timing["wait_seconds"] = (
+			time.monotonic() - start - timing["submit_seconds"])
+		try:
+			job_id = job.id()
+		except Exception:
+			job_id = None
+		if status != "completed":
+			self._last_job = {
+				"id": job_id, "status": status, "cid": cid,
+				"timing": timing, "shots": shots}
+			raise DEFwExecutionError(
+				f"QDMI job {job_id} finished with status {status!r}")
+
+		result_started = time.monotonic()
+		try:
+			counts = job.get_counts()
+		except Exception as exc:
+			raise DEFwExecutionError(f"QDMI get_counts failed: {exc}") from exc
+		timing["result_fetch_seconds"] = time.monotonic() - result_started
+		timing["total_wall_seconds"] = time.monotonic() - start
+
+		record = fomac_normalize.to_result_record(
+			counts, shots, provider, device_id, job_id=job_id,
+			status="completed")
+		self._last_job = {
+			"id": job_id, "status": "completed", "cid": cid,
+			"timing": timing, "shots": shots}
+		return record
+
+	def _serialize_program(self, iqm_circuit):
+		# Serialize the transcoded IQM circuit to the single-circuit JSON QDMI's
+		# IQM_JSON program expects. Prefer iqm-client's canonical serializer;
+		# fall back to a generic coercion. Validated against the live IQM circuit
+		# schema on hardware.
+		from util.iqm_transcode import to_jsonable
+		try:
+			try:
+				from iqm.iqm_client.util import to_json_dict
+				payload = to_json_dict(iqm_circuit)
+			except ImportError:
+				payload = to_jsonable(iqm_circuit)
+			return json.dumps(payload)
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"failed to serialize the IQM circuit for QDMI: {exc}") from exc
+
+	def _poll_job(self, job, timeout, poll):
+		# Poll FoMaC job.check() until a terminal state; returns
+		# completed/failed/cancelled (or raises on timeout).
+		deadline = time.monotonic() + max(timeout, 0.0)
+		while True:
+			try:
+				state = _job_status(job.check())
+			except Exception as exc:
+				raise DEFwExecutionError(
+					f"QDMI job.check() failed: {exc}") from exc
+			if state == "done":
+				return "completed"
+			if state == "failed":
+				return "failed"
+			if state in ("canceled", "cancelled"):
+				return "cancelled"
+			if time.monotonic() >= deadline:
+				raise DEFwExecutionError(
+					f"QDMI job timed out after {timeout}s (status {state!r})")
+			time.sleep(max(poll, 0.0))
+
+	# --- last-job timing / metadata (from the cached run_circuit job) ----
+
+	def _last_job_for(self, cid):
+		job = self._last_job
+		if not job:
+			raise DEFwExecutionError("QDMI has not run a circuit yet")
+		if cid is not None and str(job.get("cid")) != str(cid):
+			raise DEFwExecutionError(
+				f"QDMI has no job for cid {cid!r} (last job cid "
+				f"{job.get('cid')!r})")
+		return job
+
+	def get_last_job_timing(self, cid=None):
+		job = self._last_job_for(cid)
+		return {
+			"cid": job.get("cid"),
+			"job_id": job.get("id"),
+			"status": job.get("status"),
+			"timing": job.get("timing") or {}}
+
+	def get_last_job_metadata(self, cid=None):
+		job = self._last_job_for(cid)
+		return {
+			"cid": job.get("cid"),
+			"job_id": job.get("id"),
+			"status": job.get("status"),
+			"shots": job.get("shots"),
+			"backend": self._descriptor.get("provider", "iqm")}
