@@ -164,6 +164,32 @@ def to_calibration_record(cal, provider, device_id, include_raw=False,
 	return builder.build(validate_schema=validate)
 
 
+def to_result_record(counts, shots, provider, device_id, job_id=None,
+		status="completed", validate=True):
+	"""Build a `qhw-result-v1` record from a QDMI counts histogram.
+
+	QDMI (via FoMaC) returns a plain {bitstring: count} histogram from
+	`Job.get_counts()`; normalize it to the same `qhw-result-v1` the QRMI/native
+	path produces via qhw-iqm, so a consumer sees one result shape regardless of
+	which library executed the circuit. Pure over the counts dict.
+	"""
+	from qhw_data import new_result
+	counts = counts or {}
+	resolved_shots = int(shots) if shots is not None else (
+		sum(counts.values()) or None)
+	builder = (
+		new_result(provider, device_id, job_status=status)
+		.job(id=job_id, status=status)
+		.result(
+			shots=resolved_shots,
+			num_circuits=1,
+			counts=counts,
+			success=(status == "completed"))
+		.metadata({"source": "qdmi", "via": "mqt.core.fomac"})
+	)
+	return builder.build(validate_schema=validate)
+
+
 # --- FoMaC Device extraction helpers (duck-typed) ------------------------
 
 def _site_label(site):

@@ -9,9 +9,11 @@ DEFAULT_CAPS = {
 	"get_calibration_snapshot": ["qdmi", "qrmi"],
 	"get_dynamic_backend_info": ["qrmi"],
 	"get_backend_info": ["qrmi"],
-	"run_circuit": ["qrmi"],
-	"get_last_job_timing": ["qrmi"],
-	"get_last_job_metadata": ["qrmi"],
+	# Execution is composable for the QRMI-vs-QDMI comparison: no lib routes to
+	# the execution owner (qrmi); --lib qdmi runs the same circuit through QDMI.
+	"run_circuit": ["qrmi", "qdmi"],
+	"get_last_job_timing": ["qrmi", "qdmi"],
+	"get_last_job_metadata": ["qrmi", "qdmi"],
 }
 
 DEFAULT_LIBRARIES = ["qrmi", "qdmi"]

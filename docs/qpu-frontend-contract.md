@@ -429,10 +429,19 @@ submits it through QRMI's task lifecycle (`Payload.IQMServer` → `task_start` �
 poll `task_status` → `task_result`), and normalizes the counts to
 `qhw-result-v1` via `qhw-iqm`. QRMI-for-IQM has no `acquire`/`release`, so this
 first cut runs without the reservation/SPANK machinery. `get_last_job_timing`
-and `get_last_job_metadata` report the cached last job. Still to come: QDMI
-execution (via FoMaC `submit_job`) as the comparison path, and the richer job
-lifecycle. The canonical-form decision (OpenQASM3 vs QIR) is recorded in the
-`openQSE/development-analysis` comparison.
+and `get_last_job_metadata` report the cached last job.
+
+Execution is **composable** for the QRMI-vs-QDMI comparison. QDMI runs the same
+canonical OpenQASM through the same `util/iqm_transcode.py`, but submits the
+single transcoded circuit through FoMaC's `submit_job` with the `IQM_JSON`
+program format (QDMI-on-IQM wraps the circuit into a run request itself, where
+QRMI submits the whole run request — a genuine interface difference), polls
+`Job.check()`, reads `Job.get_counts()`, and normalizes to the same
+`qhw-result-v1` via `fomac_normalize.to_result_record`. In the descriptor
+`run_circuit` and the job calls list `[qrmi, qdmi]`; the execution owner (QRMI)
+serves the default, and `--lib qdmi` runs the QDMI path. Still to come: the
+richer job lifecycle. The canonical-form decision (OpenQASM3 vs QIR) is recorded
+in the `openQSE/development-analysis` comparison.
 
 ## 14. Strategic positioning: implementation-first to a specification
 
