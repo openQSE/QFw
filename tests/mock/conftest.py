@@ -102,6 +102,9 @@ def _install_defw_stubs():
 		class DEFwAgentNotFound(DEFwError):
 			pass
 
+		class DEFwExecutionError(DEFwError):
+			pass
+
 		class DEFwDumper:
 			pass
 
@@ -110,6 +113,7 @@ def _install_defw_stubs():
 		defw_exception.DEFwInProgress = DEFwInProgress
 		defw_exception.DEFwNotFound = DEFwNotFound
 		defw_exception.DEFwAgentNotFound = DEFwAgentNotFound
+		defw_exception.DEFwExecutionError = DEFwExecutionError
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
 
