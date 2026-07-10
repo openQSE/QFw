@@ -1,3 +1,5 @@
+import pytest
+
 from tests.mock.fakes import FakeEventAPI, FakeQPM, make_result_event
 
 
@@ -80,6 +82,30 @@ def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 	# Memory is emitted in Qiskit's hex format (QFwSamplerV2 parses it via
 	# int(sample, 16)); "00" -> 0x0, "11" -> 0x3.
 	assert result_entry["data"]["memory"] == ["0x0", "0x0", "0x3"]
+
+
+def test_qfw_job_result_raises_when_no_results(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from defw_exception import DEFwError
+
+	fake_qpm = FakeQPM(cids=["cid-1"])
+	event_api = FakeEventAPI()  # no result events ever arrive
+	backend = FakeBackend()
+	circuit = qfw_job.QuantumCircuit(1, name="timeout-path")
+	options = {"shots": 2, "seed": 1, "seed_simulator": 1}
+
+	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	# COMPLETION_TIMEOUT_SEC == 0 makes _result_reader return immediately with no
+	# completed circuits -- a real timeout without the wall-clock wait.
+	monkeypatch.setattr(backend, "COMPLETION_TIMEOUT_SEC", 0)
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
+	job.submit()
+
+	# With no results the per-circuit `out` never binds; result() must fail
+	# with a clear error naming the cause, not a bare NameError.
+	with pytest.raises(DEFwError, match="no circuit results"):
+		job.result()
 
 
 def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):

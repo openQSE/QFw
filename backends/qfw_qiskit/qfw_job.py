@@ -168,6 +168,16 @@ class QFwJob(Job):
 		qpm_results = self._result_reader(self._cid_list)
 		self._result_wait_time = time.time() - res_wait_start
 
+		if not qpm_results:
+			# _result_reader returns early when it times out; with no completed
+			# circuits there is nothing to assemble and the per-circuit `out`
+			# referenced below (and in the job-level result) never binds. Fail
+			# loudly with the cause instead of raising a bare NameError.
+			raise DEFwError(
+				f"QFw job {self._job_id} returned no circuit results within "
+				f"{self._backend.COMPLETION_TIMEOUT_SEC}s "
+				f"(expected {len(self._cid_list)} circuit(s))")
+
 		for qr in qpm_results:
 			res = qr['res']
 			self._backend.log_statistics(res)
