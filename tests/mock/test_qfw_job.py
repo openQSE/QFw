@@ -4,9 +4,13 @@ from tests.mock.fakes import FakeEventAPI, FakeQPM, make_result_event
 class FakeBackend:
 	COMPLETION_TIMEOUT_SEC = 5
 
-	def __init__(self):
+	def __init__(self, statevector=False):
 		self.logged_results = []
 		self.dump_called = False
+		self._statevector = statevector
+
+	def returns_statevector(self):
+		return self._statevector
 
 	def log_statistics(self, result):
 		self.logged_results.append(result)
@@ -73,7 +77,9 @@ def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 	assert result_entry["header"]["name"] == "bell"
 	assert result_entry["header"]["memory_slots"] == 2
 	assert result_entry["shots"] == 3
-	assert result_entry["data"]["memory"] == ["00", "00", "11"]
+	# Memory is emitted in Qiskit's hex format (QFwSamplerV2 parses it via
+	# int(sample, 16)); "00" -> 0x0, "11" -> 0x3.
+	assert result_entry["data"]["memory"] == ["0x0", "0x0", "0x3"]
 
 
 def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):

@@ -105,6 +105,9 @@ def _install_defw_stubs():
 		class DEFwExecutionError(DEFwError):
 			pass
 
+		class DEFwReserveError(DEFwError):
+			pass
+
 		class DEFwDumper:
 			pass
 
@@ -114,6 +117,7 @@ def _install_defw_stubs():
 		defw_exception.DEFwNotFound = DEFwNotFound
 		defw_exception.DEFwAgentNotFound = DEFwAgentNotFound
 		defw_exception.DEFwExecutionError = DEFwExecutionError
+		defw_exception.DEFwReserveError = DEFwReserveError
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
 
@@ -139,6 +143,7 @@ def _install_defw_stubs():
 
 		defw_app_util.defw_get_resource_mgr = defw_get_resource_mgr
 		defw_app_util.defw_reserve_service_by_name = defw_reserve_service_by_name
+		defw_app_util.SYSTEM_UP_TIMEOUT = 40
 		sys.modules["defw_app_util"] = defw_app_util
 
 	if "defw_event_baseapi" not in sys.modules:
@@ -191,7 +196,11 @@ def _install_defw_stubs():
 			def exit(self):
 				self.exit_called = True
 
+		def connect_to_resource(services, name):
+			raise AssertionError("defw.connect_to_resource must be patched in tests")
+
 		defw.me = _Runtime()
+		defw.connect_to_resource = connect_to_resource
 		sys.modules["defw"] = defw
 
 
@@ -409,6 +418,12 @@ def _install_qiskit_stubs():
 	quantum_info = types.ModuleType("qiskit.quantum_info")
 	quantum_info.Pauli = type("Pauli", (), {})
 	quantum_info.PauliList = type("PauliList", (), {})
+
+	class Statevector:
+		def __init__(self, data=None):
+			self.data = data
+
+	quantum_info.Statevector = Statevector
 	sys.modules["qiskit.quantum_info"] = quantum_info
 
 	primitives_base = types.ModuleType("qiskit.primitives.base")

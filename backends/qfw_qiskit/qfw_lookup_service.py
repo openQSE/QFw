@@ -66,7 +66,11 @@ def get_qpm(qpm_type=-1, qpm_cap=-1):
 	try:
 		test_qpm(qpm_api)
 	except Exception as e:
+		# The probe failed, so the reserved QPM is unusable. Tear it down and
+		# propagate -- returning the now shut-down handle would only defer the
+		# failure to the first real call against a dead resource.
 		logging.debug(f"QPM ran into an exception {e}")
 		qpm_api.shutdown()
+		raise
 
 	return qpm_api
