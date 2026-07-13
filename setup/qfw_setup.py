@@ -106,6 +106,12 @@ def get_external_defw_env():
 				'DEFW_EXTERNAL_SERVICE_APIS_PATH',
 				'PATH',
 				'LD_LIBRARY_PATH',
+				# DEFw message transport selection. These must reach the
+				# resmgr and service agents (launched with this curated
+				# environment) so they pick the same transport as the rest
+				# of the run; otherwise they silently default to TCP.
+				'DEFW_TRANSPORT',
+				'DEFW_OFI_PROVIDER',
 				'QFW_TMP_PATH',
 				'QFW_RUN_ID',
 				'QFW_RUN_TMP_PATH',
