@@ -588,3 +588,38 @@ larger refactor and should wait until the Python integration proves the exact
 state machine, callback surface, and performance needs. A passive C controller
 is the more realistic future C layer because it can preserve QFw's service API
 ownership while moving cross-library state transitions into reusable C code.
+
+## State Ownership Boundary
+
+`qhw-admission` owns the admission ledger. QPM owns the runtime orchestration
+state needed to submit, track, cancel, and complete execution work. The two
+stores should be linked by reservation IDs and task IDs, but QPM should not
+duplicate the admission credit ledger.
+
+State maintained by `qhw-admission`:
+
+| Data | Notes |
+|---|---|
+| Device profiles | Device ID, timing baseline, maximum qubits, maximum shots, total credits, device rate, concurrency, default TTL, and metadata. |
+| Policy and estimator configuration | Per-device selected policy, selected estimator, plugin state, and policy, estimator, and device-profile versions. |
+| Reservation records | Reservation ID, request ID, device ID, scope ID, user ID, job ID, workload kind, lifecycle state, expiration, policy version, estimator version, and metadata. |
+| Credit and rate ledger | Reserved credits, consumed credits, reserved rate, consumed rate, remaining usage, and unused capacity. |
+| Usage events | Per-reservation usage events keyed by task ID. These records support idempotent `consume()` and `return_usage()` calls. |
+| Actual usage records | Observed device time, compile time, transfer time, and control-overhead timing recorded through `record_actual()`. |
+| Compliance state | Overuse count, underuse score, unused capacity, and compliance action or message. |
+| Capacity views | Derived views that combine the admission ledger with optional external capacity snapshots. |
+
+State maintained by QPM:
+
+| Data | Why QPM Owns It |
+|---|---|
+| Reservation ID to submitted qtasks | QPM manages transitions across pending work, scheduler tasks, provider jobs, and client-visible status. |
+| QFw circuit and job IDs | These are QFw execution objects rather than admission records. |
+| Authenticated caller or session context | QPM validates credentials and compares caller context with the reservation binding. |
+| Pending qtasks waiting for capacity | These qtasks are not yet admitted to `qhw-scheduler` and remain under QPM control. |
+| `qhw-scheduler` task IDs | Scheduler correlation belongs to the QPM and scheduler integration path. |
+| Provider job handles | QPM needs provider handles for cancellation, polling, result retrieval, and reconciliation. |
+| Capacity-hold bookkeeping | QPM tracks which qtask has called `consume()` so it can call `return_usage()` or `record_actual()` at the correct lifecycle point. |
+| Event, callback, and result endpoints | These endpoints belong to the client-facing QFw execution path. |
+| Worker state, timeouts, and cancellation state | These lifecycle details sit outside admission accounting. |
+| Live telemetry inputs | QPM supplies queue depth, pending count, active task count, device availability, and related values through the admission capacity-provider callback. |
