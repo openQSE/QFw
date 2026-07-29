@@ -1,30 +1,51 @@
-# QFw Benchmarking Design (Proposal)
+# QFw Benchmarking and Profiling Design (Proposal)
 
-Status: **draft — request for community input**
+Status: **draft, revision 2 — request for community input**
 
-This document proposes adding benchmarking support to QFw. It is intended as
-a starting point for discussion: the measurement lists in particular are
-initial proposals, and community members are encouraged to suggest additions,
-removals, or changes. See [Open Questions and Community Input](#open-questions-and-community-input).
+This document proposes adding benchmarking and profiling support to QFw. It
+is intended as a starting point for discussion: the semantic conventions and
+suite-integration plans in particular are initial proposals, and community
+members are encouraged to suggest additions, removals, or changes. See
+[Open Questions and Community Input](#open-questions-and-community-input).
+
+Revision 2 incorporates the first round of review feedback (PR #30):
+
+- **OpenTelemetry is adopted** as the telemetry data model and SDK layer,
+  replacing the bespoke `QFW_BENCH` record format proposed in revision 1.
+- The document's core contribution is recast as **semantic conventions**
+  (span names and `qfw.*` attributes) for quantum benchmarking.
+- A **benchmark suite landscape** section is added covering SupermarQ,
+  QStone, and the MQSS Benchmarking Framework.
+- A short **licensing** section is added.
+- The document is renamed "Benchmarking and Profiling Design" — Type B
+  below is profiling/tracing.
 
 ## Table Of Contents
 
 - [Motivation](#motivation)
 - [Two Kinds of Benchmarking](#two-kinds-of-benchmarking)
 - [Design Principles](#design-principles)
-- [Measurement Capture Design](#measurement-capture-design)
-  - [Benchmark Record Format](#benchmark-record-format)
-  - [Logging Integration](#logging-integration)
+- [Telemetry Design: OpenTelemetry](#telemetry-design-opentelemetry)
+  - [What Is Adopted](#what-is-adopted)
+  - [Deployment Profiles](#deployment-profiles)
   - [Instrumentation Points](#instrumentation-points)
-- [Initial Capture List](#initial-capture-list)
-  - [Timing Events Added to QFw](#timing-events-added-to-qfw)
-  - [Context Pulled from Other Subsystems](#context-pulled-from-other-subsystems)
-  - [Result and Quality Metrics](#result-and-quality-metrics)
+  - [Trace-Context Propagation Through DEFw RPC](#trace-context-propagation-through-defw-rpc)
+  - [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)
+- [Semantic Conventions (Initial Proposal)](#semantic-conventions-initial-proposal)
+  - [Span Vocabulary](#span-vocabulary)
+  - [Context Attributes](#context-attributes)
+  - [Metrics](#metrics)
+  - [Result and Quality Data](#result-and-quality-data)
+- [Benchmark Suite Integrations](#benchmark-suite-integrations)
+  - [SupermarQ](#supermarq)
+  - [QStone](#qstone)
+  - [MQSS Benchmarking Framework](#mqss-benchmarking-framework)
+  - [Common Integration Notes](#common-integration-notes)
 - [Report Generation Design](#report-generation-design)
   - [Part 1: The JSON Report (Extractor)](#part-1-the-json-report-extractor)
   - [Part 2: The Human-Readable Report (Renderer)](#part-2-the-human-readable-report-renderer)
   - [Comparison Reports](#comparison-reports)
-- [Toward an Automated Benchmark Suite](#toward-an-automated-benchmark-suite)
+- [Licensing](#licensing)
 - [Implementation Phases](#implementation-phases)
 - [Open Questions and Community Input](#open-questions-and-community-input)
 
@@ -41,15 +62,16 @@ At the same time, QFw is itself a piece of HPC middleware whose overhead
 matters, especially for hybrid quantum-classical algorithms where the
 framework sits inside the iteration loop.
 
-This proposal covers both, with a shared measurement and reporting
+This proposal covers both, with a shared telemetry and reporting
 infrastructure.
 
 QFw's value here is **not** defining new benchmark circuits or metrics:
-established suites already exist (MQT Bench, QED-C Application-Oriented
-Benchmarks, Qiskit Benchpress, SupermarQ). QFw's value is being the neutral
-**execution harness and measurement rig** that can run such suites across
-back-ends and API paths, and attach consistent context (device calibration,
-software versions, timing breakdowns) to every result.
+established suites already exist (SupermarQ, QStone, MQT Bench, the MQSS
+Benchmarking Framework, QED-C Application-Oriented Benchmarks, Qiskit
+Benchpress). QFw's value is being the neutral **execution harness and
+measurement rig** that can run such suites across back-ends and API paths,
+and attach consistent context (device calibration, software versions, timing
+breakdowns) to every result.
 
 ## Two Kinds of Benchmarking
 
@@ -60,19 +82,22 @@ different software paths, and the results are compared.
 
 | Comparison axis | What varies | Example question |
 | --- | --- | --- |
-| Vendor / device | The QPU or simulator behind the QPM service | How does device X compare to device Y on the QED-C suite? |
+| Vendor / device | The QPU or simulator behind the QPM service | How does device X compare to device Y on an application suite? |
 | Resource-management API | Native vendor client vs QRMI vs QDMI, same device | What overhead and behavioral differences does each API layer introduce? |
 | Library / compiler | Front-end or transpiler settings, same abstract circuit | Which toolchain produces shallower circuits for this ISA, and at what compile-time cost? |
 | Simulator scaling | Simulator choice, node/rank count, circuit size | How do NWQ-Sim and TNQVM scale with qubits, depth, and nodes on this cluster? |
+| System integration under load | User population, job mix, contention | What throughput and turnaround does a realistic multi-user workload actually get? |
 
 The API-path comparison is worth highlighting: because QFw can reach the same
 IQM hardware through the native IQM client path, through QRMI, and through
 QDMI, it can isolate the cost and behavior of the resource-management layer
 itself — data directly relevant to ongoing interface-convergence discussions.
 
-### Type B: Benchmarking *of* QFw (framework overhead)
+### Type B: Profiling *of* QFw (framework overhead)
 
 QFw's own contribution to end-to-end latency and throughput is measured.
+This is distributed tracing/profiling in the classic sense, which is why
+OpenTelemetry traces (below) are its natural vehicle.
 
 | Measurement | Why it matters |
 | --- | --- |
@@ -82,317 +107,441 @@ QFw's own contribution to end-to-end latency and throughput is measured.
 | Job throughput under load | Concurrent jobs, batching behavior, scheduler interaction |
 | DEFw RPC / transport cost | Baseline for the libfabric (TCP vs OFI) transport work, which will consume this same instrumentation |
 
-Both types share the same record format, logging path, and report tooling.
-Type B events are a subset of what Type A runs also: a vendor
-comparison report automatically includes the framework-overhead breakdown.
+Both types share the same telemetry pipeline and report tooling. Type B
+spans are recorded during every Type A run: a vendor comparison report
+automatically includes the framework-overhead breakdown.
 
 ## Design Principles
 
-1. **Structured records, not prose.** Measurements are emitted as
-   single-line, machine-parseable records with a fixed sentinel — never as
-   free-form log text to be regexed later. Human-facing log wording can
-   change freely without breaking reports.
+1. **Open standards, not bespoke formats.** Telemetry is emitted through
+   OpenTelemetry — traces, metrics, and logs in OTLP — never as free-form
+   log text to be regexed later, and not as a QFw-specific record format.
+   QFw defines *semantics* (span names, attributes) on top of the standard,
+   not a new envelope.
 2. **Capture time-varying context at run time.** Anything that could differ
    between execution time and report time (device calibration, transpiler
    settings, queue state) is recorded when the run happens. The report
-   script *aggregates and formats*; it never *discovers* anything that could
-   have changed since the run. Static facts (package versions, topology) may
-   be gathered either way, but run-time capture is preferred for uniformity.
-3. **JSON first, human-readable second.** The canonical report is a
-   machine-readable JSON document; the human-readable report is rendered
-   from it. Comparing runs means diffing structured reports, not parsing
-   formatted text.
+   tooling *aggregates and formats*; it never *discovers* anything that
+   could have changed since the run. Static facts (package versions,
+   topology) may be gathered either way, but run-time capture is preferred
+   for uniformity.
+3. **Archivable artifacts first, dashboards second.** The canonical output
+   of a benchmark run is a machine-readable JSON report derived from the
+   telemetry; the human-readable report is rendered from it. Comparing runs
+   means diffing structured reports, not parsing formatted text. Live
+   dashboards (collector profile) complement but do not replace archivable
+   artifacts.
 4. **Low perturbation.** Instrumentation must not meaningfully disturb what
-   it measures: dedicated log level, node-local log files, monotonic-clock
-   durations carried in the record payload (see
-   [Logging Integration](#logging-integration)).
-5. **Schema-versioned everything.** Both the log record and the JSON report
-   carry a schema version so old data remains parseable as formats evolve.
+   it measures: batched span export, node-local telemetry files, and
+   sampling controls for high-rate signals (see
+   [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)).
+5. **Versioned semantics.** OTLP handles envelope evolution; the QFw
+   semantic conventions and the JSON report schema carry explicit versions
+   so old data remains interpretable as conventions evolve.
 6. **Reuse existing suites.** Circuit sets and quality metrics come from
-   established benchmark suites where possible; QFw provides execution,
-   timing, and context.
+   established benchmark suites; QFw provides execution, timing, and
+   context, and correlates suite results with its own traces.
 
-## Measurement Capture Design
+## Telemetry Design: OpenTelemetry
 
-### Benchmark Record Format
+### What Is Adopted
 
-Each measurement is one line in the DEFw log: a fixed sentinel `QFW_BENCH`
-followed by a JSON object.
+QFw adopts the [OpenTelemetry](https://opentelemetry.io/docs/) data model
+and SDKs for all benchmarking/profiling telemetry, using all three signals:
 
-```
-QFW_BENCH {"schema": 1, "run_id": "c3f9…", "event": "qrc.dispatch", "component": "svc_iqm_qpm", "t_wall": "2026-07-15T18:22:31.481Z", "t_mono": 10254.113724, "dur_s": 0.0132, "iter": 7, "data": {...}}
-```
+- **Traces** are the primary signal. A benchmark run is a trace; every hop
+  through the stack is a span with start/end timestamps, attributes, and a
+  parent — which replaces revision 1's paired start/end events and hand-built
+  `run_id` stitching with the standard trace ID + parent/child model.
+- **Metrics** carry counters and duration histograms — both for throughput
+  measurements and for timings that need distribution statistics or better
+  effective precision than cross-node wall-clock spans provide (see
+  [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)).
+- **Logs** remain ordinary DEFw logs; where useful, structured log entries
+  are linked to the active trace ID so they can be stitched into the same
+  timeline.
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `schema` | yes | Record schema version (integer, starts at 1) |
-| `run_id` | yes | Correlation ID for the benchmark run; generated at submission and propagated through every hop |
-| `event` | yes | Dotted event name from the vocabulary below |
-| `component` | yes | Emitting component (e.g. `qfw_qiskit`, `qpm`, `qrc`, `svc_nwqsim_qpm`) |
-| `t_wall` | yes | Wall-clock timestamp (UTC, ISO 8601) — for coarse cross-node ordering only |
-| `t_mono` | yes | Monotonic clock reading in the emitting process — for intra-process interval math |
-| `dur_s` | no | Duration in seconds for span-style events, measured with the monotonic clock around the work |
-| `iter` | no | Iteration index for hybrid-loop workloads |
-| `data` | no | Event-specific payload (context snapshots, sizes, counts) |
+Adopting the standard has consequences the bespoke format could not offer:
 
-Rules:
+- **Instrumentation below QFw.** Mature SDKs exist for Python (DEFw, QPM
+  services), Rust (QRMI), and C/C++ (QDMI), so third-party layers below the
+  shim boundary can emit spans into the same trace — exactly where the
+  Type A API-path comparison gets interesting. Some QPU vendors already use
+  OTel internally.
+- **Observability above QFw.** SLURM has adopted OpenMetrics, and a
+  [SLURM processor for the OTel Collector](https://github.com/facebookresearch/gcm/blob/main/slurmprocessor/README.md)
+  exists, so scheduler-level data can be correlated with QFw traces in the
+  collector profile.
+- **Ecosystem tooling.** Trace stores and viewers (e.g. Grafana Tempo's
+  trace waterfall) render the per-hop latency breakdown with no custom
+  code, and backward-compatible addition of spans/attributes is a
+  first-class feature of the model.
 
-- **Durations are computed inside one process** with the monotonic clock.
-  Wall-clock timestamps from different nodes are never subtracted (clock
-  skew across nodes exceeds the intervals of interest).
-- The `run_id` is minted where the workload enters QFw (the `qfw_qiskit`
-  back-end or the QPM API) and travels with the job through every service.
-- Records must be single-line JSON so extraction is `grep QFW_BENCH | parse`.
+### Deployment Profiles
 
-### Logging Integration
+The same instrumentation supports two deployment profiles; choosing one is
+a configuration decision, not a code change.
 
-DEFw's logging (Python stdlib `logging`, synchronous `FileHandler`, custom
-DEFw levels — see `DEFw/python/infra/defw_common_def.py`) is sufficient for
-the expected record rates. Analysis: benchmark instrumentation emits tens of
-records per job (order 10 per iteration for hybrid loops with ≥100 ms
-iterations); at tens of microseconds per synchronous log call, perturbation
-is well below run-to-run noise. No logging rework is required up front.
-Three deployment rules keep it that way:
+**Profile 1 — file export (default, zero infrastructure).** Each
+instrumented process exports OTLP JSON to files on node-local storage
+(e.g. under the DEFw `tmp` directory). Post-run tooling reads the files and
+produces reports. This preserves the simple "run, then process files"
+workflow and suits minimal, air-gapped, CI, and development deployments —
+including the QFw-SLURM-Cluster reference deployment.
 
-1. **Dedicated `DEFW_BENCH` log level.** Added via the existing
-   `add_logging_level()` mechanism, so benchmark records can be enabled
-   *independently* of verbose diagnostic levels. Benchmarking with
-   `DEFW_RPC`-style per-message tracing enabled would perturb results; the
-   dedicated level makes "bench on, debug off" the natural configuration.
-2. **Node-local log files.** The DEFw log path follows the `defw: tmp:`
-   configuration; benchmark deployments must point it at node-local storage
-   (e.g. `/tmp`), never a shared/NFS filesystem, where write latency is
-   large and jittery.
-3. **Timings ride in the payload.** Because durations are measured with the
-   monotonic clock around the work and merely *reported* via the record,
-   logging cost can delay the program slightly but cannot corrupt the
-   measured values.
+**Profile 2 — collector (optional, full observability).** The same signals
+are shipped to an OTel Collector and stored/visualized with off-the-shelf
+stacks (e.g. Grafana + Tempo + Loki + Mimir, or Prometheus). Docker Compose
+examples and Kubernetes Helm charts for such stacks exist and can be adapted
+as a reference deployment for persistent installations. The SLURM processor
+above slots in here.
 
-If a future workload needs record rates beyond what synchronous logging
-sustains (e.g. per-message transport tracing for the libfabric work), the
-contained upgrades are: a bench-specific handler without the
-`funcName`/`lineno` format fields (which force a stack walk per record), and
-a `QueueHandler`/`QueueListener` pair moving formatting and I/O off the hot
-thread. Nothing in this design blocks either.
+The report pipeline (below) consumes profile 1's files directly; under
+profile 2 the same reports can be generated from the collector's store.
 
 ### Instrumentation Points
 
-Instrumentation follows the job path through the stack:
+Spans follow the job path through the stack. Sketch of the trace tree for
+one job (span names from the [Span Vocabulary](#span-vocabulary)):
 
 ```
- user program
-     │
- qfw_qiskit back-end          app.*   events
-     │
- QPM API / QPM service        qpm.*   events
-     │
- QRC                          qrc.*   events
-     │
- back-end client              client.* events
- (IQM client | QRMI | QDMI | simulator)
-     │
- device / simulator
+qfw.bench.run                      (root: one benchmark run)
+└── qfw.job                        (one circuit/job, end to end)
+    ├── qfw.app.serialize          (circuit → canonical OpenQASM3)
+    ├── qfw.qpm.receive
+    ├── qfw.qpm.transpile          (if QFw-side transpilation)
+    ├── qfw.qpm.queue              (time queued inside QFw)
+    ├── qfw.qrc.dispatch
+    └── qfw.client.execute         (back-end client: IQM | QRMI | QDMI | simulator)
+        ├── qfw.client.acquire     (session/resource acquisition)
+        ├── qfw.client.submit
+        └── qfw.client.poll        (per poll; count derivable)
 ```
 
-Each hop emits paired span events (or one event with `dur_s`) so the report
-can build a per-hop latency breakdown and compute framework overhead as
-(end-to-end time) − (back-end-reported execution time).
+Hybrid workloads wrap each iteration in a `qfw.iter` span (child of
+`qfw.bench.run`, parent of that iteration's `qfw.job` spans). DEFw RPC
+round-trips can be recorded as `qfw.rpc` spans — off by default, enabled
+for transport work (libfabric TCP vs OFI).
 
-## Initial Capture List
+### Trace-Context Propagation Through DEFw RPC
 
-**This is the section where community input is most wanted.** The lists
-below are a starting proposal, split into (a) timing events QFw will emit,
-(b) context pulled from surrounding subsystems, and (c) result/quality
-metrics.
+OTel auto-instruments HTTP and gRPC, but DEFw uses its own RPC transport,
+so W3C `traceparent` context must be injected into and extracted from DEFw
+RPC envelopes manually. This is a Phase 1 work item and the main
+QFw-specific engineering cost of the OTel adoption. Once done, spans
+emitted by any service on any node join the correct trace automatically —
+and the same propagation must be preserved by the future libfabric
+transport.
 
-### Timing Events Added to QFw
+### Clocks, Precision, and Overhead
 
-| Event | Emitted by | Meaning / duration measured |
+- **Span timestamps are wall-clock.** Within one process they yield
+  accurate durations; *across* nodes, alignment is limited by clock
+  synchronization quality (at best the resolution of a well-conditioned
+  NTP/PTP deployment). Per-hop conclusions should therefore rest on span
+  durations, not on cross-node timestamp differences.
+- **Metrics for finer precision.** Where measurements need resolution below
+  cross-node clock sync, or where distributions matter (e.g. per-iteration
+  latency percentiles at scale), duration histograms measured with a
+  monotonic clock inside one process are the right signal, complementing
+  the trace view.
+- **Overhead.** The SDKs' batch span processors move export off the hot
+  path, and expected span rates are modest (tens of spans per job; order
+  ten per iteration in hybrid loops with ≥100 ms iterations) —
+  perturbation well below run-to-run noise. Deployment rules: export to
+  node-local storage, never a shared filesystem; leave high-rate span
+  sources (`qfw.rpc`) off unless the transport itself is under study; do
+  not run benchmarks with verbose DEFw debug logging enabled.
+
+## Semantic Conventions (Initial Proposal)
+
+OTel provides the envelope but not the semantics: there are no existing
+conventions for calibration set IDs, transpiled circuit depth, shot counts,
+or which resource-management path a job took. Defining these — clearly and
+vendor-neutrally — is this document's core contribution, and the area where
+community input is most valuable. A shared set of quantum-benchmarking
+semantic conventions could outlive QFw itself.
+
+Conventions are versioned via the standard OTel `schema_url` / attribute
+`qfw.conventions.version` (starting at `1`).
+
+### Span Vocabulary
+
+| Span | Emitted by | Measures |
 | --- | --- | --- |
-| `bench.run.start` / `bench.run.end` | front-end | Brackets the whole benchmark run; `data` carries the run label and workload description |
-| `app.submit` | `qfw_qiskit` | User program hands circuits to the QFw back-end |
-| `app.serialize` | `qfw_qiskit` | Circuit → canonical OpenQASM3 conversion (`dur_s`, plus payload size in `data`) |
-| `app.result` | `qfw_qiskit` | Results delivered back to the user program (end of end-to-end span) |
-| `qpm.job.received` | QPM service | Job arrives at the QPM |
-| `qpm.transpile` | QPM service | QFw-side transpilation, if any (`dur_s`; pre/post circuit stats in `data`) |
-| `qpm.queue` | QPM service | Time spent queued inside QFw before dispatch (`dur_s`) |
-| `qrc.dispatch` | QRC | Hand-off to the back-end client (`dur_s` for the dispatch call) |
-| `client.acquire` | back-end client | Resource/session acquisition: QRMI `acquire`, QDMI session open, or vendor-client connect (`dur_s`) |
-| `client.submit` | back-end client | Job submission call to the vendor/simulator (`dur_s` of the call itself) |
-| `client.poll` | back-end client | Each result poll (`dur_s`; poll count derivable) |
-| `client.result` | back-end client | Results received from vendor/simulator; `data` carries vendor-reported timing where available |
-| `rpc.call` | DEFw | DEFw RPC round-trip (`dur_s`, bytes in `data`) — off by default; enables transport benchmarking (libfabric TCP vs OFI) |
-| `iter.start` / `iter.end` | front-end | Brackets one hybrid-algorithm iteration (`iter` index set on all records in between) |
+| `qfw.bench.run` | front-end / scenario driver | The whole benchmark run; carries run label and workload attributes |
+| `qfw.iter` | front-end | One hybrid-algorithm iteration; attribute `qfw.iter.index` |
+| `qfw.job` | front-end (`qfw_qiskit`) | One circuit/job end to end, submission to result delivery |
+| `qfw.app.serialize` | `qfw_qiskit` | Circuit → canonical OpenQASM3 conversion; payload size attribute |
+| `qfw.qpm.receive` | QPM service | Job arrival and admission at the QPM |
+| `qfw.qpm.transpile` | QPM service | QFw-side transpilation; pre/post circuit-statistics attributes |
+| `qfw.qpm.queue` | QPM service | Time queued inside QFw before dispatch |
+| `qfw.qrc.dispatch` | QRC | Hand-off to the back-end client |
+| `qfw.client.execute` | back-end client | Full back-end interaction; attribute `qfw.stack.api_path` = `native` \| `qrmi` \| `qdmi` \| `simulator` |
+| `qfw.client.acquire` | back-end client | Resource/session acquisition (QRMI `acquire`, QDMI session open, vendor connect) |
+| `qfw.client.submit` | back-end client | The submission call to the vendor/simulator |
+| `qfw.client.poll` | back-end client | Each result poll |
+| `qfw.rpc` | DEFw | One DEFw RPC round-trip; bytes attributes; off by default |
 
-Derived (computed by the report script, not logged): end-to-end latency,
-per-hop breakdown, framework overhead, in-QFw queue wait, throughput
-(jobs/unit time), and per-iteration statistics (min / max / mean / p50 /
+Vendor-reported timings that did not happen under QFw's clocks (server-side
+queue time, execution time) are recorded as *attributes* on
+`qfw.client.execute` (`qfw.vendor.queue_time_s`, `qfw.vendor.exec_time_s`),
+not as spans.
+
+Derived by report tooling (not emitted): end-to-end latency, per-hop
+breakdown, framework overhead = (`qfw.job` duration) − (back-end-reported
+execution time), throughput, iteration statistics (min / max / mean / p50 /
 p95).
 
-### Context Pulled from Other Subsystems
+### Context Attributes
 
-Captured **at run time** and emitted as `data` payloads on context events
-(`ctx.qiskit`, `ctx.qrmi`, `ctx.qdmi`, `ctx.backend`, `ctx.env`), because
-several of these change over time:
+Captured **at run time** as resource attributes (per-process facts) or span
+attributes (per-run/per-job facts), because several of these change over
+time. A report generated later must describe the run as it was, not as the
+system looks at report time.
 
-| Source | What to capture |
+| Source | Attributes (namespace sketch) |
 | --- | --- |
-| Qiskit | Version; back-end name; transpiler settings (`optimization_level`, seed, basis gates); circuit statistics before and after transpilation (qubit count, depth, total gate count, two-qubit gate count); OpenQASM3 payload size |
-| QRMI | QRMI version; resource type; `target()` payload (device configuration/properties as served to the client); acquisition/session identifiers |
-| QDMI / FoMaC | Device name and version; qubit count; coupling map; supported gate set; calibration snapshot as exposed by FoMaC (gate fidelities, readout errors, T1/T2 where available); calibration set ID once the FoMaC Python binding exposes it — this is the key to knowing *which* calibration a result was obtained under |
-| Vendor (e.g. IQM) | Server-side job ID; vendor-reported queue time and execution time; any vendor-reported calibration identifier |
-| Simulators (NWQ-Sim, TNQVM, …) | Simulator name and version; method/configuration; node and rank count; peak memory where obtainable |
-| SLURM | Job ID; partition; node list; allocated resources |
-| Environment | Container image tag/digest; Python version; versions of key packages (qiskit, qrmi, mqt.core, iqm-client, …); hostname per component; QFw git revision |
+| QFw / DEFw | `service.name`, `service.version`, QFw git revision, component role (`qpm`, `qrc`, …), hostname |
+| Qiskit | `qfw.qiskit.version`; transpiler settings (`qfw.transpile.optimization_level`, seed, basis gates); circuit statistics before/after (`qfw.circuit.num_qubits`, `qfw.circuit.depth`, `qfw.circuit.depth_transpiled`, gate counts, two-qubit gate count); OpenQASM payload size |
+| QRMI | `qfw.qrmi.version`, resource type, `target()` payload digest, acquisition/session identifiers |
+| QDMI / FoMaC | `qfw.device.name`, `qfw.device.version`, qubit count, coupling map, gate set; calibration snapshot (gate fidelities, readout errors, T1/T2 where exposed); `qfw.device.calibration_set_id` once the FoMaC Python binding exposes it — the key to knowing *which* calibration a result was obtained under |
+| Vendor (e.g. IQM) | Server-side job ID, vendor-reported queue/execution times, vendor calibration identifier |
+| Simulators (NWQ-Sim, TNQVM, …) | Simulator name/version, method/configuration, node and rank count, peak memory where obtainable |
+| SLURM | Job ID, partition, node list, allocated resources (also scrapeable via OpenMetrics in the collector profile) |
+| Environment | Container image tag/digest, Python version, key package versions (qiskit, qrmi, mqt.core, iqm-client, …) |
 
-Rationale for run-time capture: a report script that queries QDMI hours
-after a run may see a *different* calibration than the one in effect during
-execution, and the report would silently misattribute results. The report
-script therefore only reads what the run recorded.
+### Metrics
 
-### Result and Quality Metrics
+Initial metric set (OTel instruments):
 
-For Type A comparisons, timing alone is not enough — result quality must be
-recorded. Proposal:
+| Metric | Instrument | Purpose |
+| --- | --- | --- |
+| `qfw.iter.duration` | histogram | Per-iteration latency distribution for hybrid loops |
+| `qfw.job.duration` | histogram | End-to-end job latency distribution under load |
+| `qfw.jobs.completed` / `qfw.jobs.failed` | counter | Throughput and reliability under load |
+| `qfw.rpc.duration`, `qfw.rpc.bytes` | histogram | Transport characterization (libfabric work); off by default |
 
-- **Always recorded:** measurement counts (or a reference to where they are
-  stored, for large results), shot count, success/failure status, error
-  details on failure.
+### Result and Quality Data
+
+- **Always recorded:** shot count, success/failure status, error details on
+  failure, and measurement counts (inline for small results, referenced
+  files above a size cutoff — see open questions).
 - **Computed where feasible:** for small circuits with classically
   computable ideal distributions, a distribution-distance metric
   (e.g. Hellinger fidelity) against the ideal.
-- **Suite-provided:** when running an established suite (MQT Bench, QED-C,
-  Benchpress), the suite's own scores are captured verbatim in the report's
-  `results` section and attributed to the suite. QFw does not re-define
-  them.
+- **Suite-provided:** when running an established suite, the suite's own
+  scores are captured verbatim in the report's `results` section and
+  attributed to the suite (`qfw.suite.name`, `qfw.suite.version`,
+  `qfw.suite.score`). QFw does not re-define them.
+
+## Benchmark Suite Integrations
+
+Three suites are proposed for integration. They occupy distinct layers and
+are complementary, with QFw's own traces as the attribution layer
+underneath all of them:
+
+| Suite | Layer | Distinctive contribution | Integration cost |
+| --- | --- | --- | --- |
+| SupermarQ (Infleqtion) | Application quality (Type A) | Normalized application scores + circuit feature vectors that help *explain* cross-device differences | Lowest — an in-tree example already runs SupermarQ circuits |
+| QStone (Riverlane / ORNL) | System integration under load (Type A/B, external view) | Multi-user contention, scheduler-aware three-phase jobs, user-experienced latency | Low — one `Connection` subclass or an HTTP/gRPC gateway |
+| MQSS Benchmarking Framework (LRZ / MQV) | Suite orchestration (Type A) | Registry-driven runner that brings MQT Bench, QV, and RB along; alignment with the QDMI community | Low — one `DeviceAdapter` |
+
+### SupermarQ
+
+[SupermarQ](https://github.com/Infleqtion/client-superstaq) provides eight
+application benchmarks (GHZ, Mermin-Bell, error-correction codes,
+Hamiltonian simulation, QAOA and VQE proxies), each exposing `circuit()`
+(Cirq or Qiskit form) and `score(counts)` — a normalized application-level
+quality score — plus per-circuit feature vectors (communication, critical
+depth, entanglement ratio, parallelism, liveness, measurement) that
+characterize the workload.
+
+QFw already runs SupermarQ circuits: `examples/tests/test_supermarq.py`
+generates GHZ and VQE-proxy circuits and executes them through the QPM API.
+It currently discards the scoring half. Completing it into a benchmark —
+feeding counts back into `score()`, recording the score and feature vector
+via the conventions above, and running the result across back-ends/API
+paths — is the proposed **pilot**: the first end-to-end exercise of the
+whole design (instrument → OTLP → extract → compare) with minimal new
+integration work.
+
+### QStone
+
+[QStone](https://github.com/riverlane/QStone) (Riverlane, developed in
+collaboration with ORNL) benchmarks the quality of the HPC–quantum
+integration itself: a config defines synthetic users with probabilistic
+application mixes (VQE, RB, PyMatching, QBC); QStone generates portable
+scheduler job suites (SLURM sbatch, LSF, bare metal) with each application
+split into `pre`/`run`/`post` phases so only `run` occupies the QPU; a
+profiler aggregates per-step records into integration-level statistics
+(classical vs quantum time, connection overhead, throughput per user).
+
+QStone is the natural **load generator for Type B**: it measures what a
+user population experiences under contention — turnaround, quantum/classical
+split, connection overhead — from outside, while QFw's traces explain from
+inside *which* hop the time went to. Running QStone workloads with QFw
+instrumentation active, and correlating QStone's job IDs with QFw trace IDs,
+joins the two views mechanically. QStone also directly drives the
+throughput/contention rows of the Type B table.
+
+Integration options: point QStone's HTTP or gRPC connector at a thin QFw
+gateway, or implement a QFw `Connection` subclass (a three-method ABC whose
+`preprocess` step hands over OpenQASM).
+
+### MQSS Benchmarking Framework
+
+The [MQSS Benchmarking Framework](https://github.com/Munich-Quantum-Software-Stack/MQSS-Benchmarking-Framework)
+(`mqssbench`, LRZ/MQV) is a registry-driven orchestration layer for
+benchmark workloads: benchmarks (quantum volume, randomized benchmarking,
+QAOA, MQT Bench circuits via a provider), device adapters, analyzers, and
+storage are plugins, driven by YAML configs or a Python API.
+
+Integration is one `DeviceAdapter` (`name`, `get_backend_name`,
+`validate_profiling_config`, `execute_circuit`); since QFw already presents
+a Qiskit back-end (`qfw_qiskit`), the adapter is expected to be a thin
+wrapper. Once it exists, every mqssbench benchmark runs through QFw against
+any QPM service and any API path — and MQT Bench, QV, and RB come along for
+free. The layering is: mqssbench defines and scores workloads; QFw executes
+and measures them.
+
+### Common Integration Notes
+
+- **Correlation.** Each suite integration stamps the active QFw trace ID
+  into the suite's own run records (and vice versa where the suite allows
+  custom metadata), so report tooling can join suite scores with QFw traces
+  without heuristics.
+- **Circuit language.** SupermarQ's QASM export and QStone's core language
+  are OpenQASM 2.0, while QFw's canonical form is OpenQASM 3. QFw's
+  canonicalization accepts 2.0 input; raising QASM 3 support upstream in
+  the suites is worthwhile but not a blocker.
+- **Suggested order.** SupermarQ first (pilot; proves the measurement rig
+  end to end at minimal cost), QStone second (Type B synergy and the
+  ORNL collaboration), mqssbench alongside or after (cheap adapter, strong
+  community-alignment value). See open questions.
 
 ## Report Generation Design
 
-Two scripts (proposed home: `bin/` alongside existing tooling, or a new
-`benchmarks/` directory — see open questions), sharing a small library:
+With OTel adopted, the report tooling's scope shrinks: it no longer defines
+a record format, and under the collector profile many views (per-trace
+waterfalls, dashboards) come from existing tools. What remains is the part
+with no off-the-shelf equivalent: turning one run's telemetry plus suite
+results into a **reproducible, archivable comparison artifact** — a report
+you can attach to a PR, a paper, or a regression bisect.
+
+Two tools plus a comparator (proposed home: `bin/`, see open questions),
+consuming profile 1's OTLP files directly (or a collector's store under
+profile 2):
 
 ```
- defw_py.log files (one per node/agent)
-        │
-        ▼
- qfw_bench_extract  ──►  run-<run_id>.json      (canonical JSON report)
+ OTLP JSON files (per node/process)   suite results (JSON)
+        │                                   │
+        ▼                                   ▼
+ qfw_bench_extract  ──►  run-<trace_id>.json      (canonical JSON report)
                                 │
                                 ▼
- qfw_bench_render   ──►  run-<run_id>.md        (human-readable report)
+ qfw_bench_render   ──►  run-<trace_id>.md        (human-readable report)
 
  qfw_bench_compare  ──►  compare.json / compare.md   (N reports in, comparison out)
 ```
 
 ### Part 1: The JSON Report (Extractor)
 
-`qfw_bench_extract --logs <dir-or-files> [--run-id <id>] --out <file.json>`
+`qfw_bench_extract --otlp <dir-or-files> [--suite-results <file>] --out <file.json>`
 
 Responsibilities:
 
-1. Scan the given log files for `QFW_BENCH` lines; parse the JSON payloads;
-   tolerate and count malformed lines (report them, don't die).
-2. Group records by `run_id`; stitch a per-run timeline across the log files
-   of different nodes/services using `t_wall` for ordering and per-process
-   `t_mono` for interval math.
-3. Compute the derived metrics (per-hop breakdown, end-to-end, overhead,
-   iteration statistics).
+1. Read OTLP JSON files; assemble the span tree per trace; tolerate and
+   count malformed/incomplete data (report it, don't die).
+2. Attach suite results by trace-ID correlation.
+3. Compute derived metrics (per-hop breakdown, end-to-end, framework
+   overhead, iteration statistics from the duration histograms).
 4. Validate against the report schema and write the canonical JSON report.
 
-Report schema sketch (`report_schema: 1`):
+Report schema sketch (`report_schema: 2`):
 
 ```json
 {
-  "report_schema": 1,
-  "run": {"run_id": "…", "label": "iqm-via-qrmi", "started": "…", "ended": "…"},
-  "workload": {"suite": "mqt-bench", "circuit": "ghz", "qubits": 5, "shots": 1024, "iterations": null},
+  "report_schema": 2,
+  "conventions_version": 1,
+  "run": {"trace_id": "…", "label": "iqm-via-qrmi", "started": "…", "ended": "…"},
+  "workload": {"suite": "supermarq", "benchmark": "ghz", "qubits": 5, "shots": 1024,
+               "features": {"communication": 0.4, "critical_depth": 0.7}},
   "stack": {
-    "path": "qrmi",
+    "api_path": "qrmi",
     "qiskit": {"version": "…", "transpile": {"optimization_level": 1, "seed": 42}},
-    "qrmi": {"version": "…", "target": {"…": "…"}},
+    "qrmi": {"version": "…"},
     "qdmi": null,
     "vendor": {"name": "iqm", "job_id": "…"}
   },
   "device": {"name": "…", "qubits": 20, "calibration": {"set_id": "…", "snapshot": {"…": "…"}}},
   "environment": {"image": "…", "python": "3.12.x", "packages": {"…": "…"}, "slurm": {"job_id": "…"}},
-  "events": [ {"event": "app.submit", "component": "qfw_qiskit", "…": "…"} ],
+  "spans": [ {"name": "qfw.job", "start": "…", "duration_s": 4.31, "attributes": {"…": "…"}} ],
   "metrics": {
     "end_to_end_s": 4.31,
-    "hops": {"serialize_s": 0.02, "qpm_queue_s": 0.4, "client_submit_s": 0.05, "backend_exec_s": 3.1, "…": 0},
+    "hops": {"serialize_s": 0.02, "qpm_queue_s": 0.4, "client_submit_s": 0.05, "backend_exec_s": 3.1},
     "framework_overhead_s": 0.74,
     "iterations": {"count": 100, "mean_s": 0.41, "p50_s": 0.39, "p95_s": 0.52}
   },
-  "results": {"status": "ok", "counts_ref": "…", "quality": {"hellinger_fidelity": 0.94}, "suite_scores": {}}
+  "results": {"status": "ok", "counts_ref": "…",
+              "quality": {"hellinger_fidelity": 0.94},
+              "suite_scores": {"supermarq_score": 0.91}}
 }
 ```
 
-The `events` array preserves the raw timeline so future tooling can compute
+The `spans` array preserves the raw timeline so future tooling can compute
 metrics not anticipated today without re-running anything.
 
 ### Part 2: The Human-Readable Report (Renderer)
 
 `qfw_bench_render <run.json> [--out <file.md>]`
 
-Renders **Markdown** from the JSON report — chosen because it displays
-natively on GitHub and can be pasted into issues, PRs, and the wiki. The
-renderer never touches log files and never queries live systems; it is a
-pure function of the JSON report. Layout:
-
-1. **Header** — run label, date, workload, one-line stack description
-   ("GHZ-5, 1024 shots, IQM via QRMI, calibration set …").
-2. **Context tables** — software versions, device snapshot summary,
-   environment.
-3. **Latency breakdown** — per-hop table plus a simple textual bar view;
-   framework overhead called out explicitly.
-4. **Iteration statistics** (hybrid runs) — count, mean, p50, p95, worst.
-5. **Results / quality** — status, quality metrics, suite scores.
-6. **Caveats** — auto-generated notes (e.g. "N malformed records skipped",
-   "calibration set ID unavailable: FoMaC binding does not expose it yet").
-
-Other output formats (HTML, CSV extracts) can be added later as alternative
-renderers over the same JSON.
+Renders **Markdown** from the JSON report — it displays natively on GitHub
+and pastes into issues, PRs, and the wiki. The renderer never touches
+telemetry files and never queries live systems; it is a pure function of
+the JSON report. Layout: header (run label, workload, one-line stack
+description), context tables, latency breakdown with framework overhead
+called out, iteration statistics, results/quality with suite scores, and
+auto-generated caveats (e.g. "calibration set ID unavailable: FoMaC binding
+does not expose it yet"). Under the collector profile, interactive trace
+views (e.g. Grafana's trace visualization) complement these reports.
 
 ### Comparison Reports
 
 `qfw_bench_compare <a.json> <b.json> […] [--out compare.md]`
 
 Takes two or more JSON reports and produces a side-by-side comparison keyed
-by run label: one column per run, rows for the shared metrics (latency
-breakdown, overhead, iteration stats, quality scores), with per-row
-best-value highlighting. The comparison also diffs the *context* (versions,
-calibration set, transpiler settings) and lists what differed — a comparison
-between runs whose context silently differs in an unnoticed way is the main
-failure mode this tool must guard against.
+by run label: one column per run, rows for shared metrics, per-row
+best-value highlighting. Critically, the comparison also **diffs the
+context** (versions, calibration set, transpiler settings) and lists what
+differed — a comparison between runs whose context silently differs is the
+main failure mode this tool guards against, and the capability with no
+off-the-shelf equivalent.
 
 Comparison is only defined between reports with the same `report_schema`
 major version; the tool refuses otherwise rather than guessing.
 
-## Toward an Automated Benchmark Suite
+## Licensing
 
-The pieces above compose into automation without further design changes:
-
-1. A **benchmark scenario** is a script that launches a workload through QFw
-   with a chosen stack path and a run label (e.g.
-   `ghz5 --path native|qrmi|qdmi`, or an MQT Bench / QED-C driver).
-2. A **suite run** executes a set of scenarios (optionally as SLURM jobs),
-   then runs `qfw_bench_extract` per run and `qfw_bench_compare` across
-   them.
-3. Reports (JSON + Markdown) are archived per suite run; comparing *suite
-   runs over time* is just `qfw_bench_compare` across archives — this is
-   how regressions in QFw itself get caught, and how the libfabric TCP→OFI
-   transition will be quantified.
-
-CI integration (e.g. a nightly suite against simulators, hardware runs on
-demand) is a natural later step once the scenario set stabilizes.
+QFw and DEFw are BSD-3-Clause. Everything this proposal adds is
+permissively licensed and compatible as a dependency: OpenTelemetry SDKs,
+QStone, SupermarQ, Qiskit, QRMI, and QDMI are Apache-2.0; the MQSS
+Benchmarking Framework is Apache-2.0 with LLVM exception; MQT Bench is MIT.
+QFw remains BSD-3-Clause; dependencies keep their own licenses. Should any
+third-party source ever be vendored into the QFw tree (none is planned),
+it retains its original license, headers, and any NOTICE obligations.
+Copyleft-licensed suites would require case-by-case review; none of the
+candidates here is copyleft.
 
 ## Implementation Phases
 
 | Phase | Deliverable |
 | --- | --- |
-| 1 | `DEFW_BENCH` log level; record format + emit helper; instrumentation of the core submit path (`app.*`, `qpm.*`, `qrc.*`, `client.*`); `qfw_bench_extract` producing schema-v1 JSON |
-| 2 | Run-time context capture (`ctx.*` events) from Qiskit, QRMI, QDMI/FoMaC, SLURM, environment; `qfw_bench_render` |
-| 3 | `qfw_bench_compare`; hybrid-loop (`iter.*`) instrumentation; quality metrics for small circuits |
-| 4 | Scenario drivers for one established suite (MQT Bench or QED-C) and the native/QRMI/QDMI path comparison; suite-run automation |
-| 5 | `rpc.call` transport instrumentation shared with the libfabric work; report archiving and longitudinal comparison |
+| 1 | OTel SDK integration in the Python components; `traceparent` propagation through DEFw RPC; file-export profile; core span vocabulary (`qfw.job` path); `qfw_bench_extract` producing schema-v2 JSON from OTLP files |
+| 2 | Context attributes from Qiskit, QRMI, QDMI/FoMaC, SLURM, environment; `qfw_bench_render`; **SupermarQ pilot** — extend the in-tree example with `score()` and conventions, run across back-ends |
+| 3 | `qfw_bench_compare`; hybrid-loop spans and metric histograms; **QStone integration** (QFw connector or gateway) with trace-ID correlation |
+| 4 | **mqssbench `DeviceAdapter`** (brings MQT Bench, QV, RB); suite-run automation; collector-profile reference deployment (Docker Compose) with the SLURM processor |
+| 5 | `qfw.rpc` spans/metrics shared with the libfabric TCP-vs-OFI work; instrumentation below the shim via the Rust (QRMI) and C (QDMI) SDKs; report archiving and longitudinal comparison |
 
 Phase 1 alone is already useful: it produces the framework-overhead
 breakdown (Type B) and the measurement rig everything else builds on.
@@ -401,20 +550,27 @@ breakdown (Type B) and the measurement rig everything else builds on.
 
 Concrete questions where feedback is sought — plus anything not listed here:
 
-1. **What else should be captured?** Additions to the
-   [Initial Capture List](#initial-capture-list) are the most valuable form
-   of feedback — especially context fields needed to make cross-vendor
-   comparisons honest, and metrics from suites you already use.
-2. **Which established suite should be integrated first** — MQT Bench,
-   QED-C Application-Oriented Benchmarks, Benchpress, other?
+1. **Semantic conventions** are the highest-value feedback target: are the
+   span names and `qfw.*` attribute namespaces right? What context is
+   missing to make cross-vendor comparisons honest? Should the conventions
+   aim for a home beyond QFw?
+2. **Suite integration order:** SupermarQ pilot → QStone → mqssbench is
+   proposed above. Agree? Other suites (QED-C, Benchpress) that should be
+   in the first wave?
 3. **Quality metrics:** is a distribution-distance metric for small
    circuits worth QFw computing itself, or should quality always be
    delegated to suites?
-4. **Where should the tooling live** — `bin/`, a new top-level
-   `benchmarks/` directory, or a separate repository?
+4. **Precision:** which measurements need metric histograms (monotonic,
+   distribution-bearing) rather than spans — is the split proposed in
+   [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)
+   drawn in the right place?
 5. **Result storage:** counts inline in the JSON report vs referenced
-   external files — where is the size cutoff?
-6. **Naming:** is the `QFW_BENCH` sentinel / `qfw_bench_*` tool naming
-   agreeable?
+   external files — where is the size cutoff? How long are OTLP files
+   retained per run?
+6. **Where should the tooling live** — `bin/`, a new top-level
+   `benchmarks/` directory, or a separate repository?
+7. **Upstream QASM 3:** should we push OpenQASM 3 support into QStone and
+   SupermarQ, or keep accepting 2.0 at the canonicalization boundary
+   indefinitely?
 
 Please open an issue or PR against this document with suggestions.
