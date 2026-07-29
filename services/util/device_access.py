@@ -124,7 +124,7 @@ def select_qpu(device_config, path, provider=None):
 		or device.get("quantum_computer")
 		or device_id)
 
-	return {
+	selected = {
 		"device_id": device_id,
 		"provider_device_id": str(provider_device_id).strip(),
 		"provider": device_provider or (provider.lower() if provider else ""),
@@ -132,6 +132,19 @@ def select_qpu(device_config, path, provider=None):
 		"credential_db": resolve_relative_path(str(credential_db), path),
 		"quantum_computer": str(provider_device_id).strip(),
 	}
+
+	# Pass through the optional shim descriptor fields (svc_lib_qpm's
+	# resolve_descriptor reads these off the selected device; see
+	# docs/qpu-frontend-contract.md section 5). Only forward keys that are
+	# actually configured so descriptor.py can apply its own defaults for the
+	# rest -- a key present with a None value would otherwise defeat the
+	# `device.get(key, DEFAULT)` fallbacks. The native resolve_device_access
+	# path ignores these keys, so forwarding them here is harmless.
+	for key in ("libraries", "preference", "caps", "execution-owner", "execution_owner"):
+		if key in device:
+			selected[key] = device[key]
+
+	return selected
 
 
 def get_user_records(credential_db):

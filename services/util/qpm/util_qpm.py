@@ -219,7 +219,7 @@ class UTIL_QPM:
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		r = self.qrc.peak_cq()
+		r = self.qrc.peak_cq(cid)
 
 		if not r:
 			if cid:

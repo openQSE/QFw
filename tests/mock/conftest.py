@@ -102,6 +102,15 @@ def _install_defw_stubs():
 		class DEFwAgentNotFound(DEFwError):
 			pass
 
+		class DEFwExecutionError(DEFwError):
+			pass
+
+		class DEFwReserveError(DEFwError):
+			pass
+
+		class DEFwOutOfResources(DEFwError):
+			pass
+
 		class DEFwDumper:
 			pass
 
@@ -110,6 +119,9 @@ def _install_defw_stubs():
 		defw_exception.DEFwInProgress = DEFwInProgress
 		defw_exception.DEFwNotFound = DEFwNotFound
 		defw_exception.DEFwAgentNotFound = DEFwAgentNotFound
+		defw_exception.DEFwExecutionError = DEFwExecutionError
+		defw_exception.DEFwReserveError = DEFwReserveError
+		defw_exception.DEFwOutOfResources = DEFwOutOfResources
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
 
@@ -135,6 +147,7 @@ def _install_defw_stubs():
 
 		defw_app_util.defw_get_resource_mgr = defw_get_resource_mgr
 		defw_app_util.defw_reserve_service_by_name = defw_reserve_service_by_name
+		defw_app_util.SYSTEM_UP_TIMEOUT = 40
 		sys.modules["defw_app_util"] = defw_app_util
 
 	if "defw_event_baseapi" not in sys.modules:
@@ -187,8 +200,55 @@ def _install_defw_stubs():
 			def exit(self):
 				self.exit_called = True
 
+		def connect_to_resource(services, name):
+			raise AssertionError("defw.connect_to_resource must be patched in tests")
+
 		defw.me = _Runtime()
+		defw.connect_to_resource = connect_to_resource
 		sys.modules["defw"] = defw
+
+	if "api_events" not in sys.modules:
+		api_events = types.ModuleType("api_events")
+
+		class Event:
+			def __init__(self, evtype, payload):
+				self.evtype = evtype
+				self.payload = payload
+
+		class BaseEventAPI:
+			def __init__(self, *args, **kwargs):
+				self.args = args
+				self.kwargs = kwargs
+
+		api_events.Event = Event
+		api_events.BaseEventAPI = BaseEventAPI
+		sys.modules["api_events"] = api_events
+
+	if "defw_util" not in sys.modules:
+		# The real defw_util pulls in the defw_cmd/native stack; stub only the
+		# helpers the QPM utility modules import at load time. They are not
+		# exercised by the mock tests (which drive individual methods), so simple
+		# reference implementations are enough.
+		defw_util = types.ModuleType("defw_util")
+
+		def expand_host_list(host_spec):
+			if not host_spec:
+				return []
+			return [h for h in str(host_spec).split(",") if h]
+
+		def round_half_up(value):
+			return int(value + 0.5)
+
+		def round_to_nearest_power_of_two(value):
+			power = 1
+			while power < value:
+				power *= 2
+			return power
+
+		defw_util.expand_host_list = expand_host_list
+		defw_util.round_half_up = round_half_up
+		defw_util.round_to_nearest_power_of_two = round_to_nearest_power_of_two
+		sys.modules["defw_util"] = defw_util
 
 
 def _install_qiskit_stubs():
@@ -405,6 +465,12 @@ def _install_qiskit_stubs():
 	quantum_info = types.ModuleType("qiskit.quantum_info")
 	quantum_info.Pauli = type("Pauli", (), {})
 	quantum_info.PauliList = type("PauliList", (), {})
+
+	class Statevector:
+		def __init__(self, data=None):
+			self.data = data
+
+	quantum_info.Statevector = Statevector
 	sys.modules["qiskit.quantum_info"] = quantum_info
 
 	primitives_base = types.ModuleType("qiskit.primitives.base")
