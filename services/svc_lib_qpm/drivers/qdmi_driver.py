@@ -251,11 +251,19 @@ class QdmiDriver(BaseDriver):
 		# schema on hardware.
 		from util.iqm_transcode import to_jsonable
 		try:
+			# to_json_dict() is typed to take a dict, but build_iqm_circuit
+			# hands us an iqm.pulse Circuit *dataclass* (no model_dump), so it
+			# must be coerced first -- passing the object straight in raises
+			# "Object contains values that are not JSON serializable". The QRMI
+			# leg never hit this because pydantic's RunRequest coerced the same
+			# object for it. to_jsonable handles dataclasses/pydantic/UUIDs;
+			# iqm-client's canonical encoder then applies on top when present.
+			payload = to_jsonable(iqm_circuit)
 			try:
 				from iqm.iqm_client.util import to_json_dict
-				payload = to_json_dict(iqm_circuit)
+				payload = to_json_dict(payload)
 			except ImportError:
-				payload = to_jsonable(iqm_circuit)
+				pass
 			return json.dumps(payload)
 		except Exception as exc:
 			raise DEFwExecutionError(
