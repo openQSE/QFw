@@ -356,8 +356,7 @@ class QrmiDriver(BaseDriver):
 		# step; the exact RunRequest schema is validated against the live IQM
 		# Server on hardware. Returns (json_str, parsed_dict).
 		try:
-			from iqm.iqm_client import CircuitCompilationOptions
-			from iqm.station_control.interface.models import _build_run_request
+			from iqm.station_control.interface.models import RunRequest
 		except Exception as exc:
 			raise DEFwExecutionError(
 				"iqm-client is required to build the IQM job payload for QRMI "
@@ -366,11 +365,15 @@ class QrmiDriver(BaseDriver):
 		if calset is not None and not isinstance(calset, str):
 			calset = str(calset)
 		try:
-			run_request = _build_run_request(
-				[iqm_circuit],
+			# iqm-client >= 34 dropped the private _build_run_request helper.
+			# RunRequest (a TypeAlias for PostJobsRequest) is built directly:
+			# every compilation option the helper set now has a model default.
+			# qubit_mapping stays None because build_iqm_circuit already emits
+			# physical qubit names (see logical_to_physical_qubits).
+			run_request = RunRequest(
+				circuits=[iqm_circuit],
 				calibration_set_id=calset,
-				shots=int(shots),
-				options=CircuitCompilationOptions())
+				shots=int(shots))
 			iqmjson = run_request.model_dump_json()
 		except Exception as exc:
 			raise DEFwExecutionError(
