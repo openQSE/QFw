@@ -218,8 +218,16 @@ class QdmiDriver(BaseDriver):
 		timing["wait_seconds"] = (
 			time.monotonic() - start - timing["submit_seconds"])
 		try:
-			job_id = job.id()
-		except Exception:
+			# FoMaC exposes QDMI_JOB_PROPERTY_ID as a PROPERTY, not a method.
+			# Calling it raised TypeError, which the except below then swallowed,
+			# so job_id was always None and every QDMI result record lost the
+			# provider job id -- leaving QDMI runs uncorrelatable with the
+			# IQM-side job. QDMI-on-IQM does populate the property.
+			job_id = job.id
+		except Exception as exc:
+			# A device need not implement QDMI_JOB_PROPERTY_ID; carry on without
+			# it, but leave a trace rather than dropping it silently.
+			logging.debug("shim: QDMI job id unavailable: %s", exc)
 			job_id = None
 		if status != "completed":
 			self._last_job = {
