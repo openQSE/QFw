@@ -25,7 +25,7 @@ class QPMRemoteBase(BaseRemote):
 
 
 class QPMExecution(QPMRemoteBase):
-	def delete_circuit(self, cid):
+	def delete_circuit(self, cid, reservation_id=None, token=None):
 		pass
 
 	def sync_run(self, info, reservation_id=None, token=None,
@@ -49,13 +49,14 @@ class QPMExecution(QPMRemoteBase):
 	def is_ready(self):
 		pass
 
-	def read_cq(self, cid=None):
+	def read_cq(self, cid=None, reservation_id=None, token=None):
 		pass
 
-	def peek_cq(self, cid=None):
+	def peek_cq(self, cid=None, reservation_id=None, token=None):
 		pass
 
-	def register_event_notification(self, ep, evtype, class_id):
+	def register_event_notification(self, ep, evtype, class_id, token=None,
+					reservation_id=None, filters=None):
 		pass
 
 

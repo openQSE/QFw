@@ -23,6 +23,7 @@ from .controller import (
 	controller_config,
 	get_target_controller,
 )
+from .admission import QPMAdmissionUnavailable, QPMAdmissionValidationError
 from .util_circuit import Circuit, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
@@ -30,6 +31,14 @@ from statistics import mean, median, stdev
 DIAGNOSTIC_BYPASS_ENV = "QFW_QPM_DIAGNOSTIC_BYPASS_ENABLED"
 qpm_initialized = False
 qpm_shutdown = False
+
+
+class QPMEventDispatcher:
+	def __init__(self, controller):
+		self.controller = controller
+
+	def put(self, event):
+		return self.controller.dispatch_completion_event(event)
 
 
 class UTIL_QPM:
@@ -93,9 +102,14 @@ class UTIL_QPM:
 	def prepare_circuit(self, info):
 		return info
 
-	def delete_circuit(self, cid):
+	def delete_circuit(self, cid, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
+
+		if reservation_id is not None:
+			request = parse_execution_request(
+				{}, reservation_id=reservation_id, token=token)
+			self.require_managed_execution(request)
 
 		with self.controller.lock:
 			if cid not in self.circuits:
@@ -276,6 +290,12 @@ class UTIL_QPM:
 
 	def require_managed_execution(self, request):
 		if request.context.reservation_id is not None:
+			try:
+				self.controller.validate_reservation_for_context(
+					request.context)
+			except (QPMAdmissionUnavailable,
+				QPMAdmissionValidationError) as error:
+				raise DEFwExecutionError(str(error))
 			return
 		raise DEFwExecutionError(
 			"reservation_id is required for resource-affecting QPM execution")
@@ -379,7 +399,7 @@ class UTIL_QPM:
 
 		return cid
 
-	def read_cq(self, cid=None):
+	def read_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -398,7 +418,7 @@ class UTIL_QPM:
 			self.controller.record_result(runtime.qtask_id, r)
 		return r
 
-	def peek_cq(self, cid=None):
+	def peek_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -412,15 +432,42 @@ class UTIL_QPM:
 
 		return r
 
-	def register_event_notification(self, ep, evtype, class_id):
-		self.push_info['class'] = BaseEventAPI(class_id=class_id, target=ep)
-		self.push_info['evtype'] = evtype
-		# keeping the below for debugging purposes
-		self.push_info['class_id'] = class_id
-		self.push_info['target'] = ep
+	def register_event_notification(self, ep, evtype, class_id, token=None,
+					reservation_id=None, filters=None):
+		if reservation_id is not None:
+			request = parse_execution_request(
+				{}, reservation_id=reservation_id, token=token)
+			self.require_managed_execution(request)
+		push_info = {
+			"class": BaseEventAPI(class_id=class_id, target=ep),
+			"evtype": evtype,
+			"class_id": class_id,
+			"target": ep,
+			"reservation_id": reservation_id,
+			"filters": dict(filters or {}),
+		}
+		result = self.controller.register_event_endpoint(push_info)
+		self._ensure_qrc_event_dispatcher(evtype)
+		return result
+
+	def _ensure_qrc_event_dispatcher(self, evtype):
+		if self.qrc is None:
+			return
 		with self.controller.lock:
-			self.controller.event_endpoints[class_id] = dict(self.push_info)
-		self.qrc.register_event_notification(self.push_info)
+			dispatcher = self.controller.callback_endpoints.get(
+				"completion-event-dispatcher")
+			if dispatcher is None:
+				dispatcher = QPMEventDispatcher(self.controller)
+				self.controller.callback_endpoints[
+					"completion-event-dispatcher"] = dispatcher
+			self.controller.push_info.update({
+				"class": dispatcher,
+				"evtype": evtype,
+				"class_id": "qpm-completion-event-dispatcher",
+				"target": "qpm-controller",
+			})
+			push_info = dict(self.controller.push_info)
+		self.qrc.register_event_notification(push_info)
 
 	def is_ready(self):
 		if not qpm_initialized:

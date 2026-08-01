@@ -49,13 +49,14 @@ class QRC:
 		if self.push_info:
 			event = Event(self.push_info['evtype'], result)
 			try:
-				self.push_info['class'].put(event)
+				delivered = self.push_info['class'].put(event)
 			except Exception as e:
 				logging.critical(
 					"Failed to push event to client. "
 					f"Exception encountered {e}")
 				raise e
-			return
+			if delivered is not False:
+				return
 
 		with self.circuit_results_lock:
 			self.circuit_results.append(result)

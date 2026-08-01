@@ -13,6 +13,10 @@ class QPMAdmissionUnavailable(RuntimeError):
 	pass
 
 
+class QPMAdmissionValidationError(RuntimeError):
+	pass
+
+
 class UnavailableAdmissionContext:
 	def __init__(self, threading_mode, error):
 		self.threading_mode = threading_mode

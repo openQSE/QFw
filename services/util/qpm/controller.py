@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from .admission import (
 	QHW_ADM_THREAD_SAFE,
 	QHW_ADM_THREAD_USER,
+	QPMAdmissionValidationError,
 	cancel_reservation,
 	admission_context_available,
 	create_admission_context,
@@ -100,12 +101,15 @@ class QPMTargetController:
 		self.callback_endpoints = {}
 		self.timeout_state = {}
 		self.result_state = {}
+		self.terminal_tasks_by_cid = {}
+		self.terminal_tasks_by_qtask_id = {}
 		self.audit_records = []
 		self.diagnostic_bypass_records = []
 		self.external_id_maps = {}
 		self.external_id_next = 1
 		self.admission_request_id_next = 1
 		self.reservation_metadata_by_id = {}
+		self.reservation_close_state = {}
 		self.device_profile = None
 		self.capacity_model = {}
 		self.admission_policy = {}
@@ -143,8 +147,40 @@ class QPMTargetController:
 					self.admission_config_versions),
 				"reservation_metadata_count": len(
 					self.reservation_metadata_by_id),
+				"closing_reservation_count": len(
+					self.reservation_close_state),
 			})
 		return info
+
+	def register_event_endpoint(self, info):
+		registration = dict(info)
+		registration["filters"] = dict(info.get("filters") or {})
+		class_id = registration.get("class_id")
+		with self.lock:
+			self.event_endpoints.setdefault(class_id, []).append(
+				registration)
+			return {
+				"status": "accepted",
+				"class_id": class_id,
+				"registration_count": sum(
+					len(items)
+					for items in self.event_endpoints.values()),
+			}
+
+	def dispatch_completion_event(self, event):
+		payload = event.get_event()
+		evtype = event.get_evtype()
+		with self.lock:
+			matches = [
+				registration
+				for registrations in self.event_endpoints.values()
+				for registration in registrations
+				if self._event_registration_matches_locked(
+					registration, evtype, payload)
+			]
+		for registration in matches:
+			registration["class"].put(event)
+		return bool(matches)
 
 	def evaluate_reservation(self, request, token=None):
 		with self.lock:
@@ -199,6 +235,21 @@ class QPMTargetController:
 				if metadata is not None:
 					reservation["request_metadata"] = dict(metadata)
 			return reservations
+
+	def validate_reservation_for_context(self, request_context,
+					     operation="execution"):
+		reservation_id = request_context.reservation_id
+		if reservation_id is None:
+			raise QPMAdmissionValidationError(
+				"reservation_id is required")
+		with self.lock:
+			reservation = get_reservation(
+				self.admission_context, reservation_id)
+			self._require_reservation_active(reservation, operation)
+			self._require_reservation_not_expired(reservation)
+			self._require_reservation_matches_context(
+				reservation, request_context)
+			return reservation
 
 	def configure_device_profile(self, profile=None):
 		with self.lock:
@@ -297,6 +348,7 @@ class QPMTargetController:
 			)
 			runtime.external_ids, runtime.canonical_ids = (
 				self.canonicalize_request_context(request_context))
+			self.terminal_tasks_by_cid.pop(cid, None)
 			self.runtime_by_cid[cid] = runtime
 			self.runtime_by_qtask_id[qtask_id] = runtime
 			if runtime.reservation_id is not None:
@@ -405,6 +457,7 @@ class QPMTargetController:
 			runtime = self.runtime_by_qtask_id.pop(qtask_id, None)
 			if runtime is None:
 				return None
+			self._retain_terminal_task_locked(runtime)
 			self.runtime_by_cid.pop(runtime.cid, None)
 			if runtime.reservation_id in self.qtask_ids_by_reservation:
 				qtask_ids = self.qtask_ids_by_reservation[runtime.reservation_id]
@@ -424,6 +477,25 @@ class QPMTargetController:
 			self.timeout_state.pop(qtask_id, None)
 			self.result_state.pop(qtask_id, None)
 			return runtime
+
+	def _retain_terminal_task_locked(self, runtime):
+		snapshot = QPMRuntimeTask(
+			cid=runtime.cid,
+			qtask_id=runtime.qtask_id,
+			reservation_id=runtime.reservation_id,
+			scheduler_task_id=runtime.scheduler_task_id,
+			provider_handle=runtime.provider_handle,
+			usage_event_id=runtime.usage_event_id,
+			token_metadata=dict(runtime.token_metadata),
+			owner_metadata=dict(runtime.owner_metadata),
+			request_metadata=dict(runtime.request_metadata),
+			external_ids=dict(runtime.external_ids),
+			canonical_ids=dict(runtime.canonical_ids),
+			state=runtime.state,
+		)
+		self.terminal_tasks_by_cid[snapshot.cid] = snapshot
+		self.terminal_tasks_by_qtask_id[snapshot.qtask_id] = snapshot
+		return snapshot
 
 	def record_diagnostic_bypass(self, operation, request_context,
 				     reason=None):
@@ -475,9 +547,55 @@ class QPMTargetController:
 		self.admission_config_versions[key] += 1
 		return self.admission_config_versions[key]
 
+	def _terminal_task_for_selector_locked(self, cid=None, qtask_id=None):
+		if qtask_id is not None:
+			return self.terminal_tasks_by_qtask_id.get(qtask_id)
+		if cid is not None:
+			return self.terminal_tasks_by_cid.get(cid)
+		return None
+
+	def _event_registration_matches_locked(self, registration, evtype,
+					       payload):
+		if registration.get("evtype") != evtype:
+			return False
+		runtime = None
+		if isinstance(payload, dict):
+			qtask_id = payload.get("qtask_id")
+			cid = payload.get("cid")
+			if qtask_id is not None:
+				runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is None and cid is not None:
+				runtime = self.runtime_by_cid.get(cid)
+			if runtime is None:
+				runtime = self._terminal_task_for_selector_locked(
+					cid=cid, qtask_id=qtask_id)
+		reservation_id = registration.get("reservation_id")
+		if reservation_id is not None:
+			if runtime is None:
+				return False
+			if runtime.reservation_id != reservation_id:
+				return False
+		return self._event_filters_match_locked(
+			registration.get("filters", {}), payload, runtime)
+
+	def _event_filters_match_locked(self, filters, payload, runtime):
+		for key, expected in filters.items():
+			actual = _event_filter_value(payload, runtime, key)
+			if not _filter_value_matches(expected, actual):
+				return False
+		return True
+
 	def _admission_request(self, request, token=None):
 		request = dict(request or {})
 		owner = dict(request.get("owner", {}))
+		policy = dict(request.get("policy", {}))
+		workload = dict(request.get("workload", {}))
+		run_context = dict(request.get("run_context", {}))
+		operation = (
+			request.get("operation") or
+			request.get("operation_type") or
+			run_context.get("operation") or
+			workload.get("operation"))
 		device_external = (
 			request.get("target_device_id") or
 			request.get("device_id") or
@@ -524,7 +642,13 @@ class QPMTargetController:
 				"external_scope_id": scope_external,
 				"external_user_id": user_external,
 				"external_job_id": job_external,
-				"policy": dict(request.get("policy", {})),
+				"external_allocation_id": request.get("allocation_id"),
+				"external_project_id": request.get("project_id"),
+				"external_session_id": request.get("session_id"),
+				"operation": operation,
+				"policy": policy,
+				"workload": workload,
+				"run_context": run_context,
 			},
 		}
 
@@ -569,6 +693,127 @@ class QPMTargetController:
 		self.admission_request_id_next += 1
 		return request_id
 
+	def _require_reservation_active(self, reservation, operation):
+		if reservation.get("state") == "active":
+			return
+		raise QPMAdmissionValidationError(
+			f"invalid reservation for {operation}: "
+			f"state={reservation.get('state')}")
+
+	def _require_reservation_not_expired(self, reservation):
+		expires_at_ns = reservation.get("expires_at_ns")
+		if not expires_at_ns:
+			return
+		now_ns = time.time_ns()
+		if expires_at_ns > now_ns:
+			return
+		reservation_id = reservation.get("reservation_id")
+		self.reservation_close_state[reservation_id] = {
+			"reason": "expired",
+			"started_at_ns": now_ns,
+		}
+		raise QPMAdmissionValidationError(
+			f"expired reservation: reservation_id={reservation_id}")
+
+	def _require_reservation_matches_context(self, reservation,
+						 request_context):
+		metadata = self._reservation_metadata_locked(reservation)
+		self._compare_reservation_field(
+			reservation,
+			"device_id",
+			_numeric_or_canonical(
+				self, "device_id", None,
+				request_context.target_device_id)
+			if request_context.target_device_id is not None else None)
+		self._compare_reservation_field(
+			reservation,
+			"scope_id",
+			_numeric_or_canonical(
+				self, "scope_id", None, request_context.scope_id)
+			if request_context.scope_id is not None else None)
+		self._compare_reservation_field(
+			reservation,
+			"job_id",
+			_numeric_or_canonical(
+				self, "job_id", None, request_context.job_id)
+			if request_context.job_id is not None else None)
+		self._compare_reservation_metadata(
+			metadata, "external_device_id",
+			request_context.target_device_id, "target_device_id")
+		self._compare_reservation_metadata(
+			metadata, "external_scope_id",
+			request_context.scope_id, "scope_id")
+		self._compare_reservation_metadata(
+			metadata, "external_job_id",
+			self._request_job_identifier(request_context), "job_id")
+		self._compare_reservation_metadata(
+			metadata, "external_allocation_id",
+			request_context.allocation_id, "allocation_id")
+		self._compare_reservation_metadata(
+			metadata, "external_project_id",
+			request_context.project_id, "project_id")
+		self._compare_reservation_metadata(
+			metadata, "external_session_id",
+			request_context.session_id, "session_id")
+		self._compare_reservation_metadata(
+			metadata, "policy", request_context.policy, "policy")
+		self._compare_reservation_metadata(
+			metadata, "workload", request_context.workload, "workload")
+		self._compare_reservation_metadata(
+			metadata, "run_context", request_context.run_context,
+			"run_context")
+		self._compare_reservation_metadata(
+			metadata, "operation",
+			self._request_operation(request_context), "operation")
+
+	def _reservation_metadata_locked(self, reservation):
+		metadata = {}
+		for source in (
+				reservation.get("metadata"),
+				reservation.get("request_metadata"),
+				self.reservation_metadata_by_id.get(
+					reservation.get("reservation_id"))):
+			if isinstance(source, dict):
+				metadata.update(source)
+		return metadata
+
+	def _request_job_identifier(self, request_context):
+		if request_context.job_id is not None:
+			return request_context.job_id
+		return request_context.allocation_id
+
+	def _request_operation(self, request_context):
+		for source in (request_context.run_context, request_context.workload):
+			operation = source.get("operation")
+			if operation is not None:
+				return operation
+		return "execution"
+
+	def _compare_reservation_field(self, reservation, field, expected):
+		if expected is None:
+			return
+		actual = reservation.get(field)
+		if actual in (None, expected):
+			return
+		raise QPMAdmissionValidationError(
+			f"reservation {field} mismatch: expected={expected} "
+			f"actual={actual}")
+
+	def _compare_reservation_metadata(self, metadata, field, expected, label):
+		if expected is None:
+			return
+		if isinstance(expected, dict) and not expected:
+			return
+		if field not in metadata:
+			return
+		actual = metadata.get(field)
+		if actual is None:
+			return
+		if actual == expected:
+			return
+		raise QPMAdmissionValidationError(
+			f"reservation {label} mismatch: expected={expected} "
+			f"actual={actual}")
 
 _CONTROLLERS = {}
 _CONTROLLERS_LOCK = threading.RLock()
@@ -639,6 +884,26 @@ def _owner_identifier(owner):
 		if value is not None:
 			return value
 	return None
+
+
+def _event_filter_value(payload, runtime, key):
+	if isinstance(payload, dict) and key in payload:
+		return payload[key]
+	if runtime is None:
+		return None
+	if key == "cid":
+		return runtime.cid
+	if key == "qtask_id":
+		return runtime.qtask_id
+	if key == "reservation_id":
+		return runtime.reservation_id
+	return None
+
+
+def _filter_value_matches(expected, actual):
+	if isinstance(expected, (list, tuple, set)):
+		return actual in expected
+	return expected == actual
 
 
 def _numeric_or_canonical(controller, kind, numeric_value, external_value):

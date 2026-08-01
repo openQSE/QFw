@@ -117,18 +117,7 @@ class UTIL_QRC:
 			}
 
 			circ.free_resources(circ)
-
-			# push the result if push info were registered:
-			if self.push_info:
-				event = Event(self.push_info['evtype'], r)
-				try:
-					self.push_info['class'].put(event)
-				except Exception as e:
-					logging.critical(f"Failed to push event to client. Exception encountered {e}")
-					raise e
-			else:
-				with self.circuit_results_lock:
-					self.circuit_results.append(r)
+			self._push_or_store_result(r)
 
 		for task_info in complete:
 			self.worker_pool[wid]['active_tasks'].remove(task_info)
@@ -202,18 +191,7 @@ class UTIL_QRC:
 						'cq_dequeue_time': -1
 					}
 					circ.free_resources(circ)
-					if self.push_info:
-						event = Event(self.push_info['evtype'], r)
-						try:
-							self.push_info['class'].put(event)
-						except Exception as e:
-							logging.critical(
-								"Failed to push event to client. "
-								f"Exception encountered {e}")
-							raise e
-					else:
-						with self.circuit_results_lock:
-							self.circuit_results.append(r)
+					self._push_or_store_result(r)
 				else:
 					self.worker_pool[my_id]['active_tasks'].append(task_info)
 
@@ -234,6 +212,21 @@ class UTIL_QRC:
 					r['cq_dequeue_time'] = time.time()
 					return r
 		return None
+
+	def _push_or_store_result(self, result):
+		if self.push_info:
+			event = Event(self.push_info['evtype'], result)
+			try:
+				delivered = self.push_info['class'].put(event)
+			except Exception as e:
+				logging.critical(
+					"Failed to push event to client. "
+					f"Exception encountered {e}")
+				raise e
+			if delivered is not False:
+				return
+		with self.circuit_results_lock:
+			self.circuit_results.append(result)
 
 	def peak_cq(self, cid=None):
 		if cid:

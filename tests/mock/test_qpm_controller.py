@@ -1,10 +1,12 @@
 import util.qpm.util_qpm as util_qpm
 from defw_exception import DEFwExecutionError
+from util.qpm.admission import QPMAdmissionValidationError
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_SUBMITTED,
 	clear_target_controllers,
 )
+from util.qpm.request import parse_execution_request
 from util.qpm.util_qpm import DIAGNOSTIC_BYPASS_ENV, UTIL_QPM
 
 
@@ -32,6 +34,20 @@ class FakeQRC:
 		self.shutdown_called = True
 
 
+class FakeAdmissionContext:
+	available = True
+
+	def __init__(self, threading_mode):
+		self.threading = threading_mode
+
+	def get_reservation_record(self, reservation_id):
+		return {
+			"reservation_id": reservation_id,
+			"state": "active",
+			"expires_at_ns": 0,
+		}
+
+
 class TrackingLock:
 	def __init__(self):
 		self.depth = 0
@@ -51,7 +67,11 @@ class TrackingLock:
 class HookQPM(UTIL_QPM):
 	def __init__(self, target_id="target-a"):
 		self.hooks = []
-		super().__init__(FakeQRC(), target_id=target_id)
+		super().__init__(
+			FakeQRC(),
+			target_id=target_id,
+			admission_context_factory=FakeAdmissionContext,
+		)
 
 	def prepare_circuit(self, info):
 		self.hooks.append("prepare_circuit")
@@ -159,6 +179,46 @@ def test_cancellation_lookup_and_cleanup(monkeypatch):
 	assert qpm.controller.task_for_cid(cid) is None
 	assert qpm.controller.task_for_qtask_id(runtime.qtask_id) is None
 	assert qpm.controller.task_for_scheduler_task_id("sched-1") is None
+
+
+def test_reservation_validation_rejects_context_metadata_mismatch(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = HookQPM()
+	reservation_id = "reservation-1"
+	qpm.controller.reservation_metadata_by_id[reservation_id] = {
+		"external_allocation_id": "allocation-a",
+		"external_project_id": "project-a",
+		"external_session_id": "session-a",
+		"policy": {"queue": "priority"},
+		"operation": "execution",
+	}
+
+	matching = parse_execution_request(
+		{},
+		reservation_id=reservation_id,
+		allocation_id="allocation-a",
+		project_id="project-a",
+		session_id="session-a",
+		policy={"queue": "priority"},
+	).context
+	qpm.controller.validate_reservation_for_context(matching)
+
+	for overrides, expected in (
+			({"session_id": "session-b"}, "session_id mismatch"),
+			({"allocation_id": "allocation-b"}, "allocation_id mismatch"),
+			({"project_id": "project-b"}, "project_id mismatch"),
+			({"policy": {"queue": "standard"}}, "policy mismatch"),
+			({"run_context": {"operation": "cancel"}}, "operation mismatch"),
+	):
+		request = parse_execution_request(
+			{}, reservation_id=reservation_id, **overrides).context
+		try:
+			qpm.controller.validate_reservation_for_context(request)
+		except QPMAdmissionValidationError as exc:
+			assert expected in str(exc)
+		else:
+			raise AssertionError(
+				f"expected reservation context rejection for {expected}")
 
 
 def test_diagnostic_bypass_requires_configuration(monkeypatch):
