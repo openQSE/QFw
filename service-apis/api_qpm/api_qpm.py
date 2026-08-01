@@ -69,7 +69,7 @@ class QPMAdmissionControl(QPMRemoteBase):
 	def renew(self, reservation_id, request=None, token=None):
 		pass
 
-	def release(self, reservation_id, token=None):
+	def release(self, reservation_id, token=None, reason=None):
 		pass
 
 	def cancel(self, reservation_id, reason=None, token=None):

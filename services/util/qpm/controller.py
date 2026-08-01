@@ -6,9 +6,16 @@ from dataclasses import dataclass, field
 from .admission import (
 	QHW_ADM_THREAD_SAFE,
 	QHW_ADM_THREAD_USER,
+	cancel_reservation,
 	admission_context_available,
 	create_admission_context,
+	evaluate_request,
+	get_reservation,
+	list_reservations,
 	register_device_profile,
+	release_reservation,
+	renew_reservation,
+	reserve_request,
 	set_estimator,
 	set_policy,
 )
@@ -97,6 +104,8 @@ class QPMTargetController:
 		self.diagnostic_bypass_records = []
 		self.external_id_maps = {}
 		self.external_id_next = 1
+		self.admission_request_id_next = 1
+		self.reservation_metadata_by_id = {}
 		self.device_profile = None
 		self.capacity_model = {}
 		self.admission_policy = {}
@@ -132,8 +141,64 @@ class QPMTargetController:
 					self.admission_context, "threading", None),
 				"admission_config_versions": dict(
 					self.admission_config_versions),
+				"reservation_metadata_count": len(
+					self.reservation_metadata_by_id),
 			})
 		return info
+
+	def evaluate_reservation(self, request, token=None):
+		with self.lock:
+			admission_request = self._admission_request(request, token=token)
+			return evaluate_request(self.admission_context, admission_request)
+
+	def reserve_admission(self, request, token=None):
+		with self.lock:
+			admission_request = self._admission_request(request, token=token)
+			decision = reserve_request(self.admission_context, admission_request)
+			reservation_id = decision.get("reservation_id")
+			if decision.get("status") == "accepted" and reservation_id:
+				self.reservation_metadata_by_id[reservation_id] = (
+					admission_request["metadata"])
+			return decision
+
+	def renew_admission(self, reservation_id, request=None, token=None):
+		with self.lock:
+			result = renew_reservation(
+				self.admission_context, reservation_id, request or {})
+			return result
+
+	def release_admission(self, reservation_id, reason_code=0, token=None):
+		with self.lock:
+			result = release_reservation(
+				self.admission_context, reservation_id, reason_code)
+			self.reservation_metadata_by_id.pop(reservation_id, None)
+			return result
+
+	def cancel_admission(self, reservation_id, reason_code=0, token=None):
+		with self.lock:
+			result = cancel_reservation(
+				self.admission_context, reservation_id, reason_code)
+			self.reservation_metadata_by_id.pop(reservation_id, None)
+			return result
+
+	def get_admission_reservation(self, reservation_id, token=None):
+		with self.lock:
+			reservation = get_reservation(self.admission_context, reservation_id)
+			metadata = self.reservation_metadata_by_id.get(reservation_id)
+			if metadata is not None:
+				reservation["request_metadata"] = dict(metadata)
+			return reservation
+
+	def list_admission_reservations(self, filters=None, token=None):
+		with self.lock:
+			reservations = list_reservations(
+				self.admission_context, self._admission_filters(filters))
+			for reservation in reservations:
+				reservation_id = reservation.get("reservation_id")
+				metadata = self.reservation_metadata_by_id.get(reservation_id)
+				if metadata is not None:
+					reservation["request_metadata"] = dict(metadata)
+			return reservations
 
 	def configure_device_profile(self, profile=None):
 		with self.lock:
@@ -410,6 +475,100 @@ class QPMTargetController:
 		self.admission_config_versions[key] += 1
 		return self.admission_config_versions[key]
 
+	def _admission_request(self, request, token=None):
+		request = dict(request or {})
+		owner = dict(request.get("owner", {}))
+		device_external = (
+			request.get("target_device_id") or
+			request.get("device_id") or
+			self.config.target_id)
+		scope_external = request.get("scope_id", 0)
+		user_external = (
+			request.get("user_id") or
+			_owner_identifier(owner) or
+			"anonymous")
+		job_external = (
+			request.get("job_id") or
+			request.get("allocation_id") or
+			0)
+		device_id = _numeric_or_canonical(
+			self, "device_id", request.get("device_numeric_id"),
+			device_external)
+		scope_id = _numeric_or_canonical(
+			self, "scope_id", request.get("scope_numeric_id"),
+			scope_external)
+		user_id = _numeric_or_canonical(
+			self, "user_id", request.get("user_numeric_id"), user_external)
+		job_id = _numeric_or_canonical(
+			self, "job_id", request.get("job_numeric_id"), job_external)
+		task_class = self._admission_task_class(request)
+		return {
+			"request_id": request.get(
+				"request_id", self._allocate_admission_request_id()),
+			"device_id": device_id,
+			"user_id": user_id,
+			"job_id": job_id,
+			"scope_id": scope_id,
+			"reservation_id": request.get("reservation_id", 0),
+			"workload_kind": request.get("workload_kind", "quantum"),
+			"walltime_ns": request.get("walltime_ns", 0),
+			"ttl_ns": request.get("ttl_ns", request.get("expiration_ttl_ns", 0)),
+			"classical_runtime_ns": request.get("classical_runtime_ns", 0),
+			"overhead_ns": request.get("overhead_ns", 0),
+			"priority": request.get("priority", 0),
+			"task_class": task_class,
+			"metadata": {
+				"owner": owner,
+				"token_present": token is not None,
+				"external_device_id": device_external,
+				"external_scope_id": scope_external,
+				"external_user_id": user_external,
+				"external_job_id": job_external,
+				"policy": dict(request.get("policy", {})),
+			},
+		}
+
+	def _admission_task_class(self, request):
+		task_class = dict(request.get("task_class", {}))
+		shots = (
+			task_class.get("shots") or
+			request.get("shots") or
+			request.get("num_shots") or
+			1)
+		qubits = (
+			task_class.get("qubit_count") or
+			request.get("qubit_count") or
+			request.get("num_qubits") or
+			1)
+		return {
+			"class_id": task_class.get("class_id", 1),
+			"count": task_class.get("count", 1),
+			"qubit_count": qubits,
+			"depth": task_class.get("depth", request.get("depth", 1)),
+			"one_q_gate_count": task_class.get("one_q_gate_count", 0),
+			"two_q_gate_count": task_class.get("two_q_gate_count", 0),
+			"shots": shots,
+			"measurement_count": task_class.get("measurement_count", 1),
+		}
+
+	def _admission_filters(self, filters):
+		filters = dict(filters or {})
+		for field, kind in (
+			("device_id", "device_id"),
+			("scope_id", "scope_id"),
+			("user_id", "user_id"),
+			("job_id", "job_id"),
+		):
+			if field in filters and filters[field] is not None:
+				filters[field] = self.canonicalize_external_id(
+					kind, filters[field])
+		return filters
+
+	def _allocate_admission_request_id(self):
+		request_id = self.admission_request_id_next
+		self.admission_request_id_next += 1
+		return request_id
+
 
 _CONTROLLERS = {}
 _CONTROLLERS_LOCK = threading.RLock()
@@ -480,6 +639,14 @@ def _owner_identifier(owner):
 		if value is not None:
 			return value
 	return None
+
+
+def _numeric_or_canonical(controller, kind, numeric_value, external_value):
+	if numeric_value is not None:
+		return int(numeric_value)
+	if isinstance(external_value, int) and not isinstance(external_value, bool):
+		return external_value
+	return controller.canonicalize_external_id(kind, external_value)
 
 
 def _token_metadata(token):

@@ -473,10 +473,40 @@ class UTIL_QPM:
 	def set_estimator_policy(self, estimator, token=None):
 		return self.controller.set_estimator_policy(estimator)
 
-	def reserve(self, svc, client_ep, *args, **kwargs):
-		logging.debug(f"{client_ep} reserved the {svc}")
+	def evaluate(self, request, token=None):
+		return self.controller.evaluate_reservation(request, token=token)
 
-	def release(self, services=None):
+	def reserve(self, request=None, token=None, *args, **kwargs):
+		if not isinstance(request, dict):
+			logging.debug(f"{token} reserved the {request}")
+			return None
+		return self.controller.reserve_admission(request, token=token)
+
+	def renew(self, reservation_id, request=None, token=None):
+		return self.controller.renew_admission(
+			reservation_id, request=request, token=token)
+
+	def release(self, reservation_id=None, token=None, reason=None,
+		    services=None):
+		if reservation_id is not None and not isinstance(
+				reservation_id, (list, tuple, set)):
+			return self.controller.release_admission(
+				reservation_id, reason_code=reason or 0, token=token)
+		return self.release_service(services=services or reservation_id)
+
+	def cancel(self, reservation_id, reason=None, token=None):
+		return self.controller.cancel_admission(
+			reservation_id, reason_code=reason or 0, token=token)
+
+	def get_reservation(self, reservation_id, token=None):
+		return self.controller.get_admission_reservation(
+			reservation_id, token=token)
+
+	def list_reservations(self, filters=None, token=None):
+		return self.controller.list_admission_reservations(
+			filters=filters, token=token)
+
+	def release_service(self, services=None):
 		global qpm_shutdown
 
 		qpm_shutdown = True
