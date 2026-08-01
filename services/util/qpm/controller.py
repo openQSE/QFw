@@ -14,12 +14,15 @@ from .admission import (
 	admission_context_available,
 	create_admission_context,
 	evaluate_request,
+	expire_reservations,
 	get_reservation,
 	list_reservations,
+	record_actual,
 	register_device_profile,
 	release_reservation,
 	renew_reservation,
 	reserve_request,
+	return_usage,
 	set_estimator,
 	set_policy,
 )
@@ -103,6 +106,7 @@ class QPMTargetController:
 		self.worker_state = {}
 		self.event_endpoints = {}
 		self.callback_endpoints = {}
+		self.provider_canceller = None
 		self.timeout_state = {}
 		self.result_state = {}
 		self.terminal_tasks_by_cid = {}
@@ -131,6 +135,10 @@ class QPMTargetController:
 			if self.max_ppn is None:
 				self.max_ppn = max_ppn
 		return self
+
+	def set_provider_canceller(self, provider_canceller):
+		with self.lock:
+			self.provider_canceller = provider_canceller
 
 	def telemetry(self):
 		info = self.config.telemetry()
@@ -209,16 +217,18 @@ class QPMTargetController:
 
 	def release_admission(self, reservation_id, reason_code=0, token=None):
 		with self.lock:
-			result = release_reservation(
-				self.admission_context, reservation_id, reason_code)
-			self.reservation_metadata_by_id.pop(reservation_id, None)
+			result = self._close_reservation(
+				reservation_id, "release", reason_code=reason_code)
+			if result.get("status") == "accepted":
+				self.reservation_metadata_by_id.pop(reservation_id, None)
 			return result
 
 	def cancel_admission(self, reservation_id, reason_code=0, token=None):
 		with self.lock:
-			result = cancel_reservation(
-				self.admission_context, reservation_id, reason_code)
-			self.reservation_metadata_by_id.pop(reservation_id, None)
+			result = self._close_reservation(
+				reservation_id, "cancel", reason_code=reason_code)
+			if result.get("status") == "accepted":
+				self.reservation_metadata_by_id.pop(reservation_id, None)
 			return result
 
 	def get_admission_reservation(self, reservation_id, token=None):
@@ -249,6 +259,10 @@ class QPMTargetController:
 		with self.lock:
 			reservation = get_reservation(
 				self.admission_context, reservation_id)
+			if reservation_id in self.reservation_close_state:
+				raise QPMAdmissionValidationError(
+					f"reservation is closing: "
+					f"reservation_id={reservation_id}")
 			self._require_reservation_active(reservation, operation)
 			self._require_reservation_not_expired(reservation)
 			self._require_reservation_matches_context(
@@ -360,6 +374,11 @@ class QPMTargetController:
 					"decision": dict(committed),
 				})
 		return results
+
+	def close_expired_reservation(self, reservation_id, now_ns=None):
+		with self.lock:
+			return self._close_reservation(
+				reservation_id, "expire", now_ns=now_ns or time.time_ns())
 
 	def configure_device_profile(self, profile=None):
 		with self.lock:
@@ -836,10 +855,7 @@ class QPMTargetController:
 		if expires_at_ns > now_ns:
 			return
 		reservation_id = reservation.get("reservation_id")
-		self.reservation_close_state[reservation_id] = {
-			"reason": "expired",
-			"started_at_ns": now_ns,
-		}
+		self._close_reservation(reservation_id, "expire", now_ns=now_ns)
 		raise QPMAdmissionValidationError(
 			f"expired reservation: reservation_id={reservation_id}")
 
@@ -942,6 +958,216 @@ class QPMTargetController:
 		raise QPMAdmissionValidationError(
 			f"reservation {label} mismatch: expected={expected} "
 			f"actual={actual}")
+	def _close_reservation(self, reservation_id, close_kind, reason_code=0,
+			       now_ns=None):
+		now_ns = now_ns or time.time_ns()
+		close_state = self.reservation_close_state.setdefault(
+			reservation_id,
+			{
+				"reason": close_kind,
+				"started_at_ns": now_ns,
+				"pending_removed": [],
+				"held_reconciled": [],
+				"scheduler_cancelled": [],
+				"provider_cancelled": [],
+				"provider_cancel_pending": [],
+				"provider_cancel_resolved": [],
+			})
+		close_state.setdefault("provider_cancel_resolved", [])
+		close_state["reason"] = close_kind
+		self._remove_pending_for_reservation(reservation_id, close_state)
+		self._reconcile_holds_for_reservation(reservation_id, close_state)
+		self._refresh_provider_cancel_pending(reservation_id, close_state)
+		if close_state["provider_cancel_pending"]:
+			close_state["status"] = "provider-cancel-pending"
+			return {
+				"status": "pending",
+				"reservation_id": reservation_id,
+				"reason": "provider-cancel-pending",
+				"pending_qtask_ids": list(
+					close_state["provider_cancel_pending"]),
+			}
+		if close_kind == "release":
+			result = release_reservation(
+				self.admission_context, reservation_id, reason_code)
+		elif close_kind == "cancel":
+			result = cancel_reservation(
+				self.admission_context, reservation_id, reason_code)
+		elif close_kind == "expire":
+			expire_reservations(self.admission_context, now_ns)
+			result = {
+				"status": "accepted",
+				"reservation_id": reservation_id,
+				"reason": "expired",
+			}
+		else:
+			raise QPMAdmissionValidationError(
+				f"unsupported reservation close kind: {close_kind}")
+		close_state["completed_at_ns"] = time.time_ns()
+		close_state["status"] = result.get("status", "accepted")
+		return result
+
+	def _remove_pending_for_reservation(self, reservation_id, close_state):
+		for qtask_id, pending in list(self.pending_capacity.items()):
+			if pending["reservation_id"] != reservation_id:
+				continue
+			self.pending_capacity.pop(qtask_id, None)
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is not None:
+				self._cancel_runtime_for_reservation_close(
+					runtime, close_state)
+			close_state["pending_removed"].append(qtask_id)
+
+	def _reconcile_holds_for_reservation(self, reservation_id, close_state):
+		for qtask_id, hold in list(self.capacity_holds.items()):
+			if hold["reservation_id"] != reservation_id:
+				continue
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if (runtime is not None and
+					not self._cancel_runtime_for_reservation_close(
+						runtime, close_state)):
+				continue
+			self.capacity_holds.pop(qtask_id, None)
+			usage = dict(hold["usage"])
+			circuit = (
+				self.circuits.get(runtime.cid)
+				if runtime is not None else None)
+			self._finalize_capacity_hold_locked(
+				qtask_id, reservation_id, usage, runtime, circuit)
+			self.usage_events_by_qtask_id.pop(qtask_id, None)
+			close_state["held_reconciled"].append(qtask_id)
+
+	def _cancel_runtime_for_reservation_close(self, runtime, close_state):
+		qtask_id = runtime.qtask_id
+		if runtime.scheduler_task_id is not None:
+			mark_cancelled = globals().get("mark_scheduler_task_cancelled")
+			scheduler_context = getattr(self, "scheduler_context", None)
+			if mark_cancelled is None or scheduler_context is None:
+				self._record_reservation_close_fault_locked({
+					"qtask_id": qtask_id,
+					"reservation_id": runtime.reservation_id,
+					"reason": "scheduler-cancel-unavailable",
+					"scheduler_task_id": runtime.scheduler_task_id,
+				})
+			else:
+				self._cancel_scheduler_for_reservation_close(
+					runtime, close_state, mark_cancelled,
+					scheduler_context)
+		selected_qtask_ids = getattr(self, "selected_qtask_ids", None)
+		if selected_qtask_ids is not None:
+			selected_qtask_ids.discard(qtask_id)
+		provider_inflight = getattr(self, "provider_inflight", None)
+		provider_active = (
+			runtime.provider_handle is not None or
+			(provider_inflight is not None and qtask_id in provider_inflight))
+		if provider_active:
+			if self._cancel_provider_for_reservation_close(
+					runtime, close_state):
+				if provider_inflight is not None:
+					provider_inflight.discard(qtask_id)
+				runtime.state = QPM_TASK_CANCELLED
+				return True
+			if qtask_id in close_state["provider_cancel_pending"]:
+				return False
+			fault = {
+				"qtask_id": qtask_id,
+				"reservation_id": runtime.reservation_id,
+				"reason": "provider-cancel-required",
+				"lifecycle_state": runtime.state,
+			}
+			if runtime.provider_handle is not None:
+				fault["provider_handle"] = runtime.provider_handle
+			self._record_reservation_close_fault_locked(fault)
+			self._append_close_state_item(
+				close_state, "provider_cancel_pending", qtask_id)
+			return False
+		if provider_inflight is not None:
+			provider_inflight.discard(qtask_id)
+		self.circuits.pop(runtime.cid, None)
+		runtime.state = QPM_TASK_CANCELLED
+		return True
+
+	def _cancel_scheduler_for_reservation_close(self, runtime, close_state,
+						    mark_cancelled,
+						    scheduler_context):
+		try:
+			mark_cancelled(scheduler_context, runtime.scheduler_task_id)
+			close_state["scheduler_cancelled"].append(runtime.qtask_id)
+		except Exception as error:
+			self._record_reservation_close_fault_locked({
+				"qtask_id": runtime.qtask_id,
+				"reservation_id": runtime.reservation_id,
+				"reason": "scheduler-cancel-failed",
+				"scheduler_task_id": runtime.scheduler_task_id,
+				"scheduler_error": str(error),
+			})
+
+	def _record_reservation_close_fault_locked(self, fault):
+		record_fault = getattr(
+			self, "_record_reconciliation_fault_locked", None)
+		if record_fault is not None:
+			return record_fault(fault)
+		record = dict(fault)
+		record.setdefault("event", "reservation-close-fault")
+		record.setdefault("target_id", self.config.target_id)
+		record.setdefault("timestamp_ns", time.time_ns())
+		self.audit_records.append(record)
+		return record
+
+	def _cancel_provider_for_reservation_close(self, runtime, close_state):
+		if runtime.provider_handle is None or self.provider_canceller is None:
+			return False
+		try:
+			status = self.provider_canceller(runtime.provider_handle)
+		except Exception as error:
+			self._record_reservation_close_fault_locked({
+				"qtask_id": runtime.qtask_id,
+				"reservation_id": runtime.reservation_id,
+				"reason": "provider-cancel-failed",
+				"provider_handle": runtime.provider_handle,
+				"provider_error": str(error),
+			})
+			self._append_close_state_item(
+				close_state, "provider_cancel_pending",
+				runtime.qtask_id)
+			return False
+		if not _provider_cancel_is_terminal(status):
+			self._append_close_state_item(
+				close_state, "provider_cancel_pending",
+				runtime.qtask_id)
+			return False
+		close_state["provider_cancelled"].append({
+			"qtask_id": runtime.qtask_id,
+			"provider_handle": runtime.provider_handle,
+			"status": status,
+		})
+		return True
+
+	def _append_close_state_item(self, close_state, key, value):
+		if value not in close_state[key]:
+			close_state[key].append(value)
+
+	def _refresh_provider_cancel_pending(self, reservation_id, close_state):
+		pending = []
+		for qtask_id in close_state["provider_cancel_pending"]:
+			if not self._provider_cancel_pending_resolved(qtask_id):
+				pending.append(qtask_id)
+				continue
+			self._append_close_state_item(
+				close_state, "provider_cancel_resolved", qtask_id)
+		close_state["provider_cancel_pending"] = pending
+
+	def _provider_cancel_pending_resolved(self, qtask_id):
+		if qtask_id in self.capacity_holds:
+			return False
+		if qtask_id in self.provider_inflight:
+			return False
+		runtime = self.runtime_by_qtask_id.get(qtask_id)
+		if runtime is None:
+			runtime = self.terminal_tasks_by_qtask_id.get(qtask_id)
+		if runtime is None:
+			return True
+		return runtime.state in QPM_TASK_TERMINAL_STATES
 
 _CONTROLLERS = {}
 _CONTROLLERS_LOCK = threading.RLock()
@@ -980,6 +1206,25 @@ def get_target_controller(config, max_ppn, admission_context_factory=None):
 def clear_target_controllers():
 	with _CONTROLLERS_LOCK:
 		_CONTROLLERS.clear()
+
+
+def _provider_cancel_is_terminal(status):
+	if status is True:
+		return True
+	if status in (None, False):
+		return False
+	if isinstance(status, dict):
+		status = status.get("status") or status.get("outcome")
+		if status is None:
+			return False
+	value = str(status).strip().lower()
+	return value not in {
+		"",
+		"pending",
+		"unsupported",
+		"not-supported",
+		"deferred",
+	}
 
 
 def _target_id(qrc, explicit_target_id):

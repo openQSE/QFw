@@ -208,6 +208,16 @@ def cancel_reservation(context, reservation_id, reason_code=0):
 	}
 
 
+def expire_reservations(context, now_ns=0):
+	handler = _handler(context, "expire_reservations")
+	if handler is not None:
+		return handler(now_ns)
+	if not admission_context_available(context):
+		raise QPMAdmissionUnavailable(
+			f"qhw-admission context is unavailable: {context.error}")
+	return context.expire(now_ns)
+
+
 def get_reservation(context, reservation_id):
 	handler = _handler(context, "get_reservation_record")
 	if handler is not None:

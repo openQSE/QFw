@@ -62,6 +62,8 @@ class UTIL_QPM:
 		self.controller = get_target_controller(
 			config, max_ppn,
 			admission_context_factory=admission_context_factory)
+		self.controller.set_provider_canceller(
+			getattr(qrc, "cancel", None) if qrc is not None else None)
 		self.circuits = self.controller.circuits
 		self.oor_queue = self.controller.oor_queue
 		if self.oor_queue is None:
