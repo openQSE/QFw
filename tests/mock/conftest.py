@@ -159,7 +159,12 @@ def _install_defw_stubs():
 				power *= 2
 			return power
 
+		def print_thread_stack_trace_to_logger(level=None):
+			return None
+
 		defw_util.expand_host_list = expand_host_list
+		defw_util.print_thread_stack_trace_to_logger = (
+			print_thread_stack_trace_to_logger)
 		defw_util.round_half_up = round_half_up
 		defw_util.round_to_nearest_power_of_two = round_to_nearest_power_of_two
 		sys.modules["defw_util"] = defw_util
@@ -241,6 +246,24 @@ def _install_defw_stubs():
 
 		defw.me = _Runtime()
 		sys.modules["defw"] = defw
+
+	if "svc_launcher" not in sys.modules:
+		svc_launcher = types.ModuleType("svc_launcher")
+
+		class Launcher:
+			def status(self, pid):
+				raise AssertionError("Launcher.status must be patched in tests")
+
+		svc_launcher.Launcher = Launcher
+		sys.modules["svc_launcher"] = svc_launcher
+
+	if "cdefw_global" not in sys.modules:
+		sys.modules["cdefw_global"] = types.ModuleType("cdefw_global")
+
+	if "psutil" not in sys.modules:
+		psutil = types.ModuleType("psutil")
+		psutil.cpu_count = lambda logical=False: 1
+		sys.modules["psutil"] = psutil
 
 
 def _install_qiskit_stubs():

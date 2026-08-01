@@ -106,25 +106,28 @@ class QPMSchedulerControl(QPMRemoteBase):
 
 
 class QPMTelemetry(QPMRemoteBase):
-	def get_backend_info(self, lib=None):
+	def get_backend_info(self, lib=None, token=None):
 		pass
 
-	def get_device_info(self, lib=None):
+	def get_device_info(self, lib=None, token=None):
 		pass
 
-	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None):
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
+				     token=None):
 		pass
 
-	def get_calibration_snapshot(self, calibration_set_id=None, lib=None):
+	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,
+				     token=None):
 		pass
 
-	def get_coupling_graph(self, calibration_set_id=None, lib=None):
+	def get_coupling_graph(self, calibration_set_id=None, lib=None,
+			       token=None):
 		pass
 
-	def get_last_job_timing(self, cid=None, lib=None):
+	def get_last_job_timing(self, cid=None, lib=None, token=None):
 		pass
 
-	def get_last_job_metadata(self, cid=None, lib=None):
+	def get_last_job_metadata(self, cid=None, lib=None, token=None):
 		pass
 
 	def test(self):

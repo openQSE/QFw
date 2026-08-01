@@ -31,25 +31,25 @@ class QPM(UTIL_QPM):
 		info['qfw_backend'] = 'iqm'
 		return super().create_circuit(info)
 
-	def get_backend_info(self):
+	def get_backend_info(self, token=None):
 		return self.qrc.get_backend_info()
 
-	def get_device_info(self):
+	def get_device_info(self, token=None):
 		return self.qrc.get_device_info()
 
-	def get_dynamic_backend_info(self, calibration_set_id=None):
+	def get_dynamic_backend_info(self, calibration_set_id=None, token=None):
 		return self.qrc.get_dynamic_backend_info(calibration_set_id)
 
-	def get_calibration_snapshot(self, calibration_set_id=None):
+	def get_calibration_snapshot(self, calibration_set_id=None, token=None):
 		return self.qrc.get_calibration_snapshot(calibration_set_id)
 
-	def get_coupling_graph(self, calibration_set_id=None):
+	def get_coupling_graph(self, calibration_set_id=None, token=None):
 		return self.qrc.get_coupling_graph(calibration_set_id)
 
-	def get_last_job_timing(self, cid=None):
+	def get_last_job_timing(self, cid=None, token=None):
 		return self.qrc.get_last_job_timing(cid)
 
-	def get_last_job_metadata(self, cid=None):
+	def get_last_job_metadata(self, cid=None, token=None):
 		return self.qrc.get_last_job_metadata(cid)
 
 	def test(self):
