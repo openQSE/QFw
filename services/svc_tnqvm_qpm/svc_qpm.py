@@ -2,10 +2,13 @@ import logging
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 
+MAX_TNQVM_QUBITS = 32
+
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), start=start)
+		self.configure_device_profile(max_qubits=MAX_TNQVM_QUBITS)
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC

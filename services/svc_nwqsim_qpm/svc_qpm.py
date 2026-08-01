@@ -10,6 +10,7 @@ class QPM(UTIL_QPM):
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), start=start)
 		set_max_qubits_pp(MAX_NWQSIM_QUBITS)
+		self.configure_device_profile(max_qubits=MAX_NWQSIM_QUBITS)
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC

@@ -450,6 +450,29 @@ class UTIL_QPM:
 		telemetry["diagnostic_bypass_enabled"] = diagnostic_bypass_enabled()
 		return telemetry
 
+	def configure_device_profile(self, profile=None, **overrides):
+		device_profile = dict(profile or {})
+		device_profile.update(overrides)
+		return self.controller.configure_device_profile(device_profile)
+
+	def get_admission_policy(self, token=None):
+		return self.controller.get_admission_policy()
+
+	def set_admission_policy(self, policy, token=None):
+		return self.controller.set_admission_policy(policy)
+
+	def get_capacity_model(self, token=None):
+		return self.controller.get_capacity_model()
+
+	def set_capacity_model(self, capacity_model, token=None):
+		return self.controller.set_capacity_model(capacity_model)
+
+	def get_estimator_policy(self, token=None):
+		return self.controller.get_estimator_policy()
+
+	def set_estimator_policy(self, estimator, token=None):
+		return self.controller.set_estimator_policy(estimator)
+
 	def reserve(self, svc, client_ep, *args, **kwargs):
 		logging.debug(f"{client_ep} reserved the {svc}")
 

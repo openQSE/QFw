@@ -52,6 +52,7 @@ class QPM(UTIL_QPM):
 		self.vqpu_cfgs = {}
 		self.launcher = None
 		super().__init__(QRC(start=start), max_ppn=MAX_VQPU_PPN, start=start)
+		self.configure_device_profile(max_qubits=MAX_VQPU_QUBITS)
 		if start:
 			self.start_vqpus()
 

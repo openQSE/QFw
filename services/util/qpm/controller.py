@@ -8,6 +8,9 @@ from .admission import (
 	QHW_ADM_THREAD_USER,
 	admission_context_available,
 	create_admission_context,
+	register_device_profile,
+	set_estimator,
+	set_policy,
 )
 
 
@@ -94,6 +97,16 @@ class QPMTargetController:
 		self.diagnostic_bypass_records = []
 		self.external_id_maps = {}
 		self.external_id_next = 1
+		self.device_profile = None
+		self.capacity_model = {}
+		self.admission_policy = {}
+		self.estimator_policy = {}
+		self.admission_config_versions = {
+			"device_profile": 0,
+			"capacity_model": 0,
+			"admission_policy": 0,
+			"estimator_policy": 0,
+		}
 
 	def bind(self, max_ppn):
 		with self.lock:
@@ -117,8 +130,87 @@ class QPMTargetController:
 					admission_context_available(self.admission_context)),
 				"admission_context_threading": getattr(
 					self.admission_context, "threading", None),
+				"admission_config_versions": dict(
+					self.admission_config_versions),
 			})
 		return info
+
+	def configure_device_profile(self, profile=None):
+		with self.lock:
+			normalized = self._normalize_device_profile(profile or {})
+			register_device_profile(self.admission_context, normalized)
+			self.device_profile = normalized
+			version = self._bump_admission_config_version("device_profile")
+			return {
+				"status": "accepted",
+				"version": version,
+				"device_profile": dict(self.device_profile),
+			}
+
+	def get_device_profile(self):
+		with self.lock:
+			return {
+				"version": self.admission_config_versions["device_profile"],
+				"device_profile": (
+					dict(self.device_profile)
+					if self.device_profile is not None else None),
+			}
+
+	def set_capacity_model(self, capacity_model):
+		with self.lock:
+			self.capacity_model = dict(capacity_model or {})
+			version = self._bump_admission_config_version("capacity_model")
+			return {
+				"status": "accepted",
+				"version": version,
+				"capacity_model": dict(self.capacity_model),
+			}
+
+	def get_capacity_model(self):
+		with self.lock:
+			return {
+				"version": self.admission_config_versions["capacity_model"],
+				"capacity_model": dict(self.capacity_model),
+			}
+
+	def set_admission_policy(self, policy):
+		with self.lock:
+			self.admission_policy = dict(policy or {})
+			device_id = self._device_id()
+			set_policy(self.admission_context, device_id, self.admission_policy)
+			version = self._bump_admission_config_version("admission_policy")
+			return {
+				"status": "accepted",
+				"version": version,
+				"admission_policy": dict(self.admission_policy),
+			}
+
+	def get_admission_policy(self):
+		with self.lock:
+			return {
+				"version": self.admission_config_versions["admission_policy"],
+				"admission_policy": dict(self.admission_policy),
+			}
+
+	def set_estimator_policy(self, estimator):
+		with self.lock:
+			self.estimator_policy = dict(estimator or {})
+			device_id = self._device_id()
+			set_estimator(
+				self.admission_context, device_id, self.estimator_policy)
+			version = self._bump_admission_config_version("estimator_policy")
+			return {
+				"status": "accepted",
+				"version": version,
+				"estimator_policy": dict(self.estimator_policy),
+			}
+
+	def get_estimator_policy(self):
+		with self.lock:
+			return {
+				"version": self.admission_config_versions["estimator_policy"],
+				"estimator_policy": dict(self.estimator_policy),
+			}
 
 	def register_circuit(self, cid, request_context, payload):
 		with self.lock:
@@ -284,6 +376,39 @@ class QPMTargetController:
 			self.audit_records.append(record)
 			self.diagnostic_bypass_records.append(record)
 		return record
+
+	def _normalize_device_profile(self, profile):
+		device_id = profile.get("device_id", self._device_id())
+		max_qubits = profile.get("max_qubits", 0)
+		baseline = dict(profile.get("baseline", {}))
+		if not baseline:
+			baseline = {
+				"qubit_count": max(1, min(max_qubits or 1, 4)),
+				"depth": 1,
+				"one_q_gate_count": 0,
+				"two_q_gate_count": 0,
+				"shots": 1,
+				"measurement_count": 1,
+			}
+		normalized = dict(profile)
+		normalized["device_id"] = device_id
+		normalized.setdefault("external_device_id", self.config.target_id)
+		normalized.setdefault("baseline", baseline)
+		normalized.setdefault("max_shots", 1)
+		normalized.setdefault("one_q_gate_ns", 1)
+		normalized.setdefault("two_q_gate_ns", 1)
+		normalized.setdefault("measurement_ns", 1)
+		normalized.setdefault("default_ttl_ns", 60_000_000_000)
+		return normalized
+
+	def _device_id(self):
+		if self.device_profile is not None:
+			return self.device_profile["device_id"]
+		return self.canonicalize_external_id("device_id", self.config.target_id)
+
+	def _bump_admission_config_version(self, key):
+		self.admission_config_versions[key] += 1
+		return self.admission_config_versions[key]
 
 
 _CONTROLLERS = {}
