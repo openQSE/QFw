@@ -7,7 +7,13 @@ import uuid
 import time
 import queue
 import os
-from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwOutOfResources
+from defw_exception import (
+	DEFwError,
+	DEFwExecutionError,
+	DEFwNotReady,
+	DEFwInProgress,
+	DEFwOutOfResources,
+)
 from .controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_FAILED,
@@ -21,6 +27,7 @@ from .util_circuit import Circuit, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
 
+DIAGNOSTIC_BYPASS_ENV = "QFW_QPM_DIAGNOSTIC_BYPASS_ENABLED"
 qpm_initialized = False
 qpm_shutdown = False
 
@@ -227,6 +234,24 @@ class UTIL_QPM:
 			cancel_on_timeout=cancel_on_timeout,
 			**request_metadata,
 		)
+		self.require_managed_execution(request)
+		return self._sync_run_request(request, common_run)
+
+	def diagnostic_sync_run(self, info, token=None, reason=None,
+				**request_metadata):
+		if not qpm_initialized:
+			raise DEFwNotReady("QPM has not initialized properly")
+
+		request = parse_execution_request(
+			info,
+			token=token,
+			**request_metadata,
+		)
+		self.require_diagnostic_bypass(
+			request, operation="diagnostic_sync_run", reason=reason)
+		return self._sync_run_request(request, self.common_run)
+
+	def _sync_run_request(self, request, common_run):
 		circuit = None
 		try:
 			cid = self.create_circuit(request.payload)
@@ -243,6 +268,19 @@ class UTIL_QPM:
 			self.free_resources(circuit)
 		logging.debug(f"circuit {circuit.get_cid()} completed with output {result}")
 		return result
+
+	def require_managed_execution(self, request):
+		if request.context.reservation_id is not None:
+			return
+		raise DEFwExecutionError(
+			"reservation_id is required for resource-affecting QPM execution")
+
+	def require_diagnostic_bypass(self, request, operation, reason=None):
+		if not diagnostic_bypass_enabled():
+			raise DEFwExecutionError(
+				"diagnostic bypass execution is disabled")
+		self.controller.record_diagnostic_bypass(
+			operation, request.context, reason=reason)
 
 	def async_run_oor(self, cid, common_run=None):
 		if not common_run:
@@ -293,6 +331,24 @@ class UTIL_QPM:
 			cancel_on_timeout=cancel_on_timeout,
 			**request_metadata,
 		)
+		self.require_managed_execution(request)
+		return self._async_run_request(request, common_run)
+
+	def diagnostic_async_run(self, info, token=None, reason=None,
+				 **request_metadata):
+		if not qpm_initialized:
+			raise DEFwNotReady("QPM has not initialized properly")
+
+		request = parse_execution_request(
+			info,
+			token=token,
+			**request_metadata,
+		)
+		self.require_diagnostic_bypass(
+			request, operation="diagnostic_async_run", reason=reason)
+		return self._async_run_request(request, self.common_run)
+
+	def _async_run_request(self, request, common_run):
 		cid = None
 		circuit = None
 		try:
@@ -385,7 +441,9 @@ class UTIL_QPM:
 		return info
 
 	def controller_telemetry(self):
-		return self.controller.telemetry()
+		telemetry = self.controller.telemetry()
+		telemetry["diagnostic_bypass_enabled"] = diagnostic_bypass_enabled()
+		return telemetry
 
 	def reserve(self, svc, client_ep, *args, **kwargs):
 		logging.debug(f"{client_ep} reserved the {svc}")
@@ -441,3 +499,8 @@ class UTIL_QPM:
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None
+
+
+def diagnostic_bypass_enabled():
+	value = os.environ.get(DIAGNOSTIC_BYPASS_ENV, "no").strip().lower()
+	return value in ("1", "true", "yes", "on", "y")

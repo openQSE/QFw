@@ -38,6 +38,14 @@ class QPMExecution(QPMRemoteBase):
 				  **request_metadata):
 		pass
 
+	def diagnostic_sync_run(self, info, token=None, reason=None,
+				**request_metadata):
+		pass
+
+	def diagnostic_async_run(self, info, token=None, reason=None,
+				 **request_metadata):
+		pass
+
 	def is_ready(self):
 		pass
 

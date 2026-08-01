@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 
 
@@ -80,6 +81,8 @@ class QPMTargetController:
 		self.callback_endpoints = {}
 		self.timeout_state = {}
 		self.result_state = {}
+		self.audit_records = []
+		self.diagnostic_bypass_records = []
 		self.external_id_maps = {}
 		self.external_id_next = 1
 
@@ -98,6 +101,9 @@ class QPMTargetController:
 				"max_ppn": self.max_ppn,
 				"resource_hosts": sorted(self.free_hosts.keys()),
 				"runtime_task_count": len(self.runtime_by_qtask_id),
+				"audit_record_count": len(self.audit_records),
+				"diagnostic_bypass_count": len(
+					self.diagnostic_bypass_records),
 			})
 		return info
 
@@ -216,6 +222,23 @@ class QPMTargetController:
 			self.result_state[qtask_id] = result
 			runtime.state = QPM_TASK_COMPLETED
 			return runtime
+
+	def record_diagnostic_bypass(self, operation, request_context,
+				     reason=None):
+		record = {
+			"operation": operation,
+			"reason": reason,
+			"target_id": self.config.target_id,
+			"reservation_id": request_context.reservation_id,
+			"token_metadata": _token_metadata(request_context.token),
+			"owner_metadata": dict(request_context.owner),
+			"auth_disabled": request_context.auth_disabled,
+			"timestamp": time.time(),
+		}
+		with self.lock:
+			self.audit_records.append(record)
+			self.diagnostic_bypass_records.append(record)
+		return record
 
 
 _CONTROLLERS = {}
