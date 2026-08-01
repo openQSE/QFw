@@ -49,7 +49,8 @@ class UTIL_QPM:
 	def __init__(self, qrc, max_ppn=MAX_PPN, start=True, target_id=None,
 		     admission_threading_mode=None, scheduler_threading_mode=None,
 		     controller_serialization_mode=None,
-		     admission_context_factory=None):
+		     admission_context_factory=None,
+		     scheduler_context_factory=None):
 		self.qrc = qrc
 		self.max_ppn = max_ppn
 		config = controller_config(
@@ -61,7 +62,8 @@ class UTIL_QPM:
 		)
 		self.controller = get_target_controller(
 			config, max_ppn,
-			admission_context_factory=admission_context_factory)
+			admission_context_factory=admission_context_factory,
+			scheduler_context_factory=scheduler_context_factory)
 		self.controller.set_provider_canceller(
 			getattr(qrc, "cancel", None) if qrc is not None else None)
 		self.circuits = self.controller.circuits
@@ -543,6 +545,34 @@ class UTIL_QPM:
 			reservation_id=reservation_id)
 		self.process_oor_queue()
 		return results
+
+	def get_scheduler_status(self, token=None):
+		return self.controller.get_scheduler_status()
+
+	def get_scheduler_policy(self, token=None):
+		return self.controller.get_scheduler_policy()
+
+	def set_scheduler_policy(self, policy, token=None):
+		return self.controller.set_scheduler_policy(policy)
+
+	def pause(self, target_id=None, token=None, reason=None):
+		return self.controller.pause_scheduler(reason=reason)
+
+	def resume(self, target_id=None, token=None):
+		return self.controller.resume_scheduler()
+
+	def drain(self, target_id=None, token=None, mode="graceful",
+		  timeout_s=None):
+		return self.controller.drain_scheduler(
+			mode=mode, timeout_s=timeout_s)
+
+	def set_dispatch_depth(self, max_inflight, target_id=None, token=None):
+		return self.controller.set_dispatch_depth(max_inflight)
+
+	def get_scheduler_queue_state(self, target_id=None, token=None,
+				      include_restricted=False):
+		return self.controller.get_scheduler_queue_state(
+			include_restricted=include_restricted)
 
 	def evaluate(self, request, token=None):
 		return self.controller.evaluate_reservation(request, token=token)

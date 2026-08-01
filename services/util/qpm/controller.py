@@ -26,6 +26,15 @@ from .admission import (
 	set_estimator,
 	set_policy,
 )
+from .scheduler import (
+	QHW_SCHED_THREAD_SAFE,
+	QHW_SCHED_THREAD_USER,
+	create_scheduler_context,
+	normalize_scheduler_policy,
+	scheduler_context_available,
+	scheduler_task_count,
+	set_scheduler_policy as activate_scheduler_policy,
+)
 
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -35,7 +44,7 @@ SCHEDULER_THREADING_ENV = "QFW_QPM_SCHEDULER_THREADING_MODE"
 CONTROLLER_SERIALIZATION_ENV = "QFW_QPM_CONTROLLER_SERIALIZATION_MODE"
 
 DEFAULT_ADMISSION_THREADING_MODE = QHW_ADM_THREAD_SAFE
-DEFAULT_SCHEDULER_THREADING_MODE = "QHW_SCHED_THREAD_SAFE"
+DEFAULT_SCHEDULER_THREADING_MODE = QHW_SCHED_THREAD_SAFE
 DEFAULT_CONTROLLER_SERIALIZATION_MODE = "controller-lock"
 QPM_TASK_CREATED = "created"
 QPM_TASK_RESOURCES_CONSUMED = "resources-consumed"
@@ -80,11 +89,14 @@ class QPMRuntimeTask:
 
 
 class QPMTargetController:
-	def __init__(self, config, admission_context_factory=None):
+	def __init__(self, config, admission_context_factory=None,
+		     scheduler_context_factory=None):
 		self.config = config
 		self.lock = threading.RLock()
 		self.admission_context = _create_admission_context(
 			config, admission_context_factory)
+		self.scheduler_context = _create_scheduler_context(
+			config, scheduler_context_factory)
 		self.binding_count = 0
 		self.max_ppn = None
 		self.resources_initialized = False
@@ -122,11 +134,25 @@ class QPMTargetController:
 		self.capacity_model = {}
 		self.admission_policy = {}
 		self.estimator_policy = {}
+		self.scheduler_policy = normalize_scheduler_policy(None)
+		self.scheduler_control = {
+			"paused": False,
+			"draining": False,
+			"drain_mode": None,
+			"drain_timeout_s": None,
+			"drain_started_at_ns": None,
+			"pause_reason": None,
+			"dispatch_depth": 1,
+		}
 		self.admission_config_versions = {
 			"device_profile": 0,
 			"capacity_model": 0,
 			"admission_policy": 0,
 			"estimator_policy": 0,
+		}
+		self.scheduler_config_versions = {
+			"scheduler_policy": 0,
+			"scheduler_control": 0,
 		}
 
 	def bind(self, max_ppn):
@@ -155,14 +181,120 @@ class QPMTargetController:
 					admission_context_available(self.admission_context)),
 				"admission_context_threading": getattr(
 					self.admission_context, "threading", None),
+				"scheduler_context_available": (
+					scheduler_context_available(self.scheduler_context)),
+				"scheduler_context_threading": getattr(
+					self.scheduler_context, "threading", None),
 				"admission_config_versions": dict(
 					self.admission_config_versions),
+				"scheduler_config_versions": dict(
+					self.scheduler_config_versions),
 				"reservation_metadata_count": len(
 					self.reservation_metadata_by_id),
 				"closing_reservation_count": len(
 					self.reservation_close_state),
+				"scheduler_task_count": scheduler_task_count(
+					self.scheduler_context),
 			})
 		return info
+
+	def get_scheduler_status(self):
+		with self.lock:
+			state = "draining" if self.scheduler_control["draining"] else (
+				"paused" if self.scheduler_control["paused"] else "active")
+			return {
+				"target_id": self.config.target_id,
+				"state": state,
+				"scheduler_available": scheduler_context_available(
+					self.scheduler_context),
+				"threading_mode": self.config.scheduler_threading_mode,
+				"policy": dict(self.scheduler_policy),
+				"control": dict(self.scheduler_control),
+				"versions": dict(self.scheduler_config_versions),
+				"task_count": scheduler_task_count(self.scheduler_context),
+				"pending_capacity_count": len(self.pending_capacity),
+				"runtime_task_count": len(self.runtime_by_qtask_id),
+			}
+
+	def get_scheduler_policy(self):
+		with self.lock:
+			return {
+				"version": (
+					self.scheduler_config_versions["scheduler_policy"]),
+				"scheduler_policy": dict(self.scheduler_policy),
+			}
+
+	def set_scheduler_policy(self, policy):
+		with self.lock:
+			normalized = activate_scheduler_policy(
+				self.scheduler_context, policy)
+			self.scheduler_policy = normalized
+			version = self._bump_scheduler_config_version(
+				"scheduler_policy")
+			return {
+				"status": "accepted",
+				"version": version,
+				"scheduler_policy": dict(self.scheduler_policy),
+			}
+
+	def pause_scheduler(self, reason=None):
+		with self.lock:
+			self.scheduler_control["paused"] = True
+			self.scheduler_control["pause_reason"] = reason
+			version = self._bump_scheduler_config_version(
+				"scheduler_control")
+			return self._scheduler_control_result("paused", version)
+
+	def resume_scheduler(self):
+		with self.lock:
+			self.scheduler_control["paused"] = False
+			self.scheduler_control["draining"] = False
+			self.scheduler_control["drain_mode"] = None
+			self.scheduler_control["drain_timeout_s"] = None
+			self.scheduler_control["drain_started_at_ns"] = None
+			self.scheduler_control["pause_reason"] = None
+			version = self._bump_scheduler_config_version(
+				"scheduler_control")
+			return self._scheduler_control_result("resumed", version)
+
+	def drain_scheduler(self, mode="graceful", timeout_s=None):
+		with self.lock:
+			self.scheduler_control["paused"] = True
+			self.scheduler_control["draining"] = True
+			self.scheduler_control["drain_mode"] = mode
+			self.scheduler_control["drain_timeout_s"] = timeout_s
+			self.scheduler_control["drain_started_at_ns"] = time.time_ns()
+			version = self._bump_scheduler_config_version(
+				"scheduler_control")
+			return self._scheduler_control_result("draining", version)
+
+	def set_dispatch_depth(self, max_inflight):
+		with self.lock:
+			depth = int(max_inflight)
+			if depth < 1:
+				raise ValueError("dispatch depth must be at least 1")
+			self.scheduler_control["dispatch_depth"] = depth
+			version = self._bump_scheduler_config_version(
+				"scheduler_control")
+			return self._scheduler_control_result(
+				"dispatch-depth-updated", version)
+
+	def get_scheduler_queue_state(self, include_restricted=False):
+		with self.lock:
+			return {
+				"target_id": self.config.target_id,
+				"include_restricted": bool(include_restricted),
+				"pending_capacity": [
+					dict(value, qtask_id=qtask_id)
+					for qtask_id, value in self.pending_capacity.items()
+				],
+				"scheduler_task_count": scheduler_task_count(
+					self.scheduler_context),
+				"runtime_tasks": [
+					self._task_status_locked(runtime)
+					for runtime in self.runtime_by_qtask_id.values()
+				],
+			}
 
 	def register_event_endpoint(self, info):
 		registration = dict(info)
@@ -675,6 +807,28 @@ class QPMTargetController:
 	def _bump_admission_config_version(self, key):
 		self.admission_config_versions[key] += 1
 		return self.admission_config_versions[key]
+
+	def _bump_scheduler_config_version(self, key):
+		self.scheduler_config_versions[key] += 1
+		return self.scheduler_config_versions[key]
+
+	def _scheduler_control_result(self, status, version):
+		return {
+			"status": status,
+			"version": version,
+			"target_id": self.config.target_id,
+			"control": dict(self.scheduler_control),
+		}
+
+	def _task_status_locked(self, runtime):
+		return {
+			"cid": runtime.cid,
+			"qtask_id": runtime.qtask_id,
+			"reservation_id": runtime.reservation_id,
+			"scheduler_task_id": runtime.scheduler_task_id,
+			"provider_handle": runtime.provider_handle,
+			"state": runtime.state,
+		}
 
 	def _terminal_task_for_selector_locked(self, cid=None, qtask_id=None):
 		if qtask_id is not None:
@@ -1192,13 +1346,15 @@ def controller_config(qrc, target_id=None, admission_threading_mode=None,
 	)
 
 
-def get_target_controller(config, max_ppn, admission_context_factory=None):
+def get_target_controller(config, max_ppn, admission_context_factory=None,
+			  scheduler_context_factory=None):
 	with _CONTROLLERS_LOCK:
 		controller = _CONTROLLERS.get(config.target_id)
 		if controller is None:
 			controller = QPMTargetController(
 				config,
-				admission_context_factory=admission_context_factory)
+				admission_context_factory=admission_context_factory,
+				scheduler_context_factory=scheduler_context_factory)
 			_CONTROLLERS[config.target_id] = controller
 		return controller.bind(max_ppn)
 
@@ -1249,6 +1405,19 @@ def _create_admission_context(config, admission_context_factory):
 	if admission_context_factory is None:
 		admission_context_factory = create_admission_context
 	return admission_context_factory(config.admission_threading_mode)
+
+
+def _create_scheduler_context(config, scheduler_context_factory):
+	if config.scheduler_threading_mode == QHW_SCHED_THREAD_USER:
+		if config.serialization_mode != DEFAULT_CONTROLLER_SERIALIZATION_MODE:
+			raise ValueError(
+				"QHW_SCHED_THREAD_USER requires controller-lock "
+				"serialization")
+	if scheduler_context_factory is None:
+		scheduler_context_factory = create_scheduler_context
+	return scheduler_context_factory(
+		config.scheduler_threading_mode,
+		target_id=config.target_id)
 
 
 def _owner_identifier(owner):

@@ -101,16 +101,27 @@ class QPMSchedulerControl(QPMRemoteBase):
 	def get_scheduler_status(self, token=None):
 		pass
 
+	def get_scheduler_policy(self, token=None):
+		pass
+
 	def set_scheduler_policy(self, policy, token=None):
 		pass
 
-	def pause(self, target_id=None, token=None):
+	def pause(self, target_id=None, token=None, reason=None):
 		pass
 
 	def resume(self, target_id=None, token=None):
 		pass
 
-	def drain(self, target_id=None, token=None):
+	def drain(self, target_id=None, token=None, mode="graceful",
+		  timeout_s=None):
+		pass
+
+	def set_dispatch_depth(self, max_inflight, target_id=None, token=None):
+		pass
+
+	def get_scheduler_queue_state(self, target_id=None, token=None,
+				      include_restricted=False):
 		pass
 
 
