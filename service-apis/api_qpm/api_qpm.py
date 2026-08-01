@@ -28,10 +28,14 @@ class QPMExecution(QPMRemoteBase):
 	def delete_circuit(self, cid):
 		pass
 
-	def sync_run(self, info):
+	def sync_run(self, info, reservation_id=None, token=None,
+				 run_context=None, timeout=None, cancel_on_timeout=False,
+				 **request_metadata):
 		pass
 
-	def async_run(self, info):
+	def async_run(self, info, reservation_id=None, token=None,
+				  run_context=None, timeout=None, cancel_on_timeout=False,
+				  **request_metadata):
 		pass
 
 	def is_ready(self):

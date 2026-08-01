@@ -9,6 +9,7 @@ import queue
 import os
 from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwOutOfResources
 from .util_circuit import Circuit, MAX_PPN
+from .request import parse_execution_request
 from statistics import mean, median, stdev
 
 qpm_initialized = False
@@ -139,7 +140,9 @@ class UTIL_QPM:
 		logging.debug(f"Running {cid}\n{circuit.info}")
 		return circuit
 
-	def sync_run(self, info, common_run=None):
+	def sync_run(self, info, common_run=None, reservation_id=None, token=None,
+				 run_context=None, timeout=None, cancel_on_timeout=False,
+				 **request_metadata):
 		if not common_run:
 			common_run = self.common_run
 		else:
@@ -148,8 +151,17 @@ class UTIL_QPM:
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
+		request = parse_execution_request(
+			info,
+			reservation_id=reservation_id,
+			token=token,
+			run_context=run_context,
+			timeout=timeout,
+			cancel_on_timeout=cancel_on_timeout,
+			**request_metadata,
+		)
 		try:
-			cid = self.create_circuit(info)
+			cid = self.create_circuit(request.payload)
 			circuit = common_run(cid)
 			result = self.qrc.sync_run(circuit)
 		except Exception as e:
@@ -178,7 +190,9 @@ class UTIL_QPM:
 			self.process_oor_queue()
 			raise e
 
-	def async_run(self, info, common_run=None):
+	def async_run(self, info, common_run=None, reservation_id=None, token=None,
+				  run_context=None, timeout=None, cancel_on_timeout=False,
+				  **request_metadata):
 		if not common_run:
 			common_run = self.common_run
 		else:
@@ -187,8 +201,17 @@ class UTIL_QPM:
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
+		request = parse_execution_request(
+			info,
+			reservation_id=reservation_id,
+			token=token,
+			run_context=run_context,
+			timeout=timeout,
+			cancel_on_timeout=cancel_on_timeout,
+			**request_metadata,
+		)
 		try:
-			cid = self.create_circuit(info)
+			cid = self.create_circuit(request.payload)
 			circuit = common_run(cid)
 			self.qrc.async_run(circuit)
 		except DEFwOutOfResources:
