@@ -23,7 +23,11 @@ from .controller import (
 	controller_config,
 	get_target_controller,
 )
-from .admission import QPMAdmissionUnavailable, QPMAdmissionValidationError
+from .admission import (
+	QPMAdmissionPendingCapacity,
+	QPMAdmissionUnavailable,
+	QPMAdmissionValidationError,
+)
 from .util_circuit import Circuit, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
@@ -200,6 +204,16 @@ class UTIL_QPM:
 
 	def common_run(self, cid):
 		circuit = self.circuits[cid]
+		try:
+			if (not circuit.info.get("_qfw_diagnostic_bypass", False) and
+					circuit.info["qtask_id"]
+					not in self.controller.capacity_holds):
+				self.controller.authorize_capacity_hold(circuit)
+		except QPMAdmissionPendingCapacity as error:
+			raise DEFwOutOfResources(str(error))
+		except (QPMAdmissionUnavailable,
+			QPMAdmissionValidationError) as error:
+			raise DEFwExecutionError(str(error))
 		with self.controller.lock:
 			self.consume_resources(circuit)
 			circuit.set_resources_consumed()
@@ -268,6 +282,7 @@ class UTIL_QPM:
 		)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_sync_run", reason=reason)
+		request.payload["_qfw_diagnostic_bypass"] = True
 		return self._sync_run_request(request, self.common_run)
 
 	def _sync_run_request(self, request, common_run):
@@ -371,6 +386,7 @@ class UTIL_QPM:
 		)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_async_run", reason=reason)
+		request.payload["_qfw_diagnostic_bypass"] = True
 		return self._async_run_request(request, self.common_run)
 
 	def _async_run_request(self, request, common_run):
@@ -519,6 +535,12 @@ class UTIL_QPM:
 
 	def set_estimator_policy(self, estimator, token=None):
 		return self.controller.set_estimator_policy(estimator)
+
+	def retry_pending_capacity(self, reservation_id=None):
+		results = self.controller.retry_pending_capacity(
+			reservation_id=reservation_id)
+		self.process_oor_queue()
+		return results
 
 	def evaluate(self, request, token=None):
 		return self.controller.evaluate_reservation(request, token=token)

@@ -17,6 +17,10 @@ class QPMAdmissionValidationError(RuntimeError):
 	pass
 
 
+class QPMAdmissionPendingCapacity(RuntimeError):
+	pass
+
+
 class UnavailableAdmissionContext:
 	def __init__(self, threading_mode, error):
 		self.threading_mode = threading_mode
@@ -228,6 +232,68 @@ def list_reservations(context, filters=None):
 	]
 
 
+def authorize_usage(context, reservation_id, usage):
+	handler = _handler(context, "authorize_usage_request")
+	if handler is not None:
+		return _decision_dict(handler(reservation_id, dict(usage)))
+	if not admission_context_available(context):
+		raise QPMAdmissionUnavailable(
+			f"qhw-admission context is unavailable: {context.error}")
+	qhw_admission = _import_qhw_admission()
+	return _decision_dict(
+		context.authorize_usage(
+			reservation_id,
+			_native_usage(qhw_admission, reservation_id, usage)))
+
+
+def consume_usage(context, reservation_id, usage):
+	handler = _handler(context, "consume_usage_request")
+	if handler is not None:
+		return _decision_dict(handler(reservation_id, dict(usage)))
+	if not admission_context_available(context):
+		raise QPMAdmissionUnavailable(
+			f"qhw-admission context is unavailable: {context.error}")
+	qhw_admission = _import_qhw_admission()
+	return _decision_dict(
+		context.consume(
+			reservation_id,
+			_native_usage(qhw_admission, reservation_id, usage)))
+
+
+def return_usage(context, reservation_id, usage):
+	handler = _handler(context, "return_usage_request")
+	if handler is not None:
+		return handler(reservation_id, dict(usage))
+	if not admission_context_available(context):
+		raise QPMAdmissionUnavailable(
+			f"qhw-admission context is unavailable: {context.error}")
+	qhw_admission = _import_qhw_admission()
+	return context.return_usage(
+		reservation_id,
+		_native_usage(qhw_admission, reservation_id, usage))
+
+
+def record_actual(context, reservation_id, actual):
+	handler = _handler(context, "record_actual_request")
+	if handler is not None:
+		return handler(reservation_id, dict(actual))
+	if not admission_context_available(context):
+		raise QPMAdmissionUnavailable(
+			f"qhw-admission context is unavailable: {context.error}")
+	qhw_admission = _import_qhw_admission()
+	return context.record_actual(
+		reservation_id,
+		qhw_admission.ActualUsage(
+			reservation_id=reservation_id,
+			task_id=actual.get("task_id", 0),
+			observed_device_ns=actual.get("observed_device_ns", 0),
+			observed_compile_ns=actual.get("observed_compile_ns", 0),
+			observed_transfer_ns=actual.get("observed_transfer_ns", 0),
+			observed_control_overhead_ns=actual.get(
+				"observed_control_overhead_ns", 0),
+		))
+
+
 def _native_threading_value(qhw_admission, threading_mode):
 	if threading_mode == QHW_ADM_THREAD_SAFE:
 		return qhw_admission.THREAD_SAFE
@@ -283,6 +349,20 @@ def _native_admission_request(qhw_admission, request):
 		classical_runtime_ns=request.get("classical_runtime_ns", 0),
 		overhead_ns=request.get("overhead_ns", 0),
 		priority=request.get("priority", 0),
+	)
+
+
+def _native_usage(qhw_admission, reservation_id, usage):
+	return qhw_admission.Usage(
+		reservation_id=reservation_id,
+		task_id=usage.get("task_id", 0),
+		class_id=usage.get("class_id", 0),
+		event_time_ns=usage.get("event_time_ns", 0),
+		estimated_ns=usage.get("estimated_ns", 0),
+		actual_ns=usage.get("actual_ns", 0),
+		baseline_units=usage.get("baseline_units", 0),
+		credits=usage.get("credits", 0),
+		rate_units=usage.get("rate_units", 0),
 	)
 
 

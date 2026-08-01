@@ -6,8 +6,11 @@ from dataclasses import dataclass, field
 from .admission import (
 	QHW_ADM_THREAD_SAFE,
 	QHW_ADM_THREAD_USER,
+	QPMAdmissionPendingCapacity,
 	QPMAdmissionValidationError,
+	authorize_usage,
 	cancel_reservation,
+	consume_usage,
 	admission_context_available,
 	create_admission_context,
 	evaluate_request,
@@ -33,6 +36,7 @@ DEFAULT_SCHEDULER_THREADING_MODE = "QHW_SCHED_THREAD_SAFE"
 DEFAULT_CONTROLLER_SERIALIZATION_MODE = "controller-lock"
 QPM_TASK_CREATED = "created"
 QPM_TASK_RESOURCES_CONSUMED = "resources-consumed"
+QPM_TASK_CAPACITY_HELD = "capacity-held"
 QPM_TASK_PENDING_CAPACITY = "pending-capacity"
 QPM_TASK_SUBMITTED = "submitted"
 QPM_TASK_COMPLETED = "completed"
@@ -250,6 +254,112 @@ class QPMTargetController:
 			self._require_reservation_matches_context(
 				reservation, request_context)
 			return reservation
+
+	def authorize_capacity_hold(self, circuit):
+		qtask_id = circuit.info["qtask_id"]
+		runtime = self.task_for_qtask_id(qtask_id)
+		if runtime is None or runtime.reservation_id is None:
+			raise QPMAdmissionValidationError(
+				"reservation-scoped qtask is missing reservation state")
+		usage = self._estimated_usage(circuit, runtime)
+		with self.lock:
+			authorized = authorize_usage(
+				self.admission_context, runtime.reservation_id, usage)
+			if authorized.get("status") == "accepted":
+				committed = consume_usage(
+					self.admission_context, runtime.reservation_id,
+					usage)
+				if committed.get("status") != "accepted":
+					runtime.state = QPM_TASK_FAILED
+					raise QPMAdmissionValidationError(
+						"admission commit failure: "
+						f"status={committed.get('status')} "
+						f"reason={committed.get('reason')}")
+				self.capacity_holds[qtask_id] = {
+					"reservation_id": runtime.reservation_id,
+					"usage": dict(usage),
+					"decision": dict(committed),
+				}
+				self.record_usage_event(qtask_id, qtask_id)
+				runtime.state = QPM_TASK_CAPACITY_HELD
+				return committed
+			if authorized.get("status") == "delayed":
+				self.pending_capacity[qtask_id] = {
+					"reservation_id": runtime.reservation_id,
+					"cid": runtime.cid,
+					"usage": dict(usage),
+					"decision": dict(authorized),
+				}
+				runtime.state = QPM_TASK_PENDING_CAPACITY
+				raise QPMAdmissionPendingCapacity(
+					"admission usage delayed: "
+					f"reservation_id={runtime.reservation_id} "
+					f"qtask_id={qtask_id}")
+			runtime.state = QPM_TASK_FAILED
+			raise QPMAdmissionValidationError(
+				"admission usage rejected: "
+				f"status={authorized.get('status')} "
+				f"reason={authorized.get('reason')}")
+
+	def retry_pending_capacity(self, reservation_id=None):
+		results = []
+		with self.lock:
+			pending_items = list(self.pending_capacity.items())
+			for qtask_id, pending in pending_items:
+				if (reservation_id is not None and
+						pending["reservation_id"] != reservation_id):
+					continue
+				runtime = self.runtime_by_qtask_id.get(qtask_id)
+				if runtime is None:
+					self.pending_capacity.pop(qtask_id, None)
+					continue
+				usage = dict(pending["usage"])
+				authorized = authorize_usage(
+					self.admission_context, pending["reservation_id"],
+					usage)
+				if authorized.get("status") == "delayed":
+					pending["decision"] = dict(authorized)
+					results.append({
+						"qtask_id": qtask_id,
+						"status": "delayed",
+						"decision": dict(authorized),
+					})
+					continue
+				if authorized.get("status") != "accepted":
+					runtime.state = QPM_TASK_FAILED
+					self.pending_capacity.pop(qtask_id, None)
+					results.append({
+						"qtask_id": qtask_id,
+						"status": "rejected",
+						"decision": dict(authorized),
+					})
+					continue
+				committed = consume_usage(
+					self.admission_context, pending["reservation_id"],
+					usage)
+				if committed.get("status") != "accepted":
+					runtime.state = QPM_TASK_FAILED
+					self.pending_capacity.pop(qtask_id, None)
+					results.append({
+						"qtask_id": qtask_id,
+						"status": "commit-failed",
+						"decision": dict(committed),
+					})
+					continue
+				self.pending_capacity.pop(qtask_id, None)
+				self.capacity_holds[qtask_id] = {
+					"reservation_id": pending["reservation_id"],
+					"usage": usage,
+					"decision": dict(committed),
+				}
+				self.record_usage_event(qtask_id, qtask_id)
+				runtime.state = QPM_TASK_CAPACITY_HELD
+				results.append({
+					"qtask_id": qtask_id,
+					"status": "accepted",
+					"decision": dict(committed),
+				})
+		return results
 
 	def configure_device_profile(self, profile=None):
 		with self.lock:
@@ -692,6 +802,24 @@ class QPMTargetController:
 		request_id = self.admission_request_id_next
 		self.admission_request_id_next += 1
 		return request_id
+
+	def _estimated_usage(self, circuit, runtime):
+		info = circuit.info
+		shots = info.get("num_shots", info.get("shots", 1))
+		estimated_ns = info.get(
+			"estimated_ns",
+			info.get("walltime_ns", info.get("estimated_device_ns", 0)))
+		return {
+			"reservation_id": runtime.reservation_id,
+			"task_id": runtime.qtask_id,
+			"class_id": info.get("class_id", 1),
+			"event_time_ns": time.time_ns(),
+			"estimated_ns": estimated_ns,
+			"baseline_units": info.get("baseline_units", max(1, shots)),
+			"credits": info.get("credits", info.get("estimated_credits", 1)),
+			"rate_units": info.get(
+				"rate_units", info.get("estimated_rate_units", 1)),
+		}
 
 	def _require_reservation_active(self, reservation, operation):
 		if reservation.get("state") == "active":

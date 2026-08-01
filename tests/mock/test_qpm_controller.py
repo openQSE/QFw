@@ -47,6 +47,20 @@ class FakeAdmissionContext:
 			"expires_at_ns": 0,
 		}
 
+	def authorize_usage_request(self, reservation_id, usage):
+		return {
+			"status": "accepted",
+			"reservation_id": reservation_id,
+			"qtask_id": usage["task_id"],
+		}
+
+	def consume_usage_request(self, reservation_id, usage):
+		return {
+			"status": "accepted",
+			"reservation_id": reservation_id,
+			"qtask_id": usage["task_id"],
+		}
+
 
 class TrackingLock:
 	def __init__(self):
