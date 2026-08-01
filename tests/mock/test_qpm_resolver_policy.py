@@ -4,6 +4,7 @@ from qfw_qiskit.qpm_resolver import (
 	QPMResolver,
 	QPMStaleGenerationError,
 	QPMUnsupportedConfigurationError,
+	binding_name_for_category,
 )
 
 
@@ -234,3 +235,37 @@ def test_direct_endpoint_connect_reports_unsupported_without_binding(
 		assert "connect_to_endpoint" in str(exc)
 	else:
 		raise AssertionError("expected unsupported direct endpoint binding")
+
+
+def test_category_routing_maps_to_binding_without_token_policy():
+	assert binding_name_for_category("execution") == "execution"
+	assert binding_name_for_category("telemetry") == "telemetry"
+	assert binding_name_for_category("scheduler-control") == "scheduler"
+	assert binding_name_for_category("execution", "custom") == "custom"
+
+
+def test_resolver_preserves_binding_policy_labels_as_metadata():
+	record = directory_record("qpm-policy-labels")
+	record["selected_api_binding"]["policy_labels"] = [
+		"reservation-required",
+		"operator-only",
+	]
+	directory = DirectoryClient([record])
+	resolver = QPMResolver(
+		[DirectoryScope("site", "site", client=directory, priority=50)],
+		connector=Connector(),
+		selection_order=["site"],
+		sleeper=lambda seconds: None,
+	)
+
+	resolved = resolver.resolve(
+		service_type="qfw.qpm",
+		selector_resource="IQM-20q",
+		api_category="execution",
+		timeout=1,
+	)
+
+	assert resolved.api_binding.policy_labels == (
+		"reservation-required",
+		"operator-only",
+	)

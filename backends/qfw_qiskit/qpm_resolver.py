@@ -32,6 +32,12 @@ API_CATEGORY_BINDINGS = {
 }
 
 
+def binding_name_for_category(api_category, binding_name=None):
+	if binding_name:
+		return binding_name
+	return API_CATEGORY_BINDINGS.get(api_category, api_category)
+
+
 class QPMResolverError(DEFwReserveError):
 	pass
 
@@ -106,9 +112,7 @@ class QPMResolutionRequest:
 	provider: Optional[str] = None
 
 	def binding_filter(self):
-		if self.binding_name:
-			return self.binding_name
-		return API_CATEGORY_BINDINGS.get(self.api_category, self.api_category)
+		return binding_name_for_category(self.api_category, self.binding_name)
 
 
 class DEFwQPMConnector:
