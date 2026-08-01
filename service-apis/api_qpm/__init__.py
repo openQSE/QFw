@@ -15,7 +15,14 @@ svc_info = {
 #	query()
 #	reserve()
 #	release()
-service_classes = [QPM]  # noqa: F405
+service_classes = [
+	QPM,  # noqa: F405
+	QPMExecution,  # noqa: F405
+	QPMAdmissionControl,  # noqa: F405
+	QPMAdmissionPolicyConfig,  # noqa: F405
+	QPMSchedulerControl,  # noqa: F405
+	QPMTelemetry,  # noqa: F405
+]
 
 
 def initialize():
