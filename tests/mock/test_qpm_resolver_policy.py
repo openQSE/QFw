@@ -130,6 +130,54 @@ def test_resolver_rejects_stale_generation_before_connecting():
 	assert connector.connected == []
 
 
+def test_resolver_from_environment_selects_site_scoped_directory(monkeypatch):
+	clients = {}
+
+	def client_factory(endpoint):
+		client = DirectoryClient([directory_record(f"{endpoint}-qpm")])
+		clients[endpoint] = client
+		return client
+
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	resolver = QPMResolver.from_environment(
+		directory_client_factory=client_factory,
+		sleeper=lambda seconds: None,
+	)
+
+	resolved = resolver.resolve(
+		service_type="qfw.qpm",
+		selector_resource="IQM-20q",
+		api_category="execution",
+		timeout=1,
+	)
+
+	assert resolved.service_id == "site-a-qpm"
+	assert resolved.directory_scope == "site"
+	assert resolved.directory_identity == "site-a"
+	assert set(clients.keys()) == {"site-a"}
+
+
+def test_resolver_from_environment_allows_direct_endpoint_fallback(monkeypatch):
+	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
+	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
+	resolver = QPMResolver.from_environment(sleeper=lambda seconds: None)
+
+	resolved = resolver.resolve(
+		service_type="qfw.qpm",
+		api_category="execution",
+		timeout=1,
+	)
+
+	assert resolved.service_id == "qpm-direct:9000"
+	assert resolved.directory_scope == "direct"
+	assert resolved.endpoint == "qpm-direct:9000"
+	assert resolved.api_binding.client_class == "QPM"
+
+
 def test_resolver_from_environment_binds_site_directory_without_factory(
 		monkeypatch):
 	class FakeDefw:
