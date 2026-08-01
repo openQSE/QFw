@@ -35,7 +35,8 @@ qpm_shutdown = False
 class UTIL_QPM:
 	def __init__(self, qrc, max_ppn=MAX_PPN, start=True, target_id=None,
 		     admission_threading_mode=None, scheduler_threading_mode=None,
-		     controller_serialization_mode=None):
+		     controller_serialization_mode=None,
+		     admission_context_factory=None):
 		self.qrc = qrc
 		self.max_ppn = max_ppn
 		config = controller_config(
@@ -45,7 +46,9 @@ class UTIL_QPM:
 			scheduler_threading_mode=scheduler_threading_mode,
 			serialization_mode=controller_serialization_mode,
 		)
-		self.controller = get_target_controller(config, max_ppn)
+		self.controller = get_target_controller(
+			config, max_ppn,
+			admission_context_factory=admission_context_factory)
 		self.circuits = self.controller.circuits
 		self.oor_queue = self.controller.oor_queue
 		if self.oor_queue is None:

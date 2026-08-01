@@ -3,6 +3,13 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from .admission import (
+	QHW_ADM_THREAD_SAFE,
+	QHW_ADM_THREAD_USER,
+	admission_context_available,
+	create_admission_context,
+)
+
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
 DEVICE_ID_ENV = "QFW_QPU_DEVICE_ID"
@@ -10,7 +17,7 @@ ADMISSION_THREADING_ENV = "QFW_QPM_ADMISSION_THREADING_MODE"
 SCHEDULER_THREADING_ENV = "QFW_QPM_SCHEDULER_THREADING_MODE"
 CONTROLLER_SERIALIZATION_ENV = "QFW_QPM_CONTROLLER_SERIALIZATION_MODE"
 
-DEFAULT_ADMISSION_THREADING_MODE = "QHW_ADM_THREAD_SAFE"
+DEFAULT_ADMISSION_THREADING_MODE = QHW_ADM_THREAD_SAFE
 DEFAULT_SCHEDULER_THREADING_MODE = "QHW_SCHED_THREAD_SAFE"
 DEFAULT_CONTROLLER_SERIALIZATION_MODE = "controller-lock"
 QPM_TASK_CREATED = "created"
@@ -55,9 +62,11 @@ class QPMRuntimeTask:
 
 
 class QPMTargetController:
-	def __init__(self, config):
+	def __init__(self, config, admission_context_factory=None):
 		self.config = config
 		self.lock = threading.RLock()
+		self.admission_context = _create_admission_context(
+			config, admission_context_factory)
 		self.binding_count = 0
 		self.max_ppn = None
 		self.resources_initialized = False
@@ -104,6 +113,10 @@ class QPMTargetController:
 				"audit_record_count": len(self.audit_records),
 				"diagnostic_bypass_count": len(
 					self.diagnostic_bypass_records),
+				"admission_context_available": (
+					admission_context_available(self.admission_context)),
+				"admission_context_threading": getattr(
+					self.admission_context, "threading", None),
 			})
 		return info
 
@@ -296,11 +309,13 @@ def controller_config(qrc, target_id=None, admission_threading_mode=None,
 	)
 
 
-def get_target_controller(config, max_ppn):
+def get_target_controller(config, max_ppn, admission_context_factory=None):
 	with _CONTROLLERS_LOCK:
 		controller = _CONTROLLERS.get(config.target_id)
 		if controller is None:
-			controller = QPMTargetController(config)
+			controller = QPMTargetController(
+				config,
+				admission_context_factory=admission_context_factory)
 			_CONTROLLERS[config.target_id] = controller
 		return controller.bind(max_ppn)
 
@@ -321,6 +336,17 @@ def _target_id(qrc, explicit_target_id):
 
 	qrc_type = type(qrc)
 	return f"{qrc_type.__module__}.{qrc_type.__name__}"
+
+
+def _create_admission_context(config, admission_context_factory):
+	if config.admission_threading_mode == QHW_ADM_THREAD_USER:
+		if config.serialization_mode != DEFAULT_CONTROLLER_SERIALIZATION_MODE:
+			raise ValueError(
+				"QHW_ADM_THREAD_USER requires controller-lock "
+				"serialization")
+	if admission_context_factory is None:
+		admission_context_factory = create_admission_context
+	return admission_context_factory(config.admission_threading_mode)
 
 
 def _owner_identifier(owner):
