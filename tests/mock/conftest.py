@@ -76,11 +76,25 @@ def _install_yaml_stub():
 	class Dumper:
 		pass
 
+	class SafeLoader:
+		@classmethod
+		def add_constructor(cls, *args, **kwargs):
+			return None
+
+	class FullLoader(SafeLoader):
+		pass
+
 	def dump(data, **kwargs):
 		return repr(data)
 
+	def load(data, Loader=None):
+		return {}
+
 	yaml.Dumper = Dumper
+	yaml.SafeLoader = SafeLoader
+	yaml.FullLoader = FullLoader
 	yaml.dump = dump
+	yaml.load = load
 	sys.modules["yaml"] = yaml
 
 

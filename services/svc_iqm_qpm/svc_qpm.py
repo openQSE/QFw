@@ -27,9 +27,9 @@ class QPM(UTIL_QPM):
 		logging.debug(f"IQM {SERVICE_DESC}: {info}")
 		return info
 
-	def create_circuit(self, info):
+	def prepare_circuit(self, info):
 		info['qfw_backend'] = 'iqm'
-		return super().create_circuit(info)
+		return info
 
 	def get_backend_info(self, token=None):
 		return self.qrc.get_backend_info()

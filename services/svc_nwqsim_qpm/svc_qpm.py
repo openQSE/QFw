@@ -21,9 +21,9 @@ class QPM(UTIL_QPM):
 		logging.debug(f"NWQSIM {SERVICE_DESC}: {info}")
 		return info
 
-	def create_circuit(self, info):
+	def prepare_circuit(self, info):
 		info['qfw_backend'] = 'circuit_runner.nwqsim'
-		return super().create_circuit(info)
+		return info
 
 	def get_backend_info(self, token=None):
 		return {

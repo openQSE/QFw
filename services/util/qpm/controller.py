@@ -13,6 +13,12 @@ DEFAULT_ADMISSION_THREADING_MODE = "QHW_ADM_THREAD_SAFE"
 DEFAULT_SCHEDULER_THREADING_MODE = "QHW_SCHED_THREAD_SAFE"
 DEFAULT_CONTROLLER_SERIALIZATION_MODE = "controller-lock"
 QPM_TASK_CREATED = "created"
+QPM_TASK_RESOURCES_CONSUMED = "resources-consumed"
+QPM_TASK_PENDING_CAPACITY = "pending-capacity"
+QPM_TASK_SUBMITTED = "submitted"
+QPM_TASK_COMPLETED = "completed"
+QPM_TASK_FAILED = "failed"
+QPM_TASK_CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -170,6 +176,13 @@ class QPMTargetController:
 				return None
 			return self.runtime_by_qtask_id.get(qtask_id)
 
+	def task_for_provider_handle(self, provider_handle):
+		with self.lock:
+			qtask_id = self.qtask_id_by_provider_handle.get(provider_handle)
+			if qtask_id is None:
+				return None
+			return self.runtime_by_qtask_id.get(qtask_id)
+
 	def bind_scheduler_task(self, qtask_id, scheduler_task_id):
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
@@ -195,6 +208,13 @@ class QPMTargetController:
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
 			runtime.state = state
+			return runtime
+
+	def record_result(self, qtask_id, result):
+		with self.lock:
+			runtime = self.runtime_by_qtask_id[qtask_id]
+			self.result_state[qtask_id] = result
+			runtime.state = QPM_TASK_COMPLETED
 			return runtime
 
 

@@ -8,7 +8,15 @@ import time
 import queue
 import os
 from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwOutOfResources
-from .controller import controller_config, get_target_controller
+from .controller import (
+	QPM_TASK_CANCELLED,
+	QPM_TASK_FAILED,
+	QPM_TASK_PENDING_CAPACITY,
+	QPM_TASK_RESOURCES_CONSUMED,
+	QPM_TASK_SUBMITTED,
+	controller_config,
+	get_target_controller,
+)
 from .util_circuit import Circuit, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
@@ -57,7 +65,11 @@ class UTIL_QPM:
 		start = time.time()
 
 		cid = str(uuid.uuid4())
-		request = parse_execution_request(info)
+		prepared_info = dict(info)
+		hook_info = self.prepare_circuit(prepared_info)
+		if hook_info is not None:
+			prepared_info = hook_info
+		request = parse_execution_request(prepared_info)
 		runtime = self.controller.register_circuit(cid, request.context,
 							   request.payload)
 		self.circuits[cid] = Circuit(
@@ -68,17 +80,21 @@ class UTIL_QPM:
 			f"in {time.time() - start}")
 		return cid
 
+	def prepare_circuit(self, info):
+		return info
+
 	def delete_circuit(self, cid):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		if cid not in self.circuits:
-			return
-		circ = self.circuits[cid]
-		if circ.can_delete():
-			del self.circuits[cid]
-		else:
-			circ.set_deletion()
+		with self.controller.lock:
+			if cid not in self.circuits:
+				return
+			circ = self.circuits[cid]
+			if circ.can_delete():
+				del self.circuits[cid]
+			else:
+				circ.set_deletion()
 
 	def consume_resources(self, circ):
 		info = circ.info
@@ -136,15 +152,17 @@ class UTIL_QPM:
 				break
 
 	def free_resources(self, circ):
-		res = circ.info['hosts']
-		for host in res.keys():
-			if host not in self.free_hosts:
-				raise DEFwError(f"Circuit has untracked host: {host}")
-			if res[host] + self.free_hosts[host] > self.max_ppn:
-				raise DEFwError("Returning more resources than originally had")
-			self.free_hosts[host] += res[host]
-		circ.set_done()
-		cid = circ.get_cid()
+		with self.controller.lock:
+			res = circ.info['hosts']
+			for host in res.keys():
+				if host not in self.free_hosts:
+					raise DEFwError(f"Circuit has untracked host: {host}")
+				if res[host] + self.free_hosts[host] > self.max_ppn:
+					raise DEFwError(
+						"Returning more resources than originally had")
+				self.free_hosts[host] += res[host]
+			circ.set_done()
+			cid = circ.get_cid()
 		self.delete_circuit(cid)
 
 	def free_resources_and_oor(self, circ):
@@ -156,10 +174,38 @@ class UTIL_QPM:
 
 	def common_run(self, cid):
 		circuit = self.circuits[cid]
-		self.consume_resources(circuit)
-		circuit.set_resources_consumed()
+		with self.controller.lock:
+			self.consume_resources(circuit)
+			circuit.set_resources_consumed()
+			self.controller.set_task_state(
+				circuit.info["qtask_id"], QPM_TASK_RESOURCES_CONSUMED)
 		logging.debug(f"Running {cid}\n{circuit.info}")
+		self.prepare_provider_submission(circuit)
 		return circuit
+
+	def prepare_provider_submission(self, circuit):
+		return circuit
+
+	def submit_provider_sync(self, circuit):
+		self.controller.set_task_state(circuit.info["qtask_id"], QPM_TASK_SUBMITTED)
+		return self.qrc.sync_run(circuit)
+
+	def submit_provider_async(self, circuit):
+		self.controller.set_task_state(circuit.info["qtask_id"], QPM_TASK_SUBMITTED)
+		return self.qrc.async_run(circuit)
+
+	def complete_provider_submission(self, circuit, result=None):
+		self.controller.record_result(circuit.info["qtask_id"], result)
+
+	def fail_provider_submission(self, circuit, error):
+		self.controller.set_task_state(circuit.info["qtask_id"], QPM_TASK_FAILED)
+
+	def cancel_provider_submission(self, cid, reason=None):
+		runtime = self.controller.task_for_cid(cid)
+		if runtime is None:
+			return None
+		self.controller.set_task_state(runtime.qtask_id, QPM_TASK_CANCELLED)
+		return runtime
 
 	def sync_run(self, info, common_run=None, reservation_id=None, token=None,
 				 run_context=None, timeout=None, cancel_on_timeout=False,
@@ -181,13 +227,20 @@ class UTIL_QPM:
 			cancel_on_timeout=cancel_on_timeout,
 			**request_metadata,
 		)
+		circuit = None
 		try:
 			cid = self.create_circuit(request.payload)
 			circuit = common_run(cid)
-			result = self.qrc.sync_run(circuit)
+			result = self.submit_provider_sync(circuit)
+			self.complete_provider_submission(circuit, result=result)
 		except Exception as e:
+			if circuit is not None:
+				self.fail_provider_submission(circuit, e)
+				if "hosts" in circuit.info:
+					self.free_resources(circuit)
 			raise e
-		self.free_resources(circuit)
+		if "hosts" in circuit.info:
+			self.free_resources(circuit)
 		logging.debug(f"circuit {circuit.get_cid()} completed with output {result}")
 		return result
 
@@ -200,14 +253,23 @@ class UTIL_QPM:
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
+		circuit = None
 		try:
 			circuit = common_run(cid)
-			self.qrc.async_run(circuit)
+			self.submit_provider_async(circuit)
 		except DEFwOutOfResources as e:
 			# queue circuit on a local out of resources queue
+			runtime = self.controller.task_for_cid(cid)
+			if runtime is not None:
+				self.controller.set_task_state(
+					runtime.qtask_id, QPM_TASK_PENDING_CAPACITY)
 			self.oor_queue.put(cid)
 			raise e
 		except Exception as e:
+			if circuit is not None:
+				self.fail_provider_submission(circuit, e)
+				if "hosts" in circuit.info:
+					self.free_resources(circuit)
 			self.process_oor_queue()
 			raise e
 
@@ -231,14 +293,26 @@ class UTIL_QPM:
 			cancel_on_timeout=cancel_on_timeout,
 			**request_metadata,
 		)
+		cid = None
+		circuit = None
 		try:
 			cid = self.create_circuit(request.payload)
 			circuit = common_run(cid)
-			self.qrc.async_run(circuit)
-		except DEFwOutOfResources:
+			self.submit_provider_async(circuit)
+		except DEFwOutOfResources as e:
+			if cid is None:
+				raise e
 			# queue circuit on a local out of resources queue
+			runtime = self.controller.task_for_cid(cid)
+			if runtime is not None:
+				self.controller.set_task_state(
+					runtime.qtask_id, QPM_TASK_PENDING_CAPACITY)
 			self.oor_queue.put(cid)
 		except Exception as e:
+			if circuit is not None:
+				self.fail_provider_submission(circuit, e)
+				if "hosts" in circuit.info:
+					self.free_resources(circuit)
 			self.process_oor_queue()
 			raise e
 
@@ -257,6 +331,10 @@ class UTIL_QPM:
 				raise DEFwInProgress("No ready QTs")
 
 		self.all_results.append(r)
+		cid = r.get("cid") if isinstance(r, dict) else None
+		runtime = self.controller.task_for_cid(cid)
+		if runtime is not None:
+			self.controller.record_result(runtime.qtask_id, r)
 		return r
 
 	def peek_cq(self, cid=None):
@@ -279,6 +357,8 @@ class UTIL_QPM:
 		# keeping the below for debugging purposes
 		self.push_info['class_id'] = class_id
 		self.push_info['target'] = ep
+		with self.controller.lock:
+			self.controller.event_endpoints[class_id] = dict(self.push_info)
 		self.qrc.register_event_notification(self.push_info)
 
 	def is_ready(self):
@@ -350,11 +430,14 @@ class UTIL_QPM:
 		except Exception:
 			pass
 
-		if self.qrc:
-			self.qrc.shutdown()
-			self.qrc = None
+		self.shutdown_provider()
 		#ss = threading.Thread(target=self.schedule_shutdown, args=())
 		#ss.start()
 
 	def test(self):
 		return "****UTIL QPM Test Successful****"
+
+	def shutdown_provider(self):
+		if self.qrc:
+			self.qrc.shutdown()
+			self.qrc = None

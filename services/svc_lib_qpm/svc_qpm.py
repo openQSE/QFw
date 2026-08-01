@@ -27,11 +27,11 @@ class QPM(UTIL_QPM):
 		logging.debug(f"shim {SERVICE_DESC}: {info}")
 		return info
 
-	def create_circuit(self, info):
+	def prepare_circuit(self, info):
 		# Hardware is still the IQM q20 (reached via QRMI / QDMI-on-IQM), so the
 		# qhw backend tag stays 'iqm' until per-library normalizers land.
 		info['qfw_backend'] = 'iqm'
-		return super().create_circuit(info)
+		return info
 
 	def capability_map(self):
 		return self.qrc.capability_map()
