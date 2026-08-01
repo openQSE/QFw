@@ -57,9 +57,15 @@ class UTIL_QPM:
 		start = time.time()
 
 		cid = str(uuid.uuid4())
-		self.circuits[cid] = Circuit(cid, info, self.free_resources_and_oor)
+		request = parse_execution_request(info)
+		runtime = self.controller.register_circuit(cid, request.context,
+							   request.payload)
+		self.circuits[cid] = Circuit(
+			cid, request.payload, self.free_resources_and_oor)
 		self.circuits[cid].set_ready()
-		logging.debug(f"{cid} added to circuit database in {time.time() - start}")
+		logging.debug(
+			f"{cid} qtask {runtime.qtask_id} added to circuit database "
+			f"in {time.time() - start}")
 		return cid
 
 	def delete_circuit(self, cid):
