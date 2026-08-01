@@ -4,6 +4,7 @@
 
 - [Purpose](#purpose)
 - [Design Context](#design-context)
+- [Build And Installation Model](#build-and-installation-model)
 - [Managed Resource Model](#managed-resource-model)
 - [QFw Controller Architecture](#qfw-controller-architecture)
 - [Requirement Design Notes](#requirement-design-notes)
@@ -43,11 +44,11 @@ client
   -> QRC completion queue or event callback
 ```
 
-The target design separates these concerns. DEFw-resmgr remains useful for
-registered-service discovery, while QPM owns the active reservation flow and
-uses qhw-admission as the authoritative reservation store. Long-running QPM
-services remain DEFw-wrapped RPC services, but they need a startup mode that
-does not require registration with DEFw-resmgr.
+The target design separates these concerns. DEFw-dirsvc owns registered-service
+discovery, while QPM owns the active reservation flow and uses qhw-admission as
+the authoritative reservation store. Long-running QPM services remain
+DEFw-wrapped RPC services and register with a site-scoped DEFw-dirsvc rather
+than with an allocation-local directory service.
 
 Relevant current implementation points:
 
@@ -77,6 +78,110 @@ Relevant current implementation points:
 </details>
 
 <details open>
+<summary><strong>Build And Installation Model</strong></summary>
+
+## Build And Installation Model
+
+DEFw should use CMake as its authoritative build and installation system.
+SCons is removed after CMake produces equivalent C, SWIG, Python extension,
+test, and install artifacts. The migration is behavior-neutral. Transport,
+directory, and C/Python interface refactors start after the CMake baseline can
+build and install the existing DEFw behavior.
+
+The build should support normal out-of-source CMake workflows:
+
+```text
+cmake -S DEFw -B build/defw -DCMAKE_INSTALL_PREFIX=<prefix>
+cmake --build build/defw
+ctest --test-dir build/defw
+cmake --install build/defw
+```
+
+A conventional source layout gives CMake stable ownership boundaries:
+
+```text
+DEFw/
+  CMakeLists.txt
+  cmake/
+    DEFwConfig.cmake.in
+    modules/
+  include/defw/
+  src/
+  swig/
+    defw.i
+    typemaps/
+      compat_charpp.i
+      compat_charppp.i
+      owned_string.i
+      owned_string_list_counted.i
+      opaque_handle.i
+  python/defw/
+  tests/
+```
+
+Generated SWIG files belong in the build tree. The source tree should contain
+the canonical `.i`, typemap, C, header, and Python sources, while generated C
+wrappers, generated Python proxy files, object files, and staging artifacts
+stay under the CMake binary directory.
+
+Installation should make DEFw usable without running from the source tree. A
+standard install prefix should contain:
+
+```text
+<prefix>/include/defw/...
+<prefix>/lib/libdefw.so
+<prefix>/lib/cmake/DEFw/DEFwConfig.cmake
+<prefix>/lib/cmake/DEFw/DEFwTargets.cmake
+<prefix>/lib/pythonX.Y/site-packages/defw/_defw.so
+<prefix>/lib/pythonX.Y/site-packages/defw/*.py
+<prefix>/share/defw/swig/typemaps/*.i
+```
+
+C clients use `find_package(DEFw CONFIG REQUIRED)` and link the exported
+`DEFw::defw` target. QFw and other Python clients use the installed Python
+package with `import defw`. The CMake package should publish include
+directories, library targets, runtime search path behavior, Python extension
+install location, and the installed SWIG typemap directory for optional
+downstream wrappers.
+
+The SWIG cleanup should preserve current DEFw Python API behavior unless an
+individual wrapper is explicitly migrated with tests. Existing broad typemaps
+remain available as compatibility includes for the current API surface, but new
+or refactored interfaces should opt in to narrower typemaps. This lets DEFw
+wrap external libraries, such as libfabric, without forcing every interface to
+inherit DEFw-specific pointer semantics by default.
+
+The target typemap set should separate compatibility from new contracts:
+
+| Typemap include | Purpose |
+| --- | --- |
+| `compat_charpp.i` | Preserve existing `char **` output behavior for audited current DEFw APIs. |
+| `compat_charppp.i` | Preserve existing `char ***` pointer-return behavior until each API is migrated. |
+| `owned_string.i` | Convert malloc/calloc-owned `char **` output to a Python string and free the transferred buffer. A NULL output means allocation failure and raises a Python memory/allocation exception. |
+| `owned_string_list_counted.i` | Convert counted `char ***out, size_t *count` output to `list[str]`, then free each transferred string and the transferred array. |
+| `opaque_handle.i` | Expose typed opaque handles without enabling arbitrary global `void *` conversion. |
+
+New string-list APIs should prefer an explicit count, such as
+`char ***out, size_t *count`, over an uncounted `char ***`. The counted typemap
+returns a Python list of strings and owns cleanup for malloc/calloc-transferred
+memory. Existing uncounted `char ***` wrappers should keep their current return
+shape until a targeted migration changes that API and adds tests.
+
+The commented global `void *` typemap should be removed rather than carried as
+dead code. Peer handles and future libfabric handles should use typed opaque
+handle wrappers or library-specific SWIG modules. That keeps external-library
+wrapping possible while preventing accidental conversion of unrelated raw
+pointers.
+
+CMake validation should include build-tree imports and install-tree imports.
+Tests should cover generated SWIG outputs, installed Python package imports,
+exported CMake targets, runtime search paths, string output typemaps, counted
+string-list typemaps, compatibility typemaps used by current wrappers, NULL
+allocation-failure handling, and typed opaque-handle round trips.
+
+</details>
+
+<details open>
 <summary><strong>Managed Resource Model</strong></summary>
 
 ## Managed Resource Model
@@ -84,8 +189,8 @@ Relevant current implementation points:
 The target resource boundary is a managed quantum resource, not direct hardware
 access. Direct hardware access is the provider-facing boundary below the
 managed resource. The managed resource boundary adds policy, admission,
-scheduling, authentication, accounting, telemetry, and lifecycle semantics
-before work reaches the provider queue.
+scheduling, accounting, telemetry, and lifecycle semantics before work reaches
+the provider queue.
 
 `qhw-admission` evaluates whether a quantum job or hybrid job can enter the
 active pool for a managed device. It owns device profiles, estimator plugins,
@@ -97,7 +202,7 @@ task queue state, scheduler policy plugins, task lifecycle state, slicing, and
 selection of the next qtask to occupy the QPU.
 
 Neither library owns the hosting framework's remote API, service registration,
-provider authentication, provider submission, result transport, event
+provider connection setup, provider submission, result transport, event
 notification, or shutdown. Those responsibilities remain in the active managed
 resource implementation that hosts the libraries.
 
@@ -144,21 +249,21 @@ Managed-resource API categories are:
 | Category | Primary consumers | Standardization role |
 | --- | --- | --- |
 | Execution | Applications, runtimes, SDK adapters | Defines submit, synchronous execution, asynchronous execution, cancellation, status, result, metadata, and event behavior for managed quantum tasks. Scheduling is implicit in this lifecycle. |
-| Admission control | Workflow managers, load managers, resource managers, trusted site services | Defines evaluate, reserve, renew, release, cancel, inspect, and decision-reporting operations for capacity requests. |
-| Scheduler control | Site operators, administrators, trusted automation | Defines scheduling policy, queue-control, drain, pause, and dispatch-tuning operations for a device. |
+| Admission control | Workflow managers, load managers, resource managers, site services | Defines evaluate, reserve, renew, release, cancel, inspect, and decision-reporting operations for capacity requests. |
+| Scheduler control | Site operators, administrators, site automation | Defines scheduling policy, queue-control, drain, pause, and dispatch-tuning operations for a device. |
 | Telemetry and discovery | Applications, workflow managers, operators, monitoring services, admission policy | Defines device, job, reservation, queue, calibration, timing, capacity, and provenance data. |
 
 Telemetry and discovery are one top-level API category because they are read
-and query surfaces. Access is still partitioned inside that category. The API
-should apply authorization at method, object, and field granularity rather than
-splitting telemetry into unrelated top-level categories.
+and query surfaces. Access can still be partitioned inside that category by
+the later authentication feature rather than splitting telemetry into unrelated
+top-level categories.
 
 | Access class | Typical data | Primary consumers |
 | --- | --- | --- |
 | Basic discovery | Device identity, supported capabilities, public topology, and public metadata. | Applications, runtimes, SDK adapters. |
 | Caller-owned state | Job, task, reservation, event, and result data owned by the caller or workflow. | Submitting users, applications, workflow managers. |
-| Manager aggregate state | Aggregate queue depth, capacity summaries, reservation summaries, and workload-level wait estimates. | Workflow managers, load managers, trusted automation. |
-| Operator telemetry | Policy state, scheduler internals, cross-user views, audit records, and detailed operational health. | Site operators, administrators, trusted monitoring services. |
+| Manager aggregate state | Aggregate queue depth, capacity summaries, reservation summaries, and workload-level wait estimates. | Workflow managers, load managers, site automation. |
+| Operator telemetry | Policy state, scheduler internals, cross-user views, audit records, and detailed operational health. | Site operators, administrators, monitoring services. |
 
 Lifecycle semantics should be defined before API names or bindings.
 qhw-admission uses decision kinds for request outcomes and reservation states
@@ -334,6 +439,13 @@ several QPUs owns separate admission and scheduler state for each target. A
 future QPU control service can preserve the same controller contract if a
 deployment centralizes policy for several QPM service instances.
 
+DEFw remote proxy objects and service-side API adapter objects are separate
+from the controller. Client proxies are per-caller handles. Service-side API
+objects may be per connection or shared through DEFw singleton policy, but
+they delegate reservation, scheduler, provider, task, and capacity operations
+to the target-scoped controller. This keeps long-running QPM state stable when
+clients disconnect, reconnect, or bind through different API surfaces.
+
 The internal QFw controller owns:
 
 - one `qhw_adm_t` admission context per managed QPU or execution target
@@ -399,7 +511,7 @@ sequenceDiagram
     QPM->>UTIL: submit reservation-scoped qtask
     UTIL->>ADM: get_reservation(reservation_id)
     ADM-->>UTIL: reservation record or lifecycle error
-    UTIL->>UTIL: validate caller, scope, operation, and expiration
+    UTIL->>UTIL: validate reservation, scope, operation, and expiration
     UTIL->>ADM: authorize_usage(reservation_id, estimated usage)
     ADM-->>UTIL: accepted / delayed / rejected
     alt authorization accepted
@@ -520,16 +632,17 @@ distinguish accepted and running work may move directly from `ASSIGNED` to
 
 ### DEFw Directory And Identity Model
 
-DEFw-resmgr should be a directory service for QFw-managed services. It owns
-registration, deregistration, service discovery, endpoint resolution, and
-service liveness state. It does not own QPM admission, QPM capacity accounting,
-QPM scheduling, or provider queue admission.
+DEFw-dirsvc is the directory service for QFw-managed and long-running services.
+It owns registration, deregistration, service discovery, endpoint resolution,
+and service liveness state. It does not own QPM admission, QPM capacity
+accounting, QPM scheduling, or provider queue admission.
 
-The directory returns service descriptors and live endpoints. A client then
-binds to the selected QPM service and calls the QPM API category it is
-authorized to use. A SLURM plugin, workflow manager, or other trusted manager
-uses the QPM admission API to create reservations. Applications and runtimes
-use execution APIs with the returned reservation ID and execution token.
+The directory returns service records, selected API bindings, and live
+endpoints. A client then binds to the selected QPM service and calls the
+selected QPM API surface. A workflow manager, load manager, launcher
+integration, or site service uses the QPM admission API to create reservations.
+Applications and runtimes use execution APIs with the returned reservation ID
+and opaque token placeholder.
 
 The transport layer and the directory layer need separate identities:
 
@@ -537,66 +650,74 @@ The transport layer and the directory layer need separate identities:
 | --- | --- | --- | --- |
 | `service_id` | Python directory and service registration | Stable across service restarts | Identifies the logical service or client registration. |
 | `runtime_id` | Service process | Stable for one process lifetime | Identifies one running instance of a logical service. |
-| `connection_id` or `blk_uuid` | C transport layer | Stable for one connection block | Distinguishes transport connections and RPC channels. |
+| `peer_handle` | C transport abstraction exposed to Python | Stable while C considers a peer callable | Lets Python associate registration and liveness with an opaque transport peer. |
 | `generation` | Python directory | Increments when a new runtime registers for a known `service_id` | Separates stale endpoints from the active runtime. |
 
 `service_id` should come from deployment configuration or another stable
 registration source. A generated `service_id` is acceptable only for ephemeral
-services that do not need restart continuity. QPM services should register with
-a stable `service_id`, the registration kind, API categories, provider, device
-ID, QPM type, capability bits, and endpoint metadata.
+services that do not need restart continuity. Services should register with a
+stable `service_id`, service type, concrete API bindings, selector metadata,
+and endpoint metadata.
 
-C should manage connection state, sockets, heartbeat transmission, heartbeat
-failure detection, connection block UUIDs, and low-level connection events. It
-may carry enough type information to preserve the existing protocol during a
-transition, but it should not be the source of truth for service lifecycle or
-QPM identity.
+C manages connection state, sockets, heartbeat transmission, heartbeat failure
+detection, connection block UUIDs, and low-level connection events. It exports
+an opaque peer lifecycle abstraction to Python. Socket stages, channel pairing,
+heartbeat details, and future libfabric endpoint mechanics remain behind that
+abstraction.
 
 Python should own the service and client directory. It maps each logical
-`service_id` to the active `runtime_id`, active connection handle, descriptor,
-registration kind, liveness state, and policy-visible metadata. Directory
-records use lifecycle states that are meaningful above the transport layer:
+`service_id` to the active `runtime_id`, active `peer_handle`, service record,
+registration kind, and liveness state. Directory records use lifecycle states
+that are meaningful above the transport layer:
 
 | State | Meaning |
 | --- | --- |
 | `UP` | The service is registered and has a live connection. |
-| `DOWN` | The descriptor is known, but the active connection is unavailable. |
+| `DOWN` | The service record is known, but the active connection is unavailable. |
 | `TIMED_OUT` | Heartbeat or transport failure exceeded the configured timeout. |
 | `DEREGISTERED` | The service explicitly removed its registration. |
 
-Heartbeat failure is a transport event. C detects it and reports the affected
-runtime or connection to Python. Python updates the directory record and stops
-returning that endpoint for normal discovery. Operator queries can still show
-the inactive descriptor until the retention window expires. If the same
-`service_id` registers again with a new `runtime_id`, the directory increments
-the generation, marks the record `UP`, and treats older endpoints as stale.
+Heartbeat failure is a transport event. C detects it and reports only the
+affected peer and protocol-neutral reason to Python. Python updates the
+directory record and stops returning that endpoint for normal discovery.
+Operator queries can still show the inactive service record until the retention
+window expires. If the same `service_id` registers again with a new
+`runtime_id`, the directory increments the generation, marks the record `UP`,
+and treats older endpoints as stale.
+
+Python does not refresh transport state by polling sockets, reloading C
+connection lists, or reconstructing heartbeat state. The Python peer or agent
+table is updated by C peer lifecycle events and by C-produced outbound connect
+results. Service and client semantics enter Python through explicit
+registration and deregistration RPCs.
 
 Purging is a retention action rather than a lifecycle state. Once retention
 expires, the directory deletes the inactive record from its database.
 A separate audit log may record that deletion, but service discovery and
 operator directory queries no longer return the purged record.
 
-The resmgr `reserve()` behavior should be replaced by separate directory,
+The legacy resmgr `reserve()` behavior should be replaced by separate directory,
 transport, and QPM operations. The directory owns service registration,
-service lifecycle, descriptor lookup, and endpoint resolution. The transport
-layer owns connection establishment and heartbeat events. The QPM service owns
-admission reservation, scheduler insertion, task lifecycle, and provider
-dispatch.
+service lifecycle, service-record lookup, selected API binding resolution, and
+endpoint resolution. The transport layer owns connection establishment and
+heartbeat events. The QPM service owns admission reservation, scheduler
+insertion, task lifecycle, and provider dispatch.
 
 The control flow should use these steps:
 
 1. A service process establishes a DEFw transport connection.
-2. C creates a connection identity and reports the connection to Python.
-3. The service registers its stable `service_id`, runtime identity,
-   descriptor, endpoint, API categories, and capability metadata.
+2. C completes the transport identity and callability checks, then reports an
+   opaque ready peer to Python.
+3. The service registers its stable `service_id`, runtime identity, endpoint,
+   API bindings, service type, and selector metadata.
 4. The Python directory creates or updates the service record, assigns a
    generation, and marks the service `UP`.
-5. A client resolves a QPM endpoint from the directory using descriptor
-   filters and caller authorization.
+5. A client resolves a QPM endpoint and concrete API binding from the
+   directory using service and selector filters.
 6. The client binds to the selected endpoint through the DEFw transport.
 7. The client calls the QPM admission API to evaluate or create a reservation.
 8. Task lifecycle calls use the QPM service directly after reservation
-   authorization. The resmgr does not perform QPM capacity accounting.
+   authorization. DEFw-dirsvc does not perform QPM capacity accounting.
 
 #### Connection Establishment Flow
 
@@ -613,10 +734,10 @@ sequenceDiagram
 
     Client->>Dir: resolve_service(filters, api_category)
     Dir->>Dir: select authorized UP record
-    Dir-->>Client: descriptor, endpoint, service_id, runtime_id, generation
+    Dir-->>Client: service record, API binding, endpoint, identity
     Client->>CT: connect(endpoint, service_id, runtime_id, generation)
-    CT->>ST: transport handshake
-    ST-->>CT: RPC channel accepted
+    CT->>ST: transport handshake and identity exchange
+    ST-->>CT: peer ready for RPC
     CT-->>Client: bound QPM client handle
     Client->>QPM: reserve(), evaluate(), or task lifecycle API
 ```
@@ -625,10 +746,187 @@ The resolve response carries enough identity for the client side to reject
 stale bindings. A later directory generation supersedes any endpoint returned
 for an older generation.
 
+#### Peer Lifecycle Events
+
+The Python-visible transport contract is a peer lifecycle abstraction. C keeps
+the socket, channel, heartbeat, connection-block, and future libfabric endpoint
+details inside the transport layer. Python receives only the information needed
+to associate an RPC-capable peer with registration records and to remove that
+peer when C declares it no longer callable.
+
+A service becomes discoverable only after `register_service()` binds a stable
+`service_id`, runtime identity, generation, service record, API bindings, and
+live peer handle. Accepted sockets, outbound connect starts, control-channel
+setup, RPC-channel setup, heartbeat success, socket close, and reference-count
+cleanup are C transport details. They are not Python directory events.
+
+The C/Python callback boundary separates message delivery from peer lifecycle
+state. Request, response, and event callbacks deliver DEFw RPC payloads to
+Python. The active-connect completion callback satisfies the Python
+`WR_CONNECT` waiter for an outbound connection attempt and returns a ready peer
+handle or a structured failure. A separate peer lifecycle callback updates the
+Python peer or agent table.
+
+The Python event path uses one serialized handler:
+
+```text
+C peer lifecycle event
+  -> defw_workers.put_peer_event(event)
+  -> worker thread serializes event handling
+  -> defw.peers.apply_event(event)
+  -> directory transition function consumes events for registered records
+  -> discovery cache changes only through directory records
+```
+
+The peer event payload is intentionally small:
+
+| Field | Meaning |
+| --- | --- |
+| `event_type` | `PEER_READY`, optional `PEER_DEGRADED`, `PEER_LOST`, or `PEER_REMOVED`. |
+| `peer_handle` | Opaque handle assigned by C for the callable peer. |
+| `remote_runtime_id` | Remote runtime UUID when the transport identity is known. |
+| `is_self` | True when the remote runtime identity matches the local runtime identity. |
+| `transport_context` | Protocol-neutral launch or endpoint metadata, such as launcher metadata, endpoint identity, or a site-configured peer handle. |
+| Endpoint metadata | Address, listen port, node name, hostname, and PID when C can report them without exposing protocol internals. |
+| `reason` | Machine-readable reason for degraded, lost, removed, or failed connect state. |
+| `timestamp` | Observation time for ordering, liveness, and audit. |
+
+Python handles these events as inputs to two distinct data structures:
+
+| C peer event | Python peer or agent table action | Directory effect |
+| --- | --- | --- |
+| `PEER_READY` | Insert or update the peer handle, runtime identity, endpoint metadata, and transport context. | No discovery change until an entity registers. A registered service with matching runtime and generation may become `UP`. |
+| `PEER_DEGRADED` | Store the warning reason and observation time for diagnostics. | Discovery policy may keep the registered service `UP` or remove it from normal discovery while C continues recovery. |
+| `PEER_LOST` | Mark the peer not callable and store the loss reason. Reasons can include heartbeat timeout, socket failure, socket close, handshake failure, or transport shutdown. | Mark the associated registered service `DOWN` or `TIMED_OUT`, remove it from normal discovery, and start inactive-record retention. |
+| `PEER_REMOVED` | Remove or tombstone the peer table entry after C cleanup. | Delete inactive directory records only when directory retention expires. Peer removal is not a service lifecycle state. |
+
+Python never derives peer liveness by refreshing C transport state. A
+C-provided snapshot may be used during startup recovery or tests, but it is a
+resynchronization from the C source of truth rather than a polling path.
+
+##### Heartbeat Policy
+
+Heartbeat behavior is a policy on each C connection record rather than an
+implicit consequence of the old service, client, active-service, and
+active-client lists. The policy is evaluated after the transport learns enough
+identity to classify the connection.
+
+Each connection record stores the selected heartbeat mode, the last heartbeat
+transmit time, the last heartbeat receive time, and the last control-channel
+activity time. It also stores whether the connection is local loopback. A
+loopback connection is one whose remote runtime identity matches the local
+runtime identity. Resmgr self-registration uses this path.
+
+Remote directory-service connections are ordinary remote peers for heartbeat
+purposes. A service should detect loss of its dirsvc connection, and the
+dirsvc should detect loss of remote services and clients. The `peer_role` field
+does not disable heartbeat by itself.
+
+Local loopback records use `heartbeat_mode = NONE`. They do not enter the
+remote heartbeat send path or the remote heartbeat timeout path. C may still
+report peer readiness or peer loss for loopback callability, but Python does
+not see socket or channel events for that path.
+
+Accepted sockets that have not completed session identity exchange use a
+handshake timeout rather than a heartbeat timeout. If the peer never
+identifies itself, C closes the transport state and may complete the outbound
+connect request with a structured failure. Python does not create a peer table
+entry for an unidentified socket. Once identity is known, every non-self live
+control channel uses the configured remote heartbeat policy, independent of
+connection direction or peer role.
+
+Heartbeat send failures, heartbeat receive failures, heartbeat timeouts, socket
+failures, socket close, connection death, and reference-count cleanup remain
+separate transport outcomes. They may happen near each other, but each outcome
+is folded into the smallest Python-visible peer lifecycle change needed for
+directory behavior. Heartbeat success remains internal to C unless a telemetry
+API explicitly requests aggregated transport health.
+
+Python ignores peer events that reference an older runtime identity, peer
+handle, or directory generation after a newer runtime has become active for the
+same `service_id`. This rule prevents late loss events from taking down a
+restarted service.
+
 #### Service Registration Flow
 
-Registration is the point where a transport connection becomes a directory
-record that can be returned to clients.
+Registration is the point where a ready peer becomes a directory record that
+can be returned to clients.
+
+The directory stores one service record per logical service generation. The
+record is intentionally small. It contains the data DEFw needs for service
+selection, concrete RPC binding, peer validation, and lifecycle management.
+Service-specific details that are not needed for selection remain inside the
+service implementation or behind one of the service APIs.
+
+```yaml
+service_id: qpm-iqm-ornl
+service_type: qfw.qpm
+runtime_id: 6a3ef0b2-...
+generation: 1
+transport_binding:
+  peer_handle: opaque-c-peer-handle
+endpoint:
+  address: qpm-host.example.org
+  listen_port: 8095
+  node_name: qpm_iqm
+  hostname: qpm-host.example.org
+  pid: 12345
+api_bindings:
+  - binding_name: execution
+    client_module: api_qpm_execution
+    client_class: QPMExecution
+    service_module: svc_iqm_qpm.svc_qpm
+    service_class: QPM
+    version: 1
+  - binding_name: telemetry
+    client_module: api_qpm_telemetry
+    client_class: QPMTelemetry
+    service_module: svc_iqm_qpm.svc_qpm
+    service_class: QPM
+    version: 1
+selector:
+  name: IQM-20q
+  aliases:
+    - ornl-iqm-20q
+  resources:
+    - IQM-20q
+```
+
+The `transport_binding` is attached by the directory from the DEFw RPC peer
+context. It is not service-provided metadata and it is not a discovery
+selector. Python treats the handle as opaque and updates its callability only
+from C peer lifecycle events.
+
+The `service_type` field is a generic service-family identifier. QFw can use
+`qfw.qpm` for QPM services, but DEFw treats the value as an opaque selector.
+
+Each `api_bindings` entry identifies a real DEFw RPC binding. The client module
+and class name identify the `BaseRemote` proxy class used by the caller. The
+service module and class name identify the server-side class that receives the
+RPC. DEFw does not interpret `execution`, `telemetry`, or any other binding
+name as a managed-resource category. Those names are ordinary binding selectors
+chosen by the service family.
+
+The binding record replaces the legacy implicit DEFw convention where the
+service name, client API class, and service-side class all share one name. A
+binding may route several client API classes to the same service-side class
+when that class implements the methods for each surface. It may also route to
+separate service-side adapter classes when a service family chooses that
+layout. Both forms are DEFw RPC bindings. QFw decides which binding to request;
+DEFw only constructs the selected proxy and routes calls to the selected
+module, class, and method.
+
+The `selector` block describes logical targets exposed for selection. The
+values should be user-facing resources or service targets, such as `IQM-20q`,
+`NWQSIM`, `TNQVM`, or `IBM-156q`. Internal routing libraries and provider SDK
+choices, such as QRMI or QDMI when they are only implementation paths, stay out
+of normal discovery selectors. A service that can execute against several
+logical targets lists each target in `selector.resources`.
+
+Directory lookup returns a selected service record and a selected API binding.
+The service remains the lifecycle unit. Multiple API bindings on the same
+service share one `service_id`, endpoint, generation, liveness state, and
+registration lifecycle.
 
 ```mermaid
 sequenceDiagram
@@ -637,11 +935,11 @@ sequenceDiagram
     participant Dir as Python directory
 
     Service->>C: establish DEFw service connection
-    C->>C: allocate connection_id
-    C->>Dir: connection_open(runtime_id, connection_id, endpoint)
-    Dir->>Dir: store runtime connection placeholder
-    Service->>Dir: register_service(service_id, runtime_id, descriptor, endpoint)
-    Dir->>Dir: validate descriptor and connection identity
+    C->>C: complete identity and callability checks
+    C->>Dir: peer_ready(peer_handle, runtime_id, endpoint)
+    Dir->>Dir: store or update peer table entry
+    Service->>Dir: register_service(service record, runtime_id)
+    Dir->>Dir: validate service record against RPC peer context
     alt service_id has live conflicting runtime
         Dir-->>Service: registration conflict
     else service_id has inactive record
@@ -660,10 +958,76 @@ unless a deployment explicitly enables a controlled takeover policy. Restart of
 an inactive service uses the same `service_id` with a new `runtime_id` and a
 new generation.
 
+#### DEFw Registration Infrastructure Changes
+
+DEFw registration should support one logical service advertising multiple API
+bindings. The directory stores the binding records and uses them during lookup,
+but the RPC layer keeps its existing responsibility: it imports a module,
+instantiates or reuses a class, and invokes the requested method. If the
+selected class or method is missing, normal DEFw remote exception handling
+returns the failure to the caller.
+
+The existing single-class assumption in the resource connection helper should
+be replaced by binding-aware construction. A caller resolves a service by
+service filters and requested binding filters, then creates the client proxy
+from the selected binding's `client_module` and `client_class`. The proxy sends
+RPCs to the selected binding's `service_module` and `service_class`.
+
+Legacy `connect_to_resource(service_infos, res_name)` constructs the proxy by
+looking up `service_apis[res_name]` and then instantiating a class with the
+same name as `res_name`. `BaseRemote` then sends `type(self).__name__` as the
+remote service class during `instantiate_class` and `method_call` RPCs. The new
+binding-aware path must keep that convention as a compatibility fallback, but
+it adds an explicit RPC target override.
+
+The binding-aware construction path is:
+
+```text
+QFw resolver
+  -> resolve service filters and requested binding filters
+  -> receive selected service record and selected API binding
+  -> connect to the selected endpoint
+  -> import selected binding.client_module
+  -> instantiate selected binding.client_class as the local BaseRemote proxy
+  -> pass selected binding.service_module and service_class as the RPC target
+```
+
+A generic helper can expose this as `connect_to_binding(resolved_binding)`.
+The helper should pass the selected service record, endpoint, generation,
+remote module, and remote class into the proxy constructor. `BaseRemote`
+should use the remote module and remote class for `instantiate_class`,
+`method_call`, and `destroy_class` when they are provided. When no override is
+present, `BaseRemote` keeps the existing behavior based on the proxy module and
+class name.
+
+Client code then asks for the desired surface directly:
+
+```python
+resolver = QPMResolver.from_environment()
+
+qpm = resolver.connect(
+    service_type="qfw.qpm",
+    selector_resource="IQM-20q",
+    binding_name="execution",
+)
+
+telemetry = resolver.connect(
+    service_type="qfw.qpm",
+    selector_resource="IQM-20q",
+    binding_name="telemetry",
+)
+```
+
+QFw API categories are implemented above DEFw by selecting different API
+bindings. For example, the QFw resolver can map its execution category to the
+`execution` binding and its telemetry category to the `telemetry` binding.
+DEFw does not need category-specific rules, authorization behavior, or QPM
+knowledge to route those calls.
+
 #### Heartbeat And Liveness Flow
 
 C owns heartbeat probes and connection-level failure detection. Python owns the
-service lifecycle state derived from those events.
+service lifecycle state derived from peer lifecycle events.
 
 ```mermaid
 sequenceDiagram
@@ -675,19 +1039,18 @@ sequenceDiagram
         C->>Peer: heartbeat probe
         alt heartbeat succeeds
             Peer-->>C: heartbeat response
-            C->>Dir: heartbeat_ok(connection_id, runtime_id, observed_at)
-            Dir->>Dir: update last_seen and keep record UP
+            C->>C: update internal transport health
         else heartbeat fails
-            C->>Dir: heartbeat_failed(connection_id, runtime_id, reason)
-            Dir->>Dir: mark record DOWN and remove from normal discovery
-            C->>Dir: heartbeat_timeout(connection_id, runtime_id)
-            Dir->>Dir: mark record TIMED_OUT and set retention_deadline
+            C->>C: retry or degrade according to transport policy
+            C->>Dir: peer_lost(peer_handle, runtime_id, reason)
+            Dir->>Dir: mark registered record DOWN or TIMED_OUT
+            Dir->>Dir: remove from normal discovery and set retention_deadline
         end
     end
 ```
 
-Python should ignore heartbeat and close events that reference an older
-generation after a newer runtime has registered for the same `service_id`.
+Python should ignore peer loss events that reference an older generation after
+a newer runtime has registered for the same `service_id`.
 Normal discovery omits `DOWN`, `TIMED_OUT`, and `DEREGISTERED` records.
 Operator queries may include inactive records until the retention deadline.
 
@@ -706,15 +1069,84 @@ sequenceDiagram
     Dir->>Dir: validate active generation and runtime binding
     Dir->>Dir: mark record DEREGISTERED
     Dir->>Dir: clear endpoint and set retention_deadline
-    Dir->>C: retire connection binding
+    Dir->>C: retire peer binding
     Dir-->>Service: deregistration accepted
-    C-->>Dir: connection_closed(connection_id, runtime_id)
-    Dir->>Dir: ignore duplicate close for inactive generation
+    C-->>Dir: peer_removed(peer_handle, runtime_id)
+    Dir->>Dir: ignore duplicate peer removal for inactive generation
 ```
 
 After the retention deadline, a directory purge deletes the inactive record
 from the service database. Purge activity may remain in an audit log, but the
 record is no longer part of service discovery or operator directory queries.
+
+#### Directory Service Scope And Resolver Policy
+
+QFw discovery should use directory services in every normal operation mode.
+Allocation-local services and long-running site services differ in where the
+directory service runs, not in the client discovery contract.
+
+`setup/qfw_services.yaml` remains the allocation launch manifest. It tells QFw
+setup which services to start inside a job allocation, where to start them,
+which DEFw modules to load, and which environment values to provide to the
+service processes. Those allocation-managed services register with the
+allocation-local DEFw-dirsvc after startup.
+
+Long-running QPM services are site infrastructure. They are not launched from
+`qfw_services.yaml` for each allocation. Instead, they register with one or
+more site-scoped DEFw-dirsvc instances managed by the site, partition, node
+group, or service group. A single site-scoped directory service should front
+many long-running services when possible. Running one directory service per QPM
+would move endpoint selection back into the client and lose the benefit of a
+directory.
+
+The SLURM plugin, resource manager, prolog, or equivalent site launcher
+reads privileged site configuration and injects allocation-scoped directory
+service information into the job environment. The injected data identifies the
+DEFw-dirsvc endpoints the allocation may use and carries any policy context
+needed to connect to them. The privileged site configuration can live
+outside the user's writable tree, such as under `/etc/qfw`, while the
+allocation receives a filtered path or materialized copy in its run directory.
+
+An allocation may have several directory services in scope at the same time:
+
+| Scope | Lifecycle | Typical contents |
+| --- | --- | --- |
+| `allocation-local` | Started and stopped with the job allocation. | Simulators, smoke-test services, development QPMs, and per-job services launched from `qfw_services.yaml`. |
+| `site` | Long-running site infrastructure. | Hardware QPMs, shared simulators, and production services registered outside the allocation. |
+
+The QFw resolver uses one discovery model for both scopes:
+
+```text
+QFw resolver
+  -> read configured directory-service endpoints and policy
+  -> query enabled DEFw-dirsvc instances
+  -> collect service records and selected API bindings
+  -> filter by service type, selector, API binding, caller policy, and mode
+  -> return a selected binding or a structured ambiguity/error outcome
+```
+
+Each returned record should be annotated with its directory scope and directory
+identity. The resolver may query directories in configured order or query them
+all and then apply a deterministic selection policy. The policy should define
+scope preference, tie-breakers, and ambiguity handling. A resolver must not
+silently replace a requested hardware service with a simulator just because the
+hardware is busy. Hardware admission delay, rejection, or queue pressure is an
+admission and scheduler outcome. Fallback to an allocation-local simulator is a
+workflow, caller, or site-policy decision that should be explicit.
+
+The minimal resolver implementation supports multiple directory endpoints,
+ordered lookup, filtering by service record and API binding, scope annotation,
+deterministic tie-breaking, and structured ambiguity errors. A later QFw
+internal scheduler can use the same multi-directory candidate set to choose
+among endpoints based on load, admission estimates, scheduler state, or policy.
+That scheduler is a higher-level selection component rather than the baseline
+resolver behavior.
+
+Direct configured QPM endpoint resolution remains useful for diagnostics and
+controlled fallback. It should not be the primary long-running service model.
+The primary model is that long-running QPMs register with a site-scoped
+DEFw-dirsvc, and clients discover them through the same directory-service
+contract used for allocation-local services.
 
 ### QPM Override Handling
 
@@ -723,6 +1155,14 @@ service picks it up. Provider-specific QPMs can still customize circuit
 preparation, metadata, and shutdown, but execution overrides must call utility
 methods that enforce reservation verification, capacity holds, scheduler
 insertion, dispatch, completion accounting, and cancellation.
+
+The design keeps the existing inheritance structure where each provider QPM
+subclasses `UTIL_QPM`. The change is the execution customization boundary.
+`UTIL_QPM` owns the public `sync_run()` and `async_run()` managed path for
+reservation-scoped execution. Provider subclasses customize provider-specific
+behavior through named hooks that the shared path calls at fixed points.
+This prevents a provider override from bypassing admission, scheduler
+selection, task accounting, completion handling, or cancellation.
 
 Execution-relevant `UTIL_QPM` overrides are:
 
@@ -739,7 +1179,8 @@ Provider-specific metadata methods such as `get_backend_info()`,
 queries, and metadata queries are implemented in the QPM subclasses or their
 QRC layers. They are telemetry/discovery methods rather than execution-path
 overrides. The API split should expose them through telemetry/discovery APIs
-with authorization filtering instead of relying on task lifecycle calls.
+instead of relying on task lifecycle calls. Policy-controlled filtering is
+deferred to `docs/detailed-design-authentication.md`.
 
 The shared utility layer should provide provider hooks instead of requiring
 subclasses to override the public run methods. Useful hooks include:
@@ -751,6 +1192,15 @@ subclasses to override the public run methods. Useful hooks include:
 | `submit_scheduled_circuit(circuit, mode)` | Submit only scheduler-selected work to QRC for synchronous or asynchronous execution. |
 | `complete_scheduled_circuit(cid, result)` | Return unused consumed capacity, record actual usage, update scheduler lifecycle state, and publish result state. |
 | `cancel_scheduled_circuit(cid, reservation_id, reason)` | Propagate cancellation through pending state, scheduler state, provider handles, active-state admission accounting, and result state. |
+| `shutdown_provider()` | Tear down provider-specific runtime after the shared shutdown path has drained or cancelled managed work. QB can use this for vQPU cleanup. |
+
+Existing `create_circuit()` overrides map to `prepare_circuit(info)`.
+The QB-specific `qb_common_run()` path maps to
+`prepare_provider_submission(circuit)`, where the selected host can be
+translated into vQPU configuration before QRC submission. Provider-specific
+public `sync_run()` and `async_run()` overrides should be removed or reduced
+to compatibility wrappers once the managed path is in place. Metadata methods
+remain normal telemetry/discovery API methods rather than execution hooks.
 
 ### QFw API Categories
 
@@ -761,111 +1211,50 @@ controller, but the remote API classes should match the caller roles.
 | API surface | Candidate service API | Primary callers |
 | --- | --- | --- |
 | Execution | `api_qpm_execution` or the narrowed execution subset of `api_qpm` | Applications, runtimes, SDK adapters. |
-| Admission control | `api_qpm_admission_control` | Workflow managers, load managers, resource managers, trusted prolog or epilog code. |
-| Admission policy configuration | `api_qpm_admission_policy_config` | Site operators, administrators, trusted automation. |
-| Scheduler control | `api_qpm_scheduler_control` | Site operators, administrators, trusted automation. |
+| Admission control | `api_qpm_admission_control` | Workflow managers, load managers, resource managers, prolog or epilog code. |
+| Admission policy configuration | `api_qpm_admission_policy_config` | Site operators, administrators, site automation. |
+| Scheduler control | `api_qpm_scheduler_control` | Site operators, administrators, site automation. |
 | Telemetry/discovery | `api_qpm_telemetry` | Applications, workflow managers, operators, telemetry collectors, admission policies. |
 
+These QFw API categories are implemented as concrete DEFw API bindings on a
+registered service. A QPM service may advertise several bindings under the
+same `service_id`, such as execution and telemetry. The QFw resolver chooses
+the binding that matches the requested API surface and then constructs the
+corresponding `BaseRemote` proxy. DEFw stores and routes the binding. It does
+not interpret the binding as a QFw authorization category.
+
 Admission control APIs are called before or around application launch by a
-trusted workflow or load manager. They return a reservation ID and, when the
-deployment uses bearer-style credentials, a bounded execution token tied to the
-reservation. Applications and runtimes submit qtasks through execution APIs
-using that reservation ID and authorization envelope. Site operators configure
-admission policy through the admission policy configuration surface.
+workflow or load manager. They return a reservation ID. Applications and
+runtimes submit qtasks through execution APIs using that reservation ID and the
+token parameter described below. Site operators configure admission policy
+through the admission policy configuration surface.
 
-#### Authentication Context
+#### Token Placeholder For Current Milestone
 
-The `token` parameter in the API tables is a QFw authorization envelope. It is
-not the reservation ID and is separate from provider API keys used by QRMI,
-QDMI, IQM, QB, or other backend drivers. A deployment may also authorize a call
-without a serialized token when the request arrives over a site-configured
-trusted DEFw transport binding that QPM can map to the same normalized caller
-context.
+The QPM API keeps a `token` parameter on control, admission, execution, and
+telemetry methods so the call signatures are ready for the later
+authentication feature. In the current milestone, authentication is disabled.
+QPM treats the token as opaque request metadata. It accepts, stores, and
+forwards the value where useful for compatibility, but does not parse it,
+verify it, derive caller identity from it, or reject requests because of it.
 
-QPM accepts two caller-context sources:
+Reservation IDs remain the mechanism that ties execution calls to admission
+state. Any user, job, allocation, or project fields supplied with a request are
+treated as unverified metadata in this milestone. Authentication requirements
+and design are defined separately in `docs/requirements-authentication.md` and
+`docs/detailed-design-authentication.md`.
 
-| Source | Validation authority | Normalized context |
-| --- | --- | --- |
-| Signed QFw reservation credential | QPM trust-root configuration keyed by issuer and key ID. | User or service principal, reservation ID, device ID, scope, job or allocation ID, operation set, issue time, credential identifier when present, and expiration. |
-| Trusted DEFw transport binding | Site configuration that binds DEFw source endpoint, `remote_uuid`, `blk_uuid`, hostname, process attributes, or launcher metadata to a principal. | The same caller-context fields produced from a credential. |
-
-DEFw connection UUIDs and block UUIDs are transport correlation handles. They
-become authentication evidence only when the site explicitly places the source
-endpoint in the trusted-transport map and associates it with a principal and
-allowed API category. Public application calls should use a signed reservation
-credential unless they run inside such a trusted launch context.
-
-A reservation credential authorizes operations against the bound reservation
-until it expires, is revoked, or policy denies the requested operation. The
-same credential may authorize multiple RPCs during that lifetime.
-
-The credential may carry a stable identifier for audit, revocation, and
-credential-level replay tracking. That identifier is not a per-RPC nonce. QPM
-must not reject an ordinary authorized call solely because a previous call used
-the same credential. Deployments can represent the identifier using JWT `jti`,
-token serial number, opaque token ID, certificate fingerprint, or another
-site-supported credential handle.
-
-The QFw reservation credential envelope is versioned and signed. It carries
-these fields:
-
-| Claim | Meaning |
-| --- | --- |
-| `typ` and `version` | Credential type `qfw.reservation` and envelope version. |
-| `iss` and `kid` | Issuer and signing-key identifier resolved from QPM trust roots. |
-| `aud` | QPM service ID, device ID, or audience accepted by the target service. |
-| `sub` | User ID or service principal allowed to use the reservation. |
-| `reservation_id` | Reservation being used by the request. |
-| `device_id` and `scope_id` | Target device and admission scope. |
-| `job_id` or `allocation_id` | Scheduler or workflow binding when site policy requires it. |
-| `operations` | Allowed operations, such as execute, cancel, status, result, or telemetry. |
-| `iat`, `nbf`, and `exp` | Issue time, not-before time, and credential expiration. |
-| Credential identifier | Optional stable identifier for audit, revocation, and credential-level replay tracking. |
-| `cnf` | Optional confirmation binding to a DEFw transport or launcher session. |
-
-The service API layer validates authentication before calling the controller:
-
-1. Parse the credential envelope, or derive candidate context from the trusted
-   DEFw transport binding when no credential is supplied.
-2. Verify the credential type, signature or MAC, issuer, key ID, and audience
-   against QPM trust-root configuration.
-3. Check `nbf`, `iat`, `exp`, and the configured clock-skew allowance.
-4. Apply revocation and credential freshness policy when the credential carries
-   a stable identifier. Ordinary reuse of the same unexpired credential is not
-   treated as a per-RPC replay signal.
-5. Compare any `cnf` transport binding with the live DEFw source endpoint,
-   `remote_uuid`, `blk_uuid`, and launcher metadata.
-6. Normalize the result into a `QFwCallerContext` and fetch the reservation
-   record from qhw-admission.
-7. Compute the effective authorization expiration as the minimum of credential
-   expiration, trusted transport session expiration, launcher allocation
-   expiration when present, and reservation expiration.
-8. Compare the normalized context with the reservation binding and requested
-   operation before any usage hold, scheduler insertion, provider submission, or
-   terminal task publication.
-
-The normalized `QFwCallerContext` contains `principal_type`,
-`principal_id`, `issuer`, `trust_root_id`, `reservation_id`, `device_id`,
-`scope_id`, optional `job_id`, optional `allocation_id`, optional
-`project_id`, optional `session_id`, allowed operations, authenticated source,
-credential identifier when present, and effective expiration.
-
-Structured errors distinguish authentication and authorization failures:
-
-| Failure | QPM reason |
-| --- | --- |
-| Missing credential and no trusted transport mapping | `UNAUTHENTICATED` |
-| Malformed envelope, invalid signature, unknown issuer, bad audience, or unsupported type | `INVALID_CREDENTIAL` |
-| Not-before violation, stale issue time, revoked credential, or stale credential identifier | `STALE_CREDENTIAL` |
-| Credential, trusted session, launcher allocation, or reservation lifetime expired | `EXPIRED_CREDENTIAL` or `EXPIRED_RESERVATION` as applicable |
-| Existing reservation with non-matching principal, job, allocation, device, scope, or operation | `UNAUTHORIZED_CALLER` |
+DEFw remains outside this token contract. It stores service records, resolves
+selected API bindings, establishes transport, and routes RPCs to
+`service_module.service_class.method`.
 
 #### Admission Policy Configuration APIs
 
 Admission policy configuration APIs configure qhw-admission policy. They are
-operator-facing and require elevated authorization. These APIs are separate
-from admission control reservation workflows. In this design, admission control
-refers to reservation evaluation and lifecycle management.
+operator-facing. The current milestone accepts the `token` parameter but does
+not validate it. These APIs are separate from admission control reservation
+workflows. In this design, admission control refers to reservation evaluation
+and lifecycle management.
 
 | API | Parameters | Result |
 | --- | --- | --- |
@@ -878,7 +1267,8 @@ refers to reservation evaluation and lifecycle management.
 #### Scheduler Control APIs
 
 Scheduler control APIs configure qhw-scheduler behavior for a QPM-managed
-execution target. They are operator-facing and require elevated authorization.
+execution target. They are operator-facing. The current milestone accepts the
+`token` parameter but does not validate it.
 
 | API | Parameters | Result |
 | --- | --- | --- |
@@ -888,58 +1278,58 @@ execution target. They are operator-facing and require elevated authorization.
 | `resume_execution_target(token, device_id)` | `token`, `device_id`. | Re-enables scheduler dispatch. |
 | `drain_execution_target(token, device_id, mode, timeout_s)` | `token`, `device_id`, drain mode, optional timeout. | Stops new dispatch and lets selected or running work finish according to policy. |
 | `set_dispatch_depth(token, device_id, max_inflight)` | `token`, `device_id`, provider queue depth bound. | Updates the maximum selected qtasks allowed below the scheduler boundary. |
-| `get_scheduler_queue_state(token, device_id, include_restricted)` | `token`, `device_id`, access selector. | Returns scheduler queue state filtered by caller authorization. |
+| `get_scheduler_queue_state(token, device_id, include_restricted)` | `token`, `device_id`, access selector. | Returns scheduler queue state. Access filtering is deferred to the authentication feature. |
 
 #### Admission Control APIs
 
 Admission control APIs create and manage reservation lifecycle state. Workflow
-managers, load managers, resource managers, and trusted prolog or epilog code
-are the primary callers.
+managers, load managers, resource managers, and launcher integration code are
+the primary callers.
 
 | API | Parameters | Result |
 | --- | --- | --- |
 | `evaluate(token, request)` | `token`; request ID; user ID; job or allocation ID when applicable; target `device_id`; `scope_id`; workload kind; circuit, shot, walltime, or device-time estimate; expiration or TTL; policy metadata. | Returns accepted, delayed, or rejected with machine-readable reason and estimate context. |
-| `reserve(token, request)` | Same request fields as `evaluate()`, with caller authority to bind ownership. | Creates an accepted reservation and returns `reservation_id`, lifecycle state, expiration, and optional execution token. |
+| `reserve(token, request)` | Same request fields as `evaluate()`. Ownership fields are accepted as unverified metadata in the current milestone. | Creates an accepted reservation and returns `reservation_id`, lifecycle state, and expiration. |
 | `renew(token, reservation_id, expiration_or_ttl)` | `token`, `reservation_id`, new expiration or TTL. | Extends reservation lifetime when policy permits it. |
 | `release(token, reservation_id, reason)` | `token`, `reservation_id`, optional reason. | Starts the QPM close protocol, stops new work, finalizes held-task accounting, and then moves the reservation to released. |
 | `cancel(token, reservation_id, reason)` | `token`, `reservation_id`, cancellation reason. | Starts the QPM close protocol, cancels or fails reservation-scoped work according to site policy, finalizes held-task accounting, and then moves the reservation to cancelled. |
-| `get_reservation(token, reservation_id)` | `token`, `reservation_id`. | Returns reservation state, owner binding, expiration, allowance, and usage summary filtered by caller authorization. |
-| `list_reservations(token, filters)` | `token`, device, owner, job, state, or time filters. | Returns reservation summaries visible to the caller. |
+| `get_reservation(token, reservation_id)` | `token`, `reservation_id`. | Returns reservation state, owner metadata, expiration, allowance, and usage summary. |
+| `list_reservations(token, filters)` | `token`, device, owner, job, state, or time filters. | Returns reservation summaries matching the filters. |
 
 #### Execution APIs
 
 Execution APIs replace the resource-affecting subset of the current
 `api_qpm.QPM` execution surface. Applications and runtimes call these APIs with
-a reservation ID and a QFw authorization envelope, or through a configured
-trusted transport that yields the same caller context. The API contract is
-expressed as a managed task lifecycle so status, cancellation, result
-retrieval, and events use the same state vocabulary.
+a reservation ID and an opaque token parameter. The current milestone does not
+validate the token. The API contract is expressed as a managed task lifecycle
+so status, cancellation, result retrieval, and events use the same state
+vocabulary.
 
 Each accepted execution submit is an independent qtask creation. QPM does not
 require an idempotency key for `sync_run()` or `async_run()`, and it does not
 collapse repeated submits into an existing task. Clients should retry submit
 calls only when duplicate task creation is acceptable or when a higher-level
 workflow can detect and handle duplicates. Read, status, result, metadata, and
-queue-observation calls do not create new work and may reuse the same
-reservation credential.
+queue-observation calls do not create new work and may reuse the same token
+placeholder.
 
 | API | Parameters | Result |
 | --- | --- | --- |
-| `sync_run(info, reservation_id, token, timeout_s, cancel_on_timeout)` | Current circuit `info`; `reservation_id`; QFw authorization envelope; optional timeout and timeout-cancellation policy. | Runs through admission and scheduler, then blocks until a terminal result or returns structured timeout, delayed, cancelled, or failure status. |
-| `async_run(info, reservation_id, token)` | Current circuit `info`; `reservation_id`; QFw authorization envelope. | Returns QFw circuit ID, qtask ID, scheduler task ID when available, and managed lifecycle status. |
-| `cancel_task(cid, reservation_id, token, reason)` | QFw circuit or qtask ID; `reservation_id`; QFw authorization envelope; optional reason. | Cancels pending, queued, selected, or provider-submitted work and updates admission accounting. |
-| `task_status(cid, reservation_id, token)` | QFw circuit or qtask ID; `reservation_id`; QFw authorization envelope. | Returns pending, queued, selected, submitted, running, completed, failed, cancelled, or timed-out state. |
-| `read_cq(cid, reservation_id, token)` | Optional circuit ID; optional reservation ID for scoped reads; QFw authorization envelope. | Returns and removes a visible completion record or a structured in-progress status. |
-| `peek_cq(cid, reservation_id, token)` | Optional circuit ID; optional reservation ID for scoped reads; QFw authorization envelope. | Returns a visible completion record without removing it. |
-| `register_event_notification(ep, evtype, class_id, token, reservation_id, filters)` | Event endpoint, event type, class ID, QFw authorization envelope, optional reservation scope and filters. | Registers event delivery for authorized task lifecycle events. |
-| `delete_circuit(cid, reservation_id, token)` | Circuit ID; reservation ID when reservation-scoped; QFw authorization envelope. | Removes client-visible circuit state when lifecycle and retention policy allow it. |
+| `sync_run(info, reservation_id, token, timeout_s, cancel_on_timeout)` | Current circuit `info`; `reservation_id`; opaque token placeholder; optional timeout and timeout-cancellation policy. | Runs through admission and scheduler, then blocks until a terminal result or returns structured timeout, delayed, cancelled, or failure status. |
+| `async_run(info, reservation_id, token)` | Current circuit `info`; `reservation_id`; opaque token placeholder. | Returns QFw circuit ID, qtask ID, scheduler task ID when available, and managed lifecycle status. |
+| `cancel_task(cid, reservation_id, token, reason)` | QFw circuit or qtask ID; `reservation_id`; opaque token placeholder; optional reason. | Cancels pending, queued, selected, or provider-submitted work and updates admission accounting. |
+| `task_status(cid, reservation_id, token)` | QFw circuit or qtask ID; `reservation_id`; opaque token placeholder. | Returns pending, queued, selected, submitted, running, completed, failed, cancelled, or timed-out state. |
+| `read_cq(cid, reservation_id, token)` | Optional circuit ID; optional reservation ID for scoped reads; opaque token placeholder. | Returns and removes a completion record or a structured in-progress status. |
+| `peek_cq(cid, reservation_id, token)` | Optional circuit ID; optional reservation ID for scoped reads; opaque token placeholder. | Returns a completion record without removing it. |
+| `register_event_notification(ep, evtype, class_id, token, reservation_id, filters)` | Event endpoint, event type, class ID, opaque token placeholder, optional reservation scope and filters. | Registers event delivery for task lifecycle events. |
+| `delete_circuit(cid, reservation_id, token)` | Circuit ID; reservation ID when reservation-scoped; opaque token placeholder. | Removes client-visible circuit state when lifecycle and retention policy allow it. |
 
 #### Synchronous Execution Contract
 
 `sync_run()` uses the same controller path as `async_run()`. It validates the
-reservation and caller context, creates the QFw circuit and managed qtask,
-establishes the admission hold, inserts the task into qhw-scheduler, and waits
-on the managed task lifecycle.
+reservation state, preserves the token placeholder, creates the QFw circuit and
+managed qtask, establishes the admission hold, inserts the task into
+qhw-scheduler, and waits on the managed task lifecycle.
 
 The call returns a terminal result when the task completes before the effective
 timeout. The effective timeout is the caller-supplied `timeout_s` when present;
@@ -976,27 +1366,28 @@ All synchronous responses use the same structured status envelope:
 | `reason` | Machine-readable reason code suitable for retry, cancellation, or operator escalation. |
 | `reservation_id`, `cid`, `qtask_id`, `scheduler_task_id` | Stable handles visible to the caller when the task entered the managed lifecycle. |
 | `result` | Present only for completed work. |
-| `error` | Structured failure details for rejected, failed, unauthorized, expired, or invalid requests. |
+| `error` | Structured failure details for rejected, failed, expired, or invalid requests. Authentication-specific errors are added by the separate authentication feature. |
 | `retry_after_ns` or `estimated_start_ns` | Optional scheduling guidance when the policy can provide it. |
 
 #### Telemetry And Discovery APIs
 
 Telemetry and discovery APIs contain the read-only subset of the current QPM
 API plus scheduler, capacity, reservation, and task telemetry. Responses are
-filtered by the telemetry access classes in the managed-resource model.
+structured around the telemetry access classes in the managed-resource model.
+Access filtering is deferred to the authentication feature.
 
 | API | Parameters | Result |
 | --- | --- | --- |
-| `get_backend_info(lib, token)` | Optional QRMI/QDMI library selector for shim QPMs; optional token. | Returns backend metadata visible to the caller. |
-| `get_device_info(lib, token)` | Optional library selector; optional token. | Returns device properties visible to the caller. |
+| `get_backend_info(lib, token)` | Optional QRMI/QDMI library selector for shim QPMs; optional opaque token placeholder. | Returns backend metadata. |
+| `get_device_info(lib, token)` | Optional library selector; optional opaque token placeholder. | Returns device properties. |
 | `get_dynamic_backend_info(calibration_set_id, lib, token)` | Optional calibration set, library selector, and token. | Returns dynamic backend metadata. |
-| `get_calibration_snapshot(calibration_set_id, lib, token)` | Optional calibration set, library selector, and token. | Returns calibration data filtered by site policy. |
-| `get_coupling_graph(calibration_set_id, lib, token)` | Optional calibration set, library selector, and token. | Returns topology data visible to the caller. |
-| `get_last_job_timing(cid, lib, reservation_id, token)` | Optional circuit ID, library selector, reservation ID, and QFw authorization envelope. | Returns timing data for caller-owned work or aggregate views authorized by policy. |
-| `get_last_job_metadata(cid, lib, reservation_id, token)` | Optional circuit ID, library selector, reservation ID, and QFw authorization envelope. | Returns provider and QPM metadata visible to the caller. |
-| `get_capacity_snapshot(token, device_id, scope_id)` | QFw authorization envelope, device ID, optional scope. | Returns admission capacity, held capacity, active reservations, and confidence values visible to the caller. |
-| `get_queue_metrics(token, device_id, access_class)` | QFw authorization envelope, device ID, requested access class. | Returns pending count, scheduler depth, estimated queued device time, active task count, and policy-specific metrics as authorized. |
-| `get_task_metadata(token, cid, reservation_id)` | QFw authorization envelope, circuit or qtask ID, optional reservation ID. | Returns managed-resource lifecycle metadata for visible work. |
+| `get_calibration_snapshot(calibration_set_id, lib, token)` | Optional calibration set, library selector, and opaque token placeholder. | Returns calibration data. |
+| `get_coupling_graph(calibration_set_id, lib, token)` | Optional calibration set, library selector, and opaque token placeholder. | Returns topology data. |
+| `get_last_job_timing(cid, lib, reservation_id, token)` | Optional circuit ID, library selector, reservation ID, and opaque token placeholder. | Returns timing data. |
+| `get_last_job_metadata(cid, lib, reservation_id, token)` | Optional circuit ID, library selector, reservation ID, and opaque token placeholder. | Returns provider and QPM metadata. |
+| `get_capacity_snapshot(token, device_id, scope_id)` | Opaque token placeholder, device ID, optional scope. | Returns admission capacity, held capacity, active reservations, and confidence values. |
+| `get_queue_metrics(token, device_id, access_class)` | Opaque token placeholder, device ID, requested access class. | Returns pending count, scheduler depth, estimated queued device time, active task count, and policy-specific metrics. |
+| `get_task_metadata(token, cid, reservation_id)` | Opaque token placeholder, circuit or qtask ID, optional reservation ID. | Returns managed-resource lifecycle metadata. |
 
 ### Integration Sequence
 
@@ -1004,8 +1395,8 @@ The integration should proceed in the shared QPM utility layer:
 
 1. Add controller construction to `UTIL_QPM.__init__()` after QRC selection.
 2. Add admission and scheduler configuration methods on the controller.
-3. Add reservation-scoped request parsing for `reservation_id`, `token`,
-   caller context, timeout, and policy metadata.
+3. Add reservation-scoped request parsing for `reservation_id`, opaque
+   `token`, timeout, and policy metadata.
 4. Wrap `sync_run()` and `async_run()` with reservation verification,
    estimated capacity hold, scheduler insertion, and selected-task dispatch.
 5. Convert QRC completion handling into controller completion handling before
@@ -1034,7 +1425,7 @@ State maintained by QPM:
 | --- | --- |
 | Reservation ID to submitted qtasks | QPM manages transitions across pending work, scheduler tasks, provider jobs, and client-visible status. |
 | QFw circuit and job IDs | These are QFw execution objects rather than admission records. |
-| Authenticated caller or session context | QPM validates credentials and compares caller context with the reservation binding. |
+| Token placeholder and request metadata | QPM preserves the token value and unverified request metadata so the later authentication feature can add validation without changing public API shapes. |
 | Pending qtasks waiting for capacity | These qtasks are not yet admitted to `qhw-scheduler` and remain under QPM control. |
 | `qhw-scheduler` task IDs | Scheduler correlation belongs to the QPM and scheduler integration path. |
 | Provider job handles | QPM needs provider handles for cancellation, polling, result retrieval, and reconciliation. |
@@ -1088,13 +1479,12 @@ reallocating or deriving them independently.
 ### OPM-001
 
 QFw-managed mode should preserve the current launch pattern: QFw starts the
-DEFw resource manager and starts QPM services described by QFw service
-configuration. QPM services register with DEFw-resmgr so existing clients can
-continue using `rmgr.get_services("QPM", type, capability)` followed by QPM API
-construction.
+allocation-local DEFw-dirsvc and starts QPM services described by QFw service
+configuration. QPM services register with DEFw-dirsvc so clients can resolve
+service records and selected API bindings through the directory service.
 
 The design change is that registration is only discovery metadata. Admission
-reservation semantics should be removed from the DEFw-resmgr service-selection
+reservation semantics should be removed from the DEFw-dirsvc service-selection
 path and implemented inside QPM.
 
 </details>
@@ -1104,23 +1494,24 @@ path and implemented inside QPM.
 
 ### OPM-002
 
-Long-running mode should allow a QPM service to start as a DEFw-wrapped service
-with a stable listening endpoint and without registering with DEFw-resmgr. QFw
-initialization should be able to read the endpoint from configuration and build
-a compatible QPM client binding.
+Long-running mode should allow a QPM service to start as a DEFw-wrapped
+service and register with a site-scoped DEFw-dirsvc. QFw initialization should
+receive the permitted site-scoped directory-service endpoint from site
+infrastructure and use the same directory lookup contract as QFw-managed mode.
 
-The service still uses DEFw RPC once the client knows the endpoint. This avoids
-turning the long-running service into a separate non-DEFw protocol while
-removing the requirement that a DEFw-resmgr always be present.
+The service still uses DEFw RPC after the client resolves the selected service
+record and API binding. This avoids turning the long-running service into a
+separate non-DEFw protocol while removing the requirement that the allocation
+itself launches the QPM service.
 
 The current QPM modules mark themselves ready only after `defw.resmgr` exists.
 Long-running mode must replace that readiness gate. A long-running QPM is ready
 when its DEFw listener is accepting RPC calls, its QRC provider path is
-initialized, its qhw-admission and qhw-scheduler contexts are constructed, and
-the target device profile and policies have been loaded. Optional
-DEFw-resmgr registration may happen later or not at all. Failure to register
-with a resmgr must not keep a configured long-running service in
-`DEFwNotReady` when the service is otherwise callable by endpoint.
+initialized, its qhw-admission and qhw-scheduler contexts are constructed, the
+target device profile and policies have been loaded, and registration with the
+site-scoped DEFw-dirsvc has completed when site discovery requires it. Direct
+endpoint readiness is a fallback/debug path and should not be the primary
+production long-running mode.
 
 </details>
 
@@ -1141,15 +1532,15 @@ across both deployment modes.
 
 ### DISC-001
 
-DEFw-resmgr should continue to track registered agents and registered services.
+DEFw-dirsvc should track registered agents and registered services.
 Its useful responsibilities are registration, deregistration, discovery,
 endpoint resolution, and liveness state.
 
-Service registration should provide the descriptor used by discovery. The
-directory should return matching descriptors and endpoints without rebuilding
-its view by querying every service. Discovery filters should include service
-name, type, capability, provider, device ID, API category, and other descriptor
-properties.
+Service registration should provide the service record used by discovery. The
+directory should return matching service records, selected API bindings, and
+endpoints without rebuilding its view by querying every service. Discovery
+filters should include service name, service type, API binding name, API
+binding class, selector name, selector aliases, and selector resources.
 
 </details>
 
@@ -1164,9 +1555,9 @@ capacity is stored on the queried `DEFwServiceInfo` object, not in an
 admission-grade resource database. The target design should remove QPM
 admission capacity accounting from this path.
 
-Directory resolution should return service descriptors and endpoints. Transport
-binding should connect the client to the selected endpoint. QPM reservation
-should be exposed only through the QPM admission API.
+Directory resolution should return service records, selected API bindings, and
+endpoints. Transport binding should connect the client to the selected
+endpoint. QPM reservation should be exposed only through the QPM admission API.
 
 </details>
 
@@ -1175,33 +1566,36 @@ should be exposed only through the QPM admission API.
 
 ### DISC-003
 
-DEFw service startup should gain an option that disables registration with
-DEFw-resmgr while still starting the service listener. The option should be
-explicit so accidental unregistered services are easy to diagnose.
+DEFw service startup should distinguish allocation-local registration,
+site-scoped registration, and direct fallback/debug listener mode. Registration
+settings should be explicit so accidental unregistered services are easy to
+diagnose.
 
 Candidate configuration fields:
 
 | Field | Meaning |
 | --- | --- |
-| `register-with-resmgr` | Boolean controlling whether the service registers with DEFw-resmgr. |
+| `register-with-dirsvc` | Boolean controlling whether the service registers with a DEFw-dirsvc. |
 | `listen-endpoint` | Stable endpoint or port used by long-running clients. |
-| `resmgr-endpoint` | Optional DEFw-resmgr endpoint for QFw-managed registration. |
-| `startup-readiness-gate` | `resmgr-ready` for registered mode or `listener-and-controller-ready` for long-running endpoint mode. |
+| `dirsvc-endpoint` | DEFw-dirsvc endpoint used for allocation-local or site-scoped registration. |
+| `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for direct fallback/debug endpoint mode. |
 
 The option must map to the existing DEFw startup behavior. `defwp-wrapper`
 defaults `DEFW_DISABLE_RESMGR` to `yes`, and the C listener attempts a parent
 resource-manager connection only when resource-manager use is enabled and a
 parent name is configured. QFw-managed service launch sets
 `DEFW_DISABLE_RESMGR=no` and provides parent host, port, and name. A
-long-running unregistered QPM should set `DEFW_DISABLE_RESMGR=yes`, leave
-registration disabled, and use the listener/controller readiness gate above.
+long-running QPM should register with the configured site-scoped DEFw-dirsvc
+in production deployments. Direct unregistered listener mode should set
+`DEFW_DISABLE_RESMGR=yes`, leave registration disabled, and use the
+listener/controller readiness gate only when fallback or diagnostics require it.
 
 Provider QPM modules that currently wait in `qpm_wait_resmgr()` need a
 configuration-aware readiness path. In registered mode they may keep the
-existing resmgr wait. In endpoint mode they should call the common QPM
-completion routine after listener and controller initialization, then expose
-health and metadata over DEFw RPC so the configured-endpoint resolver can
-validate the service.
+existing directory-service wait after it is renamed. In direct endpoint mode
+they should call the common QPM completion routine after listener and
+controller initialization, then expose health and metadata over DEFw RPC so the
+fallback resolver can validate the service.
 
 </details>
 
@@ -1211,47 +1605,53 @@ validate the service.
 ### DISC-004
 
 QFw should add a QPM resolver layer between clients and QPM discovery. The
-resolver can keep the current DEFw-resmgr lookup path for QFw-managed services
-and add a configured-endpoint path for long-running QPM services.
+resolver queries one or more DEFw-dirsvc instances. QFw-managed services use
+an allocation-local directory service. Long-running services register with a
+site-scoped directory service whose endpoint is injected into the allocation by
+site infrastructure.
 
-For a long-running QPM service, the resolver cannot infer the listening port.
-The site or resource owner must publish an endpoint descriptor, either in QFw
-configuration or through a future external registry. The configured-endpoint
-path can use explicit static configuration:
+The resolver input is a directory-service scope configuration rather than a
+list of primary QPM endpoints:
 
 ```yaml
-qpm-endpoints:
-  - name: iqm-ornl-20q
-    service-name: QPM
-    provider: iqm
-    device-id: ornl-iqm-20q
-    address: qpm-host.example.org
-    listen-port: 8095
-    agent-name: qpm_iqm
+resolver:
+  directories:
+    - name: allocation-local
+      scope: allocation-local
+      endpoint: ${QFW_LOCAL_DIRSVC_ENDPOINT}
+      priority: 100
+    - name: site
+      scope: site
+      endpoint: ${QFW_SITE_DIRSVC_ENDPOINT}
+      priority: 50
+  selection:
+    default-order:
+      - site
+      - allocation-local
 ```
 
-The descriptor should identify the DEFw-wrapped QPM listener and the resource
-it represents. It should not require a persisted DEFw UUID, because DEFw UUIDs
-are process identity and may change when the long-running service restarts.
+The resolver path should:
 
-The configured-endpoint resolver path should:
-
-1. Read the QPM endpoint descriptor.
-2. Create a provisional DEFw endpoint from address, listen port, agent name,
-   and service node type.
-3. Connect to the DEFw-wrapped service.
-4. Reload active service-agent state so DEFw learns the service's current
-   remote UUID and block UUID from the connection handshake.
-5. Call the service readiness or health method.
-6. Query the connected service for QPM service metadata.
-7. Verify that the service metadata matches the requested service name,
-   provider, device ID, type, and capabilities.
-8. Return the same QPM client binding shape used by the DEFw-resmgr discovery
-   path.
+1. Read enabled directory-service endpoints and selection policy.
+2. Connect to each enabled DEFw-dirsvc or to the first directory required by
+   ordered policy.
+3. Query service records and selected API bindings.
+4. Annotate candidates with directory scope and directory identity.
+5. Filter by service type, selector resource, selector alias, API binding,
+   caller policy, and operation mode.
+6. Apply deterministic ordering and tie-breakers.
+7. Return a structured ambiguity or policy error when no safe default exists.
+8. Bind to the selected QPM service using the selected API binding.
 
 After resolution, reservation and release behavior should be identical for
-QFw-managed and long-running QPM services. The only difference is how QFw finds
-the DEFw-wrapped QPM endpoint.
+QFw-managed and long-running QPM services. The primary discovery contract is
+directory-service based in both modes. Direct configured QPM endpoints remain a
+controlled fallback or diagnostic path.
+
+Load-aware selection among multiple matching QPM endpoints belongs to a later
+QFw scheduler layer. The DISC-004 resolver should only apply deterministic
+selection policy or return a structured ambiguity error when no safe default is
+defined.
 
 </details>
 
@@ -1292,10 +1692,11 @@ request, constructs a qhw-admission request, calls qhw-admission `reserve()`,
 and returns the admission decision. An accepted decision includes the
 reservation ID that later resource-affecting QPM calls must supply.
 
-The request should include or derive the authenticated owner, scheduler job or
+The request should include owner metadata when available, scheduler job or
 allocation identifier when present, target device, reservation scope,
-expiration, and policy-specific metadata needed for admission decisions and
-later authorization checks.
+expiration, and policy-specific metadata needed for admission decisions. In
+the current milestone those owner and launcher fields are stored as request
+metadata.
 
 </details>
 
@@ -1316,7 +1717,7 @@ Each held qtask is reconciled with `return_usage()` for unused estimated
 capacity and `record_actual()` when measured usage is known. The terminal
 `qhw_adm_release()` call is the last admission operation for the reservation.
 
-Release is an admission lifecycle operation, not a DEFw-resmgr deregistration
+Release is an admission lifecycle operation, not a DEFw-dirsvc deregistration
 operation.
 
 </details>
@@ -1351,9 +1752,9 @@ expiration, QPM starts the expiration close protocol and returns an
 expired-reservation status. The request path does not call `qhw_adm_expire()`
 before held-task usage has been reconciled.
 
-For usable reservations, QPM compares user, job, device, scope, operation, and
-policy metadata from the authenticated caller context and request payload with
-the reservation record and metadata stored in qhw-admission.
+For usable reservations, QPM compares requested device, scope, operation, and
+policy metadata with the reservation record and metadata stored in
+qhw-admission.
 
 This check belongs on every reservation-scoped execution path, including
 synchronous execution, asynchronous execution, cancellation that affects
@@ -1414,171 +1815,6 @@ consumed estimate is not used, or only part of it is used, QPM calls
 </details>
 
 <details>
-<summary><strong>ADM-008</strong></summary>
-
-### ADM-008
-
-Reservation creation should be a trusted control-plane operation. QFw should
-require an authenticated and authorized caller before calling the controller
-reservation method.
-
-The caller may supply explicit reservation ownership fields, such as user ID,
-job ID, allocation ID, or scope ID, only when the caller is trusted to bind
-those fields. Otherwise QFw should derive ownership from the trusted transport
-or verifiable credential.
-
-</details>
-
-<details>
-<summary><strong>ADM-009</strong></summary>
-
-### ADM-009
-
-QPM should persist reservation ownership and authorization bindings in
-qhw-admission as part of the reservation record. The binding should include
-the owner identity, job or allocation identity when applicable, device ID,
-scope, expiration, issuer or trust root metadata, and policy metadata required
-for later checks.
-
-QPM runtime state may cache a copy for fast correlation, but qhw-admission
-remains the authoritative store.
-
-</details>
-
-<details>
-<summary><strong>ADM-010</strong></summary>
-
-### ADM-010
-
-A reservation ID should be treated as an accounting and correlation handle, not
-as a bearer token. Possession of the reservation ID is insufficient to authorize
-execution.
-
-Every resource-affecting request that carries a reservation ID should also
-carry authenticated caller context, or arrive over a trusted transport that
-QFw can map to authenticated caller context.
-
-The `token` API argument is the serialized QFw authorization envelope described
-in the API authentication context. A trusted transport request may omit that
-envelope only when QPM has a site-configured mapping from the live DEFw source
-endpoint to the same normalized caller-context fields.
-
-</details>
-
-<details>
-<summary><strong>ADM-011</strong></summary>
-
-### ADM-011
-
-Before accepting a reservation-scoped execution request, QPM should obtain
-authenticated caller context from a verifiable credential or from a trusted
-transport-authenticated context.
-
-The service API layer should perform the credential and transport checks before
-passing a normalized caller context to the controller. The controller should not
-make authorization decisions from raw untrusted client fields.
-
-Credential validation occurs before reservation validation. QPM verifies the
-envelope type, signature or MAC, issuer, key ID, audience, operation set,
-credential identifier when present, revocation status, and time bounds. For
-trusted transport, QPM verifies the live DEFw source endpoint, `remote_uuid`,
-`blk_uuid`, hostname, launcher metadata, and configured principal binding
-before accepting the derived caller context.
-
-</details>
-
-<details>
-<summary><strong>ADM-012</strong></summary>
-
-### ADM-012
-
-The normalized caller context should include claims that can be compared with
-the reservation binding stored in qhw-admission. Required claims include the
-user identity. Scheduler job, allocation, project, session, or scope claims
-should be included when the site policy binds reservations to those concepts.
-
-The comparison should be exact where identifiers are canonical and policy-based
-where a site intentionally allows groups, delegated identities, or workflow
-service identities.
-
-The normalized context fields are `principal_type`, `principal_id`, `issuer`,
-`trust_root_id`, `reservation_id`, `device_id`, `scope_id`, optional `job_id`,
-optional `allocation_id`, optional `project_id`, optional `session_id`, allowed
-operations, authenticated source, credential identifier when present, and
-effective expiration. The reservation ID, device ID, scope ID, and requested
-operation must match the reservation binding and the RPC request.
-
-</details>
-
-<details>
-<summary><strong>ADM-013</strong></summary>
-
-### ADM-013
-
-QPM should reject a reservation-scoped operation when the authenticated caller
-context does not match the reservation binding stored in qhw-admission.
-
-The rejection should be returned before scheduler insertion and before provider
-submission. The structured error should identify the failure as an unauthorized
-caller rather than an invalid reservation when the reservation exists but the
-caller is not allowed to use it.
-
-</details>
-
-<details>
-<summary><strong>ADM-014</strong></summary>
-
-### ADM-014
-
-Credentials used for reservation-scoped work should have bounded lifetimes. A
-credential should not authorize work after the associated reservation
-expiration, even if the credential's own expiration is later.
-
-QPM should compute the effective authorization lifetime as the minimum of the
-credential lifetime, the trusted transport session lifetime, and the
-reservation expiration.
-
-When launcher allocation metadata is present, the allocation lifetime also
-bounds the effective authorization lifetime. A request with `now` at or beyond
-that effective expiration fails before any usage hold or scheduler insertion.
-
-</details>
-
-<details>
-<summary><strong>ADM-015</strong></summary>
-
-### ADM-015
-
-QPM should validate credential integrity, issuer or trust root, expiration,
-revocation status, and credential freshness before deriving caller context.
-Freshness checks apply to the credential as reusable authorization material.
-They may reject malformed, expired, stale, revoked, or transport-mismatched
-credentials. Ordinary reuse of an unexpired credential for multiple authorized
-RPCs is valid.
-
-A credential identifier is useful for audit, revocation, and credential-level
-replay tracking. The design does not require a specific token technology or
-claim name. The credential identifier is not a per-RPC nonce.
-
-QPM does not require an idempotency key for task submission. Each accepted
-`sync_run()` or `async_run()` creates an independent qtask. Clients should not
-blindly retry submit calls unless duplicate work is acceptable or handled by a
-higher-level workflow. Read, status, result, metadata, and queue-observation
-calls can reuse the same credential because they do not create new work.
-
-Invalid or stale credentials should fail authorization before QPM calls
-qhw-admission for capacity holds or qhw-scheduler for task insertion. Trust
-roots are loaded from QPM service configuration and are scoped by issuer, key
-ID, accepted audience, and API category.
-
-Structured failures should distinguish missing authentication, invalid
-credential material, stale or revoked credentials, expired credentials, expired
-reservations, and authenticated callers that do not match the stored
-reservation binding.
-
-</details>
-
-<details>
 <summary><strong>ADM-016</strong></summary>
 
 ### ADM-016
@@ -1590,8 +1826,8 @@ is not accepted.
 
 Delayed outcomes should include any available retry, wait, or capacity context.
 Rejected outcomes should distinguish policy rejection, invalid request,
-unknown device or scope, insufficient capacity, unauthorized caller, and
-expired or cancelled lifecycle state where applicable.
+unknown device or scope, insufficient capacity, and expired or cancelled
+lifecycle state where applicable.
 
 </details>
 
@@ -1916,8 +2152,8 @@ managed-resource boundary.
 
 Any execution path that bypasses admission authorization or scheduler selection
 should be restricted to explicitly configured diagnostic or administrative use.
-It should require trusted caller authorization and should be visibly separate
-from normal application execution APIs.
+The current milestone keeps the bypass visibly separate from normal
+application execution APIs and gates it with explicit configuration.
 
 Bypass activity should still emit telemetry and audit records so operators can
 distinguish diagnostic work from scheduled reservation-scoped work.
@@ -1998,13 +2234,13 @@ estimate is unavailable rather than fabricate one.
 The QFw service API model should separate execution, admission control,
 scheduler control, and telemetry/discovery APIs. The controller can implement
 these workflows internally, but the remote API surface should remain organized
-by client role and authorization level.
+by workflow role.
 
 Execution APIs expose the managed task lifecycle to applications. Admission
 control APIs expose reservation evaluation and reservation lifecycle workflows
-to trusted workflow or load managers. Scheduler control APIs expose scheduler
-policy and execution-target controls to operators. Telemetry/discovery APIs
-provide the read surfaces with access partitioning.
+to workflow or load managers. Scheduler control APIs expose scheduler policy
+and execution-target controls to operators. Telemetry/discovery APIs provide
+the read surfaces used by applications, operators, and policy services.
 
 </details>
 
@@ -2031,12 +2267,12 @@ resource", not "place this task directly on the provider queue".
 Admission control APIs should expose workflow-level operations such as
 `evaluate`, `reserve`, `renew`, `release`, `cancel`, and `get_reservation`.
 They should accept workload metadata, target device, walltime or expiration,
-workload kind, caller binding, and policy hints.
+workload kind, owner metadata, and policy hints.
 
-Workflow managers, load managers, resource managers, trusted prolog or epilog
-code, and site automation use these APIs to request and manage quantum
-capacity. The APIs require trusted caller authorization because they create or
-mutate reservation state that later authorizes resource-affecting execution.
+Workflow managers, load managers, resource managers, prolog or epilog code,
+and site automation use these APIs to request and manage quantum capacity. The
+current milestone accepts token placeholders without validation. Caller
+validation is defined in `docs/detailed-design-authentication.md`.
 
 </details>
 
@@ -2049,9 +2285,8 @@ Scheduler control APIs should expose workflow-level operations for selecting
 scheduler policy, configuring policy options, inspecting queue state, draining
 or pausing a device, and tuning dispatch behavior.
 
-These APIs are operator and trusted-automation controls. They should not be
-part of the normal application task-run path and should require elevated
-authorization.
+These APIs are operator and site-automation controls. They should not be part
+of the normal application task-run path.
 
 </details>
 
@@ -2065,12 +2300,10 @@ topology, task state, reservation state, queue state, scheduler policy state,
 capacity state, and provenance data. They serve applications, workflow and load
 managers, operators, telemetry collectors, and admission policy.
 
-QFw should treat telemetry as a policy-partitioned read surface within one API
-category. Basic discovery, caller-owned state, manager aggregate state, and
-operator telemetry have different authorization requirements. The service API
-should filter responses at method, object, and field granularity so the same
-telemetry surface can serve applications, workflow managers, and operators
-without exposing restricted operational or cross-user data.
+QFw should treat telemetry as one API category that can serve applications,
+workflow managers, operators, telemetry collectors, and admission policy.
+Policy-controlled filtering is deferred to
+`docs/detailed-design-authentication.md`.
 
 </details>
 
@@ -2118,16 +2351,16 @@ Compatibility can be handled by an explicit transition path, but the target
 production behavior should require the reservation ID.
 
 The Qiskit adapter migrates through the same API change. The current
-`qfw_lookup_service.get_qpm()` path should become a QPM resolver wrapper. In
-QFw-managed mode it keeps the existing `rmgr.get_services("QPM", ...)` lookup
-and `defw.connect_to_resource()` binding. In long-running mode it reads the
-configured endpoint descriptor, connects directly to the DEFw-wrapped QPM, and
-validates readiness and metadata before returning the same QPM client binding.
+`qfw_lookup_service.get_qpm()` path should become a QPM resolver wrapper. The
+resolver talks to the enabled DEFw-dirsvc instances, whether they are
+allocation-local, site-scoped, or both. It resolves the selected service record
+and API binding, then constructs the same QPM client binding regardless of
+which directory scope returned the record.
 
 `QFwBackend.run()` should accept reservation context through backend options or
-run keyword arguments, including `reservation_id`, an execution token or
-trusted caller context, and an optional idempotency key. The method should copy
-those values into `QFwJob` options instead of dropping them as unused kwargs.
+run keyword arguments, including `reservation_id`, opaque token, execution
+options, and an optional idempotency key. The method should copy those values
+into `QFwJob` options instead of dropping them as unused kwargs.
 `QFwJob._run_experiment_async()` then places those fields in the managed
 execution request and calls the reservation-scoped QPM execution API.
 
@@ -2142,13 +2375,13 @@ context for every derived measurement circuit generated from an Estimator PUB.
 Until that pass-through exists, Estimator submissions are incompatible with
 reservation-scoped production execution.
 
-The adapter must not treat DEFw-resmgr service selection as a reservation.
+The adapter must not treat DEFw-dirsvc service selection as a reservation.
 Reservation creation belongs to the QPM admission API and is normally performed
-by a trusted workflow manager, load manager, prolog, or site service before the
-application runs. A compatibility helper may request a reservation for trusted
-single-process examples, but production Qiskit execution should reject
-resource-affecting runs that lack a reservation ID and authenticated caller
-context.
+by a workflow manager, load manager, prolog, or site service before the
+application runs. A compatibility helper may request a reservation for
+single-process examples. This milestone should reject resource-affecting runs
+that lack a reservation ID. Token validation is added by the separate
+authentication feature.
 
 </details>
 
@@ -2189,9 +2422,13 @@ distinguishing those jobs and sessions in both operation modes.
 
 QPM APIs should return structured status and error information that can be
 handled by applications, resource managers, and operators. The error model
-should distinguish invalid reservation, unauthorized caller, insufficient
-allowance, pending capacity, policy-delayed work, cancelled work, expired
-reservation, timeout, scheduler failure, and provider failure.
+should distinguish invalid reservation, insufficient allowance, pending
+capacity, policy-delayed work, cancelled work, expired reservation, timeout,
+scheduler failure, and provider failure.
+
+Authentication-specific status codes are defined in
+`docs/requirements-authentication.md` and
+`docs/detailed-design-authentication.md`.
 
 Structured outcomes should include machine-readable reason codes and enough
 context for callers to decide whether to retry, wait, cancel, renew a
@@ -2205,11 +2442,12 @@ reservation, or escalate to an operator.
 ### CTRL-001
 
 Admission policy configuration and scheduler policy configuration should be
-trusted control-plane operations. QFw should enforce authorization at the
-service API layer before policy state reaches the controller.
+control-plane operations. The current milestone accepts token placeholders
+without validating them. Caller validation is deferred to
+`docs/detailed-design-authentication.md`.
 
-The controller should receive validated caller context and normalized policy
-requests rather than raw untrusted input.
+The controller should receive normalized policy requests rather than raw
+unstructured input.
 
 </details>
 
@@ -2331,8 +2569,8 @@ explicit instead of presenting the estimate as authoritative.
 QPM should maintain the in-memory runtime mappings needed to orchestrate active
 execution: reservation IDs, job IDs, qtask IDs, QFw circuit IDs,
 qhw-scheduler task IDs, qhw-admission usage events, provider job handles,
-authenticated caller or job context, pending-queue entries, capacity holds,
-worker state, event endpoints, and result state.
+request owner metadata, token placeholder metadata, pending-queue entries,
+capacity holds, worker state, event endpoints, and result state.
 
 This state belongs in QPM because it represents active execution, provider
 interaction, callbacks, and client-visible status rather than the durable
