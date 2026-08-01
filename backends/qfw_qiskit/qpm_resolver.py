@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from time import sleep
@@ -12,6 +13,12 @@ QPM_IMPL_ENV = "QFW_QPM_IMPL"
 DEFAULT_QPM_IMPL = "iqm"
 DEFAULT_SERVICE_NAME = "QPM"
 DEFAULT_SERVICE_TYPE = "qfw.qpm"
+LOCAL_DIRSVC_ENDPOINT_ENV = "QFW_LOCAL_DIRSVC_ENDPOINT"
+SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
+RESOLVER_SCOPE_ORDER_ENV = "QFW_QPM_RESOLVER_SCOPE_ORDER"
+DIRECT_ENDPOINT_FALLBACK_ENV = "QFW_QPM_DIRECT_ENDPOINT_FALLBACK"
+DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
+DEFAULT_SCOPE_ORDER = ("site", "allocation-local", "direct")
 
 API_CATEGORY_BINDINGS = {
 	"execution": "execution",
@@ -25,11 +32,23 @@ API_CATEGORY_BINDINGS = {
 }
 
 
-class QPMAmbiguousResolutionError(DEFwReserveError):
+class QPMResolverError(DEFwReserveError):
 	pass
 
 
-class QPMProviderPolicyError(DEFwReserveError):
+class QPMAmbiguousResolutionError(QPMResolverError):
+	pass
+
+
+class QPMStaleGenerationError(QPMResolverError):
+	pass
+
+
+class QPMUnsupportedConfigurationError(QPMResolverError):
+	pass
+
+
+class QPMProviderPolicyError(QPMResolverError):
 	pass
 
 
@@ -67,6 +86,7 @@ class QPMResolvedBinding:
 	service_type: str = DEFAULT_SERVICE_TYPE
 	runtime_id: Optional[str] = None
 	generation: Optional[int] = None
+	latest_generation: Optional[int] = None
 	selector_metadata: Dict[str, Any] = field(default_factory=dict)
 	properties: Dict[str, Any] = field(default_factory=dict)
 	directory_priority: int = 0
@@ -104,15 +124,94 @@ class DEFwQPMConnector:
 				resolved.api_binding.client_class,
 			)
 			return apis[0]
+		if hasattr(self._defw, "connect_to_endpoint"):
+			return self._defw.connect_to_endpoint(
+				resolved.endpoint,
+				resolved.api_binding,
+			)
+		if resolved.directory_scope == "direct":
+			raise QPMUnsupportedConfigurationError(
+				"direct QPM endpoint resolution requires DEFw "
+				"connect_to_endpoint support")
 		raise DEFwReserveError(
 			f"resolved QPM {resolved.service_id!r} has no DEFw binding")
 
 
+class DEFwDirectoryClient:
+	def __init__(self, endpoint, defw_module=defw):
+		self.endpoint = endpoint
+		self._defw = defw_module
+		self._client = None
+
+	def resolve_service(self, **kwargs):
+		client = self._directory_client()
+		if hasattr(client, "resolve_service"):
+			return client.resolve_service(**kwargs)
+		if hasattr(client, "get_services"):
+			return client.get_services(
+				kwargs.get("service_name", DEFAULT_SERVICE_NAME),
+				kwargs.get("qpm_type", -1),
+				kwargs.get("qpm_capability", -1),
+			)
+		raise QPMUnsupportedConfigurationError(
+			f"site directory endpoint {self.endpoint!r} does not expose "
+			"resolve_service() or get_services()")
+
+	def _directory_client(self):
+		if self._client is not None:
+			return self._client
+		if hasattr(self._defw, "connect_to_directory"):
+			self._client = self._defw.connect_to_directory(self.endpoint)
+			return self._client
+		if hasattr(self._defw, "connect_to_endpoint"):
+			self._client = self._defw.connect_to_endpoint(
+				self.endpoint,
+				QPMApiBinding(
+					binding_name="directory",
+					client_class="DEFwResMgr",
+					service_module="svc_resmgr",
+					service_class="DEFwResMgr",
+				),
+			)
+			return self._client
+		raise QPMUnsupportedConfigurationError(
+			"site-scoped QPM resolution requires a DEFw directory "
+			"client factory or endpoint binding support")
+
+
+class DirectEndpointDirectory:
+	def __init__(self, endpoint):
+		self.endpoint = endpoint
+
+	def resolve_service(self, **kwargs):
+		return {
+			"directory_scope": "direct",
+			"directory_identity": "direct-endpoint",
+			"service_record": {
+				"service_id": str(self.endpoint),
+				"service_name": kwargs.get("service_name", DEFAULT_SERVICE_NAME),
+				"service_type": kwargs.get("service_type", DEFAULT_SERVICE_TYPE),
+				"endpoint": self.endpoint,
+				"selector": {},
+			},
+			"selected_api_binding": {
+				"binding_name": kwargs.get("binding_name", "execution"),
+				"client_module": "api_qpm",
+				"client_class": "QPM",
+				"service_class": "QPM",
+				"version": 1,
+			},
+		}
+
+
 class QPMResolver:
-	def __init__(self, directories, connector=None, sleeper=sleep):
+	def __init__(self, directories, connector=None, sleeper=sleep,
+				 selection_order=None, allow_ambiguous=False):
 		self._directories = list(directories)
 		self._connector = connector or DEFwQPMConnector()
 		self._sleep = sleeper
+		self._selection_order = list(selection_order or [])
+		self._allow_ambiguous = allow_ambiguous
 
 	@classmethod
 	def from_resource_manager(cls, rmgr, defw_module=defw, sleeper=sleep):
@@ -125,8 +224,61 @@ class QPMResolver:
 		)
 		return cls([directory], DEFwQPMConnector(defw_module), sleeper)
 
-	def connect(self, timeout=10, **kwargs):
-		return self._connector.connect(self.resolve(timeout=timeout, **kwargs))
+	@classmethod
+	def from_environment(cls, rmgr=None, defw_module=defw, sleeper=sleep,
+						 directory_client_factory=None):
+		directories = []
+		local_endpoint = os.environ.get(LOCAL_DIRSVC_ENDPOINT_ENV)
+		if rmgr is not None:
+			directories.append(DirectoryScope(
+				name="allocation-local",
+				scope="allocation-local",
+				client=rmgr,
+				endpoint=local_endpoint,
+				identity=local_endpoint or "allocation-local",
+				priority=100,
+			))
+		for index, endpoint in enumerate(
+			_split_env_list(os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV))):
+			client = (
+				directory_client_factory(endpoint)
+				if directory_client_factory is not None else
+				DEFwDirectoryClient(endpoint, defw_module)
+			)
+			directories.append(DirectoryScope(
+				name=f"site-{index}",
+				scope="site",
+				client=client,
+				endpoint=endpoint,
+				identity=endpoint,
+				priority=50,
+			))
+		if _env_enabled(DIRECT_ENDPOINT_FALLBACK_ENV):
+			endpoint = os.environ.get(DIRECT_QPM_ENDPOINT_ENV)
+			if endpoint:
+				directories.append(DirectoryScope(
+					name="direct",
+					scope="direct",
+					client=DirectEndpointDirectory(endpoint),
+					endpoint=endpoint,
+					identity="direct-endpoint",
+					priority=-100,
+				))
+		order = _split_env_list(os.environ.get(RESOLVER_SCOPE_ORDER_ENV))
+		if not order:
+			order = list(DEFAULT_SCOPE_ORDER)
+		return cls(
+			directories,
+			DEFwQPMConnector(defw_module),
+			sleeper,
+			selection_order=order,
+		)
+
+	def connect(self, timeout=10, require_current_generation=True, **kwargs):
+		resolved = self.resolve(timeout=timeout, **kwargs)
+		if require_current_generation:
+			self._reject_stale_generation(resolved)
+		return self._connector.connect(resolved)
 
 	def resolve(self, timeout=10, **kwargs):
 		request = QPMResolutionRequest(**kwargs)
@@ -174,6 +326,8 @@ class QPMResolver:
 				selector_resource=request.selector_resource,
 				selector_alias=request.selector_alias,
 				api_category=request.api_category,
+				qpm_type=request.qpm_type,
+				qpm_capability=request.qpm_capability,
 			))
 		if hasattr(client, "get_services"):
 			return _as_list(client.get_services(
@@ -223,6 +377,11 @@ class QPMResolver:
 			service_type=service.get("service_type", request.service_type),
 			runtime_id=service.get("runtime_id"),
 			generation=service.get("generation"),
+			latest_generation=(
+				record.get("latest_generation") or
+				service.get("latest_generation") or
+				properties.get("latest_generation")
+			),
 			selector_metadata=selector,
 			properties=properties,
 			directory_priority=directory.priority,
@@ -253,6 +412,7 @@ class QPMResolver:
 			service_type=properties.get("service_type", request.service_type),
 			runtime_id=properties.get("runtime_id"),
 			generation=properties.get("generation"),
+			latest_generation=properties.get("latest_generation"),
 			selector_metadata=_selector_from_properties(properties),
 			properties=properties,
 			directory_priority=directory.priority,
@@ -275,7 +435,7 @@ class QPMResolver:
 	def _select_candidate(self, candidates, request):
 		ordered = sorted(
 			candidates,
-			key=lambda item: (-item.directory_priority, item.discovery_index),
+			key=self._selection_sort_key,
 		)
 		if request.provider:
 			matching_provider = [
@@ -287,23 +447,97 @@ class QPMResolver:
 					f"no QPM provider {request.provider!r} matched "
 					f"{request.service_type}/{request.binding_filter()}: "
 					f"{_candidate_list(ordered)}")
-			tied = [
-				item for item in matching_provider
-				if item.directory_priority == (
-					matching_provider[0].directory_priority)
-			]
-			if len(tied) > 1:
-				raise QPMAmbiguousResolutionError(
-					f"ambiguous QPM provider {request.provider!r} "
-					f"resolution for "
-					f"{request.service_type}/{request.binding_filter()}: "
-					f"{_candidate_list(tied)}")
+			self._reject_ambiguous_resolution(
+				matching_provider, request, provider=request.provider)
 			logging.debug(
 				f"selected QPM impl '{request.provider}' "
 				f"({len(matching_provider)} of "
 				f"{len(ordered)} match(es))")
 			return matching_provider[0]
+		self._reject_ambiguous_resolution(ordered, request)
 		return ordered[0]
+
+	def _reject_ambiguous_resolution(self, ordered, request, provider=None):
+		if self._allow_ambiguous or not ordered:
+			return
+		tied = [
+			item for item in ordered
+			if self._selection_rank(item) == self._selection_rank(ordered[0])
+		]
+		if len(tied) <= 1:
+			return
+		provider_text = (
+			f" provider {provider!r}"
+			if provider is not None else "")
+		raise QPMAmbiguousResolutionError(
+			f"ambiguous QPM{provider_text} resolution for "
+			f"{request.service_type}/{request.binding_filter()}: "
+			f"{_candidate_list(tied)}")
+
+	def _selection_sort_key(self, candidate):
+		return (
+			self._scope_order(candidate),
+			-candidate.directory_priority,
+			candidate.discovery_index,
+		)
+
+	def _selection_rank(self, candidate):
+		return (
+			self._scope_order(candidate),
+			candidate.directory_priority,
+		)
+
+	def _scope_order(self, candidate):
+		if not self._selection_order:
+			return 0
+		names = (
+			candidate.directory_scope,
+			candidate.directory_identity,
+		)
+		for name in names:
+			if name in self._selection_order:
+				return self._selection_order.index(name)
+		return len(self._selection_order)
+
+	def _reject_stale_generation(self, resolved):
+		if resolved.generation is None:
+			return
+		latest = self._latest_generation(resolved)
+		if latest is None:
+			return
+		try:
+			current = int(resolved.generation)
+			latest = int(latest)
+		except (TypeError, ValueError):
+			return
+		if latest > current:
+			raise QPMStaleGenerationError(
+				f"stale QPM binding for {resolved.service_id}: "
+				f"generation {current} is older than {latest}")
+
+	def _latest_generation(self, resolved):
+		if resolved.latest_generation is not None:
+			return resolved.latest_generation
+		for directory in self._directories:
+			if not self._directory_matches_resolved(directory, resolved):
+				continue
+			client = directory.client
+			for method_name in ("get_service_generation", "get_generation"):
+				if not hasattr(client, method_name):
+					continue
+				try:
+					return getattr(client, method_name)(resolved.service_id)
+				except TypeError:
+					continue
+		return None
+
+	def _directory_matches_resolved(self, directory, resolved):
+		identity = directory.identity or directory.name
+		return (
+			directory.scope == resolved.directory_scope and
+			identity == resolved.directory_identity
+		)
+
 
 def _api_binding_from_mapping(binding, request):
 	if binding is None:
@@ -329,6 +563,18 @@ def _as_list(value):
 	if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
 		return list(value)
 	return [value]
+
+
+def _split_env_list(value):
+	if not value:
+		return []
+	return [item.strip() for item in value.replace(";", ",").split(",")
+		if item.strip()]
+
+
+def _env_enabled(name):
+	value = os.environ.get(name, "")
+	return value.strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
 def _candidate_list(candidates):

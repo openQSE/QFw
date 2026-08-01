@@ -69,6 +69,44 @@ def test_get_qpm_propagates_reservation_failures(monkeypatch):
 		raise AssertionError("expected reservation failure to propagate")
 
 
+def test_get_qpm_uses_direct_endpoint_without_resource_manager(monkeypatch):
+	import qfw_qiskit.qfw_lookup_service as lookup_service
+
+	fake_qpm = FakeQPM()
+
+	class DirectDefwModule(FakeDefwModule):
+		def __init__(self):
+			super().__init__()
+			self.direct_connections = []
+
+		def connect_to_endpoint(self, endpoint, api_binding):
+			self.direct_connections.append((endpoint, api_binding))
+			return fake_qpm
+
+	fake_defw = DirectDefwModule()
+
+	def unavailable_resource_manager():
+		raise RuntimeError("allocation-local resource manager unavailable")
+
+	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
+	monkeypatch.delenv("QFW_QPM_IMPL", raising=False)
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
+	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
+	monkeypatch.setattr(
+		lookup_service, "defw_get_resource_mgr",
+		unavailable_resource_manager)
+	monkeypatch.setattr(lookup_service, "defw", fake_defw)
+
+	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
+
+	assert result is fake_qpm
+	assert len(fake_defw.direct_connections) == 1
+	endpoint, api_binding = fake_defw.direct_connections[0]
+	assert endpoint == "qpm-direct:9000"
+	assert api_binding.binding_name == "execution"
+
+
 def test_get_qpm_selects_requested_provider(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
