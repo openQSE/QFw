@@ -223,6 +223,38 @@ class QPMTargetController:
 			runtime.state = QPM_TASK_COMPLETED
 			return runtime
 
+	def cleanup_circuit(self, cid):
+		with self.lock:
+			runtime = self.runtime_by_cid.get(cid)
+			if runtime is None:
+				return None
+			return self.cleanup_task(runtime.qtask_id)
+
+	def cleanup_task(self, qtask_id):
+		with self.lock:
+			runtime = self.runtime_by_qtask_id.pop(qtask_id, None)
+			if runtime is None:
+				return None
+			self.runtime_by_cid.pop(runtime.cid, None)
+			if runtime.reservation_id in self.qtask_ids_by_reservation:
+				qtask_ids = self.qtask_ids_by_reservation[runtime.reservation_id]
+				qtask_ids.discard(qtask_id)
+				if not qtask_ids:
+					self.qtask_ids_by_reservation.pop(
+						runtime.reservation_id, None)
+			if runtime.scheduler_task_id is not None:
+				self.qtask_id_by_scheduler_task_id.pop(
+					runtime.scheduler_task_id, None)
+			if runtime.provider_handle is not None:
+				self.qtask_id_by_provider_handle.pop(
+					runtime.provider_handle, None)
+			self.usage_events_by_qtask_id.pop(qtask_id, None)
+			self.pending_capacity.pop(qtask_id, None)
+			self.capacity_holds.pop(qtask_id, None)
+			self.timeout_state.pop(qtask_id, None)
+			self.result_state.pop(qtask_id, None)
+			return runtime
+
 	def record_diagnostic_bypass(self, operation, request_context,
 				     reason=None):
 		record = {

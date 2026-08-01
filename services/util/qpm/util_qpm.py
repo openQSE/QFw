@@ -100,6 +100,7 @@ class UTIL_QPM:
 			circ = self.circuits[cid]
 			if circ.can_delete():
 				del self.circuits[cid]
+				self.controller.cleanup_circuit(cid)
 			else:
 				circ.set_deletion()
 
@@ -170,7 +171,8 @@ class UTIL_QPM:
 				self.free_hosts[host] += res[host]
 			circ.set_done()
 			cid = circ.get_cid()
-		self.delete_circuit(cid)
+			self.circuits.pop(cid, None)
+			self.controller.cleanup_circuit(cid)
 
 	def free_resources_and_oor(self, circ):
 		self.free_resources(circ)
