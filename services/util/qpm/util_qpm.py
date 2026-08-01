@@ -8,6 +8,7 @@ import time
 import queue
 import os
 from defw_exception import DEFwError, DEFwNotReady, DEFwInProgress, DEFwOutOfResources
+from .controller import controller_config, get_target_controller
 from .util_circuit import Circuit, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
@@ -17,17 +18,31 @@ qpm_shutdown = False
 
 
 class UTIL_QPM:
-	def __init__(self, qrc, max_ppn=MAX_PPN, start=True):
-		self.circuits = {}
-		#self.runner_queue = queue.Queue()
-		self.oor_queue = queue.Queue()
-		self.circuit_results = []
+	def __init__(self, qrc, max_ppn=MAX_PPN, start=True, target_id=None,
+		     admission_threading_mode=None, scheduler_threading_mode=None,
+		     controller_serialization_mode=None):
 		self.qrc = qrc
-		self.free_hosts = {}
 		self.max_ppn = max_ppn
-		self.setup_host_resources(max_ppn)
-		self.all_results = []
-		self.push_info = {}
+		config = controller_config(
+			qrc,
+			target_id=target_id,
+			admission_threading_mode=admission_threading_mode,
+			scheduler_threading_mode=scheduler_threading_mode,
+			serialization_mode=controller_serialization_mode,
+		)
+		self.controller = get_target_controller(config, max_ppn)
+		self.circuits = self.controller.circuits
+		self.oor_queue = self.controller.oor_queue
+		if self.oor_queue is None:
+			self.oor_queue = queue.Queue()
+			self.controller.oor_queue = self.oor_queue
+		self.circuit_results = self.controller.circuit_results
+		self.free_hosts = self.controller.free_hosts
+		if not self.controller.resources_initialized:
+			self.setup_host_resources(max_ppn)
+			self.controller.resources_initialized = True
+		self.all_results = self.controller.all_results
+		self.push_info = self.controller.push_info
 
 	def setup_host_resources(self, max_ppn):
 		hl = expand_host_list(os.environ['QFW_QPM_ASSIGNED_HOSTS'])
@@ -270,6 +285,8 @@ class UTIL_QPM:
 					 properties=None):
 		from api_qpm import QPMType, QPMCapability
 		from defw_agent_info import get_bit_list, get_bit_desc, Capability, DEFwServiceInfo
+		properties = dict(properties or {})
+		properties.setdefault("controller", self.controller_telemetry())
 		t = get_bit_list(type_bits, QPMType)
 		c = get_bit_list(caps_bits, QPMCapability)
 		cap = Capability(type_bits, caps_bits, get_bit_desc(t, c))
@@ -280,6 +297,9 @@ class UTIL_QPM:
 			cap, -1,
 			properties=properties)
 		return info
+
+	def controller_telemetry(self):
+		return self.controller.telemetry()
 
 	def reserve(self, svc, client_ep, *args, **kwargs):
 		logging.debug(f"{client_ep} reserved the {svc}")
