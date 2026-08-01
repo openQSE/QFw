@@ -33,6 +33,43 @@ class FakeQPM:
 		return "ok"
 
 
+class FakeServiceInfo:
+	def __init__(self, qpm, endpoint="fake-qpm-endpoint", properties=None,
+				 module_name="svc_fake_qpm"):
+		self.qpm = qpm
+		self.endpoint = endpoint
+		self.properties = dict(properties or {})
+		self.module_name = module_name
+
+	def get_properties(self):
+		return dict(self.properties)
+
+	def get_endpoint(self):
+		return self.endpoint
+
+	def get_module_name(self):
+		return self.module_name
+
+
+class FakeResourceManager:
+	def __init__(self, service_infos=None):
+		self.service_infos = list(service_infos or [])
+		self.requests = []
+
+	def get_services(self, service_name, qpm_type=-1, qpm_cap=-1):
+		self.requests.append((service_name, qpm_type, qpm_cap))
+		return list(self.service_infos)
+
+
+class FakeDefwModule:
+	def __init__(self):
+		self.connections = []
+
+	def connect_to_resource(self, service_infos, resource_name):
+		self.connections.append((list(service_infos), resource_name))
+		return [service_info.qpm for service_info in service_infos]
+
+
 class FakeEvent:
 	def __init__(self, payload):
 		self.payload = payload

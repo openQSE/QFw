@@ -99,6 +99,9 @@ def _install_defw_stubs():
 		class DEFwNotFound(DEFwError):
 			pass
 
+		class DEFwReserveError(DEFwError):
+			pass
+
 		class DEFwAgentNotFound(DEFwError):
 			pass
 
@@ -109,6 +112,7 @@ def _install_defw_stubs():
 		defw_exception.DEFwNotReady = DEFwNotReady
 		defw_exception.DEFwInProgress = DEFwInProgress
 		defw_exception.DEFwNotFound = DEFwNotFound
+		defw_exception.DEFwReserveError = DEFwReserveError
 		defw_exception.DEFwAgentNotFound = DEFwAgentNotFound
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
@@ -133,6 +137,7 @@ def _install_defw_stubs():
 		def defw_reserve_service_by_name(*args, **kwargs):
 			raise AssertionError("defw_reserve_service_by_name must be patched in tests")
 
+		defw_app_util.SYSTEM_UP_TIMEOUT = 1
 		defw_app_util.defw_get_resource_mgr = defw_get_resource_mgr
 		defw_app_util.defw_reserve_service_by_name = defw_reserve_service_by_name
 		sys.modules["defw_app_util"] = defw_app_util
