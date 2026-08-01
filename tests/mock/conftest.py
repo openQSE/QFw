@@ -10,6 +10,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 def _add_repo_paths():
 	paths = [
 		REPO_ROOT / "backends",
+		REPO_ROOT / "services",
 		REPO_ROOT / "service-apis",
 		REPO_ROOT / "DEFw" / "python" / "infra",
 	]
@@ -102,7 +103,13 @@ def _install_defw_stubs():
 		class DEFwReserveError(DEFwError):
 			pass
 
+		class DEFwExecutionError(DEFwError):
+			pass
+
 		class DEFwAgentNotFound(DEFwError):
+			pass
+
+		class DEFwOutOfResources(DEFwError):
 			pass
 
 		class DEFwDumper:
@@ -113,9 +120,49 @@ def _install_defw_stubs():
 		defw_exception.DEFwInProgress = DEFwInProgress
 		defw_exception.DEFwNotFound = DEFwNotFound
 		defw_exception.DEFwReserveError = DEFwReserveError
+		defw_exception.DEFwExecutionError = DEFwExecutionError
 		defw_exception.DEFwAgentNotFound = DEFwAgentNotFound
+		defw_exception.DEFwOutOfResources = DEFwOutOfResources
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
+
+	if "defw_agent_info" not in sys.modules:
+		sys.modules["defw_agent_info"] = types.ModuleType("defw_agent_info")
+
+	if "api_events" not in sys.modules:
+		api_events = types.ModuleType("api_events")
+
+		class BaseEventAPI:
+			pass
+
+		class Event:
+			pass
+
+		api_events.BaseEventAPI = BaseEventAPI
+		api_events.Event = Event
+		sys.modules["api_events"] = api_events
+
+	if "defw_util" not in sys.modules:
+		defw_util = types.ModuleType("defw_util")
+
+		def expand_host_list(value):
+			if not value:
+				return []
+			return str(value).split(",")
+
+		def round_half_up(value):
+			return int(value + 0.5)
+
+		def round_to_nearest_power_of_two(value):
+			power = 1
+			while power < value:
+				power *= 2
+			return power
+
+		defw_util.expand_host_list = expand_host_list
+		defw_util.round_half_up = round_half_up
+		defw_util.round_to_nearest_power_of_two = round_to_nearest_power_of_two
+		sys.modules["defw_util"] = defw_util
 
 	if "defw_remote" not in sys.modules:
 		defw_remote = types.ModuleType("defw_remote")

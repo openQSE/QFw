@@ -266,6 +266,23 @@ def resolve_host_policy(policy, g0, g1):
 		return ",".join(list(dict.fromkeys(g0 + g1)))
 	return policy
 
+def config_bool(value, default=False):
+	if value is None:
+		return default
+	if isinstance(value, bool):
+		return value
+	return str(value).strip().lower() in ('1', 'true', 'yes', 'on', 'y')
+
+def config_bool_env(value, default=False):
+	return 'yes' if config_bool(value, default) else 'no'
+
+def service_registers_with_dirsvc(service):
+	if 'register-with-dirsvc' in service:
+		return config_bool(service.get('register-with-dirsvc'), True)
+	if config_bool(service.get('direct-endpoint-fallback'), False):
+		return False
+	return True
+
 def start_service(service, resmgr, g0, g1, launcher, env_dict,
 				  listen_port, telnet_port):
 	name = service.get('name', None)
@@ -276,6 +293,18 @@ def start_service(service, resmgr, g0, g1, launcher, env_dict,
 	target = resolve_node_policy(service.get('target', 'group1-head'), g0, g1)
 	agent_name = service.get('name')
 	load_modules = service.get('load-modules', module)
+	operation_mode = service.get('operation-mode', 'qfw-managed')
+	register_with_dirsvc = service_registers_with_dirsvc(service)
+	direct_endpoint_fallback = config_bool(
+		service.get('direct-endpoint-fallback'),
+		False,
+	)
+	dirsvc_host = service.get('dirsvc-host', resmgr)
+	dirsvc_port = service.get('dirsvc-port', 8090)
+	dirsvc_name = service.get(
+		'dirsvc-name',
+		service.get('parent-name', f"resmgr_{resmgr}"),
+	)
 
 	env =  {'DEFW_AGENT_NAME': agent_name,
 			'DEFW_LISTEN_PORT': str(service.get('listen-port', listen_port)),
@@ -284,11 +313,17 @@ def start_service(service, resmgr, g0, g1, launcher, env_dict,
 			'DEFW_LOAD_NO_INIT': '',
 			'DEFW_SHELL_TYPE': 'daemon',
 			'DEFW_AGENT_TYPE': service.get('agent-type', 'service'),
-			'DEFW_PARENT_HOSTNAME': resmgr,
-			'DEFW_PARENT_PORT': str(8090),
-			'DEFW_PARENT_NAME': service.get('parent-name', f"resmgr_{resmgr}"),
+			'DEFW_PARENT_HOSTNAME': dirsvc_host,
+			'DEFW_PARENT_PORT': str(dirsvc_port),
+			'DEFW_PARENT_NAME': dirsvc_name,
 			'DEFW_LOG_LEVEL': service.get('log-level', "error"),
-			'DEFW_DISABLE_RESMGR': "no",
+			'DEFW_DISABLE_RESMGR': (
+				"no" if register_with_dirsvc else "yes"),
+			'QFW_QPM_OPERATION_MODE': operation_mode,
+			'QFW_QPM_REGISTER_WITH_DIRSVC': config_bool_env(
+				register_with_dirsvc),
+			'QFW_QPM_DIRECT_ENDPOINT_FALLBACK': config_bool_env(
+				direct_endpoint_fallback),
 			'DEFW_LOG_DIR': os.path.join(
 				os.path.split(cdefw_global.get_defw_tmp_dir())[0],
 				agent_name),
@@ -304,6 +339,15 @@ def start_service(service, resmgr, g0, g1, launcher, env_dict,
 	device_id = service.get('device-id', None)
 	if device_id:
 		env['QFW_QPU_DEVICE_ID'] = device_id
+
+	for key, env_name in (
+		('site-dirsvc-endpoints', 'QFW_SITE_DIRSVC_ENDPOINTS'),
+		('site-dirsvc-trust-material', 'QFW_SITE_DIRSVC_TRUST_MATERIAL'),
+		('direct-qpm-endpoint', 'QFW_DIRECT_QPM_ENDPOINT'),
+	):
+		value = service.get(key, os.environ.get(env_name, None))
+		if value:
+			env[env_name] = str(value)
 
 	if 'QFW_DVM_URI_PATH' in os.environ:
 		env['QFW_DVM_URI_PATH'] = os.environ['QFW_DVM_URI_PATH']
