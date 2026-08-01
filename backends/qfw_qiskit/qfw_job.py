@@ -2,6 +2,7 @@ import logging
 import uuid
 import time
 import select
+import os
 
 from qiskit import qasm2, QuantumCircuit
 from qiskit.providers import JobV1 as Job
@@ -10,6 +11,25 @@ from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError, DEFwInProgress, DEFwNotFound
 from .qfw_metadata import get_qubit_mapping
+
+
+QFW_REQUIRE_RESERVATION_ENV = "QFW_QPM_REQUIRE_RESERVATION"
+EXECUTION_CONTEXT_KEYS = (
+	"reservation_id",
+	"token",
+	"timeout",
+	"cancel_on_timeout",
+	"owner",
+	"job_id",
+	"allocation_id",
+	"project_id",
+	"session_id",
+	"target_device_id",
+	"scope_id",
+	"workload",
+	"policy",
+	"run_context",
+)
 
 
 class QFwJob(Job):
@@ -50,12 +70,37 @@ class QFwJob(Job):
 			info["return_statevector"] = True
 
 		try:
-			cid = self._qpm.async_run(info)
+			context = self._execution_context()
+			response = self._qpm.async_run(info, **context)
+			cid = _async_response_cid(response)
+			self._register_completion_event(cid, response)
 			return cid
 		except Exception as e:
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
+
+	def _execution_context(self):
+		context = {
+			key: self._options[key]
+			for key in EXECUTION_CONTEXT_KEYS
+			if key in self._options
+		}
+		if _reservation_required() and not context.get("reservation_id"):
+			raise DEFwError("reservation_id is required for QPM execution")
+		return context
+
+	def _register_completion_event(self, cid, response):
+		register = getattr(self._backend, "register_completion_event", None)
+		if register is None:
+			return None
+		return register(
+			self._qpm,
+			self._qpm_event_api,
+			cid,
+			response,
+			self._options,
+		)
 
 	def submit(self):
 		if isinstance(self._qobj, QuantumCircuit):
@@ -80,14 +125,21 @@ class QFwJob(Job):
 		start = time.time()
 		logging.defw_app(f"result reader start time: {start}")
 		event_fd = self._qpm_event_api.fileno()
+		expected_cids = {list(entry.keys())[0] for entry in cid_list}
+		completed_cids = set()
 		while time.time() - start < circuit_run_timeout and total_circuits_completed != total_circ:
 			readable, _, _ = select.select([event_fd], [], [], 1)
 			if len(readable) > 0 and event_fd not in readable:
 				raise DEFwError("Something wrong with select")
 			if len(readable) > 0:
-				r = self._qpm_event_api.get()
-				results += r
-				total_circuits_completed += len(r)
+				for event in self._qpm_event_api.get():
+					payload = event.get_event()
+					cid = payload.get("cid") if isinstance(payload, dict) else None
+					if cid not in expected_cids or cid in completed_cids:
+						continue
+					results.append(event)
+					completed_cids.add(cid)
+					total_circuits_completed += 1
 
 		logging.defw_app(
 			f"Result reader thread ending. Events: {total_circuits_completed}."
@@ -261,3 +313,14 @@ class QFwJob(Job):
 
 	def options(self):
 		return self._options
+
+
+def _reservation_required():
+	value = os.environ.get(QFW_REQUIRE_RESERVATION_ENV, "no").strip().lower()
+	return value in ("1", "true", "yes", "on", "y")
+
+
+def _async_response_cid(response):
+	if isinstance(response, dict):
+		return response["cid"]
+	return response

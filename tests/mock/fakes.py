@@ -7,17 +7,20 @@ class FakeQPM:
 		self.submitted_payloads = []
 		self.shutdown_called = False
 
-	def register_event_notification(self, endpoint, event_type, class_id):
-		self.registrations.append(
-			{
-				"endpoint": endpoint,
-				"event_type": event_type,
-				"class_id": class_id,
-			}
-		)
+	def register_event_notification(self, endpoint, event_type, class_id,
+					**kwargs):
+		registration = {
+			"endpoint": endpoint,
+			"event_type": event_type,
+			"class_id": class_id,
+		}
+		registration.update(kwargs)
+		self.registrations.append(registration)
 
-	def async_run(self, info):
-		self.submitted_payloads.append(info)
+	def async_run(self, info, **kwargs):
+		payload = dict(info)
+		payload.update(kwargs)
+		self.submitted_payloads.append(payload)
 		if self.async_error is not None:
 			raise self.async_error
 		if self.cids:

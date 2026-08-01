@@ -20,6 +20,9 @@ class FakeBackend:
 	def my_version(self):
 		return "test-version"
 
+	def returns_statevector(self):
+		return False
+
 
 def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
@@ -74,6 +77,78 @@ def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 	assert result_entry["header"]["memory_slots"] == 2
 	assert result_entry["shots"] == 3
 	assert result_entry["data"]["memory"] == ["00", "00", "11"]
+
+
+def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	fake_qpm = FakeQPM(cids=["cid-1"])
+	circuit = qfw_job.QuantumCircuit(2, name="bell")
+	backend = FakeBackend()
+	event_api = FakeEventAPI(events=[
+		make_result_event("other-cid", {"00": 1}),
+		make_result_event("cid-1", {"11": 2}),
+	], fd=43)
+	options = {"shots": 2, "seed": 7, "seed_simulator": 13}
+
+	def fake_select(readable, writable, exceptional, timeout):
+		return (readable, [], [])
+
+	monkeypatch.setattr(qfw_job.select, "select", fake_select)
+	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
+	job.submit()
+	result = job.result()
+
+	assert result.get_counts(circuit) == {"11": 2}
+	assert len(backend.logged_results) == 1
+
+
+def test_qfw_job_registers_scoped_completion_event_after_submit(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	class RecordingBackend(FakeBackend):
+		def __init__(self):
+			super().__init__()
+			self.registrations = []
+
+		def register_completion_event(self, qpm, event_api, cid, response,
+					      options):
+			self.registrations.append({
+				"qpm": qpm,
+				"event_api": event_api,
+				"cid": cid,
+				"response": response,
+				"reservation_id": options.get("reservation_id"),
+			})
+
+	response = {"cid": "cid-scoped", "qtask_id": 99}
+	fake_qpm = FakeQPM(cids=[response])
+	event_api = FakeEventAPI()
+	backend = RecordingBackend()
+	circuit = qfw_job.QuantumCircuit(1, name="scoped")
+	options = {
+		"shots": 2,
+		"seed": 7,
+		"seed_simulator": 13,
+		"reservation_id": "reservation-1",
+	}
+
+	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
+
+	assert job._run_experiment_async(circuit) == "cid-scoped"
+	assert backend.registrations == [
+		{
+			"qpm": fake_qpm,
+			"event_api": event_api,
+			"cid": "cid-scoped",
+			"response": response,
+			"reservation_id": "reservation-1",
+		}
+	]
 
 
 def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):

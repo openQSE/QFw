@@ -457,6 +457,7 @@ def _install_qiskit_stubs():
 	quantum_info = types.ModuleType("qiskit.quantum_info")
 	quantum_info.Pauli = type("Pauli", (), {})
 	quantum_info.PauliList = type("PauliList", (), {})
+	quantum_info.Statevector = list
 	sys.modules["qiskit.quantum_info"] = quantum_info
 
 	primitives_base = types.ModuleType("qiskit.primitives.base")

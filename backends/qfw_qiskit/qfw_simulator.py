@@ -18,6 +18,23 @@ from api_qpm import QPMType, QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 
+QFW_RUN_CONTEXT_OPTIONS = {
+	"reservation_id",
+	"token",
+	"timeout",
+	"cancel_on_timeout",
+	"owner",
+	"job_id",
+	"allocation_id",
+	"project_id",
+	"session_id",
+	"target_device_id",
+	"scope_id",
+	"workload",
+	"policy",
+	"run_context",
+}
+
 # This is a mirror of QPMType and QPMCapability. And they always need to
 # match. The point here is not to expose QPM specific information to the
 # application as they should always be abstracted away by the backend.
@@ -80,11 +97,9 @@ class QFwBackend(BackendV2):
 		self.log_time = time.time()
 		self._capability = capability
 		self.qpm = get_qpm(betype, capability)
-		# register for events with the qpm
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
-		self.qpm.register_event_notification(
-			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, self.event_api.class_id())
+		self._event_endpoint = me.my_endpoint()
 
 		super().__init__(name=self.my_name())
 		self._target = target
@@ -166,16 +181,36 @@ class QFwBackend(BackendV2):
 
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:
-			if not hasattr(self.options, kwarg):
+			if (not hasattr(self.options, kwarg) and
+				kwarg not in QFW_RUN_CONTEXT_OPTIONS):
 				print("Option ", kwarg, " is not used by this backend")
 		options = {
 			"seed_simulator": kwargs.get("seed_simulator", self.options.seed_simulator),
 			"shots": kwargs.get("shots", self.options.shots),
 			"seed": kwargs.get("seed", self.options.seed),
 		}
+		for key in QFW_RUN_CONTEXT_OPTIONS:
+			if key in kwargs:
+				options[key] = kwargs[key]
 		self._qfw_job = QFwJob(self, self.qpm, self.event_api, circuits, options)
 		self._qfw_job.submit()
 		return self._qfw_job
+
+	def register_completion_event(self, qpm, event_api, cid, response, options):
+		filters = {"cid": cid}
+		if isinstance(response, dict) and response.get("qtask_id") is not None:
+			filters["qtask_id"] = response["qtask_id"]
+		kwargs = {"filters": filters}
+		if options.get("reservation_id") is not None:
+			kwargs["reservation_id"] = options["reservation_id"]
+		if options.get("token") is not None:
+			kwargs["token"] = options["token"]
+		return qpm.register_event_notification(
+			self._event_endpoint,
+			EVENT_TYPE_CIRC_RESULT,
+			event_api.class_id(),
+			**kwargs,
+		)
 
 	def log_statistics(self, res):
 		g_circ_metrics.add_time(res['creation_time'], res['launch_time'], "creation->launch")

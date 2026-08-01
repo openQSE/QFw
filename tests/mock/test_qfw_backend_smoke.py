@@ -14,7 +14,7 @@ class FakeJob:
 		self.submit_called = True
 
 
-def test_backend_registers_event_api_and_qpm(monkeypatch):
+def test_backend_registers_event_api(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
 
 	fake_qpm = FakeQPM()
@@ -30,13 +30,7 @@ def test_backend_registers_event_api_and_qpm(monkeypatch):
 	assert backend.qpm is fake_qpm
 	assert backend.event_api is fake_event_api
 	assert fake_event_api.registered is True
-	assert fake_qpm.registrations == [
-		{
-			"endpoint": "endpoint-1",
-			"event_type": qfw_simulator.EVENT_TYPE_CIRC_RESULT,
-			"class_id": "event-api-7",
-		}
-	]
+	assert fake_qpm.registrations == []
 	assert backend.options._validators["shots"] == (1, 65536)
 	assert backend.options._validators["seed_simulator"] is int
 	assert backend.options._validators["seed"] is int
@@ -67,6 +61,67 @@ def test_backend_run_and_shutdown_use_job_and_runtime(monkeypatch):
 	assert job.options == {"seed_simulator": 34, "shots": 12, "seed": 21}
 	assert fake_qpm.shutdown_called is True
 	assert fake_runtime.exit_called is True
+
+
+def test_backend_run_preserves_reservation_context(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-context")
+	fake_runtime = FakeRuntime(endpoint="endpoint-context")
+
+	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
+
+	backend = qfw_simulator.QFwBackend()
+	circuit = FakeCircuit(2, name="context")
+
+	job = backend.run(
+		circuit,
+		shots=12,
+		reservation_id="reservation-1",
+		token={"opaque": "token"},
+		run_context={"scope": "test"},
+	)
+
+	assert job.options["reservation_id"] == "reservation-1"
+	assert job.options["token"] == {"opaque": "token"}
+	assert job.options["run_context"] == {"scope": "test"}
+
+
+def test_backend_registers_completion_event_with_task_scope(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-scoped")
+	fake_runtime = FakeRuntime(endpoint="endpoint-scoped")
+
+	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+
+	backend = qfw_simulator.QFwBackend()
+
+	backend.register_completion_event(
+		fake_qpm,
+		fake_event_api,
+		"cid-17",
+		{"cid": "cid-17", "qtask_id": 42},
+		{"reservation_id": "reservation-1", "token": {"opaque": "token"}},
+	)
+
+	assert fake_qpm.registrations == [
+		{
+			"endpoint": "endpoint-scoped",
+			"event_type": qfw_simulator.EVENT_TYPE_CIRC_RESULT,
+			"class_id": "event-api-scoped",
+			"filters": {"cid": "cid-17", "qtask_id": 42},
+			"reservation_id": "reservation-1",
+			"token": {"opaque": "token"},
+		}
+	]
 
 
 def test_qfw_job_metadata_keeps_only_qhw_result():
@@ -156,3 +211,64 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 			"qubit_mapping": {"0": "QB7"},
 		}
 	]
+
+
+def test_qfw_job_forwards_reservation_context_to_qpm():
+	from qfw_qiskit.qfw_job import QFwJob
+
+	class FakeBackend:
+		COMPLETION_TIMEOUT_SEC = 1
+
+		def returns_statevector(self):
+			return False
+
+	fake_qpm = FakeQPM(cids=["cid-context"])
+	circuit = FakeCircuit(1, name="context")
+	job = QFwJob(
+		FakeBackend(),
+		fake_qpm,
+		FakeEventAPI(),
+		circuit,
+		{
+			"seed_simulator": 34,
+			"shots": 12,
+			"seed": 21,
+			"reservation_id": "reservation-1",
+			"token": {"opaque": "token"},
+			"run_context": {"scope": "test"},
+		},
+	)
+
+	cid = job._run_experiment_async(circuit)
+
+	assert cid == "cid-context"
+	assert fake_qpm.submitted_payloads[0]["reservation_id"] == "reservation-1"
+	assert fake_qpm.submitted_payloads[0]["token"] == {"opaque": "token"}
+	assert fake_qpm.submitted_payloads[0]["run_context"] == {"scope": "test"}
+
+
+def test_qfw_job_can_require_reservation_id(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from qfw_qiskit.qfw_job import QFwJob
+
+	class FakeBackend:
+		COMPLETION_TIMEOUT_SEC = 1
+
+		def returns_statevector(self):
+			return False
+
+	monkeypatch.setenv("QFW_QPM_REQUIRE_RESERVATION", "yes")
+	job = QFwJob(
+		FakeBackend(),
+		FakeQPM(cids=["cid-context"]),
+		FakeEventAPI(),
+		FakeCircuit(1, name="context"),
+		{"seed_simulator": 34, "shots": 12, "seed": 21},
+	)
+
+	try:
+		job._run_experiment_async(FakeCircuit(1, name="context"))
+	except qfw_job.DEFwError as exc:
+		assert "reservation_id is required" in str(exc)
+	else:
+		raise AssertionError("expected missing reservation_id to fail")
