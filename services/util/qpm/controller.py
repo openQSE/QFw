@@ -734,8 +734,6 @@ class QPMTargetController:
 					f"reservation_id={reservation_id}")
 			self._require_reservation_active(reservation, operation)
 			self._require_reservation_not_expired(reservation)
-			self._require_reservation_matches_context(
-				reservation, request_context)
 			return reservation
 
 	def authorize_capacity_hold(self, circuit):
@@ -985,22 +983,21 @@ class QPMTargetController:
 		with self.lock:
 			qtask_id = self.allocate_qtask_id()
 			payload["qtask_id"] = qtask_id
+			reservation_metadata = self._reservation_metadata_for_id_locked(
+				request_context.reservation_id)
+			owner_metadata = reservation_metadata.get("owner", {})
+			if not isinstance(owner_metadata, dict):
+				owner_metadata = {}
 			runtime = QPMRuntimeTask(
 				cid=cid,
 				qtask_id=qtask_id,
 				reservation_id=request_context.reservation_id,
 				token_metadata=_token_metadata(request_context.token),
-				owner_metadata=dict(request_context.owner),
-				request_metadata={
-					"target_device_id": request_context.target_device_id,
-					"scope_id": request_context.scope_id,
-					"workload": dict(request_context.workload),
-					"policy": dict(request_context.policy),
-					"run_context": dict(request_context.run_context),
-				},
+				owner_metadata=dict(owner_metadata),
+				request_metadata=dict(reservation_metadata),
 			)
 			runtime.external_ids, runtime.canonical_ids = (
-				self.canonicalize_request_context(request_context))
+				self.canonicalize_reservation_metadata(reservation_metadata))
 			self.terminal_tasks_by_cid.pop(cid, None)
 			self.runtime_by_cid[cid] = runtime
 			self.runtime_by_qtask_id[qtask_id] = runtime
@@ -1014,16 +1011,19 @@ class QPMTargetController:
 		self.qtask_id_next += 1
 		return qtask_id
 
-	def canonicalize_request_context(self, request_context):
+	def canonicalize_reservation_metadata(self, metadata):
 		external_ids = {}
 		canonical_ids = {}
-		owner_id = _owner_identifier(request_context.owner)
+		owner = metadata.get("owner", {})
+		if not isinstance(owner, dict):
+			owner = {}
+		owner_id = metadata.get("external_user_id") or _owner_identifier(owner)
 		for kind, value in (
 			("owner_id", owner_id),
-			("job_id", request_context.job_id),
-			("allocation_id", request_context.allocation_id),
-			("project_id", request_context.project_id),
-			("session_id", request_context.session_id),
+			("job_id", metadata.get("external_job_id")),
+			("allocation_id", metadata.get("external_allocation_id")),
+			("project_id", metadata.get("external_project_id")),
+			("session_id", metadata.get("external_session_id")),
 		):
 			if value is None:
 				continue
@@ -1223,7 +1223,7 @@ class QPMTargetController:
 			"target_id": self.config.target_id,
 			"reservation_id": request_context.reservation_id,
 			"token_metadata": _token_metadata(request_context.token),
-			"owner_metadata": dict(request_context.owner),
+			"owner_metadata": {},
 			"auth_disabled": request_context.auth_disabled,
 			"timestamp": time.time(),
 		}
@@ -1876,56 +1876,14 @@ class QPMTargetController:
 		raise QPMAdmissionValidationError(
 			f"expired reservation: reservation_id={reservation_id}")
 
-	def _require_reservation_matches_context(self, reservation,
-						 request_context):
-		metadata = self._reservation_metadata_locked(reservation)
-		self._compare_reservation_field(
-			reservation,
-			"device_id",
-			_numeric_or_canonical(
-				self, "device_id", None,
-				request_context.target_device_id)
-			if request_context.target_device_id is not None else None)
-		self._compare_reservation_field(
-			reservation,
-			"scope_id",
-			_numeric_or_canonical(
-				self, "scope_id", None, request_context.scope_id)
-			if request_context.scope_id is not None else None)
-		self._compare_reservation_field(
-			reservation,
-			"job_id",
-			_numeric_or_canonical(
-				self, "job_id", None, request_context.job_id)
-			if request_context.job_id is not None else None)
-		self._compare_reservation_metadata(
-			metadata, "external_device_id",
-			request_context.target_device_id, "target_device_id")
-		self._compare_reservation_metadata(
-			metadata, "external_scope_id",
-			request_context.scope_id, "scope_id")
-		self._compare_reservation_metadata(
-			metadata, "external_job_id",
-			self._request_job_identifier(request_context), "job_id")
-		self._compare_reservation_metadata(
-			metadata, "external_allocation_id",
-			request_context.allocation_id, "allocation_id")
-		self._compare_reservation_metadata(
-			metadata, "external_project_id",
-			request_context.project_id, "project_id")
-		self._compare_reservation_metadata(
-			metadata, "external_session_id",
-			request_context.session_id, "session_id")
-		self._compare_reservation_metadata(
-			metadata, "policy", request_context.policy, "policy")
-		self._compare_reservation_metadata(
-			metadata, "workload", request_context.workload, "workload")
-		self._compare_reservation_metadata(
-			metadata, "run_context", request_context.run_context,
-			"run_context")
-		self._compare_reservation_metadata(
-			metadata, "operation",
-			self._request_operation(request_context), "operation")
+	def _reservation_metadata_for_id_locked(self, reservation_id):
+		if reservation_id is None:
+			return {}
+		metadata = self.reservation_metadata_by_id.get(reservation_id)
+		if metadata is not None:
+			return dict(metadata)
+		reservation = get_reservation(self.admission_context, reservation_id)
+		return self._reservation_metadata_locked(reservation)
 
 	def _reservation_metadata_locked(self, reservation):
 		metadata = {}
@@ -1938,43 +1896,6 @@ class QPMTargetController:
 				metadata.update(source)
 		return metadata
 
-	def _request_job_identifier(self, request_context):
-		if request_context.job_id is not None:
-			return request_context.job_id
-		return request_context.allocation_id
-
-	def _request_operation(self, request_context):
-		for source in (request_context.run_context, request_context.workload):
-			operation = source.get("operation")
-			if operation is not None:
-				return operation
-		return "execution"
-
-	def _compare_reservation_field(self, reservation, field, expected):
-		if expected is None:
-			return
-		actual = reservation.get(field)
-		if actual in (None, expected):
-			return
-		raise QPMAdmissionValidationError(
-			f"reservation {field} mismatch: expected={expected} "
-			f"actual={actual}")
-
-	def _compare_reservation_metadata(self, metadata, field, expected, label):
-		if expected is None:
-			return
-		if isinstance(expected, dict) and not expected:
-			return
-		if field not in metadata:
-			return
-		actual = metadata.get(field)
-		if actual is None:
-			return
-		if actual == expected:
-			return
-		raise QPMAdmissionValidationError(
-			f"reservation {label} mismatch: expected={expected} "
-			f"actual={actual}")
 	def _close_reservation(self, reservation_id, close_kind, reason_code=0,
 			       now_ns=None):
 		now_ns = now_ns or time.time_ns()

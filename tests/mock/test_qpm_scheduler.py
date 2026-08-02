@@ -119,13 +119,16 @@ def test_scheduler_control_state_is_target_scoped(monkeypatch):
 def test_admitted_qtask_enters_scheduler_before_provider(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM()
+	qpm.controller.reservation_metadata_by_id["reservation-1"] = {
+		"owner": {"user": "alice"},
+		"external_user_id": "alice",
+		"external_job_id": "job-1",
+	}
 
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": "reservation-1",
-		"owner": {"user": "alice"},
-		"job_id": "job-1",
 	})
 	runtime = qpm.controller.task_for_cid(response["cid"])
 	scheduler = qpm.controller.scheduler_context
@@ -133,6 +136,8 @@ def test_admitted_qtask_enters_scheduler_before_provider(monkeypatch):
 	assert response["outcome"] == "ACCEPTED"
 	assert response["lifecycle_state"] == "submitted"
 	assert scheduler.submitted[0]["task_id"] == response["qtask_id"]
+	assert scheduler.submitted[0]["owner_id"] != 0
+	assert scheduler.submitted[0]["job_id"] != 0
 	assert scheduler.started == [response["qtask_id"]]
 	assert qpm.fake_qrc.async_cids == [response["cid"]]
 	assert runtime.scheduler_task_id == response["qtask_id"]

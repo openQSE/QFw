@@ -106,8 +106,6 @@ def test_managed_operations_flow_reports_telemetry(monkeypatch):
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": reservation_id,
-		"owner": {"user": "ops-user"},
-		"job_id": "ops-job",
 	})
 	status = qpm.task_status(
 		qtask_id=response["qtask_id"], reservation_id=reservation_id)

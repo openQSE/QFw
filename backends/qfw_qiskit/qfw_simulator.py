@@ -23,16 +23,6 @@ QFW_RUN_CONTEXT_OPTIONS = {
 	"token",
 	"timeout",
 	"cancel_on_timeout",
-	"owner",
-	"job_id",
-	"allocation_id",
-	"project_id",
-	"session_id",
-	"target_device_id",
-	"scope_id",
-	"workload",
-	"policy",
-	"run_context",
 }
 
 # This is a mirror of QPMType and QPMCapability. And they always need to

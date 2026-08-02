@@ -38,11 +38,9 @@ def test_estimator_run_circuits_forwards_run_options():
 		shots=12,
 		reservation_id="reservation-1",
 		token={"opaque": "token"},
-		run_context={"scope": "estimator"},
 	)
 
 	assert results == ["result"]
 	assert metadata == [{}]
 	assert backend.calls[0][1]["reservation_id"] == "reservation-1"
 	assert backend.calls[0][1]["token"] == {"opaque": "token"}
-	assert backend.calls[0][1]["run_context"] == {"scope": "estimator"}

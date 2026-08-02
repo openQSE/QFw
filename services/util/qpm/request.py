@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 
@@ -10,6 +10,9 @@ REQUEST_CONTEXT_KEYS = (
 	"token",
 	"timeout",
 	"cancel_on_timeout",
+)
+
+SCOPED_METADATA_KEYS = (
 	"owner",
 	"job_id",
 	"allocation_id",
@@ -29,16 +32,6 @@ class QPMRequestContext:
 	token: Any = None
 	timeout: Any = None
 	cancel_on_timeout: bool = False
-	owner: Dict[str, Any] = field(default_factory=dict)
-	job_id: Any = None
-	allocation_id: Any = None
-	project_id: Any = None
-	session_id: Any = None
-	target_device_id: Any = None
-	scope_id: Any = None
-	workload: Dict[str, Any] = field(default_factory=dict)
-	policy: Dict[str, Any] = field(default_factory=dict)
-	run_context: Dict[str, Any] = field(default_factory=dict)
 	auth_disabled: bool = True
 
 	def as_payload_fields(self):
@@ -70,6 +63,8 @@ def auth_disabled():
 
 def parse_execution_request(info, **overrides):
 	payload = dict(info or {})
+	for key in SCOPED_METADATA_KEYS:
+		payload.pop(key, None)
 	context = _context_from_payload(payload, overrides)
 	payload.update(context.as_payload_fields())
 	return QPMExecutionRequest(payload=payload, context=context)
@@ -96,16 +91,6 @@ def _context_from_payload(payload, overrides):
 		if value is None:
 			value = payload.get(key, None)
 		values[key] = value
-	values["owner"] = _dict_value(values["owner"])
-	values["workload"] = _dict_value(values["workload"])
-	values["policy"] = _dict_value(values["policy"])
-	values["run_context"] = _dict_value(values["run_context"])
 	values["cancel_on_timeout"] = bool(values["cancel_on_timeout"])
 	values["auth_disabled"] = auth_disabled()
 	return QPMRequestContext(**values)
-
-
-def _dict_value(value):
-	if value is None:
-		return {}
-	return dict(value)

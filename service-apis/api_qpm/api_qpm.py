@@ -29,21 +29,17 @@ class QPMExecution(QPMRemoteBase):
 		pass
 
 	def sync_run(self, info, reservation_id=None, token=None,
-				 run_context=None, timeout=None, cancel_on_timeout=False,
-				 **request_metadata):
+				 timeout=None, cancel_on_timeout=False):
 		pass
 
 	def async_run(self, info, reservation_id=None, token=None,
-				  run_context=None, timeout=None, cancel_on_timeout=False,
-				  **request_metadata):
+				  timeout=None, cancel_on_timeout=False):
 		pass
 
-	def diagnostic_sync_run(self, info, token=None, reason=None,
-				**request_metadata):
+	def diagnostic_sync_run(self, info, token=None, reason=None):
 		pass
 
-	def diagnostic_async_run(self, info, token=None, reason=None,
-				 **request_metadata):
+	def diagnostic_async_run(self, info, token=None, reason=None):
 		pass
 
 	def is_ready(self):

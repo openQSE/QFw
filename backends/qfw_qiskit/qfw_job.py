@@ -19,16 +19,6 @@ EXECUTION_CONTEXT_KEYS = (
 	"token",
 	"timeout",
 	"cancel_on_timeout",
-	"owner",
-	"job_id",
-	"allocation_id",
-	"project_id",
-	"session_id",
-	"target_device_id",
-	"scope_id",
-	"workload",
-	"policy",
-	"run_context",
 )
 
 

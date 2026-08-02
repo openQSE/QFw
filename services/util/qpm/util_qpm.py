@@ -381,8 +381,7 @@ class UTIL_QPM:
 		status["provider_cancel_status"] = "unsupported"
 
 	def sync_run(self, info, reservation_id=None, token=None,
-				 run_context=None, timeout=None, cancel_on_timeout=False,
-				 **request_metadata):
+				 timeout=None, cancel_on_timeout=False):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -390,23 +389,19 @@ class UTIL_QPM:
 			info,
 			reservation_id=reservation_id,
 			token=token,
-			run_context=run_context,
 			timeout=timeout,
 			cancel_on_timeout=cancel_on_timeout,
-			**request_metadata,
 		)
 		self.require_managed_execution(request)
 		return self._sync_run_request(request)
 
-	def diagnostic_sync_run(self, info, token=None, reason=None,
-				**request_metadata):
+	def diagnostic_sync_run(self, info, token=None, reason=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
 		request = parse_execution_request(
 			info,
 			token=token,
-			**request_metadata,
 		)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_sync_run", reason=reason)
@@ -518,8 +513,7 @@ class UTIL_QPM:
 			raise e
 
 	def async_run(self, info, reservation_id=None, token=None,
-				  run_context=None, timeout=None, cancel_on_timeout=False,
-				  **request_metadata):
+				  timeout=None, cancel_on_timeout=False):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -527,23 +521,19 @@ class UTIL_QPM:
 			info,
 			reservation_id=reservation_id,
 			token=token,
-			run_context=run_context,
 			timeout=timeout,
 			cancel_on_timeout=cancel_on_timeout,
-			**request_metadata,
 		)
 		self.require_managed_execution(request)
 		return self._async_run_request(request)
 
-	def diagnostic_async_run(self, info, token=None, reason=None,
-				 **request_metadata):
+	def diagnostic_async_run(self, info, token=None, reason=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
 		request = parse_execution_request(
 			info,
 			token=token,
-			**request_metadata,
 		)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_async_run", reason=reason)

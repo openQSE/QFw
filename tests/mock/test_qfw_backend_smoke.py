@@ -83,12 +83,10 @@ def test_backend_run_preserves_reservation_context(monkeypatch):
 		shots=12,
 		reservation_id="reservation-1",
 		token={"opaque": "token"},
-		run_context={"scope": "test"},
 	)
 
 	assert job.options["reservation_id"] == "reservation-1"
 	assert job.options["token"] == {"opaque": "token"}
-	assert job.options["run_context"] == {"scope": "test"}
 
 
 def test_backend_registers_completion_event_with_task_scope(monkeypatch):
@@ -235,7 +233,6 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 			"seed": 21,
 			"reservation_id": "reservation-1",
 			"token": {"opaque": "token"},
-			"run_context": {"scope": "test"},
 		},
 	)
 
@@ -244,7 +241,6 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 	assert cid == "cid-context"
 	assert fake_qpm.submitted_payloads[0]["reservation_id"] == "reservation-1"
 	assert fake_qpm.submitted_payloads[0]["token"] == {"opaque": "token"}
-	assert fake_qpm.submitted_payloads[0]["run_context"] == {"scope": "test"}
 
 
 def test_qfw_job_can_require_reservation_id(monkeypatch):
