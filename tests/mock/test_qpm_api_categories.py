@@ -35,6 +35,8 @@ def test_qpm_category_surfaces_are_importable():
 	assert hasattr(QPMAdmissionPolicyConfig, "set_admission_policy")
 	assert hasattr(QPMSchedulerControl, "set_scheduler_policy")
 	assert hasattr(QPMTelemetry, "get_calibration_snapshot")
+	assert hasattr(QPMTelemetry, "reconcile_runtime_state")
+	assert hasattr(QPMTelemetry, "get_service_lifecycle_telemetry")
 
 
 def test_qpm_category_service_api_packages_export_single_surface():

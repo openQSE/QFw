@@ -65,6 +65,11 @@ QPM_TASK_COMPLETED = "completed"
 QPM_TASK_FAILED = "failed"
 QPM_TASK_CANCELLED = "cancelled"
 QPM_TASK_TIMED_OUT = "timed-out"
+QPM_TASK_TERMINAL_STATES = (
+	QPM_TASK_COMPLETED,
+	QPM_TASK_FAILED,
+	QPM_TASK_CANCELLED,
+)
 TELEMETRY_BASIC_DISCOVERY = "basic-discovery"
 TELEMETRY_CALLER_OWNED = "caller-owned"
 TELEMETRY_MANAGER_AGGREGATE = "manager-aggregate"
@@ -88,9 +93,11 @@ TELEMETRY_METHOD_LABELS = {
 	"get_task_metadata": TELEMETRY_CALLER_OWNED,
 	"get_capacity_snapshot": TELEMETRY_MANAGER_AGGREGATE,
 	"get_queue_metrics": TELEMETRY_MANAGER_AGGREGATE,
+	"get_service_lifecycle_telemetry": TELEMETRY_OPERATOR,
 	"get_scheduler_queue_state": TELEMETRY_MANAGER_AGGREGATE,
 	"get_scheduler_status": TELEMETRY_OPERATOR,
 	"get_telemetry_access_model": TELEMETRY_BASIC_DISCOVERY,
+	"reconcile_runtime_state": TELEMETRY_OPERATOR,
 }
 
 
@@ -165,6 +172,8 @@ class QPMTargetController:
 		self.terminal_tasks_by_qtask_id = {}
 		self.audit_records = []
 		self.diagnostic_bypass_records = []
+		self.lifecycle_events = []
+		self.reconciliation_faults = []
 		self.external_id_maps = {}
 		self.external_id_next = 1
 		self.admission_request_id_next = 1
@@ -200,6 +209,12 @@ class QPMTargetController:
 			self.binding_count += 1
 			if self.max_ppn is None:
 				self.max_ppn = max_ppn
+			self._record_lifecycle_event_locked(
+				"binding-attached",
+				details={
+					"binding_count": self.binding_count,
+					"max_ppn": self.max_ppn,
+				})
 		return self
 
 	def set_provider_canceller(self, provider_canceller):
@@ -217,6 +232,9 @@ class QPMTargetController:
 				"audit_record_count": len(self.audit_records),
 				"diagnostic_bypass_count": len(
 					self.diagnostic_bypass_records),
+				"lifecycle_event_count": len(self.lifecycle_events),
+				"reconciliation_fault_count": len(
+					self.reconciliation_faults),
 				"admission_context_available": (
 					admission_context_available(self.admission_context)),
 				"admission_context_threading": getattr(
@@ -273,6 +291,12 @@ class QPMTargetController:
 			self.scheduler_policy = normalized
 			version = self._bump_scheduler_config_version(
 				"scheduler_policy")
+			self._record_lifecycle_event_locked(
+				"scheduler-policy-change",
+				details={
+					"version": version,
+					"scheduler_policy": dict(self.scheduler_policy),
+				})
 			return {
 				"status": "accepted",
 				"version": version,
@@ -285,6 +309,10 @@ class QPMTargetController:
 			self.scheduler_control["pause_reason"] = reason
 			version = self._bump_scheduler_config_version(
 				"scheduler_control")
+			self._record_lifecycle_event_locked(
+				"scheduler-paused",
+				reason=reason,
+				details={"version": version})
 			return self._scheduler_control_result("paused", version)
 
 	def resume_scheduler(self):
@@ -297,6 +325,9 @@ class QPMTargetController:
 			self.scheduler_control["pause_reason"] = None
 			version = self._bump_scheduler_config_version(
 				"scheduler_control")
+			self._record_lifecycle_event_locked(
+				"scheduler-resumed",
+				details={"version": version})
 			return self._scheduler_control_result("resumed", version)
 
 	def drain_scheduler(self, mode="graceful", timeout_s=None):
@@ -308,6 +339,13 @@ class QPMTargetController:
 			self.scheduler_control["drain_started_at_ns"] = time.time_ns()
 			version = self._bump_scheduler_config_version(
 				"scheduler_control")
+			self._record_lifecycle_event_locked(
+				"scheduler-draining",
+				details={
+					"version": version,
+					"mode": mode,
+					"timeout_s": timeout_s,
+				})
 			return self._scheduler_control_result("draining", version)
 
 	def set_dispatch_depth(self, max_inflight):
@@ -318,6 +356,12 @@ class QPMTargetController:
 			self.scheduler_control["dispatch_depth"] = depth
 			version = self._bump_scheduler_config_version(
 				"scheduler_control")
+			self._record_lifecycle_event_locked(
+				"scheduler-dispatch-depth-change",
+				details={
+					"version": version,
+					"dispatch_depth": depth,
+				})
 			return self._scheduler_control_result(
 				"dispatch-depth-updated", version)
 
@@ -473,6 +517,51 @@ class QPMTargetController:
 						"queued-device-time")),
 				"telemetry": self._telemetry_object_label(
 					"queue-metrics", access_class),
+			}
+
+	def reconcile_runtime_state(self, now_ns=None):
+		with self.lock:
+			now_ns = now_ns or time.time_ns()
+			summary = {
+				"target_id": self.config.target_id,
+				"timestamp_ns": now_ns,
+				"pending_removed": [],
+				"stale_runtime_tasks": [],
+				"capacity_hold_faults": [],
+				"unfinished_scheduler_tasks": [],
+				"provider_handle_faults": [],
+				"directory_generation_faults": [],
+			}
+			self._reconcile_pending_capacity_locked(summary)
+			self._reconcile_capacity_holds_locked(summary, now_ns)
+			self._reconcile_runtime_maps_locked(summary)
+			self._record_lifecycle_event_locked(
+				"reconciliation",
+				details={"summary": dict(summary)})
+			return summary
+
+	def service_lifecycle_telemetry(self, access_class=TELEMETRY_OPERATOR):
+		with self.lock:
+			return {
+				"target_id": self.config.target_id,
+				"timestamp_ns": time.time_ns(),
+				"access_class": access_class,
+				"lifecycle_events": [
+					dict(record) for record in self.lifecycle_events
+				],
+				"audit_records": [
+					dict(record) for record in self.audit_records
+				],
+				"diagnostic_bypass_records": [
+					dict(record)
+					for record in self.diagnostic_bypass_records
+				],
+				"reconciliation_faults": [
+					dict(record)
+					for record in self.reconciliation_faults
+				],
+				"telemetry": self._telemetry_object_label(
+					"service-lifecycle", access_class),
 			}
 
 	def cancel_task(self, cid=None, qtask_id=None, reason=None,
@@ -1141,6 +1230,10 @@ class QPMTargetController:
 		with self.lock:
 			self.audit_records.append(record)
 			self.diagnostic_bypass_records.append(record)
+			self._record_lifecycle_event_locked(
+				"diagnostic-bypass",
+				reason=reason,
+				details={"operation": operation})
 		return record
 
 	def _normalize_device_profile(self, profile):
@@ -1328,6 +1421,117 @@ class QPMTargetController:
 				self.scheduler_context, runtime.scheduler_task_id)
 		except Exception:
 			return None
+
+	def _reconcile_pending_capacity_locked(self, summary):
+		for qtask_id, pending in list(self.pending_capacity.items()):
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is not None and runtime.cid in self.circuits:
+				continue
+			reason = "missing-runtime" if runtime is None else "missing-circuit"
+			summary["pending_removed"].append({
+				"qtask_id": qtask_id,
+				"reservation_id": pending.get("reservation_id"),
+				"reason": reason,
+			})
+			if runtime is None:
+				self.pending_capacity.pop(qtask_id, None)
+				continue
+			self.cleanup_task(qtask_id)
+
+	def _reconcile_capacity_holds_locked(self, summary, now_ns):
+		for qtask_id, hold in list(self.capacity_holds.items()):
+			reservation_id = hold["reservation_id"]
+			reservation_state, lookup_error = (
+				self._reservation_lifecycle_state_locked(reservation_id))
+			if reservation_state == "active":
+				continue
+			fault = {
+				"qtask_id": qtask_id,
+				"reservation_id": reservation_id,
+				"reservation_state": reservation_state or "unknown",
+				"timestamp_ns": now_ns,
+			}
+			if lookup_error is not None:
+				fault["reason"] = "reservation-lookup-failed"
+				fault["lookup_error"] = lookup_error
+				record = self._record_reconciliation_fault_locked(fault)
+				summary["capacity_hold_faults"].append(dict(record))
+				continue
+			fault["reason"] = "inactive-reservation-hold"
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is not None and runtime.scheduler_task_id is not None:
+				try:
+					mark_scheduler_task_failed(
+						self.scheduler_context, runtime.scheduler_task_id)
+				except Exception as error:
+					fault["scheduler_error"] = str(error)
+			self.capacity_holds.pop(qtask_id, None)
+			self.usage_events_by_qtask_id.pop(qtask_id, None)
+			if runtime is not None:
+				runtime.state = QPM_TASK_FAILED
+				self.selected_qtask_ids.discard(qtask_id)
+				self.provider_inflight.discard(qtask_id)
+			record = self._record_reconciliation_fault_locked(fault)
+			summary["capacity_hold_faults"].append(dict(record))
+
+	def _reconcile_runtime_maps_locked(self, summary):
+		for qtask_id, runtime in list(self.runtime_by_qtask_id.items()):
+			if (runtime.cid not in self.circuits and
+					runtime.state in QPM_TASK_TERMINAL_STATES):
+				summary["stale_runtime_tasks"].append({
+					"qtask_id": qtask_id,
+					"cid": runtime.cid,
+					"state": runtime.state,
+				})
+				self.cleanup_task(qtask_id)
+				continue
+			if (runtime.scheduler_task_id is not None and
+					runtime.state not in QPM_TASK_TERMINAL_STATES):
+				summary["unfinished_scheduler_tasks"].append({
+					"qtask_id": qtask_id,
+					"scheduler_task_id": runtime.scheduler_task_id,
+					"scheduler_state": self._scheduler_state_locked(runtime),
+					"lifecycle_state": runtime.state,
+				})
+			if (runtime.provider_handle is not None and
+					qtask_id not in self.provider_inflight and
+					runtime.state not in QPM_TASK_TERMINAL_STATES):
+				summary["provider_handle_faults"].append({
+					"qtask_id": qtask_id,
+					"provider_handle": runtime.provider_handle,
+					"lifecycle_state": runtime.state,
+				})
+
+	def _reservation_lifecycle_state_locked(self, reservation_id):
+		try:
+			reservation = get_reservation(
+				self.admission_context, reservation_id)
+		except Exception as error:
+			return None, str(error)
+		return reservation.get("state"), None
+
+	def _record_lifecycle_event_locked(self, event, reason=None, details=None):
+		record = {
+			"event": event,
+			"target_id": self.config.target_id,
+			"timestamp_ns": time.time_ns(),
+		}
+		if reason is not None:
+			record["reason"] = reason
+		if details is not None:
+			record["details"] = dict(details)
+		self.lifecycle_events.append(record)
+		self.audit_records.append(record)
+		return record
+
+	def _record_reconciliation_fault_locked(self, fault):
+		record = dict(fault)
+		record.setdefault("event", "reconciliation-fault")
+		record.setdefault("target_id", self.config.target_id)
+		record.setdefault("timestamp_ns", time.time_ns())
+		self.reconciliation_faults.append(record)
+		self.audit_records.append(record)
+		return record
 
 	def _active_reservation_count_locked(self):
 		try:

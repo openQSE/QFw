@@ -363,6 +363,13 @@ class UTIL_QPM:
 			device_id=device_id,
 			access_class=access_class or "manager-aggregate")
 
+	def reconcile_runtime_state(self, token=None, now_ns=None):
+		return self.controller.reconcile_runtime_state(now_ns=now_ns)
+
+	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
+		return self.controller.service_lifecycle_telemetry(
+			access_class=access_class or "operator")
+
 	def _cancel_provider_handle(self, status):
 		provider_handle = status.get("provider_handle")
 		if provider_handle is None or self.qrc is None:

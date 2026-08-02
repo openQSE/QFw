@@ -173,6 +173,12 @@ class QPMTelemetry(QPMRemoteBase):
 			      access_class=None):
 		pass
 
+	def reconcile_runtime_state(self, token=None, now_ns=None):
+		pass
+
+	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
+		pass
+
 	def test(self):
 		pass
 
