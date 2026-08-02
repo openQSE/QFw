@@ -264,6 +264,26 @@ def test_diagnostic_bypass_requires_configuration(monkeypatch):
 		raise AssertionError("expected disabled diagnostic bypass to fail")
 
 	monkeypatch.setenv(DIAGNOSTIC_BYPASS_ENV, "yes")
+	try:
+		qpm.diagnostic_async_run(
+			{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
+			reason="maintenance",
+		)
+	except DEFwExecutionError as exc:
+		assert "requires token metadata" in str(exc)
+	else:
+		raise AssertionError("expected missing diagnostic token to fail")
+
+	try:
+		qpm.diagnostic_async_run(
+			{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
+			token={"opaque": "token"},
+		)
+	except DEFwExecutionError as exc:
+		assert "requires an audit reason" in str(exc)
+	else:
+		raise AssertionError("expected missing diagnostic reason to fail")
+
 	response = qpm.diagnostic_async_run(
 		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
 		token={"opaque": "token"},

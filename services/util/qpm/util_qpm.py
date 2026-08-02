@@ -491,6 +491,12 @@ class UTIL_QPM:
 		if not diagnostic_bypass_enabled():
 			raise DEFwExecutionError(
 				"diagnostic bypass execution is disabled")
+		if request.context.token is None:
+			raise DEFwExecutionError(
+				"diagnostic bypass execution requires token metadata")
+		if not reason:
+			raise DEFwExecutionError(
+				"diagnostic bypass execution requires an audit reason")
 		self.controller.record_diagnostic_bypass(
 			operation, request.context, reason=reason)
 
@@ -787,8 +793,9 @@ class UTIL_QPM:
 
 	def reserve(self, request=None, token=None, *args, **kwargs):
 		if not isinstance(request, dict):
-			logging.debug(f"{token} reserved the {request}")
-			return None
+			raise DEFwExecutionError(
+				"legacy service reservation is not supported by the "
+				"QPM admission API")
 		return self.controller.reserve_admission(request, token=token)
 
 	def renew(self, reservation_id, request=None, token=None):
@@ -797,11 +804,13 @@ class UTIL_QPM:
 
 	def release(self, reservation_id=None, token=None, reason=None,
 		    services=None):
-		if reservation_id is not None and not isinstance(
+		if reservation_id is None or isinstance(
 				reservation_id, (list, tuple, set)):
-			return self.controller.release_admission(
-				reservation_id, reason_code=reason or 0, token=token)
-		return self.release_service(services=services or reservation_id)
+			raise DEFwExecutionError(
+				"legacy service release is not supported by the "
+				"QPM admission API")
+		return self.controller.release_admission(
+			reservation_id, reason_code=reason or 0, token=token)
 
 	def cancel(self, reservation_id, reason=None, token=None):
 		return self.controller.cancel_admission(

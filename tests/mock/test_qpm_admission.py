@@ -210,6 +210,23 @@ def test_reserve_stores_unverified_request_metadata(monkeypatch):
 		"qubit_count"] == 4
 
 
+def test_legacy_service_reserve_release_are_rejected(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	for call in (
+			lambda: qpm.reserve("service-info"),
+			lambda: qpm.release(["service-info"]),
+			lambda: qpm.release(),
+	):
+		try:
+			call()
+		except DEFwExecutionError as exc:
+			assert "legacy service" in str(exc)
+		else:
+			raise AssertionError("expected legacy QPM compatibility call")
+
+
 def test_admission_decision_kinds_are_structured(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
