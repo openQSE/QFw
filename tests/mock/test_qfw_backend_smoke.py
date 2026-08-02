@@ -82,11 +82,10 @@ def test_backend_run_preserves_reservation_context(monkeypatch):
 		circuit,
 		shots=12,
 		reservation_id="reservation-1",
-		token={"opaque": "token"},
 	)
 
 	assert job.options["reservation_id"] == "reservation-1"
-	assert job.options["token"] == {"opaque": "token"}
+	assert "token" not in job.options
 
 
 def test_backend_registers_completion_event_with_task_scope(monkeypatch):
@@ -107,7 +106,7 @@ def test_backend_registers_completion_event_with_task_scope(monkeypatch):
 		fake_event_api,
 		"cid-17",
 		{"cid": "cid-17", "qtask_id": 42},
-		{"reservation_id": "reservation-1", "token": {"opaque": "token"}},
+		{"reservation_id": "reservation-1"},
 	)
 
 	assert fake_qpm.registrations == [
@@ -117,7 +116,6 @@ def test_backend_registers_completion_event_with_task_scope(monkeypatch):
 			"class_id": "event-api-scoped",
 			"filters": {"cid": "cid-17", "qtask_id": 42},
 			"reservation_id": "reservation-1",
-			"token": {"opaque": "token"},
 		}
 	]
 
@@ -232,7 +230,6 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 			"shots": 12,
 			"seed": 21,
 			"reservation_id": "reservation-1",
-			"token": {"opaque": "token"},
 		},
 	)
 
@@ -240,7 +237,7 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 
 	assert cid == "cid-context"
 	assert fake_qpm.submitted_payloads[0]["reservation_id"] == "reservation-1"
-	assert fake_qpm.submitted_payloads[0]["token"] == {"opaque": "token"}
+	assert "token" not in fake_qpm.submitted_payloads[0]
 
 
 def test_qfw_job_can_require_reservation_id(monkeypatch):

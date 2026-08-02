@@ -7,7 +7,6 @@ AUTH_DISABLED_ENV = "QFW_QPM_AUTH_DISABLED"
 
 REQUEST_CONTEXT_KEYS = (
 	"reservation_id",
-	"token",
 	"timeout",
 	"cancel_on_timeout",
 )
@@ -23,6 +22,7 @@ SCOPED_METADATA_KEYS = (
 	"workload",
 	"policy",
 	"run_context",
+	"token",
 )
 
 

@@ -3,7 +3,6 @@ from defw_exception import DEFwExecutionError
 from fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
-	QPM_TASK_SUBMITTED,
 	clear_target_controllers,
 )
 from util.qpm.request import parse_execution_request
@@ -143,7 +142,6 @@ def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": "reservation-1",
-		"token": {"opaque": "token"},
 	})
 	cid2 = qpm.create_circuit({
 		"qasm": "OPENQASM 2.0;",
@@ -158,7 +156,7 @@ def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 	assert qpm.circuits[cid1].info["qtask_id"] == 1
 	assert qpm.controller.task_for_qtask_id(1) is runtime1
 	assert qpm.controller.qtask_ids_by_reservation["reservation-1"] == {1, 2}
-	assert runtime1.token_metadata == {"present": True, "type": "dict"}
+	assert runtime1.token_metadata == {}
 	assert runtime1.external_ids["owner_id"] == "alice"
 	assert runtime1.canonical_ids["owner_id"] == runtime2.canonical_ids["owner_id"]
 	assert runtime1.canonical_ids["job_id"] == runtime2.canonical_ids["job_id"]
@@ -249,31 +247,18 @@ def test_diagnostic_bypass_requires_configuration(monkeypatch):
 			reason="maintenance",
 		)
 	except DEFwExecutionError as exc:
-		assert "requires token metadata" in str(exc)
+		assert "requires authenticated request context" in str(exc)
 	else:
-		raise AssertionError("expected missing diagnostic token to fail")
+		raise AssertionError("expected missing diagnostic auth to fail")
 
 	try:
 		qpm.diagnostic_async_run(
 			{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
-			token={"opaque": "token"},
 		)
 	except DEFwExecutionError as exc:
-		assert "requires an audit reason" in str(exc)
+		assert "requires authenticated request context" in str(exc)
 	else:
-		raise AssertionError("expected missing diagnostic reason to fail")
+		raise AssertionError("expected missing diagnostic auth to fail")
 
-	response = qpm.diagnostic_async_run(
-		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
-		token={"opaque": "token"},
-		reason="maintenance",
-	)
-	cid = response["cid"]
-	runtime = qpm.controller.task_for_cid(cid)
-	record = qpm.controller.diagnostic_bypass_records[-1]
-
-	assert runtime.state == QPM_TASK_SUBMITTED
-	assert record["operation"] == "diagnostic_async_run"
-	assert record["reason"] == "maintenance"
-	assert record["token_metadata"] == {"present": True, "type": "dict"}
+	assert qpm.controller.diagnostic_bypass_records == []
 	assert qpm.controller_telemetry()["diagnostic_bypass_enabled"] is True

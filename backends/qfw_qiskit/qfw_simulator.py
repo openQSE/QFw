@@ -20,7 +20,6 @@ from defw_common_def import g_rpc_metrics
 
 QFW_RUN_CONTEXT_OPTIONS = {
 	"reservation_id",
-	"token",
 	"timeout",
 	"cancel_on_timeout",
 }
@@ -193,8 +192,6 @@ class QFwBackend(BackendV2):
 		kwargs = {"filters": filters}
 		if options.get("reservation_id") is not None:
 			kwargs["reservation_id"] = options["reservation_id"]
-		if options.get("token") is not None:
-			kwargs["token"] = options["token"]
 		return qpm.register_event_notification(
 			self._event_endpoint,
 			EVENT_TYPE_CIRC_RESULT,

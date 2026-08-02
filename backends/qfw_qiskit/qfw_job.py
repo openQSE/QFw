@@ -16,7 +16,6 @@ from .qfw_metadata import get_qubit_mapping
 QFW_REQUIRE_RESERVATION_ENV = "QFW_QPM_REQUIRE_RESERVATION"
 EXECUTION_CONTEXT_KEYS = (
 	"reservation_id",
-	"token",
 	"timeout",
 	"cancel_on_timeout",
 )

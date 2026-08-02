@@ -1,7 +1,7 @@
 import inspect
 
 
-def test_qpm_telemetry_api_accepts_token_placeholders():
+def test_qpm_telemetry_api_does_not_accept_token_placeholders():
 	from api_qpm import QPMTelemetry
 
 	for method_name in (
@@ -14,10 +14,10 @@ def test_qpm_telemetry_api_accepts_token_placeholders():
 		"get_last_job_metadata",
 	):
 		signature = inspect.signature(getattr(QPMTelemetry, method_name))
-		assert "token" in signature.parameters
+		assert "token" not in signature.parameters
 
 
-def test_simulator_metadata_methods_ignore_token_placeholder(monkeypatch):
+def test_simulator_metadata_methods_work_without_token_placeholder(monkeypatch):
 	from svc_nwqsim_qpm.svc_qpm import QPM as NWQSimQPM
 	from svc_tnqvm_qpm.svc_qpm import QPM as TNQVMQPM
 
@@ -28,7 +28,7 @@ def test_simulator_metadata_methods_ignore_token_placeholder(monkeypatch):
 		(TNQVMQPM, "tnqvm"),
 	):
 		qpm = qpm_class(start=False)
-		assert qpm.get_backend_info(token={"opaque": "token"}) == {
+		assert qpm.get_backend_info() == {
 			"backend": backend,
 			"metadata_supported": False,
 		}

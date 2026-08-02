@@ -112,13 +112,13 @@ class UTIL_QPM:
 	def prepare_circuit(self, info):
 		return info
 
-	def delete_circuit(self, cid, reservation_id=None, token=None):
+	def delete_circuit(self, cid, reservation_id=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
 		if reservation_id is not None:
 			request = parse_execution_request(
-				{}, reservation_id=reservation_id, token=token)
+				{}, reservation_id=reservation_id)
 			self.require_managed_execution(request)
 		error = self.controller.task_reservation_error(
 			cid=cid, reservation_id=reservation_id,
@@ -320,10 +320,10 @@ class UTIL_QPM:
 			cid=cid, reservation_id=reservation_id, reason=reason)
 
 	def cancel_task(self, cid=None, qtask_id=None, reservation_id=None,
-			token=None, reason=None):
+			reason=None):
 		if reservation_id is not None:
 			request = parse_execution_request(
-				{}, reservation_id=reservation_id, token=token)
+				{}, reservation_id=reservation_id)
 			self.require_managed_execution(request)
 		status = self.controller.cancel_task(
 			cid=cid, qtask_id=qtask_id, reason=reason,
@@ -332,8 +332,7 @@ class UTIL_QPM:
 		self.process_oor_queue()
 		return status
 
-	def task_status(self, cid=None, qtask_id=None, reservation_id=None,
-			token=None):
+	def task_status(self, cid=None, qtask_id=None, reservation_id=None):
 		if qtask_id is not None:
 			return self.controller.task_status_for_qtask_id(
 				qtask_id, reservation_id=reservation_id,
@@ -342,31 +341,30 @@ class UTIL_QPM:
 			cid, reservation_id=reservation_id,
 			require_reservation=True)
 
-	def get_task_metadata(self, cid=None, qtask_id=None, reservation_id=None,
-			      token=None):
+	def get_task_metadata(self, cid=None, qtask_id=None,
+			      reservation_id=None):
 		return self.task_status(
 			cid=cid, qtask_id=qtask_id,
-			reservation_id=reservation_id, token=token)
+			reservation_id=reservation_id)
 
-	def get_telemetry_access_model(self, token=None):
+	def get_telemetry_access_model(self):
 		return self.controller.telemetry_access_model()
 
-	def get_capacity_snapshot(self, token=None, device_id=None,
-				  scope_id=None, access_class=None):
+	def get_capacity_snapshot(self, device_id=None, scope_id=None,
+				  access_class=None):
 		return self.controller.capacity_snapshot(
 			device_id=device_id, scope_id=scope_id,
 			access_class=access_class or "manager-aggregate")
 
-	def get_queue_metrics(self, token=None, device_id=None,
-			      access_class=None):
+	def get_queue_metrics(self, device_id=None, access_class=None):
 		return self.controller.queue_metrics(
 			device_id=device_id,
 			access_class=access_class or "manager-aggregate")
 
-	def reconcile_runtime_state(self, token=None, now_ns=None):
+	def reconcile_runtime_state(self, now_ns=None):
 		return self.controller.reconcile_runtime_state(now_ns=now_ns)
 
-	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
+	def get_service_lifecycle_telemetry(self, access_class=None):
 		return self.controller.service_lifecycle_telemetry(
 			access_class=access_class or "operator")
 
@@ -380,29 +378,25 @@ class UTIL_QPM:
 			return
 		status["provider_cancel_status"] = "unsupported"
 
-	def sync_run(self, info, reservation_id=None, token=None,
-				 timeout=None, cancel_on_timeout=False):
+	def sync_run(self, info, reservation_id=None, timeout=None,
+				 cancel_on_timeout=False):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
 		request = parse_execution_request(
 			info,
 			reservation_id=reservation_id,
-			token=token,
 			timeout=timeout,
 			cancel_on_timeout=cancel_on_timeout,
 		)
 		self.require_managed_execution(request)
 		return self._sync_run_request(request)
 
-	def diagnostic_sync_run(self, info, token=None, reason=None):
+	def diagnostic_sync_run(self, info, reason=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		request = parse_execution_request(
-			info,
-			token=token,
-		)
+		request = parse_execution_request(info)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_sync_run", reason=reason)
 		request.payload["_qfw_diagnostic_bypass"] = True
@@ -484,7 +478,8 @@ class UTIL_QPM:
 				"diagnostic bypass execution is disabled")
 		if request.context.token is None:
 			raise DEFwExecutionError(
-				"diagnostic bypass execution requires token metadata")
+				"diagnostic bypass execution requires authenticated "
+				"request context")
 		if not reason:
 			raise DEFwExecutionError(
 				"diagnostic bypass execution requires an audit reason")
@@ -512,29 +507,25 @@ class UTIL_QPM:
 			self.process_oor_queue()
 			raise e
 
-	def async_run(self, info, reservation_id=None, token=None,
-				  timeout=None, cancel_on_timeout=False):
+	def async_run(self, info, reservation_id=None, timeout=None,
+				  cancel_on_timeout=False):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
 		request = parse_execution_request(
 			info,
 			reservation_id=reservation_id,
-			token=token,
 			timeout=timeout,
 			cancel_on_timeout=cancel_on_timeout,
 		)
 		self.require_managed_execution(request)
 		return self._async_run_request(request)
 
-	def diagnostic_async_run(self, info, token=None, reason=None):
+	def diagnostic_async_run(self, info, reason=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		request = parse_execution_request(
-			info,
-			token=token,
-		)
+		request = parse_execution_request(info)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_async_run", reason=reason)
 		request.payload["_qfw_diagnostic_bypass"] = True
@@ -577,7 +568,7 @@ class UTIL_QPM:
 		self.controller.set_task_state(
 			runtime.qtask_id, QPM_TASK_PENDING_CAPACITY)
 
-	def read_cq(self, cid=None, reservation_id=None, token=None):
+	def read_cq(self, cid=None, reservation_id=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -605,7 +596,7 @@ class UTIL_QPM:
 			self.controller.forget_terminal_task_for_cid(cid)
 		return r
 
-	def peek_cq(self, cid=None, reservation_id=None, token=None):
+	def peek_cq(self, cid=None, reservation_id=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -644,11 +635,11 @@ class UTIL_QPM:
 			cid=cid, reservation_id=reservation_id,
 			require_reservation=True)
 
-	def register_event_notification(self, ep, evtype, class_id, token=None,
+	def register_event_notification(self, ep, evtype, class_id,
 					reservation_id=None, filters=None):
 		if reservation_id is not None:
 			request = parse_execution_request(
-				{}, reservation_id=reservation_id, token=token)
+				{}, reservation_id=reservation_id)
 			self.require_managed_execution(request)
 		push_info = {
 			"class": BaseEventAPI(class_id=class_id, target=ep),
@@ -714,22 +705,22 @@ class UTIL_QPM:
 		device_profile.update(overrides)
 		return self.controller.configure_device_profile(device_profile)
 
-	def get_admission_policy(self, token=None):
+	def get_admission_policy(self):
 		return self.controller.get_admission_policy()
 
-	def set_admission_policy(self, policy, token=None):
+	def set_admission_policy(self, policy):
 		return self.controller.set_admission_policy(policy)
 
-	def get_capacity_model(self, token=None):
+	def get_capacity_model(self):
 		return self.controller.get_capacity_model()
 
-	def set_capacity_model(self, capacity_model, token=None):
+	def set_capacity_model(self, capacity_model):
 		return self.controller.set_capacity_model(capacity_model)
 
-	def get_estimator_policy(self, token=None):
+	def get_estimator_policy(self):
 		return self.controller.get_estimator_policy()
 
-	def set_estimator_policy(self, estimator, token=None):
+	def set_estimator_policy(self, estimator):
 		return self.controller.set_estimator_policy(estimator)
 
 	def retry_pending_capacity(self, reservation_id=None):
@@ -738,69 +729,67 @@ class UTIL_QPM:
 		self.process_oor_queue()
 		return results
 
-	def get_scheduler_status(self, token=None):
+	def get_scheduler_status(self):
 		return self.controller.get_scheduler_status()
 
-	def get_scheduler_policy(self, token=None):
+	def get_scheduler_policy(self):
 		return self.controller.get_scheduler_policy()
 
-	def set_scheduler_policy(self, policy, token=None):
+	def set_scheduler_policy(self, policy):
 		return self.controller.set_scheduler_policy(policy)
 
-	def pause(self, target_id=None, token=None, reason=None):
+	def pause(self, target_id=None, reason=None):
 		return self.controller.pause_scheduler(reason=reason)
 
-	def resume(self, target_id=None, token=None):
+	def resume(self, target_id=None):
 		return self.controller.resume_scheduler()
 
-	def drain(self, target_id=None, token=None, mode="graceful",
-		  timeout_s=None):
+	def drain(self, target_id=None, mode="graceful", timeout_s=None):
 		return self.controller.drain_scheduler(
 			mode=mode, timeout_s=timeout_s)
 
-	def set_dispatch_depth(self, max_inflight, target_id=None, token=None):
+	def set_dispatch_depth(self, max_inflight, target_id=None):
 		return self.controller.set_dispatch_depth(max_inflight)
 
-	def get_scheduler_queue_state(self, target_id=None, token=None,
+	def get_scheduler_queue_state(self, target_id=None,
 				      include_restricted=False):
 		return self.controller.get_scheduler_queue_state(
 			include_restricted=include_restricted)
 
-	def evaluate(self, request, token=None):
-		return self.controller.evaluate_reservation(request, token=token)
+	def evaluate(self, request):
+		return self.controller.evaluate_reservation(request)
 
-	def reserve(self, request=None, token=None, *args, **kwargs):
+	def reserve(self, request=None, *args, **kwargs):
 		if not isinstance(request, dict):
 			raise DEFwExecutionError(
 				"legacy service reservation is not supported by the "
 				"QPM admission API")
-		return self.controller.reserve_admission(request, token=token)
+		return self.controller.reserve_admission(request)
 
-	def renew(self, reservation_id, request=None, token=None):
+	def renew(self, reservation_id, request=None):
 		return self.controller.renew_admission(
-			reservation_id, request=request, token=token)
+			reservation_id, request=request)
 
-	def release(self, reservation_id=None, token=None, reason=None,
-		    services=None):
+	def release(self, reservation_id=None, reason=None, services=None):
 		if reservation_id is None or isinstance(
 				reservation_id, (list, tuple, set)):
 			raise DEFwExecutionError(
 				"legacy service release is not supported by the "
 				"QPM admission API")
 		return self.controller.release_admission(
-			reservation_id, reason_code=reason or 0, token=token)
+			reservation_id, reason_code=reason or 0)
 
-	def cancel(self, reservation_id, reason=None, token=None):
+	def cancel(self, reservation_id, reason=None):
 		return self.controller.cancel_admission(
-			reservation_id, reason_code=reason or 0, token=token)
+			reservation_id, reason_code=reason or 0)
 
-	def get_reservation(self, reservation_id, token=None):
+	def get_reservation(self, reservation_id):
 		return self.controller.get_admission_reservation(
-			reservation_id, token=token)
+			reservation_id)
 
-	def list_reservations(self, filters=None, token=None):
+	def list_reservations(self, filters=None):
 		return self.controller.list_admission_reservations(
-			filters=filters, token=token)
+			filters=filters)
 
 	def release_service(self, services=None):
 		global qpm_shutdown
