@@ -174,6 +174,26 @@ def scheduler_task_state(context, scheduler_task_id):
 	return context.scheduler.task_state(scheduler_task_id)
 
 
+def scheduler_task_state_name(context, scheduler_task_id):
+	state = scheduler_task_state(context, scheduler_task_id)
+	if isinstance(state, str):
+		return state
+	qhw_scheduler = getattr(context, "qhw_scheduler", None)
+	if qhw_scheduler is None:
+		return state
+	state_names = {
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_UNKNOWN", None): "unknown",
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_QUEUED", None): "queued",
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_RUNNING", None): "running",
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_COMPLETED", None): "completed",
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_FAILED", None): "failed",
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_CANCELLED", None): "cancelled",
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_ASSIGNED", None): "selected",
+		getattr(qhw_scheduler, "QHW_SCHED_TASK_WAITING", None): "waiting",
+	}
+	return state_names.get(state, state)
+
+
 def scheduler_task_count(context):
 	if not scheduler_context_available(context):
 		return None

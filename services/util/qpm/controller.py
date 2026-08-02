@@ -34,8 +34,10 @@ from .scheduler import (
 	mark_scheduler_task_started,
 	mark_scheduler_task_completed,
 	mark_scheduler_task_failed,
+	mark_scheduler_task_cancelled,
 	select_next_scheduler_task,
 	scheduler_context_available,
+	scheduler_task_state_name,
 	scheduler_task_count,
 	set_scheduler_policy as activate_scheduler_policy,
 	submit_scheduler_task,
@@ -313,9 +315,12 @@ class QPMTargetController:
 			}
 
 	def task_status_for_cid(self, cid, outcome=None, reason=None,
-				message=None, result=None):
+				message=None, result=None, reservation_id=None,
+				require_reservation=False):
 		with self.lock:
 			runtime = self.runtime_by_cid.get(cid)
+			if runtime is None:
+				runtime = self.terminal_tasks_by_cid.get(cid)
 			if runtime is None:
 				return {
 					"outcome": outcome or "UNKNOWN",
@@ -324,14 +329,21 @@ class QPMTargetController:
 					"reason": reason,
 					"message": message,
 				}
+			error = self._task_reservation_error_locked(
+				runtime, reservation_id, require_reservation)
+			if error is not None:
+				return error
 			return self._task_status_locked(
 				runtime, outcome=outcome, reason=reason,
 				message=message, result=result)
 
 	def task_status_for_qtask_id(self, qtask_id, outcome=None, reason=None,
-				     message=None, result=None):
+				     message=None, result=None, reservation_id=None,
+				     require_reservation=False):
 		with self.lock:
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is None:
+				runtime = self.terminal_tasks_by_qtask_id.get(qtask_id)
 			if runtime is None:
 				return {
 					"outcome": outcome or "UNKNOWN",
@@ -340,9 +352,82 @@ class QPMTargetController:
 					"reason": reason,
 					"message": message,
 				}
+			error = self._task_reservation_error_locked(
+				runtime, reservation_id, require_reservation)
+			if error is not None:
+				return error
 			return self._task_status_locked(
 				runtime, outcome=outcome, reason=reason,
 				message=message, result=result)
+
+	def cancel_task(self, cid=None, qtask_id=None, reason=None,
+			reservation_id=None, require_reservation=False):
+		with self.lock:
+			runtime = self._runtime_for_task_selector_locked(
+				cid=cid, qtask_id=qtask_id)
+			if runtime is None:
+				return {
+					"outcome": "UNKNOWN",
+					"lifecycle_state": "unknown",
+					"cid": cid,
+					"qtask_id": qtask_id,
+					"reason": "not-found",
+				}
+			error = self._task_reservation_error_locked(
+				runtime, reservation_id, require_reservation)
+			if error is not None:
+				return error
+			if runtime.state == QPM_TASK_COMPLETED:
+				return self._task_status_locked(
+					runtime, outcome="COMPLETED",
+					reason="already-completed")
+			if runtime.state == QPM_TASK_CANCELLED:
+				return self._task_status_locked(
+					runtime, outcome="CANCELLED",
+					reason="already-cancelled")
+			provider_cancel = (
+				self._cancel_provider_for_task_locked(runtime))
+			if (provider_cancel is not None and
+					not provider_cancel["terminal"]):
+				response = self._task_status_locked(
+					runtime, outcome="CANCEL_PENDING",
+					reason=provider_cancel["reason"],
+					message=provider_cancel.get("message"))
+				response["provider_cancel_status"] = (
+					provider_cancel["status"])
+				return response
+			self.pending_capacity.pop(runtime.qtask_id, None)
+			self._reconcile_task_hold_locked(runtime, self.circuits.get(
+				runtime.cid))
+			if runtime.scheduler_task_id is not None:
+				mark_scheduler_task_cancelled(
+					self.scheduler_context, runtime.scheduler_task_id)
+			self.selected_qtask_ids.discard(runtime.qtask_id)
+			self.provider_inflight.discard(runtime.qtask_id)
+			self.result_state.pop(runtime.qtask_id, None)
+			self.timeout_state.pop(runtime.qtask_id, None)
+			runtime.state = QPM_TASK_CANCELLED
+			response = self._task_status_locked(
+				runtime, outcome="CANCELLED",
+				reason=reason or "cancelled")
+			if provider_cancel is not None:
+				response["provider_cancel_status"] = (
+					provider_cancel["status"])
+			return response
+
+	def task_reservation_error(self, cid=None, qtask_id=None,
+				   reservation_id=None,
+				   require_reservation=False):
+		with self.lock:
+			runtime = self._runtime_for_task_selector_locked(
+				cid=cid, qtask_id=qtask_id)
+			if runtime is None:
+				runtime = self._terminal_task_for_selector_locked(
+					cid=cid, qtask_id=qtask_id)
+			if runtime is None:
+				return None
+			return self._task_reservation_error_locked(
+				runtime, reservation_id, require_reservation)
 
 	def register_event_endpoint(self, info):
 		registration = dict(info)
@@ -775,6 +860,14 @@ class QPMTargetController:
 				return None
 			return self.runtime_by_qtask_id.get(qtask_id)
 
+	def forget_terminal_task_for_cid(self, cid):
+		with self.lock:
+			runtime = self.terminal_tasks_by_cid.pop(cid, None)
+			if runtime is not None:
+				self.terminal_tasks_by_qtask_id.pop(
+					runtime.qtask_id, None)
+			return runtime
+
 	def bind_scheduler_task(self, qtask_id, scheduler_task_id):
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
@@ -816,7 +909,7 @@ class QPMTargetController:
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
 			if runtime is None:
 				return None
-			if runtime.state == QPM_TASK_COMPLETED:
+			if runtime.state in (QPM_TASK_COMPLETED, QPM_TASK_CANCELLED):
 				return runtime
 			self._reconcile_task_hold_locked(runtime, circuit)
 			if runtime.scheduler_task_id is not None:
@@ -835,7 +928,9 @@ class QPMTargetController:
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
 			if runtime is None:
 				return None
-			if runtime.state == QPM_TASK_FAILED:
+			if runtime.state in (
+					QPM_TASK_FAILED, QPM_TASK_CANCELLED,
+					QPM_TASK_COMPLETED):
 				return runtime
 			self._reconcile_task_hold_locked(runtime, circuit)
 			if runtime.scheduler_task_id is not None:
@@ -981,6 +1076,7 @@ class QPMTargetController:
 	def _task_status_locked(self, runtime, outcome=None, reason=None,
 				message=None, result=None):
 		timeout = self.timeout_state.get(runtime.qtask_id)
+		queue_observation = self._queue_observation_locked(runtime)
 		response = {
 			"outcome": outcome or self._task_outcome_locked(runtime),
 			"lifecycle_state": runtime.state,
@@ -991,6 +1087,10 @@ class QPMTargetController:
 			"provider_handle": runtime.provider_handle,
 			"state": runtime.state,
 		}
+		scheduler_state = self._scheduler_state_locked(runtime)
+		if scheduler_state is not None:
+			response["scheduler_state"] = scheduler_state
+		response.update(queue_observation)
 		if reason is not None:
 			response["reason"] = reason
 		if message is not None:
@@ -1013,6 +1113,13 @@ class QPMTargetController:
 			return "DELAYED"
 		return "ACCEPTED"
 
+	def _runtime_for_task_selector_locked(self, cid=None, qtask_id=None):
+		if qtask_id is not None:
+			return self.runtime_by_qtask_id.get(qtask_id)
+		if cid is not None:
+			return self.runtime_by_cid.get(cid)
+		return None
+
 	def _terminal_task_for_selector_locked(self, cid=None, qtask_id=None):
 		if qtask_id is not None:
 			return self.terminal_tasks_by_qtask_id.get(qtask_id)
@@ -1020,21 +1127,46 @@ class QPMTargetController:
 			return self.terminal_tasks_by_cid.get(cid)
 		return None
 
+	def _task_reservation_error_locked(self, runtime, reservation_id,
+					   require_reservation):
+		if (reservation_id is None and require_reservation and
+				runtime.reservation_id is not None):
+			return self._invalid_task_reservation_locked(
+				runtime, reservation_id,
+				"reservation-required",
+				"reservation_id is required for task operation")
+		if runtime.reservation_id == reservation_id:
+			return None
+		if runtime.reservation_id is None and reservation_id is None:
+			return None
+		return self._invalid_task_reservation_locked(
+			runtime, reservation_id, "reservation-mismatch",
+			"task does not belong to the supplied reservation")
+
+	def _invalid_task_reservation_locked(self, runtime, reservation_id,
+					     reason, message):
+		return {
+			"outcome": "INVALID_RESERVATION",
+			"lifecycle_state": "invalid-reservation",
+			"cid": runtime.cid,
+			"qtask_id": runtime.qtask_id,
+			"reservation_id": reservation_id,
+			"reason": reason,
+			"message": message,
+		}
+
 	def _event_registration_matches_locked(self, registration, evtype,
 					       payload):
 		if registration.get("evtype") != evtype:
 			return False
-		runtime = None
-		if isinstance(payload, dict):
-			qtask_id = payload.get("qtask_id")
-			cid = payload.get("cid")
-			if qtask_id is not None:
-				runtime = self.runtime_by_qtask_id.get(qtask_id)
-			if runtime is None and cid is not None:
-				runtime = self.runtime_by_cid.get(cid)
-			if runtime is None:
-				runtime = self._terminal_task_for_selector_locked(
-					cid=cid, qtask_id=qtask_id)
+		cid = payload.get("cid") if isinstance(payload, dict) else None
+		qtask_id = (
+			payload.get("qtask_id") if isinstance(payload, dict) else None)
+		runtime = self._runtime_for_task_selector_locked(
+			cid=cid, qtask_id=qtask_id)
+		if runtime is None:
+			runtime = self._terminal_task_for_selector_locked(
+				cid=cid, qtask_id=qtask_id)
 		reservation_id = registration.get("reservation_id")
 		if reservation_id is not None:
 			if runtime is None:
@@ -1050,6 +1182,32 @@ class QPMTargetController:
 			if not _filter_value_matches(expected, actual):
 				return False
 		return True
+
+	def _queue_observation_locked(self, runtime):
+		observation = {
+			"wait_estimate": {
+				"available": False,
+				"reason": "telemetry-unavailable",
+			},
+		}
+		if runtime.qtask_id in self.pending_capacity:
+			pending_ids = list(self.pending_capacity.keys())
+			observation["pending_queue_position"] = (
+				pending_ids.index(runtime.qtask_id) + 1)
+			return observation
+		if runtime.state in (QPM_TASK_QUEUED, QPM_TASK_SELECTED):
+			observation["scheduler_queue_position"] = None
+			observation["scheduling_order"] = None
+		return observation
+
+	def _scheduler_state_locked(self, runtime):
+		if runtime.scheduler_task_id is None:
+			return None
+		try:
+			return scheduler_task_state_name(
+				self.scheduler_context, runtime.scheduler_task_id)
+		except Exception:
+			return None
 
 	def _admission_request(self, request, token=None):
 		request = dict(request or {})
@@ -1248,7 +1406,8 @@ class QPMTargetController:
 				break
 		if observed_device_ns is None:
 			observed_device_ns = 0
-			if circuit.exec_time >= 0 and circuit.completion_time >= 0:
+			if (circuit is not None and circuit.exec_time >= 0 and
+					circuit.completion_time >= 0):
 				observed_device_ns = int(
 					(circuit.completion_time - circuit.exec_time) *
 					1_000_000_000)
@@ -1597,6 +1756,67 @@ class QPMTargetController:
 			"status": status,
 		})
 		return True
+
+	def _cancel_provider_for_task_locked(self, runtime):
+		provider_active = (
+			runtime.provider_handle is not None or
+			runtime.qtask_id in self.provider_inflight)
+		if not provider_active:
+			return None
+		if runtime.provider_handle is None:
+			self._record_reconciliation_fault_locked({
+				"qtask_id": runtime.qtask_id,
+				"reservation_id": runtime.reservation_id,
+				"reason": "provider-handle-missing",
+				"lifecycle_state": runtime.state,
+			})
+			return {
+				"terminal": False,
+				"status": "unsupported",
+				"reason": "provider-cancel-pending",
+				"message": "provider work has no cancellable handle",
+			}
+		if self.provider_canceller is None:
+			self._record_reconciliation_fault_locked({
+				"qtask_id": runtime.qtask_id,
+				"reservation_id": runtime.reservation_id,
+				"reason": "provider-cancel-unsupported",
+				"provider_handle": runtime.provider_handle,
+				"lifecycle_state": runtime.state,
+			})
+			return {
+				"terminal": False,
+				"status": "unsupported",
+				"reason": "provider-cancel-pending",
+				"message": "provider cancellation is unsupported",
+			}
+		try:
+			status = self.provider_canceller(runtime.provider_handle)
+		except Exception as error:
+			self._record_reconciliation_fault_locked({
+				"qtask_id": runtime.qtask_id,
+				"reservation_id": runtime.reservation_id,
+				"reason": "provider-cancel-failed",
+				"provider_handle": runtime.provider_handle,
+				"provider_error": str(error),
+			})
+			return {
+				"terminal": False,
+				"status": "failed",
+				"reason": "provider-cancel-pending",
+				"message": str(error),
+			}
+		if not _provider_cancel_is_terminal(status):
+			return {
+				"terminal": False,
+				"status": status,
+				"reason": "provider-cancel-pending",
+			}
+		return {
+			"terminal": True,
+			"status": status,
+			"reason": "provider-cancelled",
+		}
 
 	def _append_close_state_item(self, close_state, key, value):
 		if value not in close_state[key]:

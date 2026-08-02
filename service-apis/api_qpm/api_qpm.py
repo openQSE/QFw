@@ -59,6 +59,14 @@ class QPMExecution(QPMRemoteBase):
 					reservation_id=None, filters=None):
 		pass
 
+	def cancel_task(self, cid=None, qtask_id=None, reservation_id=None,
+			token=None, reason=None):
+		pass
+
+	def task_status(self, cid=None, qtask_id=None, reservation_id=None,
+			token=None):
+		pass
+
 
 class QPMAdmissionControl(QPMRemoteBase):
 	def evaluate(self, request, token=None):

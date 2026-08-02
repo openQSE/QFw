@@ -121,6 +121,11 @@ class UTIL_QPM:
 			request = parse_execution_request(
 				{}, reservation_id=reservation_id, token=token)
 			self.require_managed_execution(request)
+		error = self.controller.task_reservation_error(
+			cid=cid, reservation_id=reservation_id,
+			require_reservation=True)
+		if error is not None:
+			return error
 
 		with self.controller.lock:
 			if cid not in self.circuits:
@@ -183,6 +188,9 @@ class UTIL_QPM:
 				# now that we have the resources for the circuit secured
 				# pop that entry off the queue.
 				cid = self.oor_queue.get(block=False)
+				runtime = self.controller.task_for_cid(cid)
+				if runtime is None or runtime.state == QPM_TASK_CANCELLED:
+					continue
 				self.async_run_oor(cid, self.common_run)
 			except DEFwOutOfResources:
 				break
@@ -253,7 +261,9 @@ class UTIL_QPM:
 	def submit_provider_async(self, circuit, return_status=False):
 		self.controller.start_provider_submission(circuit)
 		response = (
-			self.controller.task_status_for_cid(circuit.get_cid())
+			self.controller.task_status_for_cid(
+				circuit.get_cid(),
+				reservation_id=circuit.info.get("reservation_id"))
 			if return_status else None)
 		provider_handle = self.qrc.async_run(circuit)
 		if provider_handle is not None:
@@ -304,10 +314,43 @@ class UTIL_QPM:
 
 	def cancel_provider_submission(self, cid, reason=None):
 		runtime = self.controller.task_for_cid(cid)
-		if runtime is None:
-			return None
-		self.controller.set_task_state(runtime.qtask_id, QPM_TASK_CANCELLED)
-		return runtime
+		reservation_id = (
+			runtime.reservation_id if runtime is not None else None)
+		return self.cancel_task(
+			cid=cid, reservation_id=reservation_id, reason=reason)
+
+	def cancel_task(self, cid=None, qtask_id=None, reservation_id=None,
+			token=None, reason=None):
+		if reservation_id is not None:
+			request = parse_execution_request(
+				{}, reservation_id=reservation_id, token=token)
+			self.require_managed_execution(request)
+		status = self.controller.cancel_task(
+			cid=cid, qtask_id=qtask_id, reason=reason,
+			reservation_id=reservation_id,
+			require_reservation=True)
+		self.process_oor_queue()
+		return status
+
+	def task_status(self, cid=None, qtask_id=None, reservation_id=None,
+			token=None):
+		if qtask_id is not None:
+			return self.controller.task_status_for_qtask_id(
+				qtask_id, reservation_id=reservation_id,
+				require_reservation=True)
+		return self.controller.task_status_for_cid(
+			cid, reservation_id=reservation_id,
+			require_reservation=True)
+
+	def _cancel_provider_handle(self, status):
+		provider_handle = status.get("provider_handle")
+		if provider_handle is None or self.qrc is None:
+			return
+		cancel = getattr(self.qrc, "cancel", None)
+		if cancel is not None:
+			status["provider_cancel_status"] = cancel(provider_handle)
+			return
+		status["provider_cancel_status"] = "unsupported"
 
 	def sync_run(self, info, common_run=None, reservation_id=None, token=None,
 				 run_context=None, timeout=None, cancel_on_timeout=False,
@@ -358,7 +401,8 @@ class UTIL_QPM:
 				self.complete_provider_submission(circuit, result=result)
 				response = self.controller.task_status_for_cid(
 					circuit.get_cid(), outcome="COMPLETED",
-					result=result)
+					result=result,
+					reservation_id=request.context.reservation_id)
 				if "hosts" in circuit.info:
 					self.free_resources(circuit)
 				logging.debug(
@@ -387,18 +431,21 @@ class UTIL_QPM:
 		if runtime is None:
 			return self.controller.task_status_for_cid(
 				cid, outcome="TIMEOUT", reason="sync-timeout",
-				message=message)
+				message=message,
+				reservation_id=request.context.reservation_id)
 		if request.context.cancel_on_timeout:
 			self.cancel_provider_submission(cid, reason="sync-timeout")
 			return self.controller.task_status_for_cid(
 				cid, outcome="CANCELLED", reason="sync-timeout",
-				message=message)
+				message=message,
+				reservation_id=request.context.reservation_id)
 		self.oor_queue.put(cid)
 		self.controller.record_timeout(
 			runtime.qtask_id, reason="sync-timeout", message=message)
 		return self.controller.task_status_for_cid(
 			cid, outcome="TIMEOUT", reason="sync-timeout",
-			message=message)
+			message=message,
+			reservation_id=request.context.reservation_id)
 
 	def require_managed_execution(self, request):
 		if request.context.reservation_id is not None:
@@ -506,7 +553,8 @@ class UTIL_QPM:
 			self.process_oor_queue()
 			raise e
 
-		return self.controller.task_status_for_cid(cid)
+		return self.controller.task_status_for_cid(
+			cid, reservation_id=request.context.reservation_id)
 
 	def defer_local_retry(self, cid):
 		runtime = self.controller.task_for_cid(cid)
@@ -520,6 +568,11 @@ class UTIL_QPM:
 	def read_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
+
+		error = self._result_selector_reservation_error(
+			cid, reservation_id)
+		if error is not None:
+			return error
 
 		r = self.qrc.read_cq(cid)
 
@@ -536,13 +589,20 @@ class UTIL_QPM:
 			circuit = self.circuits.get(cid)
 			if circuit is not None:
 				self.complete_provider_submission(circuit, result=r)
+		if cid is not None:
+			self.controller.forget_terminal_task_for_cid(cid)
 		return r
 
 	def peek_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		r = self.qrc.peak_cq()
+		error = self._result_selector_reservation_error(
+			cid, reservation_id)
+		if error is not None:
+			return error
+
+		r = self.qrc.peak_cq(cid)
 
 		if not r:
 			if cid:
@@ -557,6 +617,20 @@ class UTIL_QPM:
 			if circuit is not None:
 				self.complete_provider_submission(circuit, result=r)
 		return r
+
+	def _result_selector_reservation_error(self, cid, reservation_id):
+		if reservation_id is not None and cid is None:
+			return {
+				"outcome": "INVALID_RESERVATION",
+				"lifecycle_state": "invalid-reservation",
+				"reservation_id": reservation_id,
+				"reason": "task-selector-required",
+				"message": (
+					"reservation-scoped result retrieval requires cid"),
+			}
+		return self.controller.task_reservation_error(
+			cid=cid, reservation_id=reservation_id,
+			require_reservation=True)
 
 	def register_event_notification(self, ep, evtype, class_id, token=None,
 					reservation_id=None, filters=None):
