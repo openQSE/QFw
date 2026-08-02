@@ -256,6 +256,34 @@ def test_execution_rejects_invalid_reservation_state(monkeypatch):
 		raise AssertionError("expected invalid reservation state")
 
 
+def test_public_execution_accepts_positional_reservation_id(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM(target_id="admission-positional-async")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+
+	async_response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+	}, reservation_id)
+
+	assert async_response["outcome"] == "ACCEPTED"
+	assert async_response["reservation_id"] == reservation_id
+	assert qpm.fake_qrc.async_cids == [async_response["cid"]]
+
+	_setup(monkeypatch)
+	qpm = AdmissionQPM(target_id="admission-positional-sync")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+
+	sync_response = qpm.sync_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+	}, reservation_id)
+
+	assert sync_response["outcome"] == "COMPLETED"
+	assert sync_response["reservation_id"] == reservation_id
+	assert qpm.controller.admission_context.consumed[-1][0] == reservation_id
+
+
 def test_usage_authorization_hold_and_pending_retry(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()

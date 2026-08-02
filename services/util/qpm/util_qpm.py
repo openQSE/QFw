@@ -191,7 +191,7 @@ class UTIL_QPM:
 				runtime = self.controller.task_for_cid(cid)
 				if runtime is None or runtime.state == QPM_TASK_CANCELLED:
 					continue
-				self.async_run_oor(cid, self.common_run)
+				self.async_run_oor(cid)
 			except DEFwOutOfResources:
 				break
 
@@ -218,7 +218,7 @@ class UTIL_QPM:
 		# resources again.
 		self.process_oor_queue()
 
-	def common_run(self, cid, require_selected_cid=False):
+	def _prepare_run_circuit(self, cid, require_selected_cid=False):
 		circuit = self.circuits[cid]
 		if not circuit.info.get("_qfw_diagnostic_bypass", False):
 			try:
@@ -283,7 +283,7 @@ class UTIL_QPM:
 			runtime = self.controller.select_qtask_for_dispatch()
 			if runtime is None:
 				return None
-			circuit = self.common_run(
+			circuit = self._prepare_run_circuit(
 				runtime.cid, require_selected_cid=True)
 			return self.submit_provider_async(circuit, return_status=True)
 		except DEFwOutOfResources:
@@ -380,14 +380,9 @@ class UTIL_QPM:
 			return
 		status["provider_cancel_status"] = "unsupported"
 
-	def sync_run(self, info, common_run=None, reservation_id=None, token=None,
+	def sync_run(self, info, reservation_id=None, token=None,
 				 run_context=None, timeout=None, cancel_on_timeout=False,
 				 **request_metadata):
-		if not common_run:
-			common_run = self.common_run
-		else:
-			self.common_run = common_run
-
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -401,7 +396,7 @@ class UTIL_QPM:
 			**request_metadata,
 		)
 		self.require_managed_execution(request)
-		return self._sync_run_request(request, common_run)
+		return self._sync_run_request(request)
 
 	def diagnostic_sync_run(self, info, token=None, reason=None,
 				**request_metadata):
@@ -416,15 +411,16 @@ class UTIL_QPM:
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_sync_run", reason=reason)
 		request.payload["_qfw_diagnostic_bypass"] = True
-		return self._sync_run_request(request, self.common_run)
+		return self._sync_run_request(request)
 
-	def _sync_run_request(self, request, common_run):
+	def _sync_run_request(self, request):
 		cid = self.create_circuit(request.payload)
 		deadline = _sync_deadline(request.context.timeout)
 		while True:
 			circuit = None
 			try:
-				circuit = common_run(cid, require_selected_cid=True)
+				circuit = self._prepare_run_circuit(
+					cid, require_selected_cid=True)
 				result = self.submit_provider_sync(circuit)
 				self.complete_provider_submission(circuit, result=result)
 				response = self.controller.task_status_for_cid(
@@ -500,18 +496,14 @@ class UTIL_QPM:
 		self.controller.record_diagnostic_bypass(
 			operation, request.context, reason=reason)
 
-	def async_run_oor(self, cid, common_run=None):
-		if not common_run:
-			common_run = self.common_run
-		else:
-			self.common_run = common_run
-
+	def async_run_oor(self, cid):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
 		circuit = None
 		try:
-			circuit = common_run(cid, require_selected_cid=True)
+			circuit = self._prepare_run_circuit(
+				cid, require_selected_cid=True)
 			self.submit_provider_async(circuit)
 		except DEFwOutOfResources as e:
 			self.defer_local_retry(cid)
@@ -525,14 +517,9 @@ class UTIL_QPM:
 			self.process_oor_queue()
 			raise e
 
-	def async_run(self, info, common_run=None, reservation_id=None, token=None,
+	def async_run(self, info, reservation_id=None, token=None,
 				  run_context=None, timeout=None, cancel_on_timeout=False,
 				  **request_metadata):
-		if not common_run:
-			common_run = self.common_run
-		else:
-			self.common_run = common_run
-
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -546,7 +533,7 @@ class UTIL_QPM:
 			**request_metadata,
 		)
 		self.require_managed_execution(request)
-		return self._async_run_request(request, common_run)
+		return self._async_run_request(request)
 
 	def diagnostic_async_run(self, info, token=None, reason=None,
 				 **request_metadata):
@@ -561,14 +548,15 @@ class UTIL_QPM:
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_async_run", reason=reason)
 		request.payload["_qfw_diagnostic_bypass"] = True
-		return self._async_run_request(request, self.common_run)
+		return self._async_run_request(request)
 
-	def _async_run_request(self, request, common_run):
+	def _async_run_request(self, request):
 		cid = None
 		circuit = None
 		try:
 			cid = self.create_circuit(request.payload)
-			circuit = common_run(cid, require_selected_cid=True)
+			circuit = self._prepare_run_circuit(
+				cid, require_selected_cid=True)
 			return self.submit_provider_async(circuit, return_status=True)
 		except DEFwOutOfResources as e:
 			if cid is None:
