@@ -1,6 +1,7 @@
 import util.qpm.util_qpm as util_qpm
 from defw_exception import DEFwExecutionError
 from util.qpm.admission import QPMAdmissionValidationError
+from fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_SUBMITTED,
@@ -29,6 +30,7 @@ class FakeQRC:
 	def async_run(self, circuit):
 		self.async_circuits.append(circuit)
 		assert circuit.info["provider_ready"] is True
+		return circuit.get_cid()
 
 	def shutdown(self):
 		self.shutdown_called = True
@@ -61,6 +63,12 @@ class FakeAdmissionContext:
 			"qtask_id": usage["task_id"],
 		}
 
+	def return_usage_request(self, reservation_id, usage):
+		pass
+
+	def record_actual_request(self, reservation_id, actual):
+		pass
+
 
 class TrackingLock:
 	def __init__(self):
@@ -85,6 +93,7 @@ class HookQPM(UTIL_QPM):
 			FakeQRC(),
 			target_id=target_id,
 			admission_context_factory=FakeAdmissionContext,
+			scheduler_context_factory=FakeSchedulerContext,
 		)
 
 	def prepare_circuit(self, info):
@@ -182,11 +191,12 @@ def test_cancellation_lookup_and_cleanup(monkeypatch):
 	})
 	runtime = qpm.controller.task_for_cid(cid)
 
+	qpm.controller.set_provider_canceller(lambda provider_handle: "cancelled")
 	qpm.controller.bind_scheduler_task(runtime.qtask_id, "sched-1")
 	qpm.controller.bind_provider_handle(runtime.qtask_id, "provider-1")
 	cancelled = qpm.cancel_provider_submission(cid, reason="test")
 
-	assert cancelled.state == QPM_TASK_CANCELLED
+	assert cancelled["lifecycle_state"] == QPM_TASK_CANCELLED
 	assert qpm.controller.task_for_scheduler_task_id("sched-1") is runtime
 	assert qpm.controller.task_for_provider_handle("provider-1") is runtime
 	assert qpm.controller.cleanup_circuit(cid) is runtime
@@ -254,11 +264,12 @@ def test_diagnostic_bypass_requires_configuration(monkeypatch):
 		raise AssertionError("expected disabled diagnostic bypass to fail")
 
 	monkeypatch.setenv(DIAGNOSTIC_BYPASS_ENV, "yes")
-	cid = qpm.diagnostic_async_run(
+	response = qpm.diagnostic_async_run(
 		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
 		token={"opaque": "token"},
 		reason="maintenance",
 	)
+	cid = response["cid"]
 	runtime = qpm.controller.task_for_cid(cid)
 	record = qpm.controller.diagnostic_bypass_records[-1]
 

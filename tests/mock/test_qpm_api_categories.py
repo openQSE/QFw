@@ -7,6 +7,8 @@ def test_qpm_compatibility_surface_keeps_existing_methods():
 		"read_cq",
 		"peek_cq",
 		"register_event_notification",
+		"cancel_task",
+		"task_status",
 		"get_backend_info",
 		"get_device_info",
 		"shutdown",

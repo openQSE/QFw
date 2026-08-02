@@ -36,6 +36,61 @@ class FakeQPM:
 		return "ok"
 
 
+class FakeSchedulerContext:
+	available = True
+
+	def __init__(self, threading_mode, target_id=None):
+		self.threading = threading_mode
+		self.target_id = target_id
+		self.policy = None
+		self.submitted = []
+		self.queue = []
+		self.states = {}
+		self.started = []
+		self.completed = []
+		self.failed = []
+		self.cancelled = []
+
+	def set_policy(self, name, options):
+		self.policy = (name, dict(options))
+
+	def submit_task(self, task):
+		task = dict(task)
+		self.submitted.append(task)
+		self.queue.append(task["task_id"])
+		self.states[task["task_id"]] = "queued"
+		return task["task_id"]
+
+	def select_next_assignment(self):
+		if not self.queue:
+			return None
+		task_id = self.queue.pop(0)
+		self.states[task_id] = "selected"
+		return {"task_id": task_id}
+
+	def task_started(self, task_id):
+		self.states[task_id] = "running"
+		self.started.append(task_id)
+
+	def task_completed(self, task_id):
+		self.states[task_id] = "completed"
+		self.completed.append(task_id)
+
+	def task_failed(self, task_id):
+		self.states[task_id] = "failed"
+		self.failed.append(task_id)
+
+	def task_cancelled(self, task_id):
+		self.states[task_id] = "cancelled"
+		self.cancelled.append(task_id)
+
+	def task_state(self, task_id):
+		return self.states.get(task_id, "unknown")
+
+	def task_count(self):
+		return len(self.queue)
+
+
 class FakeServiceInfo:
 	def __init__(self, qpm, endpoint="fake-qpm-endpoint", properties=None,
 				 module_name="svc_fake_qpm"):

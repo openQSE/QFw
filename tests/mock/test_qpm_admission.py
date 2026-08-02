@@ -3,6 +3,7 @@ import time
 
 import util.qpm.util_qpm as util_qpm
 from defw_exception import DEFwExecutionError
+from fakes import FakeSchedulerContext
 from util.qpm.controller import clear_target_controllers
 from util.qpm.util_qpm import UTIL_QPM
 
@@ -15,6 +16,7 @@ class FakeQRC:
 
 	def async_run(self, circuit):
 		self.async_cids.append(circuit.get_cid())
+		return circuit.get_cid()
 
 	def sync_run(self, circuit):
 		return {"cid": circuit.get_cid()}
@@ -135,6 +137,7 @@ class AdmissionQPM(UTIL_QPM):
 			self.fake_qrc,
 			target_id=target_id,
 			admission_context_factory=FakeAdmissionContext,
+			scheduler_context_factory=FakeSchedulerContext,
 		)
 
 	def prepare_circuit(self, info):
@@ -241,12 +244,13 @@ def test_usage_authorization_hold_and_pending_retry(monkeypatch):
 	qpm = AdmissionQPM()
 	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
 
-	cid = qpm.async_run({
+	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"num_shots": 8,
 		"reservation_id": reservation_id,
 	})
+	cid = response["cid"]
 	runtime = qpm.controller.task_for_cid(cid)
 	assert runtime.qtask_id in qpm.controller.capacity_holds
 	assert qpm.controller.admission_context.consumed[-1][1]["task_id"] == (
@@ -256,11 +260,12 @@ def test_usage_authorization_hold_and_pending_retry(monkeypatch):
 	FakeAdmissionContext.usage_status = "delayed"
 	qpm = AdmissionQPM()
 	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	cid = qpm.async_run({
+	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": reservation_id,
 	})
+	cid = response["cid"]
 	runtime = qpm.controller.task_for_cid(cid)
 	assert runtime.qtask_id in qpm.controller.pending_capacity
 	FakeAdmissionContext.usage_status = "accepted"
@@ -273,11 +278,12 @@ def test_release_cancel_and_expiration_reconcile_active_state(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
 	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	cid = qpm.async_run({
+	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": reservation_id,
 	})
+	cid = response["cid"]
 	qtask_id = qpm.controller.task_for_cid(cid).qtask_id
 
 	qpm.release(reservation_id, reason=16)
