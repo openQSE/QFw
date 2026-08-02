@@ -165,6 +165,14 @@ class QPMTelemetry(QPMRemoteBase):
 	def get_telemetry_access_model(self, token=None):
 		pass
 
+	def get_capacity_snapshot(self, token=None, device_id=None,
+				  scope_id=None, access_class=None):
+		pass
+
+	def get_queue_metrics(self, token=None, device_id=None,
+			      access_class=None):
+		pass
+
 	def test(self):
 		pass
 

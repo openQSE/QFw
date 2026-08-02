@@ -86,6 +86,8 @@ TELEMETRY_METHOD_LABELS = {
 	"get_last_job_timing": TELEMETRY_CALLER_OWNED,
 	"get_last_job_metadata": TELEMETRY_CALLER_OWNED,
 	"get_task_metadata": TELEMETRY_CALLER_OWNED,
+	"get_capacity_snapshot": TELEMETRY_MANAGER_AGGREGATE,
+	"get_queue_metrics": TELEMETRY_MANAGER_AGGREGATE,
 	"get_scheduler_queue_state": TELEMETRY_MANAGER_AGGREGATE,
 	"get_scheduler_status": TELEMETRY_OPERATOR,
 	"get_telemetry_access_model": TELEMETRY_BASIC_DISCOVERY,
@@ -412,6 +414,66 @@ class QPMTargetController:
 				for name in sorted(TELEMETRY_METHOD_LABELS)
 			},
 		}
+
+	def capacity_snapshot(self, device_id=None, scope_id=None,
+			      access_class=TELEMETRY_MANAGER_AGGREGATE):
+		with self.lock:
+			now_ns = time.time_ns()
+			return {
+				"target_id": self.config.target_id,
+				"device_id": device_id or self._device_id(),
+				"scope_id": scope_id,
+				"timestamp_ns": now_ns,
+				"access_class": access_class,
+				"pending_qtask_count": len(self.pending_capacity),
+				"scheduler_queue_depth": scheduler_task_count(
+					self.scheduler_context),
+				"active_reservation_count": (
+					self._active_reservation_count_locked()),
+				"held_capacity": self._held_capacity_locked(),
+				"in_flight_capacity": self._in_flight_capacity_locked(),
+				"available_capacity": self._unavailable_estimate_locked(
+					"available-capacity"),
+				"estimated_queued_device_time": (
+					self._unavailable_estimate_locked(
+						"queued-device-time")),
+				"scheduler_policy": dict(self.scheduler_policy),
+				"device_available": self.resources_initialized,
+				"confidence": "observed-controller-state",
+				"telemetry": self._telemetry_object_label(
+					"capacity-snapshot", access_class),
+			}
+
+	def queue_metrics(self, device_id=None,
+			  access_class=TELEMETRY_MANAGER_AGGREGATE):
+		with self.lock:
+			return {
+				"target_id": self.config.target_id,
+				"device_id": device_id or self._device_id(),
+				"timestamp_ns": time.time_ns(),
+				"access_class": access_class,
+				"pending_qtask_count": len(self.pending_capacity),
+				"scheduler_depth": scheduler_task_count(
+					self.scheduler_context),
+				"active_task_count": len(self.runtime_by_qtask_id),
+				"selected_task_count": len(self.selected_qtask_ids),
+				"provider_inflight_count": len(self.provider_inflight),
+				"held_capacity": self._held_capacity_locked(),
+				"in_flight_capacity": self._in_flight_capacity_locked(),
+				"policy_state": {
+					"scheduler": dict(self.scheduler_policy),
+					"admission": dict(self.admission_policy),
+				},
+				"wait_estimate": self._unavailable_estimate_locked(
+					"wait-estimate"),
+				"estimated_start": self._unavailable_estimate_locked(
+					"start-estimate"),
+				"estimated_queued_device_time": (
+					self._unavailable_estimate_locked(
+						"queued-device-time")),
+				"telemetry": self._telemetry_object_label(
+					"queue-metrics", access_class),
+			}
 
 	def cancel_task(self, cid=None, qtask_id=None, reason=None,
 			reservation_id=None, require_reservation=False):
@@ -1266,6 +1328,61 @@ class QPMTargetController:
 				self.scheduler_context, runtime.scheduler_task_id)
 		except Exception:
 			return None
+
+	def _active_reservation_count_locked(self):
+		try:
+			reservations = list_reservations(self.admission_context, {})
+		except Exception:
+			return None
+		return sum(1 for reservation in reservations
+			if reservation.get("state") == "active")
+
+	def _held_capacity_locked(self):
+		return self._usage_totals_locked(self.capacity_holds.values())
+
+	def _in_flight_capacity_locked(self):
+		holds = [
+			self.capacity_holds[qtask_id]
+			for qtask_id in self.provider_inflight
+			if qtask_id in self.capacity_holds
+		]
+		return self._usage_totals_locked(holds)
+
+	def _usage_totals_locked(self, holds):
+		totals = {
+			"qtask_count": 0,
+			"estimated_ns": 0,
+			"baseline_units": 0,
+			"credits": 0,
+			"rate_units": 0,
+		}
+		for hold in holds:
+			usage = hold.get("usage", {})
+			totals["qtask_count"] += 1
+			for field in (
+					"estimated_ns", "baseline_units",
+					"credits", "rate_units"):
+				totals[field] += usage.get(field, 0)
+		return totals
+
+	def _unavailable_estimate_locked(self, kind):
+		return {
+			"available": False,
+			"kind": kind,
+			"reason": "telemetry-unavailable",
+			"timestamp_ns": time.time_ns(),
+			"confidence": "unavailable",
+			"policy_context": {
+				"scheduler_policy": dict(self.scheduler_policy),
+			},
+		}
+
+	def _telemetry_object_label(self, object_name, access_class):
+		return {
+			"object": object_name,
+			"access_class": access_class,
+			"enforced": False,
+		}
 
 	def _telemetry_method_label(self, method_name):
 		access_class = TELEMETRY_METHOD_LABELS[method_name]

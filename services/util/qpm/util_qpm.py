@@ -351,6 +351,18 @@ class UTIL_QPM:
 	def get_telemetry_access_model(self, token=None):
 		return self.controller.telemetry_access_model()
 
+	def get_capacity_snapshot(self, token=None, device_id=None,
+				  scope_id=None, access_class=None):
+		return self.controller.capacity_snapshot(
+			device_id=device_id, scope_id=scope_id,
+			access_class=access_class or "manager-aggregate")
+
+	def get_queue_metrics(self, token=None, device_id=None,
+			      access_class=None):
+		return self.controller.queue_metrics(
+			device_id=device_id,
+			access_class=access_class or "manager-aggregate")
+
 	def _cancel_provider_handle(self, status):
 		provider_handle = status.get("provider_handle")
 		if provider_handle is None or self.qrc is None:
