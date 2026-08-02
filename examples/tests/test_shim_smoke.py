@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import select
 import sys
 import traceback
@@ -253,7 +254,103 @@ def wait_for_async_result(event_api, expected_cid, timeout):
 		f"timed out waiting for circuit result cid={expected_cid!r}")
 
 
-def run_circuit(qpm, lib, shots, timeout):
+def require_provider_completion():
+	value = os.environ.get("QFW_SHIM_SMOKE_REQUIRE_PROVIDER", "")
+	return value.lower() in ("1", "true", "yes", "on")
+
+
+def live_qrmi_token_present():
+	token = os.environ.get("QFW_API_KEY")
+	if token and token != "dummy-api-key":
+		return True
+	for name, value in os.environ.items():
+		if name.endswith("_QRMI_IQM_ISA_TOKEN") and value and (
+				value != "dummy-api-key"):
+			return True
+	return False
+
+
+def can_skip_qrmi_provider_completion(qpm, lib):
+	if require_provider_completion() or live_qrmi_token_present():
+		return False
+	if lib not in (None, "qrmi"):
+		return False
+	try:
+		backend_info = qpm.get_backend_info(lib="qrmi")
+	except Exception as exc:
+		prformat(
+			fg.red + fg.bold,
+			f"[shim-smoke] QRMI provider preflight unavailable: {exc}")
+		return False
+	active_qubits = backend_info.get("active_qubits") or []
+	if active_qubits:
+		return False
+	print("[shim-smoke] run_circuit: SKIPPED provider completion "
+	      "(QRMI target has no active qubits and no live token is present)")
+	return True
+
+
+def admission_policy_path():
+	candidates = [
+		os.environ.get("QFW_SHIM_SMOKE_ADMISSION_POLICY_PATH"),
+		os.environ.get("QHW_ADMISSION_POLICY_PATH"),
+	]
+	qfw_path = os.environ.get("QFW_PATH")
+	if qfw_path:
+		base_dir = os.path.dirname(qfw_path)
+		candidates.extend([
+			os.path.join(base_dir, "qhw-admission", "build", "policies"),
+			os.path.join(
+				base_dir, "install", "qhw-admission", "lib",
+				"qhw_admission", "policies"),
+		])
+	for candidate in candidates:
+		if candidate and os.path.isdir(candidate):
+			return candidate
+	return None
+
+
+def configure_admission_policy(qpm):
+	policy = {"name": "unlimited"}
+	policy_path = admission_policy_path()
+	if policy_path:
+		policy["path"] = policy_path
+	result = qpm.set_admission_policy(policy)
+	dump_result("set_admission_policy", result)
+
+
+def reserve_execution(qpm, args):
+	configure_admission_policy(qpm)
+	job_id = os.environ.get("SLURM_JOB_ID", "shim-smoke")
+	request = {
+		"owner": {"user": os.environ.get("USER", "shim-smoke")},
+		"job_id": job_id,
+		"allocation_id": job_id,
+		"target_device_id": args.device_id,
+		"num_qubits": 1,
+		"walltime_ns": 2_000_000_000,
+		"ttl_ns": 60_000_000_000,
+		"workload": {
+			"example": "qfw_shim_smoke",
+			"operation": "async_run",
+		},
+		"run_context": {"operation": "async_run"},
+		"task_class": {
+			"count": 1,
+			"qubit_count": 1,
+			"shots": args.shots,
+			"measurement_count": 1,
+		},
+	}
+	decision = qpm.reserve(request)
+	dump_result("reserve", decision)
+	if decision.get("status") != "accepted" or not decision.get(
+			"reservation_id"):
+		raise DEFwError(f"reservation was not accepted: {decision}")
+	return decision["reservation_id"]
+
+
+def run_circuit(qpm, lib, shots, timeout, reservation_id):
 	event_api = BaseEventAPI()
 	event_api.register_external()
 	qpm.register_event_notification(
@@ -268,15 +365,22 @@ def run_circuit(qpm, lib, shots, timeout):
 	if lib:
 		info["lib"] = lib
 
-	cid = qpm.async_run(info)
+	response = qpm.async_run(info, reservation_id)
+	dump_result("async_run", response)
+	cid = response.get("cid") if isinstance(response, dict) else response
+	if not cid:
+		raise DEFwError(f"async_run did not return a circuit id: {response}")
 	result = wait_for_async_result(event_api, cid, timeout)
 	dump_result("run_circuit", result)
 	if result.get("rc") != 0:
+		if can_skip_qrmi_provider_completion(qpm, lib):
+			return cid, result, False
 		raise DEFwError(f"run_circuit failed for cid={cid}: {result}")
-	return cid, result
+	return cid, result, True
 
 
-def run_named_call(call, qpm, libs, cap_map, failures, args, cid=None):
+def run_named_call(call, qpm, libs, cap_map, failures, args,
+		   cid=None, reservation_id=None):
 	if call == "test":
 		call_api("test", qpm.test, failures)
 		return cid
@@ -286,6 +390,10 @@ def run_named_call(call, qpm, libs, cap_map, failures, args, cid=None):
 	if call == "get_last_job_metadata":
 		# Execution-facet call: stays with the single --lib selection (bound to
 		# the execution owner), not the introspection preference list.
+		if cid is None and args.call != "get_last_job_metadata":
+			print("[shim-smoke] get_last_job_metadata: SKIPPED "
+			      "(async_run did not complete on the provider)")
+			return cid
 		exec_lib = requested_lib(args)
 		kwargs = {"lib": exec_lib} if exec_lib else {}
 		call_api(
@@ -294,9 +402,11 @@ def run_named_call(call, qpm, libs, cap_map, failures, args, cid=None):
 		return cid
 	if call == "async_run":
 		try:
-			cid, _ = run_circuit(
+			cid, _, completed = run_circuit(
 				qpm, requested_lib(args), args.shots,
-				args.circuit_run_timeout)
+				args.circuit_run_timeout, reservation_id)
+			if not completed:
+				cid = None
 		except Exception as exc:
 			failures.append(("async_run", exc))
 			prformat(
@@ -328,15 +438,30 @@ def main():
 	failures = []
 
 	qpm = reserve_shim_qpm(args.device_id, args.system_up_timeout)
+	reservation_id = None
 	try:
 		wait_ready(qpm, args.system_up_timeout)
 		# Only needed to skip unsupported libraries during a --libs comparison.
 		cap_map = fetch_capability_map(qpm) if len(libs) > 1 else {}
 		cid = None
 		calls = (args.call,) if args.call else DEFAULT_CALL_SEQUENCE
+		if "async_run" in calls:
+			reservation_id = reserve_execution(qpm, args)
 		for call in calls:
-			cid = run_named_call(call, qpm, libs, cap_map, failures, args, cid)
+			cid = run_named_call(
+				call, qpm, libs, cap_map, failures, args, cid,
+				reservation_id=reservation_id)
 	finally:
+		if reservation_id is not None:
+			try:
+				dump_result(
+					"release", qpm.release(reservation_id, reason=0))
+			except Exception as exc:
+				failures.append(("release", exc))
+				prformat(
+					fg.red + fg.bold,
+					f"[shim-smoke] release: FAILED: {exc}")
+				traceback.print_exc()
 		try:
 			qpm.shutdown()
 		except Exception:
@@ -352,5 +477,8 @@ if __name__ == "__main__":
 	except Exception:
 		traceback.print_exc()
 	finally:
-		me.exit()
+		try:
+			me.exit()
+		except SystemExit:
+			pass
 	sys.exit(rc)

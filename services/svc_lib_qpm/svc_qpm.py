@@ -5,13 +5,17 @@ from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
 
 MAX_SHIM_QUBITS = 1024
+MAX_SHIM_SHOTS = 10000
 
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), max_ppn=1, start=start)
 		set_max_qubits_pp(MAX_SHIM_QUBITS)
-		self.configure_device_profile(max_qubits=MAX_SHIM_QUBITS)
+		self.configure_device_profile(
+			max_qubits=MAX_SHIM_QUBITS,
+			max_shots=MAX_SHIM_SHOTS,
+			time_span_ns=60_000_000_000)
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC, svc_info

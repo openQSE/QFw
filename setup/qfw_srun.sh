@@ -73,6 +73,7 @@ export DEFW_PY_LOGLEVEL=debug,DEFW_ALL
 
 set -xe
 qfw_launch_app python3 "$1" "${@:2}"
+app_rc=$?
 
 set +xe
 unset DEFW_AGENT_NAME
@@ -83,3 +84,4 @@ unset DEFW_AGENT_TYPE
 unset DEFW_LOG_LEVEL
 unset DEFW_DISABLE_RESMGR
 unset DEFW_PY_LOGLEVEL
+exit $app_rc
