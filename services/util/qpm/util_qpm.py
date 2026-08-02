@@ -31,7 +31,7 @@ from .admission import (
 	QPMAdmissionValidationError,
 )
 from .scheduler import QPMSchedulerError, QPMSchedulerUnavailable
-from .util_circuit import Circuit, MAX_PPN
+from .util_circuit import Circuit, CircuitStates, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
 
@@ -188,6 +188,7 @@ class UTIL_QPM:
 				break
 
 	def free_resources(self, circ):
+		self.finalize_provider_task(circ)
 		with self.controller.lock:
 			res = circ.info['hosts']
 			for host in res.keys():
@@ -287,10 +288,19 @@ class UTIL_QPM:
 			raise e
 
 	def complete_provider_submission(self, circuit, result=None):
-		self.controller.record_result(circuit.info["qtask_id"], result)
+		self.controller.complete_scheduled_task(circuit, result=result)
 
 	def fail_provider_submission(self, circuit, error):
-		self.controller.set_task_state(circuit.info["qtask_id"], QPM_TASK_FAILED)
+		self.controller.fail_scheduled_task(circuit, error=error)
+
+	def finalize_provider_task(self, circuit, result=None):
+		state = circuit.getState()
+		if state == CircuitStates.FAIL:
+			return self.controller.fail_scheduled_task(circuit)
+		if state in (CircuitStates.EXEC_DONE, CircuitStates.RESOURCES_CONSUMED):
+			return self.controller.complete_scheduled_task(
+				circuit, result=result)
+		return None
 
 	def cancel_provider_submission(self, cid, reason=None):
 		runtime = self.controller.task_for_cid(cid)
@@ -523,7 +533,9 @@ class UTIL_QPM:
 		cid = r.get("cid") if isinstance(r, dict) else None
 		runtime = self.controller.task_for_cid(cid)
 		if runtime is not None:
-			self.controller.record_result(runtime.qtask_id, r)
+			circuit = self.circuits.get(cid)
+			if circuit is not None:
+				self.complete_provider_submission(circuit, result=r)
 		return r
 
 	def peek_cq(self, cid=None, reservation_id=None, token=None):
@@ -538,6 +550,12 @@ class UTIL_QPM:
 			else:
 				raise DEFwInProgress("No ready QTs")
 
+		cid = r.get("cid") if isinstance(r, dict) else None
+		runtime = self.controller.task_for_cid(cid)
+		if runtime is not None:
+			circuit = self.circuits.get(cid)
+			if circuit is not None:
+				self.complete_provider_submission(circuit, result=r)
 		return r
 
 	def register_event_notification(self, ep, evtype, class_id, token=None,

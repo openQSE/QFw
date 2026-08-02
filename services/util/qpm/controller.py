@@ -32,6 +32,8 @@ from .scheduler import (
 	create_scheduler_context,
 	normalize_scheduler_policy,
 	mark_scheduler_task_started,
+	mark_scheduler_task_completed,
+	mark_scheduler_task_failed,
 	select_next_scheduler_task,
 	scheduler_context_available,
 	scheduler_task_count,
@@ -808,6 +810,48 @@ class QPMTargetController:
 			runtime.state = QPM_TASK_COMPLETED
 			return runtime
 
+	def complete_scheduled_task(self, circuit, result=None):
+		qtask_id = circuit.info["qtask_id"]
+		with self.lock:
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is None:
+				return None
+			if runtime.state == QPM_TASK_COMPLETED:
+				return runtime
+			self._reconcile_task_hold_locked(runtime, circuit)
+			if runtime.scheduler_task_id is not None:
+				mark_scheduler_task_completed(
+					self.scheduler_context, runtime.scheduler_task_id)
+			self.provider_inflight.discard(qtask_id)
+			self.selected_qtask_ids.discard(qtask_id)
+			self.result_state[qtask_id] = result
+			self.timeout_state.pop(qtask_id, None)
+			runtime.state = QPM_TASK_COMPLETED
+			return runtime
+
+	def fail_scheduled_task(self, circuit, error=None):
+		qtask_id = circuit.info["qtask_id"]
+		with self.lock:
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is None:
+				return None
+			if runtime.state == QPM_TASK_FAILED:
+				return runtime
+			self._reconcile_task_hold_locked(runtime, circuit)
+			if runtime.scheduler_task_id is not None:
+				mark_scheduler_task_failed(
+					self.scheduler_context, runtime.scheduler_task_id)
+			self.provider_inflight.discard(qtask_id)
+			self.selected_qtask_ids.discard(qtask_id)
+			self.timeout_state.pop(qtask_id, None)
+			runtime.state = QPM_TASK_FAILED
+			if error is not None:
+				self.result_state[qtask_id] = {
+					"error": str(error),
+					"error_type": type(error).__name__,
+				}
+			return runtime
+
 	def record_timeout(self, qtask_id, reason=None, message=None):
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
@@ -1161,6 +1205,80 @@ class QPMTargetController:
 				103: info.get("two_q_gate_count", 0),
 			},
 		}
+
+	def _reconcile_task_hold_locked(self, runtime, circuit):
+		hold = self.capacity_holds.pop(runtime.qtask_id, None)
+		if hold is None:
+			return
+		reservation_id = hold["reservation_id"]
+		usage = dict(hold["usage"])
+		self._finalize_capacity_hold_locked(
+			runtime.qtask_id, reservation_id, usage, runtime, circuit)
+		self.usage_events_by_qtask_id.pop(runtime.qtask_id, None)
+
+	def _finalize_capacity_hold_locked(self, qtask_id, reservation_id,
+					   usage, runtime=None, circuit=None):
+		actual = self._actual_usage(circuit, runtime, usage, qtask_id)
+		unused = self._unused_usage(usage, actual)
+		return_usage(self.admission_context, reservation_id, unused)
+		record_actual(self.admission_context, reservation_id, actual)
+
+	def _actual_usage(self, circuit, runtime, usage, qtask_id=None):
+		observed_device_ns = self._observed_device_ns(circuit, usage)
+		actual = {
+			"task_id": qtask_id or (
+				runtime.qtask_id if runtime is not None else
+				usage.get("task_id", 0)),
+			"observed_device_ns": observed_device_ns,
+		}
+		for field in ("baseline_units", "credits", "rate_units"):
+			actual[f"actual_{field}"] = self._actual_capacity_value(
+				circuit, usage, field)
+		return actual
+
+	def _observed_device_ns(self, circuit, usage):
+		info = getattr(circuit, "info", {}) if circuit is not None else {}
+		observed_device_ns = None
+		for source in (info, usage):
+			for key in ("actual_ns", "observed_device_ns"):
+				if key in source:
+					observed_device_ns = source[key]
+					break
+			if observed_device_ns is not None:
+				break
+		if observed_device_ns is None:
+			observed_device_ns = 0
+			if circuit.exec_time >= 0 and circuit.completion_time >= 0:
+				observed_device_ns = int(
+					(circuit.completion_time - circuit.exec_time) *
+					1_000_000_000)
+			elif circuit is not None and circuit.completion_time >= 0:
+				observed_device_ns = usage.get("estimated_ns", 0)
+		return observed_device_ns
+
+	def _actual_capacity_value(self, circuit, usage, field):
+		info = getattr(circuit, "info", {}) if circuit is not None else {}
+		for key in (f"actual_{field}", f"observed_{field}"):
+			if key in info:
+				return info[key]
+			if key in usage:
+				return usage[key]
+		if circuit is not None and circuit.completion_time >= 0:
+			return usage.get(field, 0)
+		return 0
+
+	def _unused_usage(self, usage, actual):
+		unused = dict(usage)
+		for field, actual_field in (
+				("estimated_ns", "observed_device_ns"),
+				("baseline_units", "actual_baseline_units"),
+				("credits", "actual_credits"),
+				("rate_units", "actual_rate_units")):
+			estimated = usage.get(field, 0) or 0
+			actual_value = actual.get(actual_field, 0) or 0
+			unused[field] = max(0, estimated - actual_value)
+		unused["actual_ns"] = 0
+		return unused
 
 	def _selected_runtime_locked(self):
 		for qtask_id in sorted(self.selected_qtask_ids):
