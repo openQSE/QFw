@@ -342,6 +342,15 @@ class UTIL_QPM:
 			cid, reservation_id=reservation_id,
 			require_reservation=True)
 
+	def get_task_metadata(self, cid=None, qtask_id=None, reservation_id=None,
+			      token=None):
+		return self.task_status(
+			cid=cid, qtask_id=qtask_id,
+			reservation_id=reservation_id, token=token)
+
+	def get_telemetry_access_model(self, token=None):
+		return self.controller.telemetry_access_model()
+
 	def _cancel_provider_handle(self, status):
 		provider_handle = status.get("provider_handle")
 		if provider_handle is None or self.qrc is None:

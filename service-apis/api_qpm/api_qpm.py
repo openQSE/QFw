@@ -158,6 +158,13 @@ class QPMTelemetry(QPMRemoteBase):
 	def get_last_job_metadata(self, cid=None, lib=None, token=None):
 		pass
 
+	def get_task_metadata(self, cid=None, qtask_id=None,
+			      reservation_id=None, token=None):
+		pass
+
+	def get_telemetry_access_model(self, token=None):
+		pass
+
 	def test(self):
 		pass
 

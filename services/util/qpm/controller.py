@@ -65,6 +65,31 @@ QPM_TASK_COMPLETED = "completed"
 QPM_TASK_FAILED = "failed"
 QPM_TASK_CANCELLED = "cancelled"
 QPM_TASK_TIMED_OUT = "timed-out"
+TELEMETRY_BASIC_DISCOVERY = "basic-discovery"
+TELEMETRY_CALLER_OWNED = "caller-owned"
+TELEMETRY_MANAGER_AGGREGATE = "manager-aggregate"
+TELEMETRY_OPERATOR = "operator"
+
+TELEMETRY_ACCESS_CLASSES = (
+	TELEMETRY_BASIC_DISCOVERY,
+	TELEMETRY_CALLER_OWNED,
+	TELEMETRY_MANAGER_AGGREGATE,
+	TELEMETRY_OPERATOR,
+)
+
+TELEMETRY_METHOD_LABELS = {
+	"get_backend_info": TELEMETRY_BASIC_DISCOVERY,
+	"get_device_info": TELEMETRY_BASIC_DISCOVERY,
+	"get_dynamic_backend_info": TELEMETRY_BASIC_DISCOVERY,
+	"get_calibration_snapshot": TELEMETRY_BASIC_DISCOVERY,
+	"get_coupling_graph": TELEMETRY_BASIC_DISCOVERY,
+	"get_last_job_timing": TELEMETRY_CALLER_OWNED,
+	"get_last_job_metadata": TELEMETRY_CALLER_OWNED,
+	"get_task_metadata": TELEMETRY_CALLER_OWNED,
+	"get_scheduler_queue_state": TELEMETRY_MANAGER_AGGREGATE,
+	"get_scheduler_status": TELEMETRY_OPERATOR,
+	"get_telemetry_access_model": TELEMETRY_BASIC_DISCOVERY,
+}
 
 
 @dataclass(frozen=True)
@@ -359,6 +384,34 @@ class QPMTargetController:
 			return self._task_status_locked(
 				runtime, outcome=outcome, reason=reason,
 				message=message, result=result)
+
+	def telemetry_access_model(self):
+		return {
+			"target_id": self.config.target_id,
+			"enforcement": "record-only",
+			"access_classes": [
+				{
+					"name": TELEMETRY_BASIC_DISCOVERY,
+					"description": "public backend and device discovery",
+				},
+				{
+					"name": TELEMETRY_CALLER_OWNED,
+					"description": "caller-owned task and reservation state",
+				},
+				{
+					"name": TELEMETRY_MANAGER_AGGREGATE,
+					"description": "aggregate queue and capacity state",
+				},
+				{
+					"name": TELEMETRY_OPERATOR,
+					"description": "operator policy, audit, and health state",
+				},
+			],
+			"methods": {
+				name: self._telemetry_method_label(name)
+				for name in sorted(TELEMETRY_METHOD_LABELS)
+			},
+		}
 
 	def cancel_task(self, cid=None, qtask_id=None, reason=None,
 			reservation_id=None, require_reservation=False):
@@ -1099,6 +1152,11 @@ class QPMTargetController:
 			response["result"] = result
 		if timeout is not None:
 			response["timeout"] = dict(timeout)
+		response["telemetry"] = {
+			"access_class": TELEMETRY_CALLER_OWNED,
+			"object": "managed-qtask",
+			"field_visibility": self._task_status_field_visibility(),
+		}
 		return {key: value for key, value in response.items()
 			if value is not None}
 
@@ -1208,6 +1266,30 @@ class QPMTargetController:
 				self.scheduler_context, runtime.scheduler_task_id)
 		except Exception:
 			return None
+
+	def _telemetry_method_label(self, method_name):
+		access_class = TELEMETRY_METHOD_LABELS[method_name]
+		return {
+			"access_class": access_class,
+			"enforced": False,
+			"object_visibility": access_class,
+			"field_visibility": {
+				"telemetry": TELEMETRY_BASIC_DISCOVERY,
+				"data": access_class,
+			},
+		}
+
+	def _task_status_field_visibility(self):
+		return {
+			"cid": TELEMETRY_CALLER_OWNED,
+			"qtask_id": TELEMETRY_CALLER_OWNED,
+			"reservation_id": TELEMETRY_CALLER_OWNED,
+			"scheduler_task_id": TELEMETRY_CALLER_OWNED,
+			"provider_handle": TELEMETRY_OPERATOR,
+			"scheduler_state": TELEMETRY_MANAGER_AGGREGATE,
+			"wait_estimate": TELEMETRY_MANAGER_AGGREGATE,
+			"timeout": TELEMETRY_CALLER_OWNED,
+		}
 
 	def _admission_request(self, request, token=None):
 		request = dict(request or {})
