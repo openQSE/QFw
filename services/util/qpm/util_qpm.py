@@ -18,7 +18,9 @@ from .controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_FAILED,
 	QPM_TASK_PENDING_CAPACITY,
+	QPM_TASK_QUEUED,
 	QPM_TASK_RESOURCES_CONSUMED,
+	QPM_TASK_SELECTED,
 	QPM_TASK_SUBMITTED,
 	controller_config,
 	get_target_controller,
@@ -28,6 +30,7 @@ from .admission import (
 	QPMAdmissionUnavailable,
 	QPMAdmissionValidationError,
 )
+from .scheduler import QPMSchedulerError, QPMSchedulerUnavailable
 from .util_circuit import Circuit, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
@@ -206,18 +209,30 @@ class UTIL_QPM:
 		# resources again.
 		self.process_oor_queue()
 
-	def common_run(self, cid):
+	def common_run(self, cid, require_selected_cid=False):
 		circuit = self.circuits[cid]
-		try:
-			if (not circuit.info.get("_qfw_diagnostic_bypass", False) and
-					circuit.info["qtask_id"]
-					not in self.controller.capacity_holds):
-				self.controller.authorize_capacity_hold(circuit)
-		except QPMAdmissionPendingCapacity as error:
-			raise DEFwOutOfResources(str(error))
-		except (QPMAdmissionUnavailable,
-			QPMAdmissionValidationError) as error:
-			raise DEFwExecutionError(str(error))
+		if not circuit.info.get("_qfw_diagnostic_bypass", False):
+			try:
+				if (circuit.info["qtask_id"]
+						not in self.controller.capacity_holds):
+					self.controller.authorize_capacity_hold(circuit)
+				self.controller.submit_qtask_to_scheduler(circuit)
+				selected_runtime = (
+					self.controller.select_qtask_for_dispatch())
+				if selected_runtime is None:
+					raise DEFwOutOfResources(
+						"scheduler has no dispatch slot available")
+				if require_selected_cid and selected_runtime.cid != cid:
+					raise DEFwOutOfResources(
+						"scheduler selected earlier queued work")
+				circuit = self.circuits[selected_runtime.cid]
+			except QPMAdmissionPendingCapacity as error:
+				raise DEFwOutOfResources(str(error))
+			except (QPMAdmissionUnavailable,
+				QPMAdmissionValidationError,
+				QPMSchedulerUnavailable,
+				QPMSchedulerError) as error:
+				raise DEFwExecutionError(str(error))
 		with self.controller.lock:
 			self.consume_resources(circuit)
 			circuit.set_resources_consumed()
@@ -231,12 +246,59 @@ class UTIL_QPM:
 		return circuit
 
 	def submit_provider_sync(self, circuit):
-		self.controller.set_task_state(circuit.info["qtask_id"], QPM_TASK_SUBMITTED)
+		self.controller.start_provider_submission(circuit)
 		return self.qrc.sync_run(circuit)
 
-	def submit_provider_async(self, circuit):
-		self.controller.set_task_state(circuit.info["qtask_id"], QPM_TASK_SUBMITTED)
-		return self.qrc.async_run(circuit)
+	def submit_provider_async(self, circuit, return_status=False):
+		self.controller.start_provider_submission(circuit)
+		response = (
+			self._task_status_for_cid(circuit.get_cid())
+			if return_status else None)
+		provider_handle = self.qrc.async_run(circuit)
+		if provider_handle is not None:
+			runtime = self.controller.task_for_cid(circuit.get_cid())
+			if runtime is not None:
+				self.controller.bind_provider_handle(
+					runtime.qtask_id, provider_handle)
+				if return_status:
+					response["provider_handle"] = provider_handle
+		if return_status:
+			return response
+		return provider_handle
+
+	def dispatch_ready_qtask(self):
+		circuit = None
+		try:
+			runtime = self.controller.select_qtask_for_dispatch()
+			if runtime is None:
+				return None
+			circuit = self.common_run(
+				runtime.cid, require_selected_cid=True)
+			return self.submit_provider_async(circuit, return_status=True)
+		except DEFwOutOfResources:
+			if circuit is not None:
+				self.defer_local_retry(circuit.get_cid())
+			raise
+		except Exception as e:
+			if circuit is not None:
+				self.fail_provider_submission(circuit, e)
+				if "hosts" in circuit.info:
+					self.free_resources(circuit)
+			raise e
+
+	def _task_status_for_cid(self, cid, **fields):
+		status_for_cid = getattr(self.controller, "task_status_for_cid", None)
+		if status_for_cid is not None:
+			return status_for_cid(cid, **fields)
+		runtime = self.controller.task_for_cid(cid)
+		if runtime is None:
+			response = {"cid": cid}
+		else:
+			response = self.controller._task_status_locked(runtime)
+		for key, value in fields.items():
+			if value is not None:
+				response[key] = value
+		return response
 
 	def complete_provider_submission(self, circuit, result=None):
 		self.controller.record_result(circuit.info["qtask_id"], result)
@@ -290,22 +352,60 @@ class UTIL_QPM:
 		return self._sync_run_request(request, self.common_run)
 
 	def _sync_run_request(self, request, common_run):
-		circuit = None
-		try:
-			cid = self.create_circuit(request.payload)
-			circuit = common_run(cid)
-			result = self.submit_provider_sync(circuit)
-			self.complete_provider_submission(circuit, result=result)
-		except Exception as e:
-			if circuit is not None:
-				self.fail_provider_submission(circuit, e)
+		cid = self.create_circuit(request.payload)
+		deadline = _sync_deadline(request.context.timeout)
+		while True:
+			circuit = None
+			try:
+				circuit = common_run(cid, require_selected_cid=True)
+				result = self.submit_provider_sync(circuit)
+				self.complete_provider_submission(circuit, result=result)
+				response = self._task_status_for_cid(
+					circuit.get_cid(), outcome="COMPLETED",
+					result=result)
 				if "hosts" in circuit.info:
 					self.free_resources(circuit)
-			raise e
-		if "hosts" in circuit.info:
-			self.free_resources(circuit)
-		logging.debug(f"circuit {circuit.get_cid()} completed with output {result}")
-		return result
+				logging.debug(
+					f"circuit {circuit.get_cid()} completed "
+					f"with output {result}")
+				return response
+			except DEFwOutOfResources as error:
+				if deadline is not None and _sync_timed_out(deadline):
+					return self._sync_timeout_response(
+						cid, request, str(error))
+				try:
+					self.dispatch_ready_qtask()
+				except DEFwOutOfResources:
+					pass
+				self.process_oor_queue()
+				_sleep_until_retry(deadline)
+			except Exception as e:
+				if circuit is not None:
+					self.fail_provider_submission(circuit, e)
+					if "hosts" in circuit.info:
+						self.free_resources(circuit)
+				raise e
+
+	def _sync_timeout_response(self, cid, request, message):
+		runtime = self.controller.task_for_cid(cid)
+		if runtime is None:
+			return self._task_status_for_cid(
+				cid, outcome="TIMEOUT", reason="sync-timeout",
+				message=message)
+		if request.context.cancel_on_timeout:
+			self.cancel_provider_submission(cid, reason="sync-timeout")
+			return self._task_status_for_cid(
+				cid, outcome="CANCELLED", reason="sync-timeout",
+				message=message)
+		self.oor_queue.put(cid)
+		record_timeout = getattr(self.controller, "record_timeout", None)
+		if record_timeout is not None:
+			record_timeout(
+				runtime.qtask_id, reason="sync-timeout",
+				message=message)
+		return self._task_status_for_cid(
+			cid, outcome="TIMEOUT", reason="sync-timeout",
+			message=message)
 
 	def require_managed_execution(self, request):
 		if request.context.reservation_id is not None:
@@ -337,14 +437,10 @@ class UTIL_QPM:
 
 		circuit = None
 		try:
-			circuit = common_run(cid)
+			circuit = common_run(cid, require_selected_cid=True)
 			self.submit_provider_async(circuit)
 		except DEFwOutOfResources as e:
-			# queue circuit on a local out of resources queue
-			runtime = self.controller.task_for_cid(cid)
-			if runtime is not None:
-				self.controller.set_task_state(
-					runtime.qtask_id, QPM_TASK_PENDING_CAPACITY)
+			self.defer_local_retry(cid)
 			self.oor_queue.put(cid)
 			raise e
 		except Exception as e:
@@ -398,16 +494,16 @@ class UTIL_QPM:
 		circuit = None
 		try:
 			cid = self.create_circuit(request.payload)
-			circuit = common_run(cid)
-			self.submit_provider_async(circuit)
+			circuit = common_run(cid, require_selected_cid=True)
+			return self.submit_provider_async(circuit, return_status=True)
 		except DEFwOutOfResources as e:
 			if cid is None:
 				raise e
-			# queue circuit on a local out of resources queue
-			runtime = self.controller.task_for_cid(cid)
-			if runtime is not None:
-				self.controller.set_task_state(
-					runtime.qtask_id, QPM_TASK_PENDING_CAPACITY)
+			try:
+				self.dispatch_ready_qtask()
+			except DEFwOutOfResources:
+				pass
+			self.defer_local_retry(cid)
 			self.oor_queue.put(cid)
 		except Exception as e:
 			if circuit is not None:
@@ -417,7 +513,16 @@ class UTIL_QPM:
 			self.process_oor_queue()
 			raise e
 
-		return cid
+		return self._task_status_for_cid(cid)
+
+	def defer_local_retry(self, cid):
+		runtime = self.controller.task_for_cid(cid)
+		if runtime is None:
+			return
+		if runtime.state in (QPM_TASK_QUEUED, QPM_TASK_SELECTED):
+			return
+		self.controller.set_task_state(
+			runtime.qtask_id, QPM_TASK_PENDING_CAPACITY)
 
 	def read_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
@@ -663,3 +768,24 @@ class UTIL_QPM:
 def diagnostic_bypass_enabled():
 	value = os.environ.get(DIAGNOSTIC_BYPASS_ENV, "no").strip().lower()
 	return value in ("1", "true", "yes", "on", "y")
+
+
+def _sync_deadline(timeout):
+	if timeout is None:
+		return None
+	timeout_s = float(timeout)
+	if timeout_s <= 0:
+		return time.time()
+	return time.time() + timeout_s
+
+
+def _sync_timed_out(deadline):
+	return time.time() >= deadline
+
+
+def _sleep_until_retry(deadline):
+	if deadline is None:
+		time.sleep(0.01)
+		return
+	remaining = max(0.0, deadline - time.time())
+	time.sleep(min(0.01, remaining))

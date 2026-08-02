@@ -31,9 +31,13 @@ from .scheduler import (
 	QHW_SCHED_THREAD_USER,
 	create_scheduler_context,
 	normalize_scheduler_policy,
+	mark_scheduler_task_started,
+	select_next_scheduler_task,
 	scheduler_context_available,
 	scheduler_task_count,
 	set_scheduler_policy as activate_scheduler_policy,
+	submit_scheduler_task,
+	QPMSchedulerQueueEmpty,
 )
 
 
@@ -50,6 +54,8 @@ QPM_TASK_CREATED = "created"
 QPM_TASK_RESOURCES_CONSUMED = "resources-consumed"
 QPM_TASK_CAPACITY_HELD = "capacity-held"
 QPM_TASK_PENDING_CAPACITY = "pending-capacity"
+QPM_TASK_QUEUED = "queued"
+QPM_TASK_SELECTED = "selected"
 QPM_TASK_SUBMITTED = "submitted"
 QPM_TASK_COMPLETED = "completed"
 QPM_TASK_FAILED = "failed"
@@ -115,6 +121,8 @@ class QPMTargetController:
 		self.usage_events_by_qtask_id = {}
 		self.pending_capacity = {}
 		self.capacity_holds = {}
+		self.selected_qtask_ids = set()
+		self.provider_inflight = set()
 		self.worker_state = {}
 		self.event_endpoints = {}
 		self.callback_endpoints = {}
@@ -214,6 +222,8 @@ class QPMTargetController:
 				"task_count": scheduler_task_count(self.scheduler_context),
 				"pending_capacity_count": len(self.pending_capacity),
 				"runtime_task_count": len(self.runtime_by_qtask_id),
+				"selected_task_count": len(self.selected_qtask_ids),
+				"provider_inflight_count": len(self.provider_inflight),
 			}
 
 	def get_scheduler_policy(self):
@@ -290,6 +300,9 @@ class QPMTargetController:
 				],
 				"scheduler_task_count": scheduler_task_count(
 					self.scheduler_context),
+				"selected_qtask_ids": sorted(self.selected_qtask_ids),
+				"provider_inflight_qtask_ids": sorted(
+					self.provider_inflight),
 				"runtime_tasks": [
 					self._task_status_locked(runtime)
 					for runtime in self.runtime_by_qtask_id.values()
@@ -446,6 +459,61 @@ class QPMTargetController:
 				"admission usage rejected: "
 				f"status={authorized.get('status')} "
 				f"reason={authorized.get('reason')}")
+
+	def submit_qtask_to_scheduler(self, circuit):
+		qtask_id = circuit.info["qtask_id"]
+		with self.lock:
+			runtime = self.runtime_by_qtask_id[qtask_id]
+			if runtime.scheduler_task_id is not None:
+				return runtime
+			if qtask_id not in self.capacity_holds:
+				raise QPMAdmissionValidationError(
+					"scheduler submission requires an active "
+					"admission capacity hold")
+			scheduler_task_id = submit_scheduler_task(
+				self.scheduler_context,
+				self._scheduler_task_desc(circuit, runtime))
+			runtime.scheduler_task_id = scheduler_task_id
+			self.qtask_id_by_scheduler_task_id[scheduler_task_id] = qtask_id
+			runtime.state = QPM_TASK_QUEUED
+			return runtime
+
+	def select_qtask_for_dispatch(self):
+		with self.lock:
+			runtime = self._selected_runtime_locked()
+			if runtime is not None:
+				return runtime
+			if not self._can_select_scheduler_task_locked():
+				return None
+			try:
+				assignment = select_next_scheduler_task(
+					self.scheduler_context)
+			except QPMSchedulerQueueEmpty:
+				return None
+			scheduler_task_id = assignment["task_id"]
+			runtime = self.task_for_scheduler_task_id(scheduler_task_id)
+			if runtime is None:
+				raise QPMAdmissionValidationError(
+					"selected scheduler task is not known to QPM: "
+					f"scheduler_task_id={scheduler_task_id}")
+			self.selected_qtask_ids.add(runtime.qtask_id)
+			runtime.state = QPM_TASK_SELECTED
+			return runtime
+
+	def start_provider_submission(self, circuit, provider_handle=None):
+		qtask_id = circuit.info["qtask_id"]
+		with self.lock:
+			runtime = self.runtime_by_qtask_id[qtask_id]
+			if runtime.scheduler_task_id is not None:
+				mark_scheduler_task_started(
+					self.scheduler_context, runtime.scheduler_task_id)
+			self.selected_qtask_ids.discard(qtask_id)
+			self.provider_inflight.add(qtask_id)
+			if provider_handle is not None:
+				runtime.provider_handle = provider_handle
+				self.qtask_id_by_provider_handle[provider_handle] = qtask_id
+			runtime.state = QPM_TASK_SUBMITTED
+			return runtime
 
 	def retry_pending_capacity(self, reservation_id=None):
 		results = []
@@ -735,6 +803,8 @@ class QPMTargetController:
 			self.usage_events_by_qtask_id.pop(qtask_id, None)
 			self.pending_capacity.pop(qtask_id, None)
 			self.capacity_holds.pop(qtask_id, None)
+			self.selected_qtask_ids.discard(qtask_id)
+			self.provider_inflight.discard(qtask_id)
 			self.timeout_state.pop(qtask_id, None)
 			self.result_state.pop(qtask_id, None)
 			return runtime
@@ -993,6 +1063,50 @@ class QPMTargetController:
 			"rate_units": info.get(
 				"rate_units", info.get("estimated_rate_units", 1)),
 		}
+
+	def _scheduler_task_desc(self, circuit, runtime):
+		info = circuit.info
+		payload = info.get("qasm")
+		if isinstance(payload, str):
+			payload = payload.encode("utf-8")
+		return {
+			"task_id": runtime.qtask_id,
+			"owner_id": runtime.canonical_ids.get("owner_id", 0),
+			"job_id": runtime.canonical_ids.get(
+				"job_id",
+				runtime.canonical_ids.get("allocation_id", 0)),
+			"reservation_id": self.canonicalize_external_id(
+				"reservation_id", runtime.reservation_id),
+			"priority": info.get("priority", 0),
+			"deadline_ns": info.get("deadline_ns", 0),
+			"estimated_runtime_ns": info.get(
+				"estimated_ns",
+				info.get("walltime_ns", info.get("estimated_device_ns", 0))),
+			"estimated_cost": info.get(
+				"estimated_cost", info.get("credits", 0)),
+			"payload": payload,
+			"metadata": {
+				100: info.get("num_shots", info.get("shots", 1)),
+				101: info.get("num_qubits", 1),
+				102: info.get("depth", 1),
+				103: info.get("two_q_gate_count", 0),
+			},
+		}
+
+	def _selected_runtime_locked(self):
+		for qtask_id in sorted(self.selected_qtask_ids):
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is not None:
+				return runtime
+			self.selected_qtask_ids.discard(qtask_id)
+		return None
+
+	def _can_select_scheduler_task_locked(self):
+		if self.scheduler_control["paused"] or self.scheduler_control["draining"]:
+			return False
+		return (
+			len(self.provider_inflight) <
+			self.scheduler_control["dispatch_depth"])
 
 	def _require_reservation_active(self, reservation, operation):
 		if reservation.get("state") == "active":

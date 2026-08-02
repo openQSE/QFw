@@ -12,6 +12,10 @@ class QPMSchedulerUnavailable(QPMSchedulerError):
 	pass
 
 
+class QPMSchedulerQueueEmpty(QPMSchedulerError):
+	pass
+
+
 class UnavailableSchedulerContext:
 	available = False
 
@@ -110,8 +114,16 @@ def select_next_scheduler_task(context):
 	context = require_scheduler_context(context)
 	if hasattr(context, "select_next_assignment"):
 		assignment = context.select_next_assignment()
+		if assignment is None:
+			raise QPMSchedulerQueueEmpty("scheduler queue is empty")
 		return dict(assignment) if isinstance(assignment, dict) else assignment
-	assignment = context.scheduler.select_next_assignment()
+	try:
+		assignment = context.scheduler.select_next_assignment()
+	except Exception as error:
+		if _is_empty_selection_error(context.qhw_scheduler, error):
+			raise QPMSchedulerQueueEmpty(
+				"scheduler queue is empty") from error
+		raise
 	return {
 		"task_id": assignment.task_id,
 		"parent_task_id": assignment.parent_task_id,
@@ -218,6 +230,12 @@ def _native_options(qhw_scheduler, options):
 			raise QPMSchedulerError(
 				f"unsupported scheduler option value: key={key}")
 	return items
+
+
+def _is_empty_selection_error(qhw_scheduler, error):
+	return (
+		getattr(error, "rc", None) ==
+		getattr(qhw_scheduler, "QHW_SCHED_ERR_NOT_FOUND", object()))
 
 
 def _plain_options(options):
