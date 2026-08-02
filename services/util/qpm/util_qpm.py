@@ -252,7 +252,7 @@ class UTIL_QPM:
 	def submit_provider_async(self, circuit, return_status=False):
 		self.controller.start_provider_submission(circuit)
 		response = (
-			self._task_status_for_cid(circuit.get_cid())
+			self.controller.task_status_for_cid(circuit.get_cid())
 			if return_status else None)
 		provider_handle = self.qrc.async_run(circuit)
 		if provider_handle is not None:
@@ -285,20 +285,6 @@ class UTIL_QPM:
 				if "hosts" in circuit.info:
 					self.free_resources(circuit)
 			raise e
-
-	def _task_status_for_cid(self, cid, **fields):
-		status_for_cid = getattr(self.controller, "task_status_for_cid", None)
-		if status_for_cid is not None:
-			return status_for_cid(cid, **fields)
-		runtime = self.controller.task_for_cid(cid)
-		if runtime is None:
-			response = {"cid": cid}
-		else:
-			response = self.controller._task_status_locked(runtime)
-		for key, value in fields.items():
-			if value is not None:
-				response[key] = value
-		return response
 
 	def complete_provider_submission(self, circuit, result=None):
 		self.controller.record_result(circuit.info["qtask_id"], result)
@@ -360,7 +346,7 @@ class UTIL_QPM:
 				circuit = common_run(cid, require_selected_cid=True)
 				result = self.submit_provider_sync(circuit)
 				self.complete_provider_submission(circuit, result=result)
-				response = self._task_status_for_cid(
+				response = self.controller.task_status_for_cid(
 					circuit.get_cid(), outcome="COMPLETED",
 					result=result)
 				if "hosts" in circuit.info:
@@ -389,21 +375,18 @@ class UTIL_QPM:
 	def _sync_timeout_response(self, cid, request, message):
 		runtime = self.controller.task_for_cid(cid)
 		if runtime is None:
-			return self._task_status_for_cid(
+			return self.controller.task_status_for_cid(
 				cid, outcome="TIMEOUT", reason="sync-timeout",
 				message=message)
 		if request.context.cancel_on_timeout:
 			self.cancel_provider_submission(cid, reason="sync-timeout")
-			return self._task_status_for_cid(
+			return self.controller.task_status_for_cid(
 				cid, outcome="CANCELLED", reason="sync-timeout",
 				message=message)
 		self.oor_queue.put(cid)
-		record_timeout = getattr(self.controller, "record_timeout", None)
-		if record_timeout is not None:
-			record_timeout(
-				runtime.qtask_id, reason="sync-timeout",
-				message=message)
-		return self._task_status_for_cid(
+		self.controller.record_timeout(
+			runtime.qtask_id, reason="sync-timeout", message=message)
+		return self.controller.task_status_for_cid(
 			cid, outcome="TIMEOUT", reason="sync-timeout",
 			message=message)
 
@@ -513,7 +496,7 @@ class UTIL_QPM:
 			self.process_oor_queue()
 			raise e
 
-		return self._task_status_for_cid(cid)
+		return self.controller.task_status_for_cid(cid)
 
 	def defer_local_retry(self, cid):
 		runtime = self.controller.task_for_cid(cid)

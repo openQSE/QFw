@@ -60,6 +60,7 @@ QPM_TASK_SUBMITTED = "submitted"
 QPM_TASK_COMPLETED = "completed"
 QPM_TASK_FAILED = "failed"
 QPM_TASK_CANCELLED = "cancelled"
+QPM_TASK_TIMED_OUT = "timed-out"
 
 
 @dataclass(frozen=True)
@@ -308,6 +309,38 @@ class QPMTargetController:
 					for runtime in self.runtime_by_qtask_id.values()
 				],
 			}
+
+	def task_status_for_cid(self, cid, outcome=None, reason=None,
+				message=None, result=None):
+		with self.lock:
+			runtime = self.runtime_by_cid.get(cid)
+			if runtime is None:
+				return {
+					"outcome": outcome or "UNKNOWN",
+					"lifecycle_state": "unknown",
+					"cid": cid,
+					"reason": reason,
+					"message": message,
+				}
+			return self._task_status_locked(
+				runtime, outcome=outcome, reason=reason,
+				message=message, result=result)
+
+	def task_status_for_qtask_id(self, qtask_id, outcome=None, reason=None,
+				     message=None, result=None):
+		with self.lock:
+			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			if runtime is None:
+				return {
+					"outcome": outcome or "UNKNOWN",
+					"lifecycle_state": "unknown",
+					"qtask_id": qtask_id,
+					"reason": reason,
+					"message": message,
+				}
+			return self._task_status_locked(
+				runtime, outcome=outcome, reason=reason,
+				message=message, result=result)
 
 	def register_event_endpoint(self, info):
 		registration = dict(info)
@@ -771,7 +804,18 @@ class QPMTargetController:
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
 			self.result_state[qtask_id] = result
+			self.timeout_state.pop(qtask_id, None)
 			runtime.state = QPM_TASK_COMPLETED
+			return runtime
+
+	def record_timeout(self, qtask_id, reason=None, message=None):
+		with self.lock:
+			runtime = self.runtime_by_qtask_id[qtask_id]
+			self.timeout_state[qtask_id] = {
+				"reason": reason,
+				"message": message,
+				"timestamp_ns": time.time_ns(),
+			}
 			return runtime
 
 	def cleanup_circuit(self, cid):
@@ -890,8 +934,12 @@ class QPMTargetController:
 			"control": dict(self.scheduler_control),
 		}
 
-	def _task_status_locked(self, runtime):
-		return {
+	def _task_status_locked(self, runtime, outcome=None, reason=None,
+				message=None, result=None):
+		timeout = self.timeout_state.get(runtime.qtask_id)
+		response = {
+			"outcome": outcome or self._task_outcome_locked(runtime),
+			"lifecycle_state": runtime.state,
 			"cid": runtime.cid,
 			"qtask_id": runtime.qtask_id,
 			"reservation_id": runtime.reservation_id,
@@ -899,6 +947,27 @@ class QPMTargetController:
 			"provider_handle": runtime.provider_handle,
 			"state": runtime.state,
 		}
+		if reason is not None:
+			response["reason"] = reason
+		if message is not None:
+			response["message"] = message
+		if result is not None:
+			response["result"] = result
+		if timeout is not None:
+			response["timeout"] = dict(timeout)
+		return {key: value for key, value in response.items()
+			if value is not None}
+
+	def _task_outcome_locked(self, runtime):
+		if runtime.state == QPM_TASK_COMPLETED:
+			return "COMPLETED"
+		if runtime.state == QPM_TASK_FAILED:
+			return "FAILED"
+		if runtime.state == QPM_TASK_CANCELLED:
+			return "CANCELLED"
+		if runtime.state == QPM_TASK_PENDING_CAPACITY:
+			return "DELAYED"
+		return "ACCEPTED"
 
 	def _terminal_task_for_selector_locked(self, cid=None, qtask_id=None):
 		if qtask_id is not None:
