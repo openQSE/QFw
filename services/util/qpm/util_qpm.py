@@ -15,13 +15,12 @@ from defw_exception import (
 	DEFwOutOfResources,
 )
 from .controller import (
-	QPM_TASK_CANCELLED,
-	QPM_TASK_FAILED,
 	QPM_TASK_PENDING_CAPACITY,
 	QPM_TASK_QUEUED,
 	QPM_TASK_RESOURCES_CONSUMED,
 	QPM_TASK_SELECTED,
 	QPM_TASK_SUBMITTED,
+	QPM_TASK_TERMINAL_STATES,
 	controller_config,
 	get_target_controller,
 )
@@ -189,7 +188,8 @@ class UTIL_QPM:
 				# pop that entry off the queue.
 				cid = self.oor_queue.get(block=False)
 				runtime = self.controller.task_for_cid(cid)
-				if runtime is None or runtime.state == QPM_TASK_CANCELLED:
+				if (runtime is None or
+						runtime.state in QPM_TASK_TERMINAL_STATES):
 					continue
 				self.async_run_oor(cid)
 			except DEFwOutOfResources:

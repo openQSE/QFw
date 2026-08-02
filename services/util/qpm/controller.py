@@ -849,6 +849,14 @@ class QPMTargetController:
 				if runtime is None:
 					self.pending_capacity.pop(qtask_id, None)
 					continue
+				try:
+					self._require_pending_capacity_reservation_valid_locked(
+						qtask_id, pending, runtime)
+				except QPMAdmissionValidationError as error:
+					results.append(
+						self._reject_pending_capacity_locked(
+							qtask_id, pending, runtime, error))
+					continue
 				usage = dict(pending["usage"])
 				authorized = authorize_usage(
 					self.admission_context, pending["reservation_id"],
@@ -896,6 +904,50 @@ class QPMTargetController:
 					"decision": dict(committed),
 				})
 		return results
+
+	def _require_pending_capacity_reservation_valid_locked(
+			self, qtask_id, pending, runtime):
+		reservation_id = pending.get("reservation_id")
+		if reservation_id is None:
+			raise QPMAdmissionValidationError(
+				f"pending capacity is missing reservation_id: "
+				f"qtask_id={qtask_id}")
+		if runtime.reservation_id != reservation_id:
+			raise QPMAdmissionValidationError(
+				"pending capacity reservation mismatch: "
+				f"qtask_id={qtask_id} "
+				f"pending_reservation_id={reservation_id} "
+				f"runtime_reservation_id={runtime.reservation_id}")
+		if reservation_id in self.reservation_close_state:
+			raise QPMAdmissionValidationError(
+				f"reservation is closing: reservation_id={reservation_id}")
+		try:
+			reservation = get_reservation(
+				self.admission_context, reservation_id)
+		except Exception as error:
+			raise QPMAdmissionValidationError(
+				f"reservation lookup failed: reservation_id={reservation_id} "
+				f"error={error}") from error
+		self._require_reservation_active(
+			reservation, "pending capacity retry")
+		self._require_reservation_not_expired(reservation)
+		return reservation
+
+	def _reject_pending_capacity_locked(self, qtask_id, pending, runtime,
+					    error):
+		self.pending_capacity.pop(qtask_id, None)
+		if runtime.state not in QPM_TASK_TERMINAL_STATES:
+			runtime.state = QPM_TASK_FAILED
+		return {
+			"qtask_id": qtask_id,
+			"status": "rejected",
+			"decision": {
+				"status": "rejected",
+				"reason": "invalid-reservation",
+				"reservation_id": pending.get("reservation_id"),
+				"message": str(error),
+			},
+		}
 
 	def close_expired_reservation(self, reservation_id, now_ns=None):
 		with self.lock:

@@ -4,7 +4,11 @@ import time
 import util.qpm.util_qpm as util_qpm
 from defw_exception import DEFwExecutionError
 from fakes import FakeSchedulerContext
-from util.qpm.controller import clear_target_controllers
+from util.qpm.controller import (
+	QPM_TASK_CANCELLED,
+	QPM_TASK_FAILED,
+	clear_target_controllers,
+)
 from util.qpm.util_qpm import UTIL_QPM
 
 
@@ -317,6 +321,68 @@ def test_usage_authorization_hold_and_pending_retry(monkeypatch):
 	result = qpm.retry_pending_capacity(reservation_id)
 	assert result[0]["status"] == "accepted"
 	assert qpm.fake_qrc.async_cids == [cid]
+
+
+def _delayed_capacity_qpm(monkeypatch, target_id="admission-delayed"):
+	_setup(monkeypatch)
+	FakeAdmissionContext.usage_status = "delayed"
+	qpm = AdmissionQPM(target_id=target_id)
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	runtime = qpm.controller.task_for_cid(response["cid"])
+
+	assert runtime.qtask_id in qpm.controller.pending_capacity
+	assert qpm.fake_qrc.async_cids == []
+	return qpm, reservation_id, runtime
+
+
+def test_pending_capacity_retry_rejects_inactive_reservation(monkeypatch):
+	for state in ("released", "cancelled"):
+		qpm, reservation_id, runtime = _delayed_capacity_qpm(
+			monkeypatch, target_id=f"admission-delayed-{state}")
+		qpm.controller.admission_context.reservations[
+			reservation_id]["state"] = state
+		FakeAdmissionContext.usage_status = "accepted"
+
+		result = qpm.retry_pending_capacity(reservation_id)
+
+		assert result[0]["status"] == "rejected"
+		assert result[0]["decision"]["reason"] == "invalid-reservation"
+		assert f"state={state}" in result[0]["decision"]["message"]
+		assert runtime.qtask_id not in qpm.controller.pending_capacity
+		assert runtime.qtask_id not in qpm.controller.capacity_holds
+		assert runtime.state == QPM_TASK_FAILED
+		assert len(qpm.controller.admission_context.authorized) == 1
+		assert qpm.controller.admission_context.authorized[0][0] == (
+			reservation_id)
+		assert qpm.controller.admission_context.consumed == []
+		assert qpm.fake_qrc.async_cids == []
+
+
+def test_pending_capacity_retry_rejects_expired_reservation(monkeypatch):
+	qpm, reservation_id, runtime = _delayed_capacity_qpm(
+		monkeypatch, target_id="admission-delayed-expired")
+	qpm.controller.admission_context.reservations[
+		reservation_id]["expires_at_ns"] = time.time_ns() - 1
+	FakeAdmissionContext.usage_status = "accepted"
+
+	result = qpm.retry_pending_capacity(reservation_id)
+	close_state = qpm.controller.reservation_close_state[reservation_id]
+
+	assert result[0]["status"] == "rejected"
+	assert result[0]["decision"]["reason"] == "invalid-reservation"
+	assert "expired reservation" in result[0]["decision"]["message"]
+	assert runtime.qtask_id not in qpm.controller.pending_capacity
+	assert runtime.qtask_id not in qpm.controller.capacity_holds
+	assert runtime.state == QPM_TASK_CANCELLED
+	assert runtime.qtask_id in close_state["pending_removed"]
+	assert qpm.controller.admission_context.expired
+	assert qpm.controller.admission_context.consumed == []
+	assert qpm.fake_qrc.async_cids == []
 
 
 def test_release_cancel_and_expiration_reconcile_active_state(monkeypatch):
