@@ -16,6 +16,10 @@ Revision 2 incorporates the first round of review feedback (PR #30):
   (span names and `qfw.*` attributes) for quantum benchmarking.
 - A **benchmark suite landscape** section is added covering SupermarQ,
   QStone, and the MQSS Benchmarking Framework.
+- A third **streaming deployment profile** is added for sites with existing
+  telemetry infrastructure (Kafka → VictoriaMetrics), together with
+  **attribute cardinality classes** so the conventions are safe to use as
+  metric labels in such a store.
 - A short **licensing** section is added.
 - The document is renamed "Benchmarking and Profiling Design" — Type B
   below is profiling/tracing.
@@ -34,6 +38,7 @@ Revision 2 incorporates the first round of review feedback (PR #30):
 - [Semantic Conventions (Initial Proposal)](#semantic-conventions-initial-proposal)
   - [Span Vocabulary](#span-vocabulary)
   - [Context Attributes](#context-attributes)
+    - [Cardinality Classes](#cardinality-classes)
   - [Metrics](#metrics)
   - [Result and Quality Data](#result-and-quality-data)
 - [Benchmark Suite Integrations](#benchmark-suite-integrations)
@@ -179,8 +184,8 @@ Adopting the standard has consequences the bespoke format could not offer:
 
 ### Deployment Profiles
 
-The same instrumentation supports two deployment profiles; choosing one is
-a configuration decision, not a code change.
+The same instrumentation supports three deployment profiles; choosing one
+is a configuration decision, not a code change.
 
 **Profile 1 — file export (default, zero infrastructure).** Each
 instrumented process exports OTLP JSON to files on node-local storage
@@ -196,8 +201,62 @@ examples and Kubernetes Helm charts for such stacks exist and can be adapted
 as a reference deployment for persistent installations. The SLURM processor
 above slots in here.
 
+**Profile 3 — streaming to site telemetry infrastructure (optional).**
+Sites that already operate a telemetry pipeline can receive QFw's signals
+into it rather than running a QFw-specific stack. The motivating case is
+ORNL, whose HPC telemetry today streams from many sources over **Apache
+Kafka** into **VictoriaMetrics** for storage and analysis, and which does
+not use OpenTelemetry natively. Adopting OTel does not conflict with such
+a pipeline — OTel governs what QFw *emits*, while Kafka and VictoriaMetrics
+are transport and storage — and the connecting pieces are stock components:
+
+```
+QFw (OTel SDK) → Collector agent ──[kafka exporter]──► site Kafka topic
+                                                            │
+                            ┌───────────────────────────────┘
+                            ▼
+        [kafka receiver] → Collector → VictoriaMetrics  (metrics, OTLP native)
+                                     → VictoriaTraces   (traces, OTLP native)
+                                     → VictoriaLogs     (logs, OTLP native)
+```
+
+- The OTel Collector's **Kafka exporter and receiver** are OSS
+  (collector-contrib), defaulting to `otlp_proto` encoding, so QFw needs no
+  Kafka-specific code.
+- **VictoriaMetrics ingests OTLP metrics natively** at
+  `/opentelemetry/v1/metrics` in the OSS release, and promotes OTel resource
+  attributes to labels — so the `qfw.*` conventions become directly
+  queryable (see the cardinality guidance in
+  [Context Attributes](#context-attributes)).
+- Sites whose Kafka pipeline already has consumers may only need QFw to land
+  OTLP-encoded messages on a topic.
+
+Two practical notes for this profile:
+
+- **Traces need a trace store.** VictoriaMetrics is a metrics database;
+  QFw's Type B per-hop profiling is fundamentally traces. Options, in rough
+  order of preference: (a) add **VictoriaTraces** (same vendor, OTLP
+  ingestion, Jaeger-compatible query APIs for Grafana — but newer, built on
+  VictoriaLogs, minimum retention one day, no per-tenant authorization);
+  (b) use the Collector's **spanmetrics connector** to derive
+  rate/error/duration metrics from spans, sending aggregates into the
+  existing metrics store while full traces stay local under profile 1 —
+  usually the least invasive option for a site that does not want to adopt
+  a trace store; (c) route traces to a separate store (Tempo, Jaeger)
+  alongside metrics.
+- **Licensing of the Kafka path.** `vmagent`'s own Kafka consumer is a
+  VictoriaMetrics *Enterprise* feature, but the OSS OTel Collector Kafka
+  receiver covers the same ground, so no license is required for this
+  topology.
+
+Because VictoriaMetrics is Prometheus-compatible, SLURM's OpenMetrics data
+lands in the same store, keeping scheduler and framework telemetry
+queryable together.
+
 The report pipeline (below) consumes profile 1's files directly; under
-profile 2 the same reports can be generated from the collector's store.
+profiles 2 and 3 the same reports can be generated from the backing store.
+Profiles compose: a site may stream to shared infrastructure *and* keep
+node-local OTLP files for archivable per-run reports.
 
 ### Instrumentation Points
 
@@ -311,9 +370,45 @@ system looks at report time.
 | SLURM | Job ID, partition, node list, allocated resources (also scrapeable via OpenMetrics in the collector profile) |
 | Environment | Container image tag/digest, Python version, key package versions (qiskit, qrmi, mqt.core, iqm-client, …) |
 
+#### Cardinality Classes
+
+Attributes must be classified by cardinality, because the same attribute is
+cheap on a span and expensive on a metric. Time-series databases key each
+series by its full label set, so a high-cardinality label multiplies stored
+series; this matters concretely in the streaming profile, where
+VictoriaMetrics promotes OTel resource attributes to labels automatically.
+Spans have no such constraint — each span is an independent record.
+
+Every `qfw.*` attribute carries one of two classes:
+
+| Class | Meaning | Where it may appear |
+| --- | --- | --- |
+| **Dimensional** (low cardinality) | Bounded, slow-changing set of values — safe to group and filter by | Metric labels, span attributes, resource attributes |
+| **Descriptive** (high cardinality) | Per-run, per-job, or free-form values | Span attributes and report JSON only — **never** metric labels |
+
+Initial classification:
+
+| Class | Attributes |
+| --- | --- |
+| Dimensional | `qfw.stack.api_path` (`native`/`qrmi`/`qdmi`/`simulator`), `qfw.device.name`, `qfw.backend.kind`, `qfw.suite.name`, `qfw.circuit.num_qubits`, `service.name`, `service.version`, status/outcome |
+| Descriptive | trace and span IDs, `qfw.job.id`, vendor job IDs, SLURM job ID, `qfw.device.calibration_set_id`, calibration snapshots, coupling maps, `target()` payload digests, circuit hashes, OpenQASM payloads, package-version maps, container image digests |
+
+Two judgment calls worth community scrutiny (see open questions):
+`qfw.circuit.num_qubits` is dimensional in practice because sweeps use a
+small set of sizes, but an unbounded sweep would make it descriptive; and
+`qfw.device.calibration_set_id` is classed descriptive because it rotates,
+even though grouping results by calibration is exactly what an analyst
+wants — that grouping belongs in the report tooling and trace store, not in
+metric labels.
+
+Where a descriptive value must be reachable from a metric, record it as an
+**exemplar** on the metric rather than as a label; exemplars carry a trace
+ID that links an aggregate back to a representative trace.
+
 ### Metrics
 
-Initial metric set (OTel instruments):
+Initial metric set (OTel instruments). Metric labels are drawn only from
+the **dimensional** class above:
 
 | Metric | Instrument | Purpose |
 | --- | --- | --- |
@@ -540,7 +635,7 @@ candidates here is copyleft.
 | 1 | OTel SDK integration in the Python components; `traceparent` propagation through DEFw RPC; file-export profile; core span vocabulary (`qfw.job` path); `qfw_bench_extract` producing schema-v2 JSON from OTLP files |
 | 2 | Context attributes from Qiskit, QRMI, QDMI/FoMaC, SLURM, environment; `qfw_bench_render`; **SupermarQ pilot** — extend the in-tree example with `score()` and conventions, run across back-ends |
 | 3 | `qfw_bench_compare`; hybrid-loop spans and metric histograms; **QStone integration** (QFw connector or gateway) with trace-ID correlation |
-| 4 | **mqssbench `DeviceAdapter`** (brings MQT Bench, QV, RB); suite-run automation; collector-profile reference deployment (Docker Compose) with the SLURM processor |
+| 4 | **mqssbench `DeviceAdapter`** (brings MQT Bench, QV, RB); suite-run automation; collector-profile reference deployment (Docker Compose) with the SLURM processor; streaming-profile validation against a site pipeline (Kafka → VictoriaMetrics) |
 | 5 | `qfw.rpc` spans/metrics shared with the libfabric TCP-vs-OFI work; instrumentation below the shim via the Rust (QRMI) and C (QDMI) SDKs; report archiving and longitudinal comparison |
 
 Phase 1 alone is already useful: it produces the framework-overhead
@@ -564,12 +659,22 @@ Concrete questions where feedback is sought — plus anything not listed here:
    distribution-bearing) rather than spans — is the split proposed in
    [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)
    drawn in the right place?
-5. **Result storage:** counts inline in the JSON report vs referenced
+5. **Cardinality classes:** is the dimensional/descriptive split in
+   [Cardinality Classes](#cardinality-classes) right — particularly
+   `qfw.circuit.num_qubits` (dimensional only if sweeps stay bounded) and
+   `qfw.device.calibration_set_id` (classed descriptive despite grouping by
+   calibration being an obvious analysis axis)? Sites running a shared
+   metrics store have the most direct stake here.
+6. **Streaming profile:** for sites with existing telemetry pipelines
+   (e.g. ORNL's Kafka → VictoriaMetrics), is deriving span metrics via the
+   spanmetrics connector the right default when no trace store is
+   available, or should we expect trace stores to be deployed?
+7. **Result storage:** counts inline in the JSON report vs referenced
    external files — where is the size cutoff? How long are OTLP files
    retained per run?
-6. **Where should the tooling live** — `bin/`, a new top-level
+8. **Where should the tooling live** — `bin/`, a new top-level
    `benchmarks/` directory, or a separate repository?
-7. **Upstream QASM 3:** should we push OpenQASM 3 support into QStone and
+9. **Upstream QASM 3:** should we push OpenQASM 3 support into QStone and
    SupermarQ, or keep accepting 2.0 at the canonicalization boundary
    indefinitely?
 
