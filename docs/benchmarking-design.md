@@ -203,12 +203,18 @@ above slots in here.
 
 **Profile 3 — streaming to site telemetry infrastructure (optional).**
 Sites that already operate a telemetry pipeline can receive QFw's signals
-into it rather than running a QFw-specific stack. The motivating case is
-ORNL, whose HPC telemetry today streams from many sources over **Apache
-Kafka** into **VictoriaMetrics** for storage and analysis, and which does
-not use OpenTelemetry natively. Adopting OTel does not conflict with such
-a pipeline — OTel governs what QFw *emits*, while Kafka and VictoriaMetrics
-are transport and storage — and the connecting pieces are stock components:
+into it rather than running a QFw-specific stack. Adopting OTel does not
+conflict with such a pipeline: OTel governs what QFw *emits*, while the
+site's bus and stores handle transport and storage.
+
+The motivating case is ORNL, whose operational analytics pipeline collects
+from systems, storage, SLURM, telemetry sources, and users; ingests through
+**Apache Kafka** as a common message bus (roughly 4 TB/day); stores in
+**VictoriaMetrics**, **Druid**, **Elasticsearch**, and **MinIO**;
+visualizes with **Grafana**; and archives to MinIO/Parquet for long-term
+research. ORNL does not use OpenTelemetry natively today. Even so, every
+signal QFw emits has a destination in that stack, reachable with stock
+components:
 
 ```
 QFw (OTel SDK) → Collector agent ──[kafka exporter]──► site Kafka topic
@@ -216,8 +222,10 @@ QFw (OTel SDK) → Collector agent ──[kafka exporter]──► site Kafka to
                             ┌───────────────────────────────┘
                             ▼
         [kafka receiver] → Collector → VictoriaMetrics  (metrics, OTLP native)
-                                     → VictoriaTraces   (traces, OTLP native)
-                                     → VictoriaLogs     (logs, OTLP native)
+                                     → Elasticsearch    (traces + logs)
+                                     → MinIO            (archive, object storage)
+                                              │
+                                        Grafana queries both stores
 ```
 
 - The OTel Collector's **Kafka exporter and receiver** are OSS
@@ -226,24 +234,45 @@ QFw (OTel SDK) → Collector agent ──[kafka exporter]──► site Kafka to
 - **VictoriaMetrics ingests OTLP metrics natively** at
   `/opentelemetry/v1/metrics` in the OSS release, and promotes OTel resource
   attributes to labels — so the `qfw.*` conventions become directly
-  queryable (see the cardinality guidance in
-  [Context Attributes](#context-attributes)).
+  queryable (see [Cardinality Classes](#cardinality-classes), which exists
+  precisely because of this promotion).
+- The **Elasticsearch exporter** (collector-contrib, OSS) sends traces,
+  logs, and metrics to Elasticsearch 7.17.x/8.x/9.x, routing each signal to
+  its own index.
+- The **S3 exporter** (`awss3exporter`) writes to any S3-compatible object
+  store including MinIO (`endpoint` plus `s3_force_path_style`, credentials
+  from the standard AWS environment variables).
 - Sites whose Kafka pipeline already has consumers may only need QFw to land
-  OTLP-encoded messages on a topic.
+  OTLP-encoded messages on a topic and route them with existing tooling.
 
-Two practical notes for this profile:
+Practical notes for this profile:
 
-- **Traces need a trace store.** VictoriaMetrics is a metrics database;
-  QFw's Type B per-hop profiling is fundamentally traces. Options, in rough
-  order of preference: (a) add **VictoriaTraces** (same vendor, OTLP
-  ingestion, Jaeger-compatible query APIs for Grafana — but newer, built on
-  VictoriaLogs, minimum retention one day, no per-tenant authorization);
-  (b) use the Collector's **spanmetrics connector** to derive
-  rate/error/duration metrics from spans, sending aggregates into the
-  existing metrics store while full traces stay local under profile 1 —
-  usually the least invasive option for a site that does not want to adopt
-  a trace store; (c) route traces to a separate store (Tempo, Jaeger)
-  alongside metrics.
+- **Traces need a trace-capable store, and sites often already have one.**
+  A metrics database alone cannot hold QFw's Type B per-hop profiling,
+  which is fundamentally traces. Where a site runs Elasticsearch (as ORNL
+  does), the Elasticsearch exporter covers traces directly. Otherwise, in
+  rough order of preference: add a trace store (VictoriaTraces — same
+  vendor as VictoriaMetrics, OTLP ingestion, Jaeger-compatible query APIs,
+  though newer, built on VictoriaLogs, minimum retention one day, and
+  without per-tenant authorization — or Tempo, or Jaeger); or, if the site
+  prefers not to index spans at all, use the Collector's **spanmetrics
+  connector** to derive rate/error/duration metrics from spans, sending
+  aggregates to the metrics store while full traces stay node-local under
+  profile 1.
+- **Object-storage archiving aligns with the report pipeline.** A site
+  archive such as MinIO/Parquet is the natural home for the archivable
+  artifacts this design calls for, and makes longitudinal comparison a
+  query against data researchers already hold rather than a bespoke
+  exercise. One caveat: `awss3exporter`'s marshalers are `otlp_json` and
+  `otlp_proto` — **not Parquet** — so columnar conversion is a separate
+  step. Sites already landing Parquet in object storage typically have such
+  a step; whether QFw's OTLP joins it, or the report tooling writes its own
+  artifacts to the archive, is a per-site decision.
+- **Volume is not a concern.** Benchmark instrumentation emits on the order
+  of tens of spans per job, so a full campaign is megabytes against a
+  pipeline already carrying terabytes per day. The one discipline to keep
+  is leaving high-rate sources (`qfw.rpc`) off unless the transport itself
+  is under study.
 - **Licensing of the Kafka path.** `vmagent`'s own Kafka consumer is a
   VictoriaMetrics *Enterprise* feature, but the OSS OTel Collector Kafka
   receiver covers the same ground, so no license is required for this
@@ -251,7 +280,8 @@ Two practical notes for this profile:
 
 Because VictoriaMetrics is Prometheus-compatible, SLURM's OpenMetrics data
 lands in the same store, keeping scheduler and framework telemetry
-queryable together.
+queryable together — and under this profile Grafana, already deployed at
+such sites, serves both the metric dashboards and the trace views.
 
 The report pipeline (below) consumes profile 1's files directly; under
 profiles 2 and 3 the same reports can be generated from the backing store.
@@ -665,10 +695,12 @@ Concrete questions where feedback is sought — plus anything not listed here:
    `qfw.device.calibration_set_id` (classed descriptive despite grouping by
    calibration being an obvious analysis axis)? Sites running a shared
    metrics store have the most direct stake here.
-6. **Streaming profile:** for sites with existing telemetry pipelines
-   (e.g. ORNL's Kafka → VictoriaMetrics), is deriving span metrics via the
-   spanmetrics connector the right default when no trace store is
-   available, or should we expect trace stores to be deployed?
+6. **Streaming profile:** for sites with existing telemetry pipelines,
+   which stores should QFw target by default for each signal — and where a
+   site archives to object storage (e.g. MinIO/Parquet), should QFw's OTLP
+   feed the site's existing columnar conversion, or should the report
+   tooling write its own artifacts to the archive? Operators of such
+   pipelines are the right people to answer both.
 7. **Result storage:** counts inline in the JSON report vs referenced
    external files — where is the size cutoff? How long are OTLP files
    retained per run?
