@@ -143,9 +143,9 @@ def measure_library(library, device_id, warm_iterations):
 				_require_real_payload(returned)
 		warm[call] = {
 			"samples": samples,
-			"median_seconds": statistics.median(samples),
-			"min_seconds": min(samples),
-			"max_seconds": max(samples),
+			"median_seconds": statistics.median(samples) if samples else None,
+			"min_seconds": min(samples) if samples else None,
+			"max_seconds": max(samples) if samples else None,
 		}
 	result["warm"] = warm
 	return result
