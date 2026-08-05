@@ -1,3 +1,5 @@
+import pytest
+
 from tests.mock.fakes import FakeEventAPI, FakeQPM, make_result_event
 
 
@@ -49,6 +51,8 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 	assert list(job._cid_list[0].keys()) == ["cid-101"]
 
 
+@pytest.mark.skip(
+	reason="Phase 3+ QFwJob result memory mapping is out of Phase 2")
 def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 

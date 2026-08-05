@@ -1,21 +1,77 @@
-from tests.mock.fakes import (
-	FakeDefwModule,
-	FakeQPM,
-	FakeResourceManager,
-	FakeServiceInfo,
-)
+from tests.mock.fakes import FakeQPM
 
 
-def test_get_qpm_returns_reserved_service(monkeypatch):
+def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
+			 endpoint=None):
+	return {
+		"fake_qpm": fake_qpm,
+		"service_record": {
+			"service_id": service_id,
+			"service_name": "QPM",
+			"service_type": "qfw.qpm",
+			"runtime_id": f"{service_id}-runtime",
+			"generation": 1,
+			"endpoint": endpoint or f"{service_id}:9000",
+			"selector": {
+				"resources": ["IQM-20q"],
+				"aliases": [provider],
+			},
+			"properties": {
+				"provider": provider,
+				"legacy_type": 4,
+				"legacy_capabilities": 2,
+			},
+		},
+		"selected_binding": {
+			"binding_name": "execution",
+			"client_module": "api_qpm_execution",
+			"client_class": "QPMExecution",
+			"service_module": f"svc_{provider}_qpm.svc_qpm",
+			"service_class": "QPM",
+			"version": 1,
+		},
+	}
+
+
+class FakeDirectoryResourceManager:
+	def __init__(self, records):
+		self.records = list(records)
+		self.queries = []
+
+	def resolve_services(self, **kwargs):
+		self.queries.append(kwargs)
+		return [
+			{key: value for key, value in record.items()
+			 if key != "fake_qpm"}
+			for record in self.records
+		]
+
+
+class BindingDefwModule:
+	def __init__(self, records=None, default_qpm=None):
+		self.binding_connections = []
+		self.qpms = {
+			record["service_record"]["service_id"]: record["fake_qpm"]
+			for record in records or []
+		}
+		self.default_qpm = default_qpm
+
+	def connect_to_binding(self, resolved_binding):
+		self.binding_connections.append(resolved_binding)
+		service_id = resolved_binding["service_record"]["service_id"]
+		return self.qpms.get(service_id, self.default_qpm)
+
+	def connect_to_resource(self, service_infos, resource_name):
+		raise AssertionError("legacy connect_to_resource must not be used")
+
+
+def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
 	fake_qpm = FakeQPM()
-	service_info = FakeServiceInfo(
-		fake_qpm,
-		properties={"provider": "iqm", "service_type": "qfw.qpm"},
-	)
-	rmgr = FakeResourceManager([service_info])
-	fake_defw = FakeDefwModule()
+	record = qpm_directory_record("qpm-iqm", fake_qpm)
+	rmgr = FakeDirectoryResourceManager([record])
+	fake_defw = BindingDefwModule([record])
 
 	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
@@ -23,8 +79,16 @@ def test_get_qpm_returns_reserved_service(monkeypatch):
 	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
 
 	assert result is fake_qpm
-	assert rmgr.requests == [("QPM", 4, 2)]
-	assert fake_defw.connections == [([service_info], "QPM")]
+	assert len(rmgr.queries) == 1
+	assert rmgr.queries[0]["service_name"] == "QPM"
+	assert rmgr.queries[0]["service_type"] == "qfw.qpm"
+	assert rmgr.queries[0]["binding_name"] == "execution"
+	assert rmgr.queries[0]["svc_type"] == 4
+	assert rmgr.queries[0]["svc_caps"] == 2
+	assert len(fake_defw.binding_connections) == 1
+	binding = fake_defw.binding_connections[0]
+	assert binding["service_record"]["service_id"] == "qpm-iqm"
+	assert binding["selected_binding"]["binding_name"] == "execution"
 	assert fake_qpm.shutdown_called is False
 
 
@@ -32,12 +96,9 @@ def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
 	fake_qpm = FakeQPM(test_error=RuntimeError("probe failed"))
-	service_info = FakeServiceInfo(
-		fake_qpm,
-		properties={"provider": "iqm", "service_type": "qfw.qpm"},
-	)
-	rmgr = FakeResourceManager([service_info])
-	fake_defw = FakeDefwModule()
+	record = qpm_directory_record("qpm-iqm", fake_qpm)
+	rmgr = FakeDirectoryResourceManager([record])
+	fake_defw = BindingDefwModule([record])
 
 	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
@@ -51,14 +112,14 @@ def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
 def test_get_qpm_propagates_reservation_failures(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
-	class FailingResourceManager:
-		def get_services(self, *args, **kwargs):
+	class FailingDirectory:
+		def resolve_services(self, **kwargs):
 			raise RuntimeError("reserve failed")
 
 	monkeypatch.setattr(
 		lookup_service,
 		"defw_get_resource_mgr",
-		lambda: FailingResourceManager(),
+		lambda: FailingDirectory(),
 	)
 
 	try:
@@ -73,17 +134,7 @@ def test_get_qpm_uses_direct_endpoint_without_resource_manager(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
 	fake_qpm = FakeQPM()
-
-	class DirectDefwModule(FakeDefwModule):
-		def __init__(self):
-			super().__init__()
-			self.direct_connections = []
-
-		def connect_to_endpoint(self, endpoint, api_binding):
-			self.direct_connections.append((endpoint, api_binding))
-			return fake_qpm
-
-	fake_defw = DirectDefwModule()
+	fake_defw = BindingDefwModule(default_qpm=fake_qpm)
 
 	def unavailable_resource_manager():
 		raise RuntimeError("allocation-local resource manager unavailable")
@@ -101,10 +152,11 @@ def test_get_qpm_uses_direct_endpoint_without_resource_manager(monkeypatch):
 	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
 
 	assert result is fake_qpm
-	assert len(fake_defw.direct_connections) == 1
-	endpoint, api_binding = fake_defw.direct_connections[0]
-	assert endpoint == "qpm-direct:9000"
-	assert api_binding.binding_name == "execution"
+	assert len(fake_defw.binding_connections) == 1
+	binding = fake_defw.binding_connections[0]
+	assert binding["service_record"]["endpoint"]["address"] == "qpm-direct"
+	assert binding["service_record"]["endpoint"]["listen_port"] == 9000
+	assert binding["selected_binding"]["binding_name"] == "execution"
 
 
 def test_get_qpm_selects_requested_provider(monkeypatch):
@@ -112,18 +164,10 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 
 	native_qpm = FakeQPM()
 	shim_qpm = FakeQPM()
-	native = FakeServiceInfo(
-		native_qpm,
-		endpoint="native",
-		properties={"provider": "iqm", "service_type": "qfw.qpm"},
-	)
-	shim = FakeServiceInfo(
-		shim_qpm,
-		endpoint="shim",
-		properties={"provider": "shim", "service_type": "qfw.qpm"},
-	)
-	rmgr = FakeResourceManager([native, shim])
-	fake_defw = FakeDefwModule()
+	native = qpm_directory_record("native", native_qpm, provider="iqm")
+	shim = qpm_directory_record("shim", shim_qpm, provider="shim")
+	rmgr = FakeDirectoryResourceManager([native, shim])
+	fake_defw = BindingDefwModule([native, shim])
 
 	monkeypatch.setenv("QFW_QPM_IMPL", "shim")
 	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
@@ -132,20 +176,19 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
 
 	assert result is shim_qpm
-	assert fake_defw.connections == [([shim], "QPM")]
+	assert [
+		item["service_record"]["service_id"]
+		for item in fake_defw.binding_connections
+	] == ["shim"]
 
 
 def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 	from qfw_qiskit.qpm_resolver import QPMProviderPolicyError
 
-	shim = FakeServiceInfo(
-		FakeQPM(),
-		endpoint="shim",
-		properties={"provider": "shim", "service_type": "qfw.qpm"},
-	)
-	rmgr = FakeResourceManager([shim])
-	fake_defw = FakeDefwModule()
+	shim = qpm_directory_record("shim", FakeQPM(), provider="shim")
+	rmgr = FakeDirectoryResourceManager([shim])
+	fake_defw = BindingDefwModule([shim])
 
 	monkeypatch.setenv("QFW_QPM_IMPL", "iqm")
 	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
@@ -158,28 +201,25 @@ def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):
 	else:
 		raise AssertionError("expected requested provider policy failure")
 
-	assert fake_defw.connections == []
+	assert fake_defw.binding_connections == []
 
 
 def test_resolver_rejects_ambiguous_requested_provider():
 	from qfw_qiskit.qpm_resolver import (
+		DirectoryScope,
 		QPMAmbiguousResolutionError,
 		QPMResolver,
 	)
 
-	first = FakeServiceInfo(
-		FakeQPM(),
-		endpoint="iqm-a",
-		properties={"provider": "iqm", "service_type": "qfw.qpm"},
-	)
-	second = FakeServiceInfo(
-		FakeQPM(),
-		endpoint="iqm-b",
-		properties={"provider": "iqm", "service_type": "qfw.qpm"},
-	)
-	resolver = QPMResolver.from_resource_manager(
-		FakeResourceManager([first, second]),
-		defw_module=FakeDefwModule(),
+	first = qpm_directory_record("iqm-a", FakeQPM(), provider="iqm")
+	second = qpm_directory_record("iqm-b", FakeQPM(), provider="iqm")
+	resolver = QPMResolver(
+		[DirectoryScope(
+			"allocation-local",
+			"allocation-local",
+			client=FakeDirectoryResourceManager([first, second]),
+			priority=100,
+		)],
 		sleeper=lambda seconds: None,
 	)
 
