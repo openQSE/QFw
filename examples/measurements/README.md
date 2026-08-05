@@ -130,6 +130,47 @@ as positional by reversing the library order and watching the penalty follow
 position. The script now warms the transcoder before timing; prep is
 order-independent.
 
+## Three-arm records: `2026-08-04-introspection-three-arm.json`, `2026-08-04-execution-three-arm.json`
+
+The same two measurements re-run with QFw's **native IQM service client**
+(`svc_iqm_qpm`) added as a third path, talking to `iqm-client` directly. This is
+the baseline the interface-convergence question needs: it separates what the
+shim layers cost from what they save.
+
+Introspection, median of 3 cold samples:
+
+| | cold | cold conns | warm `get_device_info` | new conns during warm |
+|---|---|---|---|---|
+| QRMI | 918.1 ms | 1 | 11.8 ms | 0 |
+| QDMI | 2881.0 ms | 5 | 13.1 ms | 0 |
+| native | 2831.1 ms | 4 | **512.6 ms** | **25** |
+
+Execution, one circuit each:
+
+| | total | conns | provider timing |
+|---|---|---|---|
+| QRMI | 995.7 ms | 1 | none |
+| QDMI | 3892.7 ms | 4 | none |
+| native | 3992.7 ms | 6 | queue 34.9 ms, execution 107.3 ms |
+
+**The interface layers are not pure overhead — they add a cache the native
+client does not have.** Both QRMI and QDMI serve repeat introspection locally,
+opening no connection. The native path holds no introspection cache at all:
+every call re-fetches, 25 connections across a warm phase, and each call costs
+about 40x what the cached paths cost. It also re-fetches the dynamic
+architecture inside `run_circuit`, which is why its execution `prep` is high.
+
+**Only the native path reports provider-side timing.** It reads the IQM job
+timeline and can separate queue wait from execution — 34.9 ms and 107.3 ms in
+the run above. Neither QRMI nor QDMI passes that through. The information is
+not missing at the provider; both interfaces discard it. That materially
+changes the reading of the Telemetry gap in the analysis document: it is a
+choice made by the abstraction layers, not a limitation of the device.
+
+Worth noting how small the device's own numbers are. Execution took 107 ms on
+hardware while the client-side total was 1-4 seconds. Under these conditions
+almost everything measured is client and network cost, not QPU time.
+
 **Reproducing**
 
 ```bash

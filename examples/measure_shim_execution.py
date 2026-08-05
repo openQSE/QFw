@@ -1,9 +1,14 @@
 #!/usr/bin/env python
-"""Measure where time goes executing a circuit through QRMI vs QDMI.
+"""Measure where time goes executing a circuit: QRMI vs QDMI vs native.
 
 USES QPU TIME. Unlike measure_shim_introspection.py this submits real circuits
-to the device, one per library per repeat. Defaults are deliberately small: a
+to the device, one per path per repeat. Defaults are deliberately small: a
 single-qubit circuit at 10 shots, one repeat.
+
+Three paths are compared: the two shim libraries, and QFw's native IQM service
+client (svc_iqm_qpm), which talks to iqm-client directly. The native arm is the
+baseline the interface-convergence question needs -- it shows what the shim
+layers cost, and what they save.
 
 The question is whether the envelope-assembly difference between the two
 libraries costs anything measurable. QRMI's caller builds the entire IQM run
@@ -52,7 +57,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from measurement_support import (  # noqa: E402
 	ConnectionSampler, MeasurementError, driver_for, endpoint_context,
-	endpoint_port, fmt_ms, require_counts, require_qubits)
+	endpoint_port, fmt_ms, open_handle, require_counts, require_qubits)
 
 # One qubit, flipped and measured: the smallest circuit that still exercises
 # transcoding, submission, and a non-trivial result. Expect counts to be all
@@ -99,10 +104,7 @@ def _warm(library, driver):
 	ordering artifact, confirmed by reversing the library order and watching
 	the penalty follow position rather than library.
 	"""
-	if library == "qrmi":
-		driver._qpu()
-	else:
-		driver._device()
+	open_handle(library, driver)
 
 	device_info = driver.get_device_info()
 	require_qubits(device_info)
@@ -153,6 +155,12 @@ def measure_library(library, device_id, args, count_port=None):
 			"driver_total_wall_seconds": driver_timing.get(
 					"total_wall_seconds"),
 			"connections": len(conns.endpoints) if conns.supported else None,
+			# Provider-reported phase durations, where the path exposes any.
+			# Only the native client does: it reads the IQM job timeline, so it
+			# can separate queue wait from execution. Neither QRMI nor QDMI
+			# passes that through, which is why this is None for them.
+			"provider_durations": (driver.provider_durations()
+					if hasattr(driver, "provider_durations") else None),
 			"counts": counts,
 			"shots": args.shots,
 		})
@@ -172,7 +180,7 @@ def _median(runs, key):
 
 def render(record):
 	context = record.get("context", {})
-	print("QFw shim execution cost -- QRMI vs QDMI")
+	print("QFw execution cost -- QRMI vs QDMI vs native IQM client")
 	print(f"  endpoint      {context.get('base_url', 'unknown')}")
 	print(f"  host          {record.get('host', 'unknown')}")
 	print(f"  circuit       1 qubit, x + measure, {record.get('shots')} shots")
@@ -202,8 +210,11 @@ def render(record):
 			row += f" {conns:>7.0f}" if conns is not None else f" {'n/a':>7}"
 		print(row)
 	print()
-	print("  prep    = transcode + payload assembly, before the provider is")
-	print("            contacted. Derived: total minus submit/wait/fetch.")
+	print("  prep    = everything before submit: transcode + payload assembly.")
+	print("            Derived as total minus submit/wait/fetch. For the shim")
+	print("            drivers this is local work; the native path also")
+	print("            re-fetches the dynamic architecture here, having no")
+	print("            introspection cache, so its prep includes a round trip.")
 	print("  wait    = polling to terminal; includes device queue time, which")
 	print("            neither interface reports separately.")
 	if counting:
@@ -214,12 +225,32 @@ def render(record):
 		if "error" not in entry and entry["runs"]:
 			print(f"  {library}: counts {entry['runs'][0]['counts']}")
 
+	# Provider-reported phase durations. The point of showing these is which
+	# paths have none: queue wait and execution are separable only where the
+	# provider's own timeline survives to the caller.
+	print()
+	print("PROVIDER-REPORTED TIMING (from the device's job timeline)")
+	for library, entry in record.get("libraries", {}).items():
+		if "error" in entry or not entry["runs"]:
+			continue
+		durations = entry["runs"][0].get("provider_durations")
+		if not durations:
+			print(f"  {library:<8} none - this path does not surface the "
+					"provider's timeline")
+			continue
+		queue = durations.get("queue_wait_received_to_validation_started")
+		execution = durations.get("execution")
+		total = durations.get("server_total_created_to_completed")
+		print(f"  {library:<8} queue {fmt_ms(queue)}"
+				f"   execution {fmt_ms(execution)}"
+				f"   server total {fmt_ms(total)}")
+
 
 def parse_args():
 	parser = argparse.ArgumentParser(
-		description="Measure QRMI vs QDMI circuit-execution cost. USES QPU TIME.")
+		description="Measure QRMI vs QDMI vs native circuit-execution cost. USES QPU TIME.")
 	parser.add_argument("--device-id", default="ornl-iqm-20q")
-	parser.add_argument("--libraries", default="qrmi,qdmi")
+	parser.add_argument("--libraries", default="qrmi,qdmi,native")
 	parser.add_argument(
 		"--shots", type=int, default=10,
 		help="Shots per circuit. Kept small: this runs on real hardware.")

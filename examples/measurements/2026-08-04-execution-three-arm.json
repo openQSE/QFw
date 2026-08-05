@@ -1,0 +1,92 @@
+{
+  "schema": "qfw-execution-measurement-v0",
+  "timestamp": "2026-08-05T22:15:25.558587+00:00",
+  "host": "c5",
+  "shots": 10,
+  "repeat": 1,
+  "context": {
+    "base_url": "https://qccsw.ccs.ornl.gov:8443",
+    "provider_device_id": "default"
+  },
+  "connection_counting": {
+    "requested": true,
+    "port": 8443,
+    "supported": true
+  },
+  "libraries": {
+    "qrmi": {
+      "library": "qrmi",
+      "device_id": "ornl-iqm-20q",
+      "warm_seconds": 4.45731337700272,
+      "runs": [
+        {
+          "total_seconds": 0.9957263329997659,
+          "prep_seconds": 0.05858654103940353,
+          "submit_seconds": 0.1407548749994021,
+          "wait_seconds": 0.49478520898264833,
+          "result_fetch_seconds": 0.3015997079783119,
+          "driver_total_wall_seconds": 0.9371559589926619,
+          "connections": 1,
+          "provider_durations": null,
+          "counts": {
+            "0": 2,
+            "1": 8
+          },
+          "shots": 10
+        }
+      ]
+    },
+    "qdmi": {
+      "library": "qdmi",
+      "device_id": "ornl-iqm-20q",
+      "warm_seconds": 2.532944334001513,
+      "runs": [
+        {
+          "total_seconds": 3.8927366679999977,
+          "prep_seconds": 0.06659374901209958,
+          "submit_seconds": 1.41047487501055,
+          "wait_seconds": 1.9189470429846551,
+          "result_fetch_seconds": 0.496721000992693,
+          "driver_total_wall_seconds": 3.826161877019331,
+          "connections": 4,
+          "provider_durations": null,
+          "counts": {
+            "1": 10
+          },
+          "shots": 10
+        }
+      ]
+    },
+    "native": {
+      "library": "native",
+      "device_id": "ornl-iqm-20q",
+      "warm_seconds": 2.049220710003283,
+      "runs": [
+        {
+          "total_seconds": 3.9926918770070188,
+          "prep_seconds": 1.046512332977727,
+          "submit_seconds": 0.5061881260189693,
+          "wait_seconds": 1.932023293018574,
+          "result_fetch_seconds": 0.5079681249917485,
+          "driver_total_wall_seconds": 3.9282694179855753,
+          "connections": 6,
+          "provider_durations": {
+            "server_total_created_to_completed": 0.542143,
+            "created_to_station_received": 0.022003,
+            "queue_wait_received_to_validation_started": 0.03494,
+            "validation": 0.001171,
+            "compilation": 0.066206,
+            "execution": 0.107279,
+            "post_processing": 0.01051,
+            "ready_to_completed": 0.067385,
+            "pre_execution_created_to_execution_started": 0.340229
+          },
+          "counts": {
+            "1": 10
+          },
+          "shots": 10
+        }
+      ]
+    }
+  }
+}

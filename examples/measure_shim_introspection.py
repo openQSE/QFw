@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Measure QRMI vs QDMI device-introspection cost, cold and warm.
+"""Measure device-introspection cost, cold and warm: QRMI, QDMI, native.
 
 Read-only: this submits no circuits and consumes no QPU time.
 
@@ -14,6 +14,10 @@ cost lands in different places:
   QDMI   opening the device (FoMaC add_dynamic_device_library) initializes a
          session, and the IQM device library fetches its data during that init.
          The network cost is paid at OPEN; later property queries are local.
+
+  native QFw's own svc_iqm_qpm client, talking to iqm-client directly. It holds
+         no introspection cache at all, so every call re-fetches -- which is
+         what the warm column exposes.
 
 So a fair comparison has to separate opening from querying, otherwise QRMI
 looks slow at the first call and QDMI looks slow at startup while both are
@@ -56,20 +60,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from measurement_support import (  # noqa: E402
 	ConnectionSampler, driver_for, endpoint_context,
-	endpoint_port, fmt_ms, require_qubits)
+	endpoint_port, fmt_ms, open_handle, require_qubits)
 
 # Introspection calls served by both libraries, so the same set can be timed on
 # each. Kept in a fixed order because the first one is the cold-path call.
 CALLS = ("get_device_info", "get_coupling_graph", "get_calibration_snapshot")
-
-
-def _open_handle(library, driver):
-	# Force the lazy handle without issuing an introspection call, so the open
-	# cost is attributed separately from the first query. These are the private
-	# accessors the drivers use internally; there is no public "open" call.
-	if library == "qrmi":
-		return driver._qpu()
-	return driver._device()
 
 
 def measure_library(library, device_id, warm_iterations, count_port=None):
@@ -87,7 +82,7 @@ def measure_library(library, device_id, warm_iterations, count_port=None):
 	# since the libraries do their fetching in different phases.
 	with ConnectionSampler(count_port, enabled=count_port is not None) as cold_conns:
 		open_start = time.perf_counter()
-		_open_handle(library, driver)
+		open_handle(library, driver)
 		result["open_seconds"] = time.perf_counter() - open_start
 
 		first_start = time.perf_counter()
@@ -197,7 +192,7 @@ def render(records):
 			break
 	alias = context.get("provider_device_id", "unknown")
 
-	print("QFw shim introspection cost -- QRMI vs QDMI")
+	print("QFw introspection cost -- QRMI vs QDMI vs native IQM client")
 	print(f"  endpoint      {context.get('base_url', 'unknown')}")
 	print(f"  device        {device_id}  (provider alias {alias})")
 	print(f"  host          {first.get('host', 'unknown')}")
@@ -272,12 +267,12 @@ def render(records):
 
 def parse_args():
 	parser = argparse.ArgumentParser(
-		description="Measure QRMI vs QDMI introspection cost (no QPU time).")
+		description="Measure QRMI vs QDMI vs native introspection cost (no QPU time).")
 	parser.add_argument(
 		"--device-id", default="ornl-iqm-20q",
 		help="QFw device id to resolve the descriptor from.")
 	parser.add_argument(
-		"--libraries", default="qrmi,qdmi",
+		"--libraries", default="qrmi,qdmi,native",
 		help="Comma-separated libraries to measure.")
 	parser.add_argument(
 		"--warm-iterations", type=int, default=5,

@@ -224,6 +224,69 @@ def endpoint_port(context):
 	return 443 if parts.scheme == "https" else 80
 
 
+class NativeAdapter:
+	"""QFw's native IQM path, presented with the same surface as the drivers.
+
+	`svc_iqm_qpm.util_iqm.IQMServiceClient` already exposes get_device_info,
+	get_coupling_graph, get_calibration_snapshot, run_circuit and
+	get_last_job_timing. Two return shapes differ, so they are adapted here
+	rather than by touching the native service, which is deliberately
+	unmodified by the shim work:
+
+	  run_circuit          returns {"counts", "qhw_result"}; the drivers return
+	                       the qhw record directly.
+	  get_last_job_timing  returns an iqm-timing-summary-v1 record whose
+	                       client-side spans live under "client_wall_seconds".
+
+	That second difference is worth more than the adaptation. The native record
+	also carries `durations_seconds`, derived from the IQM job timeline:
+	queue wait, validation, compilation, execution, post-processing. That is
+	provider-side timing which neither QRMI nor QDMI passes through, so the
+	native arm shows the information exists and is lost at the interface rather
+	than absent at the provider. `provider_durations()` exposes it.
+	"""
+
+	name = "native"
+
+	def __init__(self):
+		from svc_iqm_qpm.util_iqm import IQMServiceClient
+		self._client = IQMServiceClient()
+		self._last_summary = None
+
+	def open(self):
+		return self._client.client()
+
+	def get_device_info(self):
+		return self._client.get_device_info()
+
+	def get_coupling_graph(self, calibration_set_id=None):
+		return self._client.get_coupling_graph(calibration_set_id)
+
+	def get_calibration_snapshot(self, calibration_set_id=None):
+		return self._client.get_calibration_snapshot(calibration_set_id)
+
+	def run_circuit(self, circuit):
+		out = self._client.run_circuit(circuit)
+		if isinstance(out, dict) and "qhw_result" in out:
+			return out["qhw_result"]
+		return out
+
+	def get_last_job_timing(self, cid=None):
+		summary = self._client.get_last_job_timing(cid) or {}
+		self._last_summary = summary
+		wall = summary.get("client_wall_seconds") or {}
+		return {"timing": {
+			"submit_seconds": wall.get("submit"),
+			"wait_seconds": wall.get("wait"),
+			"result_fetch_seconds": wall.get("result_fetch"),
+			"total_wall_seconds": wall.get("total"),
+		}}
+
+	def provider_durations(self):
+		"""Provider-reported phase durations, or None if this path has none."""
+		return (self._last_summary or {}).get("durations_seconds")
+
+
 def driver_for(library, descriptor):
 	from svc_lib_qpm.drivers import QdmiDriver, QrmiDriver
 
@@ -231,7 +294,18 @@ def driver_for(library, descriptor):
 		return QrmiDriver(descriptor)
 	if library == "qdmi":
 		return QdmiDriver(descriptor)
+	if library == "native":
+		return NativeAdapter()
 	raise ValueError(f"unknown library {library!r}")
+
+
+def open_handle(library, driver):
+	"""Force the lazy handle without issuing a call, so open is timed apart."""
+	if library == "qrmi":
+		return driver._qpu()
+	if library == "qdmi":
+		return driver._device()
+	return driver.open()
 
 
 def fmt_ms(seconds):
