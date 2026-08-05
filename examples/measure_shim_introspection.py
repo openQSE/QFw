@@ -51,208 +51,16 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from measurement_support import (  # noqa: E402
+	ConnectionSampler, driver_for, endpoint_context,
+	endpoint_port, fmt_ms, require_qubits)
 
 # Introspection calls served by both libraries, so the same set can be timed on
 # each. Kept in a fixed order because the first one is the cold-path call.
 CALLS = ("get_device_info", "get_coupling_graph", "get_calibration_snapshot")
-
-
-class MeasurementError(Exception):
-	"""A sample was taken but cannot be trusted."""
-
-
-# --- connection counting ------------------------------------------------
-#
-# How many TCP connections a library opens to reach the same data is the
-# difference that explains most of the cold-cost gap: a client that pools and
-# reuses one connection pays one TLS handshake, one that opens a fresh
-# connection per request pays a handshake every time. Over a tunnel a handshake
-# costs about as much as a request, so this is worth counting rather than
-# inferring from timings.
-#
-# Counted by sampling /proc for this process's own sockets whose remote port is
-# the endpoint's, and accumulating distinct local endpoints. Filtering by our
-# own socket inodes keeps other processes on the node out of the count.
-#
-# Limits: Linux only, and a poll can miss a connection shorter-lived than the
-# sample interval, so the count is a lower bound. Off by default because the
-# sampler runs concurrently with the timed calls.
-
-
-# The sampler runs in a SUBPROCESS, not a thread. QDMI's session init is a
-# single blocking call into the C++ device library which holds the GIL for its
-# whole duration, so an in-process Python sampler is frozen exactly when the
-# connections it should be counting are being opened -- it reported zero for
-# QDMI while `ss` showed five. A separate process is not subject to the GIL.
-_SAMPLER_SOURCE = r'''
-import os, sys, time
-
-pid, port, interval = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
-out_path, stop_path = sys.argv[4], sys.argv[5]
-seen = set()
-
-# Backstop lifetime. A phase takes seconds; this only bounds a sampler whose
-# parent vanished between the liveness checks below.
-MAX_LIFETIME = 300.0
-started = time.monotonic()
-
-def socket_inodes():
-    found = set()
-    try:
-        fds = os.listdir("/proc/%d/fd" % pid)
-    except OSError:
-        return found
-    for fd in fds:
-        try:
-            target = os.readlink("/proc/%d/fd/%s" % (pid, fd))
-        except OSError:
-            continue
-        if target.startswith("socket:["):
-            found.add(target[8:-1])
-    return found
-
-def peers():
-    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
-        try:
-            with open(path) as stream:
-                next(stream, None)
-                for line in stream:
-                    fields = line.split()
-                    if len(fields) < 10:
-                        continue
-                    try:
-                        if int(fields[2].rsplit(":", 1)[1], 16) != port:
-                            continue
-                    except (IndexError, ValueError):
-                        continue
-                    yield fields[1], fields[9]
-        except OSError:
-            continue
-
-# Results go to a file and shutdown is signalled by a file, not by pipes and
-# signals: kill()+communicate() proved unreliable in the container this runs in
-# (a trivial child reproduced the same hang), and a sampler that cannot be
-# stopped or read is worse than no sampler.
-with open(out_path, "a", buffering=1) as sink:
-    while not os.path.exists(stop_path):
-        # Never outlive the parent. Without these two guards a parent that dies
-        # without running its cleanup -- killed, crashed, interrupted -- leaves
-        # this process polling forever. socket_inodes() fails softly when the
-        # parent is gone, so the loop would spin rather than error out. During
-        # development that left 21 orphaned samplers burning 145% CPU.
-        if not os.path.isdir("/proc/%d" % pid):
-            break
-        if time.monotonic() - started > MAX_LIFETIME:
-            break
-        ours = socket_inodes()
-        for local, inode in peers():
-            if inode in ours and local not in seen:
-                seen.add(local)
-                sink.write(local + "\n")   # line-buffered, so already flushed
-        time.sleep(interval)
-'''
-
-
-class ConnectionSampler:
-	"""Count distinct TCP connections this process opens to a port.
-
-	Use as a context manager; `endpoints` holds the local endpoints observed.
-	Counting *new* connections for a later phase means differencing against an
-	earlier phase's set -- a pooled connection stays open and visible, so
-	observing it again is not the same as opening it again.
-	"""
-
-	def __init__(self, port, interval=0.02, enabled=True):
-		self._port = port
-		self._interval = interval
-		self._enabled = bool(enabled and sys.platform.startswith("linux")
-				and port)
-		self._proc = None
-		self._dir = None
-		self.endpoints = set()
-
-	@property
-	def supported(self):
-		return self._enabled
-
-	def __enter__(self):
-		if not self._enabled:
-			return self
-		import tempfile
-		self._dir = tempfile.mkdtemp(prefix="qfw-connsample-")
-		self._out = os.path.join(self._dir, "endpoints")
-		self._stop = os.path.join(self._dir, "stop")
-		open(self._out, "w").close()
-		try:
-			self._proc = subprocess.Popen(
-				[sys.executable, "-c", _SAMPLER_SOURCE,
-					str(os.getpid()), str(self._port), str(self._interval),
-					self._out, self._stop],
-				stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-		except OSError:
-			self._proc = None
-			self._enabled = False
-		return self
-
-	def __exit__(self, *exc):
-		if self._proc is None:
-			return False
-		open(self._stop, "w").close()
-		# Give the sampler a couple of poll intervals to notice and exit.
-		deadline = time.monotonic() + max(1.0, self._interval * 10)
-		while time.monotonic() < deadline and self._proc.poll() is None:
-			time.sleep(self._interval)
-		if self._proc.poll() is None:
-			self._proc.kill()
-		try:
-			with open(self._out, "r", encoding="utf-8") as stream:
-				self.endpoints = {line.strip() for line in stream
-						if line.strip()}
-		except OSError:
-			self.endpoints = set()
-		import shutil
-		shutil.rmtree(self._dir, ignore_errors=True)
-		return False
-
-
-def _qubit_count(record):
-	# Qubit count from a qhw-device-v1 record, or None if this is not one.
-	if isinstance(record, dict) and isinstance(record.get("qubits"), list):
-		return len(record["qubits"])
-	return None
-
-
-def _require_real_payload(record):
-	# A timing is only meaningful if the call actually returned device data.
-	#
-	# This check exists because QRMI's target() does not raise when its REST
-	# fetches fail: each field is individually guarded and replaced with null,
-	# so an unreachable endpoint yields a successful call returning an empty
-	# document. Timing that path produces plausible-looking numbers -- observed
-	# at ~45 ms cold against a dead endpoint -- that measure nothing but the
-	# speed of failing. Worse, they flatter QRMI relative to QDMI, which raises
-	# on a failed session init and so reports no sample at all.
-	#
-	# Requiring a non-empty qubit list turns that silent case into a loud one.
-	qubits = _qubit_count(record)
-	if not qubits:
-		raise MeasurementError(
-			"introspection returned no qubits, so this sample is not a "
-			"measurement of a working call. The endpoint is most likely "
-			"unreachable; note that QRMI reports this as success with null "
-			"fields rather than raising.")
-	return qubits
-
-
-def _driver(library, descriptor):
-	from svc_lib_qpm.drivers import QdmiDriver, QrmiDriver
-
-	if library == "qrmi":
-		return QrmiDriver(descriptor)
-	if library == "qdmi":
-		return QdmiDriver(descriptor)
-	raise ValueError(f"unknown library {library!r}")
 
 
 def _open_handle(library, driver):
@@ -272,7 +80,7 @@ def measure_library(library, device_id, warm_iterations, count_port=None):
 	result = {"library": library, "device_id": device_id}
 
 	construct_start = time.perf_counter()
-	driver = _driver(library, descriptor)
+	driver = driver_for(library, descriptor)
 	result["construct_seconds"] = time.perf_counter() - construct_start
 
 	# Cold phase: open + first call, with connections counted across both,
@@ -287,7 +95,7 @@ def measure_library(library, device_id, warm_iterations, count_port=None):
 		result["first_call_seconds"] = time.perf_counter() - first_start
 
 	# Validate before reporting: a fast failure must not read as a fast call.
-	result["qubits_seen"] = _require_real_payload(first_record)
+	result["qubits_seen"] = require_qubits(first_record)
 	result["cold_seconds"] = result["open_seconds"] + result["first_call_seconds"]
 	result["cold_connections"] = (
 			len(cold_conns.endpoints) if cold_conns.supported else None)
@@ -303,7 +111,7 @@ def measure_library(library, device_id, warm_iterations, count_port=None):
 				returned = getattr(driver, call)()
 				samples.append(time.perf_counter() - start)
 				if call == "get_device_info":
-					_require_real_payload(returned)
+					require_qubits(returned)
 			warm[call] = {
 				"samples": samples,
 				"median_seconds": statistics.median(samples) if samples else None,
@@ -319,35 +127,9 @@ def measure_library(library, device_id, warm_iterations, count_port=None):
 	return result
 
 
-def endpoint_context(device_id):
-	"""Endpoint identity for the record. Never returns the token."""
-	try:
-		from svc_lib_qpm.descriptor import resolve_descriptor
-		from svc_lib_qpm.drivers import QrmiDriver
-
-		access = QrmiDriver(resolve_descriptor(device_id))._access()
-		return {
-			"base_url": access.get("base_url"),
-			"provider_device_id": access.get("provider_device_id"),
-		}
-	except Exception as exc:
-		return {"error": f"{type(exc).__name__}: {exc}"}
-
-
-def _endpoint_port(context):
-	# Port the libraries connect to, for connection counting.
-	base_url = (context or {}).get("base_url")
-	if not base_url:
-		return None
-	parts = urlsplit(base_url)
-	if parts.port:
-		return parts.port
-	return 443 if parts.scheme == "https" else 80
-
-
 def run_once(args):
 	context = endpoint_context(args.device_id)
-	count_port = _endpoint_port(context) if args.count_connections else None
+	count_port = endpoint_port(context) if args.count_connections else None
 	record = {
 		"schema": "qfw-introspection-measurement-v0",
 		"timestamp": datetime.now(timezone.utc).isoformat(),
@@ -402,9 +184,6 @@ def run_repeated(args):
 	return records
 
 
-def _fmt(seconds):
-	return f"{seconds * 1000:.1f} ms"
-
 
 def render(records):
 	first = records[0]
@@ -448,9 +227,9 @@ def render(records):
 			error = first["libraries"].get(library, {}).get("error", "no data")
 			print(f"  {library:<8} unavailable: {error}")
 			continue
-		row = (f"  {library:<8} {_fmt(statistics.median(opens)):>12}"
-				f" {_fmt(statistics.median(firsts)):>12}"
-				f" {_fmt(statistics.median(colds)):>12}")
+		row = (f"  {library:<8} {fmt_ms(statistics.median(opens)):>12}"
+				f" {fmt_ms(statistics.median(firsts)):>12}"
+				f" {fmt_ms(statistics.median(colds)):>12}")
 		if counting:
 			row += f" {(statistics.median(conns) if conns else 0):>7.0f}"
 		print(row)
@@ -473,7 +252,7 @@ def render(records):
 				warm = entry.get("warm", {}).get(call)
 				if warm:
 					samples.extend(warm["samples"])
-			cells.append(_fmt(statistics.median(samples)) if samples else "n/a")
+			cells.append(fmt_ms(statistics.median(samples)) if samples else "n/a")
 		row = f"  {library:<8}" + "".join(f"{c:>26}" for c in cells)
 		if counting:
 			warm_conns = [record["libraries"].get(library, {}).get("warm_connections")

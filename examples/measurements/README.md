@@ -86,6 +86,50 @@ interface, and it is fixable there by retaining a session across requests.
   higher cold cost buys strictly more device data.
 - One device, one session, five samples.
 
+## `2026-08-04-execution-phases.json`
+
+Produced by `examples/measure_shim_execution.py --repeat 2
+--count-connections`. Same device, same path, same versions as above. **Uses
+QPU time**: two circuits per library, one qubit, 10 shots.
+
+Medians per run:
+
+| | QRMI | QDMI |
+|---|---|---|
+| prep (transcode + payload assembly) | 67.7 ms | 66.2 ms |
+| submit | 133.1 ms | 1590.6 ms |
+| wait (poll to terminal) | 589.9 ms | 1339.5 ms |
+| fetch | 300.1 ms | 522.3 ms |
+| **total** | **1090.8 ms** | **3518.5 ms** |
+| connections opened | 1 | 3 |
+
+Both returned `{'1': 10}` — an X gate on |0⟩, no readout error at 10 shots.
+
+**Payload assembly costs nothing.** This measurement was built to test whether
+the envelope-assembly difference between the libraries is expensive: QRMI's
+caller builds the whole IQM run request, QDMI's caller submits a single circuit
+and the device implementation assembles the request. The two are within 1.5 ms
+of each other. The difference is architecturally significant — it decides who
+owns shots, calibration selection, and provenance — but it is not a performance
+difference.
+
+**The gap is connection handling again, now multiplied by polling.** The same
+per-request reconnect seen in introspection applies here, and execution makes
+several requests: submit, one or more polls, then fetch. QRMI does all of them
+over one pooled connection; QDMI opens a new one each time.
+
+**Read `wait` with care.** It includes device queue time, which neither
+interface reports separately (see the Telemetry axis of the QRMI/QDMI analysis),
+so it varies with what else is on the instrument. `submit` and `fetch` are the
+interpretable phases; `wait` is confounded.
+
+**Ordering artifact, since fixed.** The first version charged the first library
+measured about 3.4 seconds of lazy Qiskit imports inside `build_iqm_circuit`,
+making its payload assembly look ~57x more expensive than the second. Confirmed
+as positional by reversing the library order and watching the penalty follow
+position. The script now warms the transcoder before timing; prep is
+order-independent.
+
 **Reproducing**
 
 ```bash
@@ -99,4 +143,10 @@ opens no connection on either path:
 
 ```bash
 python examples/measure_shim_introspection.py --repeat 5 --warm-iterations 10 --count-connections
+```
+
+Execution (**uses QPU time** — keep `--repeat` and `--shots` small):
+
+```bash
+python examples/measure_shim_execution.py --repeat 2 --count-connections
 ```
