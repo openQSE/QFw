@@ -86,6 +86,11 @@ handle across requests).
 python examples/measure_shim_introspection.py --repeat 5 --warm-iterations 10
 ```
 
-Connection counting is not part of the script. It was done by sampling
-`ss -tan` for sockets to the endpoint port while a single-library run executed,
-and counting distinct local ports.
+The connection counts in this record were taken by hand with `ss`. Counting is
+now built into the script behind `--count-connections`, which reproduces the
+same figures (QRMI 1, QDMI 5) and additionally confirms that the warm phase
+opens no connection on either path:
+
+```bash
+python examples/measure_shim_introspection.py --repeat 5 --warm-iterations 10 --count-connections
+```
