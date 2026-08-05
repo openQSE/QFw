@@ -21,6 +21,12 @@ Produced by `examples/measure_shim_introspection.py --repeat 5
 | Warm iterations | 10 per call, per sample |
 | Payload validated | 20 qubits returned on every sample |
 
+**Versions.** These figures are implementation-specific and will change as the
+libraries move, so they mean nothing without the versions they were taken
+against: `qrmi` 0.17.2, `iqm-qdmi` 1.2.0, `mqt-core` 3.7.0 (QDMI headers and
+FoMaC), `iqm-client` 34.0.1, `iqm-station-control-client` 12.1.1, `iqm-pulse`
+13.0.1, `qhw-iqm` 0.1.0.
+
 **Medians**
 
 | | QRMI | QDMI |
@@ -55,10 +61,11 @@ opened toward the endpoint during one cold introspection:
 | QDMI | ~5 | **5** | 5 |
 
 QRMI's Rust client (`reqwest`) pools and reuses one connection. QDMI-on-IQM
-calls `curl_easy_init()` per request and `curl_easy_cleanup()` after it
-(`src/internal/curl_http_client.cpp`); libcurl's connection cache lives on the
-easy handle, so each request opens a fresh connection and repeats the TLS
-handshake.
+1.2.0 issues each request through cpr's free-function API (`cpr::Get` /
+`cpr::Post` in `src/internal/http_client.cpp`), which constructs and destroys a
+session — and with it the underlying libcurl handle and its connection cache —
+per call. No session is retained across requests, so each one reconnects and
+repeats the TLS handshake.
 
 Solving the two medians for a uniform per-request cost and a uniform handshake
 cost gives roughly 330 ms per request and 350 ms per handshake under these
@@ -67,8 +74,7 @@ would expect over a tunnel. That is a derived model from two data points, not a
 measurement; it is offered only as a consistency check on the explanation.
 
 This is an implementation property of QDMI-on-IQM, not a property of the QDMI
-interface, and it is fixable there (a shared handle, or reusing the easy
-handle across requests).
+interface, and it is fixable there by retaining a session across requests.
 
 **Caveats**
 
