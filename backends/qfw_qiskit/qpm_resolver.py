@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from time import sleep
@@ -18,7 +19,21 @@ SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 RESOLVER_SCOPE_ORDER_ENV = "QFW_QPM_RESOLVER_SCOPE_ORDER"
 DIRECT_ENDPOINT_FALLBACK_ENV = "QFW_QPM_DIRECT_ENDPOINT_FALLBACK"
 DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
+DIRECT_QPM_SERVICE_MODULE_ENV = "QFW_DIRECT_QPM_SERVICE_MODULE"
+DIRECT_QPM_SERVICE_CLASS_ENV = "QFW_DIRECT_QPM_SERVICE_CLASS"
+SIMULATOR_FALLBACK_ENV = "QFW_QPM_ALLOW_SIMULATOR_FALLBACK"
 DEFAULT_SCOPE_ORDER = ("site", "allocation-local", "direct")
+QPM_TYPE_HARDWARE = 1 << 0
+QPM_TYPE_SIMULATOR = 1 << 1
+SIMULATOR_PROVIDERS = {"simulator", "nwqsim", "tnqvm", "qb"}
+PROVIDER_SERVICE_MODULES = {
+	"iqm": "svc_iqm_qpm.svc_qpm",
+	"shim": "svc_lib_qpm.svc_qpm",
+	"nwqsim": "svc_nwqsim_qpm.svc_qpm",
+	"tnqvm": "svc_tnqvm_qpm.svc_qpm",
+	"qb": "svc_qb_qpm.svc_qpm",
+}
+ZERO_UUID = str(uuid.UUID(int=0))
 
 API_CATEGORY_BINDINGS = {
 	"execution": "execution",
@@ -55,6 +70,14 @@ class QPMUnsupportedConfigurationError(QPMResolverError):
 
 
 class QPMProviderPolicyError(QPMResolverError):
+	pass
+
+
+class QPMInvalidDirectoryRecordError(QPMResolverError):
+	pass
+
+
+class QPMSimulatorFallbackPolicyError(QPMResolverError):
 	pass
 
 
@@ -110,6 +133,7 @@ class QPMResolutionRequest:
 	qpm_type: Any = -1
 	qpm_capability: Any = -1
 	provider: Optional[str] = None
+	allow_simulator_fallback: bool = False
 
 	def binding_filter(self):
 		return binding_name_for_category(self.api_category, self.binding_name)
@@ -120,8 +144,19 @@ class DEFwQPMConnector:
 		self._defw = defw_module
 
 	def connect(self, resolved):
-		if hasattr(self._defw, "connect_to_binding"):
-			return self._defw.connect_to_binding(resolved)
+		if (hasattr(self._defw, "connect_to_binding") and
+				_can_use_binding_connector(resolved)):
+			return self._defw.connect_to_binding(
+				_defw_binding_record(resolved))
+		if resolved.directory_scope == "direct":
+			if hasattr(self._defw, "connect_to_endpoint"):
+				return self._defw.connect_to_endpoint(
+					resolved.endpoint,
+					resolved.api_binding,
+				)
+			raise QPMUnsupportedConfigurationError(
+				"direct QPM endpoint resolution requires DEFw "
+				"connect_to_binding or connect_to_endpoint support")
 		if resolved.service_info is not None:
 			apis = self._defw.connect_to_resource(
 				[resolved.service_info],
@@ -133,10 +168,6 @@ class DEFwQPMConnector:
 				resolved.endpoint,
 				resolved.api_binding,
 			)
-		if resolved.directory_scope == "direct":
-			raise QPMUnsupportedConfigurationError(
-				"direct QPM endpoint resolution requires DEFw "
-				"connect_to_endpoint support")
 		raise DEFwReserveError(
 			f"resolved QPM {resolved.service_id!r} has no DEFw binding")
 
@@ -151,6 +182,8 @@ class DEFwDirectoryClient:
 		client = self._directory_client()
 		if hasattr(client, "resolve_service"):
 			return client.resolve_service(**kwargs)
+		if hasattr(client, "resolve_services"):
+			return client.resolve_services(**kwargs)
 		if hasattr(client, "get_services"):
 			return client.get_services(
 				kwargs.get("service_name", DEFAULT_SERVICE_NAME),
@@ -159,7 +192,7 @@ class DEFwDirectoryClient:
 			)
 		raise QPMUnsupportedConfigurationError(
 			f"site directory endpoint {self.endpoint!r} does not expose "
-			"resolve_service() or get_services()")
+			"resolve_service(), resolve_services(), or get_services()")
 
 	def _directory_client(self):
 		if self._client is not None:
@@ -167,27 +200,46 @@ class DEFwDirectoryClient:
 		if hasattr(self._defw, "connect_to_directory"):
 			self._client = self._defw.connect_to_directory(self.endpoint)
 			return self._client
+		if hasattr(self._defw, "connect_to_binding"):
+			self._client = self._defw.connect_to_binding(
+				_defw_directory_binding_record(self.endpoint))
+			return self._client
 		if hasattr(self._defw, "connect_to_endpoint"):
 			self._client = self._defw.connect_to_endpoint(
 				self.endpoint,
-				QPMApiBinding(
-					binding_name="directory",
-					client_class="DEFwResMgr",
-					service_module="svc_resmgr",
-					service_class="DEFwResMgr",
-				),
+				_directory_api_binding(),
 			)
 			return self._client
 		raise QPMUnsupportedConfigurationError(
 			"site-scoped QPM resolution requires a DEFw directory "
-			"client factory or endpoint binding support")
+			"client factory or binding support")
 
 
 class DirectEndpointDirectory:
-	def __init__(self, endpoint):
+	def __init__(self, endpoint, provider=None, service_module=None,
+		     service_class="QPM"):
 		self.endpoint = endpoint
+		self.provider = provider
+		self.service_module = service_module
+		self.service_class = service_class
 
 	def resolve_service(self, **kwargs):
+		endpoint = _endpoint_record_from_value(
+			self.endpoint,
+			default_name="direct-qpm",
+		)
+		if endpoint is None:
+			raise QPMUnsupportedConfigurationError(
+				f"direct QPM endpoint {self.endpoint!r} must include "
+				"a listen port")
+		provider = kwargs.get("provider") or self.provider
+		service_module = (
+			self.service_module or
+			_provider_service_module(provider)
+		)
+		properties = {}
+		if provider:
+			properties["provider"] = provider
 		return {
 			"directory_scope": "direct",
 			"directory_identity": "direct-endpoint",
@@ -195,14 +247,17 @@ class DirectEndpointDirectory:
 				"service_id": str(self.endpoint),
 				"service_name": kwargs.get("service_name", DEFAULT_SERVICE_NAME),
 				"service_type": kwargs.get("service_type", DEFAULT_SERVICE_TYPE),
+				"runtime_id": endpoint["runtime_id"],
 				"endpoint": self.endpoint,
 				"selector": {},
+				"properties": properties,
 			},
 			"selected_api_binding": {
 				"binding_name": kwargs.get("binding_name", "execution"),
 				"client_module": "api_qpm",
 				"client_class": "QPM",
-				"service_class": "QPM",
+				"service_module": service_module,
+				"service_class": self.service_class,
 				"version": 1,
 			},
 		}
@@ -260,10 +315,21 @@ class QPMResolver:
 		if _env_enabled(DIRECT_ENDPOINT_FALLBACK_ENV):
 			endpoint = os.environ.get(DIRECT_QPM_ENDPOINT_ENV)
 			if endpoint:
+				provider = os.environ.get(
+					QPM_IMPL_ENV, DEFAULT_QPM_IMPL).strip()
 				directories.append(DirectoryScope(
 					name="direct",
 					scope="direct",
-					client=DirectEndpointDirectory(endpoint),
+					client=DirectEndpointDirectory(
+						endpoint,
+						provider=provider,
+						service_module=os.environ.get(
+							DIRECT_QPM_SERVICE_MODULE_ENV,
+							_provider_service_module(provider)),
+						service_class=os.environ.get(
+							DIRECT_QPM_SERVICE_CLASS_ENV,
+							"QPM"),
+					),
 					endpoint=endpoint,
 					identity="direct-endpoint",
 					priority=-100,
@@ -285,6 +351,9 @@ class QPMResolver:
 		return self._connector.connect(resolved)
 
 	def resolve(self, timeout=10, **kwargs):
+		if ("allow_simulator_fallback" not in kwargs and
+				_env_enabled(SIMULATOR_FALLBACK_ENV)):
+			kwargs["allow_simulator_fallback"] = True
 		request = QPMResolutionRequest(**kwargs)
 		candidates = []
 		wait = 0
@@ -322,17 +391,11 @@ class QPMResolver:
 		client = directory.client
 		if client is None:
 			return []
+		filters = self._query_filters(request)
 		if hasattr(client, "resolve_service"):
-			return _as_list(client.resolve_service(
-				service_name=request.service_name,
-				service_type=request.service_type,
-				binding_name=request.binding_filter(),
-				selector_resource=request.selector_resource,
-				selector_alias=request.selector_alias,
-				api_category=request.api_category,
-				qpm_type=request.qpm_type,
-				qpm_capability=request.qpm_capability,
-			))
+			return _as_list(client.resolve_service(**filters))
+		if hasattr(client, "resolve_services"):
+			return _as_list(client.resolve_services(**filters))
 		if hasattr(client, "get_services"):
 			return _as_list(client.get_services(
 				request.service_name,
@@ -340,6 +403,23 @@ class QPMResolver:
 				request.qpm_capability,
 			))
 		return []
+
+	def _query_filters(self, request):
+		return {
+			"service_name": request.service_name,
+			"service_type": request.service_type,
+			"binding_name": request.binding_filter(),
+			"selector_resource": request.selector_resource,
+			"selector_alias": request.selector_alias,
+			"api_category": request.api_category,
+			"qpm_type": request.qpm_type,
+			"qpm_capability": request.qpm_capability,
+			"svc_type": request.qpm_type,
+			"svc_caps": request.qpm_capability,
+			"legacy_type": request.qpm_type,
+			"legacy_capabilities": request.qpm_capability,
+			"provider": request.provider,
+		}
 
 	def _normalize_record(self, directory, record, request, discovery_index):
 		if isinstance(record, QPMResolvedBinding):
@@ -361,9 +441,17 @@ class QPMResolver:
 	def _normalize_directory_record(self, directory, record, request,
 					discovery_index):
 		service = record.get("service_record", record)
-		binding = record.get("selected_api_binding") or record.get("api_binding")
+		binding = (
+			record.get("selected_api_binding") or
+			record.get("selected_binding") or
+			record.get("api_binding")
+		)
+		_validate_directory_record(service, binding, record)
 		api_binding = _api_binding_from_mapping(binding, request)
 		properties = dict(service.get("properties") or {})
+		for key in ("legacy_type", "legacy_capabilities", "capability"):
+			if key in service and key not in properties:
+				properties[key] = service[key]
 		selector = dict(service.get("selector") or {})
 		endpoint = service.get("endpoint") or record.get("endpoint")
 		service_id = service.get("service_id") or properties.get("service_id")
@@ -426,6 +514,13 @@ class QPMResolver:
 	def _matches_request(self, candidate, request):
 		if request.service_type and candidate.service_type != request.service_type:
 			return False
+		if not _candidate_legacy_bits_match(
+				candidate, "legacy_type", "type", request.qpm_type):
+			return False
+		if not _candidate_legacy_bits_match(
+				candidate, "legacy_capabilities", "caps",
+				request.qpm_capability):
+			return False
 		if request.selector_resource:
 			resources = candidate.selector_metadata.get("resources", [])
 			if request.selector_resource not in resources:
@@ -437,6 +532,8 @@ class QPMResolver:
 		return candidate.api_binding.binding_name == request.binding_filter()
 
 	def _select_candidate(self, candidates, request):
+		candidates = self._apply_simulator_fallback_policy(
+			candidates, request)
 		ordered = sorted(
 			candidates,
 			key=self._selection_sort_key,
@@ -460,6 +557,27 @@ class QPMResolver:
 			return matching_provider[0]
 		self._reject_ambiguous_resolution(ordered, request)
 		return ordered[0]
+
+	def _apply_simulator_fallback_policy(self, candidates, request):
+		if _simulator_fallback_allowed(request):
+			return candidates
+		if not _request_requires_hardware(request):
+			return candidates
+		simulator_candidates = [
+			candidate for candidate in candidates
+			if _candidate_is_simulator(candidate)
+		]
+		if not simulator_candidates:
+			return candidates
+		non_simulator_candidates = [
+			candidate for candidate in candidates
+			if not _candidate_is_simulator(candidate)
+		]
+		if non_simulator_candidates:
+			return non_simulator_candidates
+		raise QPMSimulatorFallbackPolicyError(
+			"explicit simulator fallback policy required for hardware "
+			f"QPM request: {_candidate_list(simulator_candidates)}")
 
 	def _reject_ambiguous_resolution(self, ordered, request, provider=None):
 		if self._allow_ambiguous or not ordered:
@@ -520,8 +638,6 @@ class QPMResolver:
 				f"generation {current} is older than {latest}")
 
 	def _latest_generation(self, resolved):
-		if resolved.latest_generation is not None:
-			return resolved.latest_generation
 		for directory in self._directories:
 			if not self._directory_matches_resolved(directory, resolved):
 				continue
@@ -530,9 +646,13 @@ class QPMResolver:
 				if not hasattr(client, method_name):
 					continue
 				try:
-					return getattr(client, method_name)(resolved.service_id)
+					latest = getattr(client, method_name)(resolved.service_id)
 				except TypeError:
 					continue
+				if latest is not None:
+					return latest
+		if resolved.latest_generation is not None:
+			return resolved.latest_generation
 		return None
 
 	def _directory_matches_resolved(self, directory, resolved):
@@ -557,6 +677,192 @@ def _api_binding_from_mapping(binding, request):
 	)
 
 
+def _validate_directory_record(service, binding, record):
+	if not isinstance(service, dict):
+		raise QPMInvalidDirectoryRecordError(
+			"directory service record must be a mapping")
+	properties = service.get("properties") or {}
+	service_id = service.get("service_id") or properties.get("service_id")
+	if not service_id:
+		raise QPMInvalidDirectoryRecordError(
+			"directory service record is missing service_id")
+	endpoint = service.get("endpoint") or record.get("endpoint")
+	if not endpoint and record.get("service_info") is None:
+		raise QPMInvalidDirectoryRecordError(
+			f"directory service record {service_id!r} is missing endpoint")
+	if binding is None:
+		raise QPMInvalidDirectoryRecordError(
+			f"directory service record {service_id!r} is missing "
+			"selected API binding")
+	if not isinstance(binding, dict):
+		raise QPMInvalidDirectoryRecordError(
+			f"selected API binding for {service_id!r} must be a mapping")
+	if not binding.get("binding_name"):
+		raise QPMInvalidDirectoryRecordError(
+			f"selected API binding for {service_id!r} is missing "
+			"binding_name")
+
+
+def _can_use_binding_connector(resolved):
+	return _endpoint_record_from_value(
+		resolved.endpoint,
+		default_name=resolved.service_name,
+		runtime_id=resolved.runtime_id,
+	) is not None
+
+
+def _defw_binding_record(resolved):
+	endpoint = _endpoint_record_from_value(
+		resolved.endpoint,
+		default_name=resolved.service_name,
+		runtime_id=resolved.runtime_id,
+	)
+	if endpoint is None:
+		raise QPMUnsupportedConfigurationError(
+			f"resolved QPM endpoint for {resolved.service_id!r} must "
+			"include address and listen_port")
+	return {
+		"service_record": {
+			"service_id": resolved.service_id,
+			"service_name": resolved.service_name,
+			"service_type": resolved.service_type,
+			"runtime_id": endpoint["runtime_id"],
+			"generation": resolved.generation,
+			"endpoint": endpoint,
+			"selector": dict(resolved.selector_metadata or {}),
+			"properties": dict(resolved.properties or {}),
+		},
+		"selected_binding": _api_binding_to_mapping(resolved.api_binding),
+	}
+
+
+def _defw_directory_binding_record(endpoint):
+	endpoint_record = _endpoint_record_from_value(
+		endpoint,
+		default_name="DEFwDirSvc",
+	)
+	if endpoint_record is None:
+		raise QPMUnsupportedConfigurationError(
+			f"site directory endpoint {endpoint!r} must include a "
+			"listen port")
+	return {
+		"service_record": {
+			"service_id": f"dirsvc:{endpoint}",
+			"service_name": "DEFwDirSvc",
+			"service_type": "defw.dirsvc",
+			"runtime_id": endpoint_record["runtime_id"],
+			"generation": None,
+			"endpoint": endpoint_record,
+			"selector": {
+				"resources": ["DEFwDirSvc"],
+				"aliases": ["dirsvc", "directory"],
+			},
+			"properties": {},
+		},
+		"selected_binding": _api_binding_to_mapping(
+			_directory_api_binding()),
+	}
+
+
+def _directory_api_binding():
+	return QPMApiBinding(
+		binding_name="directory",
+		client_module="api_dirsvc",
+		client_class="DEFwDirSvc",
+		service_module="svc_dirsvc.svc_dirsvc",
+		service_class="DEFwDirSvc",
+	)
+
+
+def _api_binding_to_mapping(api_binding):
+	return {
+		"binding_name": api_binding.binding_name,
+		"client_module": api_binding.client_module,
+		"client_class": api_binding.client_class,
+		"service_module": api_binding.service_module,
+		"service_class": api_binding.service_class,
+		"version": api_binding.version,
+		"policy_labels": list(api_binding.policy_labels),
+	}
+
+
+def _endpoint_record_from_value(endpoint, default_name=None, runtime_id=None):
+	if isinstance(endpoint, dict):
+		address = (
+			endpoint.get("address") or
+			endpoint.get("addr") or
+			endpoint.get("host") or
+			endpoint.get("hostname")
+		)
+		listen_port = (
+			endpoint.get("listen_port") or
+			endpoint.get("listen-port") or
+			endpoint.get("port")
+		)
+		if not address or listen_port is None:
+			return None
+		try:
+			listen_port = int(listen_port)
+		except (TypeError, ValueError):
+			return None
+		name = (
+			endpoint.get("node_name") or
+			endpoint.get("name") or
+			default_name or
+			str(address)
+		)
+		hostname = endpoint.get("hostname") or str(address)
+		return {
+			"address": str(address),
+			"listen_port": listen_port,
+			"pid": int(endpoint.get("pid", 0) or 0),
+			"node_name": str(name),
+			"hostname": str(hostname),
+			"runtime_id": (
+				runtime_id or
+				endpoint.get("runtime_id") or
+				endpoint.get("remote_uuid") or
+				ZERO_UUID
+			),
+		}
+	if isinstance(endpoint, str):
+		parsed = _parse_endpoint_string(endpoint)
+		if parsed is None:
+			return None
+		host, listen_port = parsed
+		return {
+			"address": host,
+			"listen_port": listen_port,
+			"pid": 0,
+			"node_name": default_name or host,
+			"hostname": host,
+			"runtime_id": runtime_id or ZERO_UUID,
+		}
+	return None
+
+
+def _parse_endpoint_string(endpoint):
+	value = endpoint.strip()
+	if not value:
+		return None
+	if "://" in value:
+		from urllib.parse import urlparse
+
+		parsed = urlparse(value)
+		if not parsed.hostname or parsed.port is None:
+			return None
+		return parsed.hostname, parsed.port
+	if value.count(":") == 1:
+		host, port = value.rsplit(":", 1)
+		if not host or not port:
+			return None
+		try:
+			return host, int(port)
+		except ValueError:
+			return None
+	return None
+
+
 def _as_list(value):
 	if value is None:
 		return []
@@ -579,6 +885,94 @@ def _split_env_list(value):
 def _env_enabled(name):
 	value = os.environ.get(name, "")
 	return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _request_requires_hardware(request):
+	try:
+		qpm_type = int(request.qpm_type)
+	except (TypeError, ValueError):
+		return False
+	if qpm_type in (-1, 0):
+		return False
+	return bool(qpm_type & QPM_TYPE_HARDWARE)
+
+
+def _simulator_fallback_allowed(request):
+	if request.allow_simulator_fallback:
+		return True
+	if _provider_is_simulator(request.provider):
+		return True
+	try:
+		qpm_type = int(request.qpm_type)
+	except (TypeError, ValueError):
+		return False
+	return bool(qpm_type & QPM_TYPE_SIMULATOR)
+
+
+def _candidate_legacy_bits_match(candidate, property_key, capability_key,
+				 requested_bits):
+	if requested_bits in (-1, None):
+		return True
+	properties = candidate.properties or {}
+	record_bits = properties.get(property_key)
+	capability = properties.get("capability")
+	if record_bits is None and isinstance(capability, dict):
+		record_bits = capability.get(capability_key)
+	if record_bits in (-1, None):
+		return True
+	return _legacy_bits_match(record_bits, requested_bits)
+
+
+def _legacy_bits_match(record_bits, requested_bits):
+	try:
+		record_bits = int(record_bits)
+		requested_bits = int(requested_bits)
+	except (TypeError, ValueError):
+		return False
+	if requested_bits in (-1, 0):
+		return True
+	if record_bits in (-1, 0):
+		return False
+	return (record_bits & requested_bits) == requested_bits
+
+
+def _candidate_is_simulator(candidate):
+	properties = candidate.properties or {}
+	for key in ("simulator", "is_simulator"):
+		if key in properties:
+			return _truthy(properties.get(key))
+	if _provider_is_simulator(properties.get("provider")):
+		return True
+	try:
+		legacy_type = int(properties.get("legacy_type", -1))
+	except (TypeError, ValueError):
+		return False
+	return (
+		legacy_type not in (-1, 0) and
+		bool(legacy_type & QPM_TYPE_SIMULATOR)
+	)
+
+
+def _provider_is_simulator(provider):
+	if provider is None:
+		return False
+	return str(provider).strip().lower() in SIMULATOR_PROVIDERS
+
+
+def _provider_service_module(provider):
+	if provider is None:
+		return None
+	return PROVIDER_SERVICE_MODULES.get(str(provider).strip().lower())
+
+
+def _truthy(value):
+	if isinstance(value, bool):
+		return value
+	if value is None:
+		return False
+	if isinstance(value, (int, float)):
+		return value != 0
+	return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
 def _candidate_list(candidates):

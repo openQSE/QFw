@@ -35,6 +35,17 @@ from .request import parse_execution_request
 from statistics import mean, median, stdev
 
 DIAGNOSTIC_BYPASS_ENV = "QFW_QPM_DIAGNOSTIC_BYPASS_ENABLED"
+QPM_SERVICE_TYPE = "qfw.qpm"
+QPM_DEFAULT_CLIENT_MODULE = "api_qpm"
+QPM_DEFAULT_CLIENT_CLASS = "QPM"
+QPM_CATEGORY_API_BINDINGS = (
+	("execution", "api_qpm_execution", "QPMExecution"),
+	("admission", "api_qpm_admission_control", "QPMAdmissionControl"),
+	("admission-policy", "api_qpm_admission_policy_config",
+	 "QPMAdmissionPolicyConfig"),
+	("scheduler", "api_qpm_scheduler_control", "QPMSchedulerControl"),
+	("telemetry", "api_qpm_telemetry", "QPMTelemetry"),
+)
 qpm_initialized = False
 qpm_shutdown = False
 
@@ -45,6 +56,108 @@ class QPMEventDispatcher:
 
 	def put(self, event):
 		return self.controller.dispatch_completion_event(event)
+
+
+def _qpm_api_bindings(service_module, service_class):
+	bindings = [{
+		"binding_name": "default",
+		"client_module": QPM_DEFAULT_CLIENT_MODULE,
+		"client_class": QPM_DEFAULT_CLIENT_CLASS,
+		"service_module": service_module,
+		"service_class": service_class,
+		"version": 1,
+	}]
+	for binding_name, client_module, client_class in QPM_CATEGORY_API_BINDINGS:
+		bindings.append({
+			"binding_name": binding_name,
+			"client_module": client_module,
+			"client_class": client_class,
+			"service_module": service_module,
+			"service_class": service_class,
+			"version": 1,
+		})
+	return bindings
+
+
+def _qpm_service_id(svc_name, service_module, provider, properties):
+	device_id = properties.get("device_id") or properties.get("target_id")
+	if device_id:
+		return f"qpm:{provider or svc_name}:{device_id}"
+	return f"qpm:{provider or service_module}:{svc_name}"
+
+
+def _qpm_selector(properties, svc_name, provider):
+	selector = dict(properties.get("selector") or {})
+	resources = _metadata_list(selector.get("resources"))
+	aliases = _metadata_list(selector.get("aliases"))
+	device_id = properties.get("device_id") or properties.get("target_id")
+	_add_metadata_value(resources, device_id)
+	_add_metadata_value(resources, properties.get("resource_id"))
+	_add_qpm_qubit_resource(resources, provider, properties.get("num_qubits"))
+	if not resources:
+		_add_metadata_value(resources, svc_name)
+	_add_metadata_value(aliases, provider)
+	_add_metadata_value(aliases, svc_name)
+	selector["resources"] = resources
+	selector["aliases"] = aliases
+	selector.setdefault("name", device_id or provider or svc_name)
+	return selector
+
+
+def _qpm_provider_from_type_bits(type_bits, qpm_type):
+	bits = _int_bits(type_bits)
+	if bits is None:
+		return None
+	for member_name, provider in (
+			("QPM_TYPE_IQM", "iqm"),
+			("QPM_TYPE_NWQSIM", "nwqsim"),
+			("QPM_TYPE_TNQVM", "tnqvm"),
+			("QPM_TYPE_QB", "qb"),
+	):
+		member = getattr(qpm_type, member_name, None)
+		if member is not None and bits & int(member):
+			return provider
+	return None
+
+
+def _qpm_type_bit_enabled(type_bits, bit):
+	bits = _int_bits(type_bits)
+	if bits is None:
+		return False
+	return bool(bits & int(bit))
+
+
+def _int_bits(value):
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return None
+
+
+def _metadata_list(value):
+	if value is None:
+		return []
+	if isinstance(value, (list, tuple, set)):
+		return [str(item) for item in value if item is not None]
+	return [str(value)]
+
+
+def _add_metadata_value(items, value):
+	if value is None:
+		return
+	value = str(value)
+	if value and value not in items:
+		items.append(value)
+
+
+def _add_qpm_qubit_resource(resources, provider, num_qubits):
+	if provider is None or num_qubits is None:
+		return
+	try:
+		num_qubits = int(num_qubits)
+	except (TypeError, ValueError):
+		return
+	_add_metadata_value(resources, f"{str(provider).upper()}-{num_qubits}q")
 
 
 class UTIL_QPM:
@@ -683,14 +796,41 @@ class UTIL_QPM:
 		from api_qpm import QPMType, QPMCapability
 		from defw_agent_info import get_bit_list, get_bit_desc, Capability, DEFwServiceInfo
 		properties = dict(properties or {})
+		service_module = self.__class__.__module__
+		service_class = self.__class__.__name__
+		provider = properties.get("provider")
+		if provider is None:
+			provider = _qpm_provider_from_type_bits(type_bits, QPMType)
+			if provider is not None:
+				properties["provider"] = provider
+		properties.setdefault("service_type", QPM_SERVICE_TYPE)
+		properties.setdefault("service_id", _qpm_service_id(
+			svc_name, service_module, provider, properties))
+		properties.setdefault("legacy_type", int(type_bits))
+		properties.setdefault("legacy_capabilities", int(caps_bits))
+		properties.setdefault(
+			"simulator",
+			_qpm_type_bit_enabled(type_bits, QPMType.QPM_TYPE_SIMULATOR))
+		properties.setdefault(
+			"hardware",
+			_qpm_type_bit_enabled(type_bits, QPMType.QPM_TYPE_HARDWARE))
+		properties.setdefault("selector", _qpm_selector(
+			properties, svc_name, provider))
+		properties.setdefault("api_bindings", _qpm_api_bindings(
+			service_module, service_class))
+		properties.setdefault("binding_name", "execution")
+		properties.setdefault("client_module", "api_qpm_execution")
+		properties.setdefault("client_class", "QPMExecution")
+		properties.setdefault("service_module", service_module)
+		properties.setdefault("service_class", service_class)
 		properties.setdefault("controller", self.controller_telemetry())
 		t = get_bit_list(type_bits, QPMType)
 		c = get_bit_list(caps_bits, QPMCapability)
 		cap = Capability(type_bits, caps_bits, get_bit_desc(t, c))
 		info = DEFwServiceInfo(
 			svc_name, svc_desc,
-			self.__class__.__name__,
-			self.__class__.__module__,
+			service_class,
+			service_module,
 			cap, -1,
 			properties=properties)
 		return info
