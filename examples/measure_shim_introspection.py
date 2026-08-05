@@ -92,6 +92,11 @@ pid, port, interval = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
 out_path, stop_path = sys.argv[4], sys.argv[5]
 seen = set()
 
+# Backstop lifetime. A phase takes seconds; this only bounds a sampler whose
+# parent vanished between the liveness checks below.
+MAX_LIFETIME = 300.0
+started = time.monotonic()
+
 def socket_inodes():
     found = set()
     try:
@@ -131,6 +136,15 @@ def peers():
 # stopped or read is worse than no sampler.
 with open(out_path, "a", buffering=1) as sink:
     while not os.path.exists(stop_path):
+        # Never outlive the parent. Without these two guards a parent that dies
+        # without running its cleanup -- killed, crashed, interrupted -- leaves
+        # this process polling forever. socket_inodes() fails softly when the
+        # parent is gone, so the loop would spin rather than error out. During
+        # development that left 21 orphaned samplers burning 145% CPU.
+        if not os.path.isdir("/proc/%d" % pid):
+            break
+        if time.monotonic() - started > MAX_LIFETIME:
+            break
         ours = socket_inodes()
         for local, inode in peers():
             if inode in ours and local not in seen:
