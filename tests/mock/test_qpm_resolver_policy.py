@@ -1,4 +1,5 @@
 from qfw_qiskit.qpm_resolver import (
+	DEFwDirectoryClient,
 	DEFwQPMConnector,
 	DirectoryScope,
 	QPMAmbiguousResolutionError,
@@ -274,6 +275,31 @@ def test_resolver_from_environment_binds_site_directory_without_factory(
 	assert qpm_endpoint["listen_port"] == 9020
 
 
+def test_site_directory_client_accepts_resolve_services_only():
+	class ResolveServicesOnly:
+		def resolve_services(self, **kwargs):
+			self.kwargs = kwargs
+			return [directory_record("site-services-qpm")]
+
+	class FakeDefw:
+		def connect_to_binding(self, resolved_binding):
+			self.resolved_binding = resolved_binding
+			return ResolveServicesOnly()
+
+	fake_defw = FakeDefw()
+	client = DEFwDirectoryClient("site-a:8090", defw_module=fake_defw)
+
+	records = client.resolve_service(
+		service_name="QPM",
+		service_type="qfw.qpm",
+		binding_name="execution")
+
+	assert len(records) == 1
+	assert records[0]["service_record"]["service_id"] == "site-services-qpm"
+	assert fake_defw.resolved_binding["selected_binding"]["binding_name"] == (
+		"directory")
+
+
 def test_direct_endpoint_connect_uses_defw_binding(monkeypatch):
 	class FakeDefw:
 		def __init__(self):
@@ -424,6 +450,28 @@ def test_resolver_rejects_directory_record_without_selected_binding():
 		assert "selected API binding" in str(exc)
 	else:
 		raise AssertionError("expected invalid directory record rejection")
+
+
+def test_resolver_rejects_legacy_service_info_records():
+	class LegacyServiceInfo:
+		pass
+
+	resolver = QPMResolver(
+		[DirectoryScope(
+			"site", "site",
+			client=DirectoryClient([LegacyServiceInfo()]),
+			priority=50)],
+		connector=Connector(),
+		selection_order=["site"],
+		sleeper=lambda seconds: None,
+	)
+
+	try:
+		resolver.resolve(service_type="qfw.qpm", timeout=1)
+	except QPMInvalidDirectoryRecordError as exc:
+		assert "legacy DEFwServiceInfo" in str(exc)
+	else:
+		raise AssertionError("expected legacy service-info rejection")
 
 
 def test_hardware_request_requires_explicit_simulator_fallback_policy():

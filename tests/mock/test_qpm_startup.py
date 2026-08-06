@@ -46,9 +46,9 @@ class FakeSiteDirSvc:
 
 
 class FakeDefw:
-	def __init__(self, resmgr=None, site_ready=None, site_dirsvc=None,
+	def __init__(self, dirsvc=None, site_ready=None, site_dirsvc=None,
 		     records=None, listener_ready=True, controller_ready=True):
-		self.resmgr = resmgr
+		self.dirsvc = dirsvc
 		self.site_ready = set(site_ready or [])
 		self.site_dirsvc = site_dirsvc
 		self.records = list(records or [])
@@ -304,7 +304,7 @@ def test_qpm_startup_records_real_defw_directory_lifecycle(monkeypatch):
 	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
 
 	state = startup.initialize_qpm_service(
-		FakeDefw(resmgr=object()),
+		FakeDefw(dirsvc=object()),
 		"ready",
 	)
 	registered = defw_directory.register_service(record)

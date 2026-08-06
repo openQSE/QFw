@@ -154,7 +154,7 @@ def _dirsvc_ready(defw_module):
 		if not site_dirsvc_endpoints_configured():
 			return True
 		return _site_dirsvc_ready(defw_module)
-	return getattr(defw_module, "resmgr", None) is not None
+	return getattr(defw_module, "dirsvc", None) is not None
 
 
 def _site_dirsvc_ready(defw_module):
@@ -285,7 +285,7 @@ def _query_local_service_info(defw_module):
 	infos = []
 	for _svc, module in services:
 		svc_info = getattr(module, "svc_info", {})
-		if svc_info.get("name") in ("Directory Service", "Resource Manager"):
+		if svc_info.get("name") == "Directory Service":
 			continue
 		for service_class in getattr(module, "service_classes", []):
 			try:

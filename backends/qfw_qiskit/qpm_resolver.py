@@ -105,7 +105,6 @@ class QPMApiBinding:
 
 @dataclass(frozen=True)
 class QPMResolvedBinding:
-	service_info: Any
 	api_binding: QPMApiBinding
 	directory_scope: str
 	directory_identity: str
@@ -157,12 +156,6 @@ class DEFwQPMConnector:
 			raise QPMUnsupportedConfigurationError(
 				"direct QPM endpoint resolution requires DEFw "
 				"connect_to_binding or connect_to_endpoint support")
-		if resolved.service_info is not None:
-			apis = self._defw.connect_to_resource(
-				[resolved.service_info],
-				resolved.api_binding.client_class,
-			)
-			return apis[0]
 		if hasattr(self._defw, "connect_to_endpoint"):
 			return self._defw.connect_to_endpoint(
 				resolved.endpoint,
@@ -184,15 +177,9 @@ class DEFwDirectoryClient:
 			return client.resolve_service(**kwargs)
 		if hasattr(client, "resolve_services"):
 			return client.resolve_services(**kwargs)
-		if hasattr(client, "get_services"):
-			return client.get_services(
-				kwargs.get("service_name", DEFAULT_SERVICE_NAME),
-				kwargs.get("qpm_type", -1),
-				kwargs.get("qpm_capability", -1),
-			)
 		raise QPMUnsupportedConfigurationError(
 			f"site directory endpoint {self.endpoint!r} does not expose "
-			"resolve_service(), resolve_services(), or get_services()")
+			"resolve_service() or resolve_services()")
 
 	def _directory_client(self):
 		if self._client is not None:
@@ -396,12 +383,6 @@ class QPMResolver:
 			return _as_list(client.resolve_service(**filters))
 		if hasattr(client, "resolve_services"):
 			return _as_list(client.resolve_services(**filters))
-		if hasattr(client, "get_services"):
-			return _as_list(client.get_services(
-				request.service_name,
-				request.qpm_type,
-				request.qpm_capability,
-			))
 		return []
 
 	def _query_filters(self, request):
@@ -431,12 +412,9 @@ class QPMResolver:
 				request,
 				discovery_index,
 			)
-		return self._normalize_legacy_service_info(
-			directory,
-			record,
-			request,
-			discovery_index,
-		)
+		raise QPMInvalidDirectoryRecordError(
+			"QPM directory resolution requires binding-aware directory "
+			"records; legacy DEFwServiceInfo entries are not supported")
 
 	def _normalize_directory_record(self, directory, record, request,
 					discovery_index):
@@ -456,7 +434,6 @@ class QPMResolver:
 		endpoint = service.get("endpoint") or record.get("endpoint")
 		service_id = service.get("service_id") or properties.get("service_id")
 		return QPMResolvedBinding(
-			service_info=record.get("service_info"),
 			api_binding=api_binding,
 			directory_scope=record.get("directory_scope", directory.scope),
 			directory_identity=record.get(
@@ -475,37 +452,6 @@ class QPMResolver:
 				properties.get("latest_generation")
 			),
 			selector_metadata=selector,
-			properties=properties,
-			directory_priority=directory.priority,
-			discovery_index=discovery_index,
-		)
-
-	def _normalize_legacy_service_info(self, directory, service_info, request,
-					   discovery_index):
-		properties = _service_properties(service_info)
-		endpoint = _call(service_info, "get_endpoint")
-		service_module = _call(service_info, "get_module_name")
-		service_id = (
-			properties.get("service_id") or
-			properties.get("id") or
-			str(endpoint or discovery_index)
-		)
-		return QPMResolvedBinding(
-			service_info=service_info,
-			api_binding=QPMApiBinding(
-				binding_name=request.binding_filter(),
-				service_module=service_module,
-			),
-			directory_scope=directory.scope,
-			directory_identity=directory.identity or directory.name,
-			endpoint=endpoint,
-			service_id=service_id,
-			service_name=request.service_name,
-			service_type=properties.get("service_type", request.service_type),
-			runtime_id=properties.get("runtime_id"),
-			generation=properties.get("generation"),
-			latest_generation=properties.get("latest_generation"),
-			selector_metadata=_selector_from_properties(properties),
 			properties=properties,
 			directory_priority=directory.priority,
 			discovery_index=discovery_index,
@@ -687,7 +633,7 @@ def _validate_directory_record(service, binding, record):
 		raise QPMInvalidDirectoryRecordError(
 			"directory service record is missing service_id")
 	endpoint = service.get("endpoint") or record.get("endpoint")
-	if not endpoint and record.get("service_info") is None:
+	if not endpoint:
 		raise QPMInvalidDirectoryRecordError(
 			f"directory service record {service_id!r} is missing endpoint")
 	if binding is None:
@@ -980,38 +926,3 @@ def _candidate_list(candidates):
 		f"{item.service_id}@{item.directory_identity}"
 		for item in candidates
 	)
-
-
-def _call(obj, method_name, default=None):
-	if not hasattr(obj, method_name):
-		return default
-	try:
-		return getattr(obj, method_name)()
-	except TypeError:
-		return default
-
-
-def _selector_from_properties(properties):
-	selector = properties.get("selector")
-	if isinstance(selector, dict):
-		return dict(selector)
-	result = {}
-	if "selector_name" in properties:
-		result["name"] = properties["selector_name"]
-	for source, target in (
-		("selector_aliases", "aliases"),
-		("selector_resources", "resources"),
-	):
-		if source in properties:
-			result[target] = _as_list(properties[source])
-	for source in ("resource", "device_id"):
-		if source in properties and "resources" not in result:
-			result["resources"] = [properties[source]]
-	return result
-
-
-def _service_properties(service_info):
-	properties = _call(service_info, "get_properties", {})
-	if properties is None:
-		return {}
-	return dict(properties)
