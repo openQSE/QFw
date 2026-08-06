@@ -976,15 +976,32 @@ class QPMTargetController:
 					if self.device_profile is not None else None),
 			}
 
-	def set_capacity_model(self, capacity_model):
+	def set_capacity_model(self, capacity_model, device_id=None):
 		with self.lock:
-			self.capacity_model = dict(capacity_model or {})
+			capacity_model = dict(capacity_model or {})
+			if device_id is not None:
+				capacity_model["device_id"] = device_id
+			device_profile = None
+			device_profile_version = None
+			if capacity_model:
+				device_profile = self._capacity_model_device_profile(
+					capacity_model)
+				register_device_profile(self.admission_context, device_profile)
+			self.capacity_model = capacity_model
+			if device_profile is not None:
+				self.device_profile = device_profile
+				device_profile_version = self._bump_admission_config_version(
+					"device_profile")
 			version = self._bump_admission_config_version("capacity_model")
-			return {
+			result = {
 				"status": "accepted",
 				"version": version,
 				"capacity_model": dict(self.capacity_model),
 			}
+			if device_profile_version is not None:
+				result["device_profile_version"] = device_profile_version
+				result["device_profile"] = dict(self.device_profile)
+			return result
 
 	def get_capacity_model(self):
 		with self.lock:
@@ -996,8 +1013,15 @@ class QPMTargetController:
 	def set_admission_policy(self, policy):
 		with self.lock:
 			self.admission_policy = dict(policy or {})
-			device_id = self._device_id()
-			set_policy(self.admission_context, device_id, self.admission_policy)
+			device_id = self.admission_policy.get("device_id")
+			if device_id is None:
+				device_id = self._device_id()
+			set_policy(
+				self.admission_context,
+				device_id,
+				self.admission_policy,
+				estimator=self.estimator_policy,
+				device_profile=self.device_profile)
 			version = self._bump_admission_config_version("admission_policy")
 			return {
 				"status": "accepted",
@@ -1015,9 +1039,15 @@ class QPMTargetController:
 	def set_estimator_policy(self, estimator):
 		with self.lock:
 			self.estimator_policy = dict(estimator or {})
-			device_id = self._device_id()
+			device_id = self.estimator_policy.get("device_id")
+			if device_id is None:
+				device_id = self._device_id()
 			set_estimator(
-				self.admission_context, device_id, self.estimator_policy)
+				self.admission_context,
+				device_id,
+				self.estimator_policy,
+				policy=self.admission_policy,
+				device_profile=self.device_profile)
 			version = self._bump_admission_config_version("estimator_policy")
 			return {
 				"status": "accepted",
@@ -1318,6 +1348,8 @@ class QPMTargetController:
 			}
 		normalized = dict(profile)
 		normalized["device_id"] = device_id
+		normalized.setdefault(
+			"max_qubits", max_qubits or baseline["qubit_count"])
 		normalized.setdefault("external_device_id", self.config.target_id)
 		normalized.setdefault("baseline", baseline)
 		normalized.setdefault("max_shots", 1)
@@ -1326,6 +1358,31 @@ class QPMTargetController:
 		normalized.setdefault("measurement_ns", 1)
 		normalized.setdefault("default_ttl_ns", 60_000_000_000)
 		return normalized
+
+	def _capacity_model_device_profile(self, capacity_model):
+		profile = dict(self.device_profile or {})
+		profile.update(self._capacity_model_device_profile_fields(
+			capacity_model))
+		return self._normalize_device_profile(profile)
+
+	def _capacity_model_device_profile_fields(self, capacity_model):
+		model = dict(capacity_model or {})
+		limits = model.get("limits")
+		if isinstance(limits, dict):
+			model.update(limits)
+		for source, target in (
+				("credits", "total_credits"),
+				("credit_limit", "total_credits"),
+				("rate", "device_rate"),
+				("rate_limit", "device_rate"),
+				("concurrency", "concurrent_jobs"),
+				("max_concurrent_jobs", "concurrent_jobs"),
+				("ttl_ns", "default_ttl_ns"),
+				("reservation_ttl_ns", "default_ttl_ns"),
+				("window_ns", "time_span_ns")):
+			if source in model and target not in model:
+				model[target] = model[source]
+		return model
 
 	def _device_id(self):
 		if self.device_profile is not None:

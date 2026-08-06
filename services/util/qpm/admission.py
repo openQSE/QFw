@@ -97,7 +97,8 @@ def register_device_profile(context, profile):
 	return context.register_device(device_profile)
 
 
-def set_policy(context, device_id, policy):
+def set_policy(context, device_id, policy, estimator=None,
+	       device_profile=None):
 	if not admission_context_available(context):
 		return None
 	handler = getattr(context, "set_admission_policy", None)
@@ -107,13 +108,23 @@ def set_policy(context, device_id, policy):
 	policy_path = policy.get("path")
 	if policy_path:
 		context.add_policy_path(policy_path)
-	policy_name = policy.get("name") or policy.get("policy")
+	policy_name = (
+		policy.get("name") or
+		policy.get("policy") or
+		policy.get("policy_name"))
 	if policy_name:
-		return context.set_policy(device_id, policy_name)
+		options = _policy_options(policy)
+		if options and not _setter_accepts_options(context.set_policy):
+			return _load_device_policy_config(
+				context, device_id, policy=policy, estimator=estimator,
+				device_profile=device_profile)
+		return _call_policy_setter(
+			context.set_policy, device_id, policy_name, options)
 	return None
 
 
-def set_estimator(context, device_id, estimator):
+def set_estimator(context, device_id, estimator, policy=None,
+		  device_profile=None):
 	if not admission_context_available(context):
 		return None
 	handler = getattr(context, "set_estimator_policy", None)
@@ -123,9 +134,18 @@ def set_estimator(context, device_id, estimator):
 	estimator_path = estimator.get("path")
 	if estimator_path:
 		context.add_estimator_path(estimator_path)
-	estimator_name = estimator.get("name") or estimator.get("estimator")
+	estimator_name = (
+		estimator.get("name") or
+		estimator.get("estimator") or
+		estimator.get("estimator_name"))
 	if estimator_name:
-		return context.set_estimator(device_id, estimator_name)
+		options = _estimator_options(estimator)
+		if options and not _setter_accepts_options(context.set_estimator):
+			return _load_device_policy_config(
+				context, device_id, policy=policy, estimator=estimator,
+				device_profile=device_profile)
+		return _call_policy_setter(
+			context.set_estimator, device_id, estimator_name, options)
 	return None
 
 
@@ -330,6 +350,244 @@ def _handler(context, name):
 	if not admission_context_available(context):
 		return None
 	return getattr(context, name, None)
+
+
+def _setter_accepts_options(setter):
+	try:
+		parameters = inspect.signature(setter).parameters.values()
+	except (TypeError, ValueError):
+		return False
+	positional_count = 0
+	for parameter in parameters:
+		if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+			return True
+		if parameter.name == "options":
+			return True
+		if parameter.kind in (
+				inspect.Parameter.POSITIONAL_ONLY,
+				inspect.Parameter.POSITIONAL_OR_KEYWORD):
+			positional_count += 1
+	return positional_count >= 3
+
+
+def _call_policy_setter(setter, device_id, name, options):
+	if options:
+		return setter(device_id, name, options)
+	return setter(device_id, name)
+
+
+def _policy_options(policy):
+	policy = dict(policy or {})
+	return _plain_options(
+		policy.get("options") or policy.get("policy_options") or {})
+
+
+def _estimator_options(estimator):
+	estimator = dict(estimator or {})
+	return _plain_options(
+		estimator.get("options") or
+		estimator.get("estimator_options") or
+		{})
+
+
+def _plain_options(options):
+	if not options:
+		return {}
+	if isinstance(options, dict):
+		return dict(options)
+	result = {}
+	for item in options:
+		if isinstance(item, dict) and "key" in item and "value" in item:
+			result[item["key"]] = item["value"]
+		elif isinstance(item, (list, tuple)) and len(item) == 2:
+			result[item[0]] = item[1]
+	return result
+
+
+def _load_device_policy_config(context, device_id, policy=None,
+			       estimator=None, device_profile=None):
+	loader = getattr(context, "load_config_string", None)
+	if loader is None:
+		raise QPMAdmissionValidationError(
+			"qhw-admission context cannot apply policy options")
+	profile = _device_profile_dict(device_profile)
+	if profile is None:
+		getter = getattr(context, "get_device", None)
+		if getter is not None:
+			profile = _device_profile_dict(getter(device_id))
+	if profile is None:
+		raise QPMAdmissionValidationError(
+			"admission policy options require a device profile")
+	if device_id is not None:
+		profile["device_id"] = device_id
+	return loader(_device_policy_config_yaml(profile, policy, estimator))
+
+
+def _device_policy_config_yaml(profile, policy=None, estimator=None):
+	lines = [
+		"devices:",
+		f"  - device_id: {_yaml_scalar(profile['device_id'])}",
+		f"    max_qubits: {_yaml_scalar(_profile_value(profile, 'max_qubits'))}",
+		f"    max_shots: {_yaml_scalar(_profile_value(profile, 'max_shots'))}",
+		"    max_provider_queue_depth: " +
+		_yaml_scalar(_profile_value(profile, "max_provider_queue_depth")),
+		f"    time_span_ns: {_yaml_scalar(_profile_value(profile, 'time_span_ns'))}",
+		"    default_ttl_ns: " +
+		_yaml_scalar(_profile_value(profile, "default_ttl_ns")),
+		"    baseline:",
+	]
+	baseline = _profile_value(profile, "baseline", {})
+	for key in (
+			"qubit_count", "depth", "one_q_gate_count",
+			"two_q_gate_count", "measurement_count", "shots"):
+		lines.append(
+			f"      {key}: {_yaml_scalar(_profile_value(baseline, key))}")
+	lines.extend([
+		"    timing:",
+		"      one_q_gate_ns: " +
+		_yaml_scalar(_profile_value(profile, "one_q_gate_ns")),
+		"      two_q_gate_ns: " +
+		_yaml_scalar(_profile_value(profile, "two_q_gate_ns")),
+		"      measurement_ns: " +
+		_yaml_scalar(_profile_value(profile, "measurement_ns")),
+		"      one_q_gate_transfer_ns: " +
+		_yaml_scalar(_profile_value(profile, "one_q_gate_transfer_ns")),
+		"      two_q_gate_transfer_ns: " +
+		_yaml_scalar(_profile_value(profile, "two_q_gate_transfer_ns")),
+		"      measurement_transfer_ns: " +
+		_yaml_scalar(_profile_value(profile, "measurement_transfer_ns")),
+		f"      compile_ns: {_yaml_scalar(_profile_value(profile, 'compile_ns'))}",
+		"      control_overhead_ns: " +
+		_yaml_scalar(_profile_value(profile, "control_overhead_ns")),
+		"      provider_overhead_ns: " +
+		_yaml_scalar(_profile_value(profile, "provider_overhead_ns")),
+		"    credit:",
+		f"      total_credits: {_yaml_scalar(_profile_value(profile, 'total_credits'))}",
+		"    rate:",
+		f"      device_rate: {_yaml_scalar(_profile_value(profile, 'device_rate'))}",
+		"      concurrent_jobs: " +
+		_yaml_scalar(_profile_value(profile, "concurrent_jobs")),
+	])
+	_append_estimator_config(lines, estimator)
+	_append_policy_config(lines, policy)
+	return "\n".join(lines) + "\n"
+
+
+def _append_estimator_config(lines, estimator):
+	estimator_name = _estimator_name(estimator)
+	if not estimator_name:
+		return
+	lines.extend([
+		"    estimator:",
+		f"      name: {_yaml_scalar(estimator_name)}",
+	])
+	_append_option_config(lines, _estimator_options(estimator), "      ")
+
+
+def _append_policy_config(lines, policy):
+	policy_name = _policy_name(policy)
+	if not policy_name:
+		return
+	lines.extend([
+		"    policy:",
+		f"      name: {_yaml_scalar(policy_name)}",
+	])
+	_append_option_config(lines, _policy_options(policy), "      ")
+
+
+def _append_option_config(lines, options, indent):
+	if not options:
+		return
+	lines.append(indent + "options:")
+	for key in sorted(options, key=str):
+		lines.append(
+			f"{indent}  {_yaml_key(key)}: {_yaml_scalar(options[key])}")
+
+
+def _policy_name(policy):
+	policy = dict(policy or {})
+	return (
+		policy.get("name") or
+		policy.get("policy") or
+		policy.get("policy_name"))
+
+
+def _estimator_name(estimator):
+	estimator = dict(estimator or {})
+	return (
+		estimator.get("name") or
+		estimator.get("estimator") or
+		estimator.get("estimator_name"))
+
+
+def _device_profile_dict(profile):
+	if profile is None:
+		return None
+	if isinstance(profile, dict):
+		return dict(profile)
+	baseline = getattr(profile, "baseline", None)
+	return {
+		"device_id": getattr(profile, "device_id", None),
+		"time_span_ns": getattr(profile, "time_span_ns", 0),
+		"baseline": _baseline_dict(baseline),
+		"max_qubits": getattr(profile, "max_qubits", 0),
+		"max_shots": getattr(profile, "max_shots", 0),
+		"max_provider_queue_depth": getattr(
+			profile, "max_provider_queue_depth", 0),
+		"one_q_gate_ns": getattr(profile, "one_q_gate_ns", 0),
+		"two_q_gate_ns": getattr(profile, "two_q_gate_ns", 0),
+		"measurement_ns": getattr(profile, "measurement_ns", 0),
+		"one_q_gate_transfer_ns": getattr(
+			profile, "one_q_gate_transfer_ns", 0),
+		"two_q_gate_transfer_ns": getattr(
+			profile, "two_q_gate_transfer_ns", 0),
+		"measurement_transfer_ns": getattr(
+			profile, "measurement_transfer_ns", 0),
+		"compile_ns": getattr(profile, "compile_ns", 0),
+		"control_overhead_ns": getattr(profile, "control_overhead_ns", 0),
+		"provider_overhead_ns": getattr(profile, "provider_overhead_ns", 0),
+		"total_credits": getattr(profile, "total_credits", 0),
+		"device_rate": getattr(profile, "device_rate", 0),
+		"concurrent_jobs": getattr(profile, "concurrent_jobs", 0),
+		"default_ttl_ns": getattr(profile, "default_ttl_ns", 0),
+	}
+
+
+def _baseline_dict(baseline):
+	if baseline is None:
+		return {}
+	if isinstance(baseline, dict):
+		return dict(baseline)
+	return {
+		"qubit_count": getattr(baseline, "qubit_count", 0),
+		"depth": getattr(baseline, "depth", 0),
+		"one_q_gate_count": getattr(baseline, "one_q_gate_count", 0),
+		"two_q_gate_count": getattr(baseline, "two_q_gate_count", 0),
+		"measurement_count": getattr(baseline, "measurement_count", 0),
+		"shots": getattr(baseline, "shots", 0),
+	}
+
+
+def _profile_value(profile, key, default=0):
+	if isinstance(profile, dict):
+		return profile.get(key, default)
+	return getattr(profile, key, default)
+
+
+def _yaml_key(key):
+	return str(key).replace(" ", "_")
+
+
+def _yaml_scalar(value):
+	if value is None:
+		value = 0
+	if isinstance(value, bool):
+		return "true" if value else "false"
+	text = str(value)
+	if "\n" in text or "\r" in text:
+		raise QPMAdmissionValidationError(
+			"admission policy options cannot contain newlines")
+	return text
 
 
 def _native_admission_request(qhw_admission, request):

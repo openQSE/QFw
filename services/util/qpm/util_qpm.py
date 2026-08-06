@@ -914,6 +914,8 @@ class UTIL_QPM:
 				"estimator_name": estimator_name,
 				"estimator_options": dict(estimator_options or {}),
 			}
+			if device_id is not None:
+				estimator["device_id"] = device_id
 			result["estimator_policy"] = (
 				self.controller.set_estimator_policy(estimator))
 		return result
@@ -922,6 +924,9 @@ class UTIL_QPM:
 		return self.controller.get_admission_policy()
 
 	def set_admission_policy(self, policy, token=None, device_id=None):
+		if device_id is not None:
+			policy = dict(policy or {})
+			policy.setdefault("device_id", device_id)
 		return self.controller.set_admission_policy(policy)
 
 	def get_capacity_model(self, token=None, device_id=None):
@@ -937,12 +942,16 @@ class UTIL_QPM:
 				_token_device_payload_args(
 					token, device_id, capacity_model,
 					legacy_payload_first=True))
-		return self.controller.set_capacity_model(capacity_model)
+		return self.controller.set_capacity_model(
+			capacity_model, device_id=device_id)
 
 	def get_estimator_policy(self, token=None, device_id=None):
 		return self.controller.get_estimator_policy()
 
 	def set_estimator_policy(self, estimator, token=None, device_id=None):
+		if device_id is not None:
+			estimator = dict(estimator or {})
+			estimator.setdefault("device_id", device_id)
 		return self.controller.set_estimator_policy(estimator)
 
 	def retry_pending_capacity(self, reservation_id=None):
