@@ -18,11 +18,12 @@ from api_qpm import QPMType, QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 
-QFW_RUN_CONTEXT_OPTIONS = {
+QFW_RUN_CONTEXT_OPTIONS = (
 	"reservation_id",
+	"token",
 	"timeout",
 	"cancel_on_timeout",
-}
+)
 
 # This is a mirror of QPMType and QPMCapability. And they always need to
 # match. The point here is not to expose QPM specific information to the
@@ -166,7 +167,15 @@ class QFwBackend(BackendV2):
 
 	@classmethod
 	def _default_options(cls):
-		return Options(shots=1024, seed=334, seed_simulator=334)
+		return Options(
+			shots=1024,
+			seed=334,
+			seed_simulator=334,
+			reservation_id=None,
+			token=None,
+			timeout=None,
+			cancel_on_timeout=False,
+		)
 
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:
@@ -181,6 +190,11 @@ class QFwBackend(BackendV2):
 		for key in QFW_RUN_CONTEXT_OPTIONS:
 			if key in kwargs:
 				options[key] = kwargs[key]
+				continue
+			value = getattr(self.options, key, None)
+			if value is not None and (
+					key != "cancel_on_timeout" or value is not False):
+				options[key] = value
 		self._qfw_job = QFwJob(self, self.qpm, self.event_api, circuits, options)
 		self._qfw_job.submit()
 		return self._qfw_job
@@ -192,6 +206,8 @@ class QFwBackend(BackendV2):
 		kwargs = {"filters": filters}
 		if options.get("reservation_id") is not None:
 			kwargs["reservation_id"] = options["reservation_id"]
+		if options.get("token") is not None:
+			kwargs["token"] = options["token"]
 		return qpm.register_event_notification(
 			self._event_endpoint,
 			EVENT_TYPE_CIRC_RESULT,

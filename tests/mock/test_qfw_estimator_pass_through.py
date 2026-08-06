@@ -3,10 +3,12 @@ def test_estimator_options_accept_run_options():
 
 	options = Options(run_options={
 		"reservation_id": "reservation-1",
+		"token": "opaque-token",
 	})
 
 	assert options.run_options == {
 		"reservation_id": "reservation-1",
+		"token": "opaque-token",
 	}
 
 
@@ -35,9 +37,10 @@ def test_estimator_run_circuits_forwards_run_options():
 		backend,
 		shots=12,
 		reservation_id="reservation-1",
+		token="opaque-token",
 	)
 
 	assert results == ["result"]
 	assert metadata == [{}]
 	assert backend.calls[0][1]["reservation_id"] == "reservation-1"
-	assert "token" not in backend.calls[0][1]
+	assert backend.calls[0][1]["token"] == "opaque-token"

@@ -137,6 +137,7 @@ def test_qfw_job_registers_scoped_completion_event_after_submit(monkeypatch):
 		"seed": 7,
 		"seed_simulator": 13,
 		"reservation_id": "reservation-1",
+		"token": "opaque-token",
 	}
 
 	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")

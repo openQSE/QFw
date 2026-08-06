@@ -82,10 +82,42 @@ def test_backend_run_preserves_reservation_context(monkeypatch):
 		circuit,
 		shots=12,
 		reservation_id="reservation-1",
+		token={"opaque": "token"},
 	)
 
 	assert job.options["reservation_id"] == "reservation-1"
-	assert "token" not in job.options
+	assert job.options["token"] == {"opaque": "token"}
+
+
+def test_backend_run_uses_option_reservation_context(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-options")
+	fake_runtime = FakeRuntime(endpoint="endpoint-options")
+
+	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
+
+	backend = qfw_simulator.QFwBackend()
+	backend.options.reservation_id = "reservation-default"
+	backend.options.token = "default-token"
+	backend.options.timeout = 3.5
+	backend.options.cancel_on_timeout = True
+	circuit = FakeCircuit(2, name="context-options")
+
+	job = backend.run(
+		circuit,
+		reservation_id="reservation-run",
+		timeout=1.25,
+	)
+
+	assert job.options["reservation_id"] == "reservation-run"
+	assert job.options["token"] == "default-token"
+	assert job.options["timeout"] == 1.25
+	assert job.options["cancel_on_timeout"] is True
 
 
 def test_backend_registers_completion_event_with_task_scope(monkeypatch):
@@ -118,6 +150,16 @@ def test_backend_registers_completion_event_with_task_scope(monkeypatch):
 			"reservation_id": "reservation-1",
 		}
 	]
+
+	backend.register_completion_event(
+		fake_qpm,
+		fake_event_api,
+		"cid-18",
+		{"cid": "cid-18", "qtask_id": 43},
+		{"reservation_id": "reservation-2", "token": "opaque-token"},
+	)
+
+	assert fake_qpm.registrations[-1]["token"] == "opaque-token"
 
 
 def test_qfw_job_metadata_keeps_only_qhw_result():
@@ -230,6 +272,7 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 			"shots": 12,
 			"seed": 21,
 			"reservation_id": "reservation-1",
+			"token": "opaque-token",
 		},
 	)
 
@@ -237,7 +280,7 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 
 	assert cid == "cid-context"
 	assert fake_qpm.submitted_payloads[0]["reservation_id"] == "reservation-1"
-	assert "token" not in fake_qpm.submitted_payloads[0]
+	assert fake_qpm.submitted_payloads[0]["token"] == "opaque-token"
 
 
 def test_qfw_job_can_require_reservation_id(monkeypatch):
