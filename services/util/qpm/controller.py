@@ -566,6 +566,18 @@ class QPMTargetController:
 					"service-lifecycle", access_class),
 			}
 
+	def record_defw_directory_event(self, event_type, service_record=None,
+					peer_event=None, reason=None, details=None):
+		with self.lock:
+			records = self._defw_directory_event_records_locked(
+				event_type, service_record=service_record,
+				peer_event=peer_event, reason=reason,
+				details=details)
+			for record in records:
+				self.lifecycle_events.append(record)
+				self.audit_records.append(record)
+			return [dict(record) for record in records]
+
 	def cancel_task(self, cid=None, qtask_id=None, reason=None,
 			reservation_id=None, require_reservation=False):
 		with self.lock:
@@ -1607,6 +1619,20 @@ class QPMTargetController:
 				continue
 			fault["reason"] = "inactive-reservation-hold"
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
+			provider_cancel = (
+				self._cancel_provider_for_task_locked(runtime)
+				if self._runtime_provider_active_locked(runtime) else None)
+			if provider_cancel is not None:
+				fault["provider_cancel_status"] = provider_cancel["status"]
+				fault["provider_cancel_reason"] = provider_cancel["reason"]
+				if runtime.provider_handle is not None:
+					fault["provider_handle"] = runtime.provider_handle
+				if not provider_cancel["terminal"]:
+					fault["reason"] = (
+						"inactive-reservation-hold-provider-cancel-pending")
+					record = self._record_reconciliation_fault_locked(fault)
+					summary["capacity_hold_faults"].append(dict(record))
+					continue
 			if runtime is not None and runtime.scheduler_task_id is not None:
 				try:
 					mark_scheduler_task_failed(
@@ -1621,6 +1647,13 @@ class QPMTargetController:
 				self.provider_inflight.discard(qtask_id)
 			record = self._record_reconciliation_fault_locked(fault)
 			summary["capacity_hold_faults"].append(dict(record))
+
+	def _runtime_provider_active_locked(self, runtime):
+		if runtime is None:
+			return False
+		return (
+			runtime.provider_handle is not None or
+			runtime.qtask_id in self.provider_inflight)
 
 	def _reconcile_runtime_maps_locked(self, summary):
 		for qtask_id, runtime in list(self.runtime_by_qtask_id.items()):
@@ -1671,6 +1704,115 @@ class QPMTargetController:
 		self.lifecycle_events.append(record)
 		self.audit_records.append(record)
 		return record
+
+	def _defw_directory_event_records_locked(
+			self, event_type, service_record=None, peer_event=None,
+			reason=None, details=None):
+		event_type = _normalize_directory_event_type(event_type)
+		service_record = dict(service_record or {})
+		peer_event = dict(peer_event or {})
+		reason = (
+			reason or peer_event.get("reason") or
+			service_record.get("down_reason") or None)
+		base_details = self._defw_directory_event_details(
+			service_record, peer_event, details)
+		records = []
+		if event_type in ("register", "registration", "service-registration"):
+			records.append(self._defw_directory_lifecycle_record(
+				"service-registration", reason=reason,
+				details=base_details))
+			generation = _int_or_none(service_record.get("generation"))
+			previous_generation = _int_or_none(
+				base_details.get("previous_generation"))
+			if (previous_generation is not None and generation is not None and
+					previous_generation != generation):
+				records.append(self._defw_directory_lifecycle_record(
+					"service-restart", reason="runtime-restart",
+					details=base_details))
+				records.append(self._defw_directory_lifecycle_record(
+					"generation-change", reason="generation-change",
+					details=dict(
+						base_details,
+						previous_generation=previous_generation,
+						current_generation=generation)))
+			elif generation is not None and generation > 1:
+				records.append(self._defw_directory_lifecycle_record(
+					"service-restart", reason="runtime-restart",
+					details=base_details))
+				records.append(self._defw_directory_lifecycle_record(
+					"generation-change", reason="generation-increment",
+					details=dict(
+						base_details,
+						current_generation=generation)))
+			return records
+		if event_type in ("deregister", "deregistration",
+				  "service-deregistration"):
+			return [self._defw_directory_lifecycle_record(
+				"service-deregistration", reason=reason,
+				details=base_details)]
+		if event_type in ("peer-lost", "peer-loss"):
+			records.append(self._defw_directory_lifecycle_record(
+				"peer-lost", reason=reason, details=base_details))
+			if (reason == "heartbeat-timeout" or
+					service_record.get("state") == "TIMED_OUT"):
+				records.append(self._defw_directory_lifecycle_record(
+					"service-timeout", reason=reason,
+					details=base_details))
+			return records
+		if event_type in ("peer-ready", "service-recovered"):
+			return [self._defw_directory_lifecycle_record(
+				"service-recovered", reason=reason,
+				details=base_details)]
+		if event_type in ("purge", "retention-purge"):
+			return [self._defw_directory_lifecycle_record(
+				"retention-purge", reason=reason,
+				details=base_details)]
+		if event_type in ("restart", "service-restart"):
+			return [self._defw_directory_lifecycle_record(
+				"service-restart", reason=reason,
+				details=base_details)]
+		if event_type == "generation-change":
+			return [self._defw_directory_lifecycle_record(
+				"generation-change", reason=reason,
+				details=base_details)]
+		return [self._defw_directory_lifecycle_record(
+			event_type or "directory-lifecycle", reason=reason,
+			details=base_details)]
+
+	def _defw_directory_lifecycle_record(self, event, reason=None,
+					     details=None):
+		record = {
+			"event": event,
+			"target_id": self.config.target_id,
+			"source": "defw-directory",
+			"timestamp_ns": time.time_ns(),
+		}
+		if reason:
+			record["reason"] = reason
+		if details:
+			record["details"] = dict(details)
+		return record
+
+	def _defw_directory_event_details(
+			self, service_record, peer_event, details):
+		event_details = {}
+		for key in (
+				"service_id", "service_name", "service_type",
+				"runtime_id", "peer_handle", "generation", "state",
+				"down_reason", "retention_deadline"):
+			value = service_record.get(key)
+			if value is not None:
+				event_details[key] = value
+		if peer_event:
+			for key in (
+					"event_type", "peer_handle", "runtime_id",
+					"remote_runtime_id", "reason", "timestamp"):
+				value = peer_event.get(key)
+				if value is not None:
+					event_details[f"peer_{key}"] = value
+		if details:
+			event_details.update(dict(details))
+		return event_details
 
 	def _record_reconciliation_fault_locked(self, fault):
 		record = dict(fault)
@@ -2499,6 +2641,11 @@ def get_target_controller(config, max_ppn, admission_context_factory=None,
 		return controller.bind(max_ppn)
 
 
+def find_target_controller(target_id):
+	with _CONTROLLERS_LOCK:
+		return _CONTROLLERS.get(target_id)
+
+
 def clear_target_controllers():
 	with _CONTROLLERS_LOCK:
 		_CONTROLLERS.clear()
@@ -2521,6 +2668,19 @@ def _provider_cancel_is_terminal(status):
 		"not-supported",
 		"deferred",
 	}
+
+
+def _normalize_directory_event_type(event_type):
+	if event_type is None:
+		return ""
+	return str(event_type).strip().lower().replace("_", "-")
+
+
+def _int_or_none(value):
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return None
 
 
 def _target_id(qrc, explicit_target_id):

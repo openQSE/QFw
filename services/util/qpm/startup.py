@@ -5,6 +5,7 @@ import uuid
 from time import monotonic, sleep
 
 import util.qpm.util_qpm as uq
+from .controller import find_target_controller
 
 
 OPERATION_MODE_ENV = "QFW_QPM_OPERATION_MODE"
@@ -233,8 +234,11 @@ def _ensure_site_registration(defw_module):
 		registered = []
 		for record in records:
 			try:
-				registered.append(
-					_register_site_record(client, record, peer))
+				registered_record = _register_site_record(
+					client, record, peer)
+				registered.append(registered_record)
+				_record_site_registration_lifecycle(
+					record, registered_record, peer, endpoint)
 			except Exception:
 				logging.exception(
 					"failed to register QPM service with site dirsvc")
@@ -395,6 +399,66 @@ def _register_site_record(client, record, peer):
 		except TypeError:
 			return method(record)
 	raise AttributeError("site dirsvc client does not expose register_service")
+
+
+def _install_defw_directory_lifecycle_hook(defw_module):
+	directory_module = getattr(defw_module, "defw_directory", None)
+	if directory_module is None:
+		try:
+			import defw_directory as directory_module
+		except Exception:
+			return False
+	add_listener = getattr(
+		directory_module, "add_lifecycle_listener", None)
+	if add_listener is None:
+		directory = getattr(directory_module, "directory", None)
+		add_listener = getattr(directory, "add_lifecycle_listener", None)
+	if add_listener is None:
+		return False
+	try:
+		add_listener(_record_defw_directory_lifecycle_event)
+	except Exception:
+		logging.exception(
+			"failed to install DEFw directory lifecycle telemetry hook")
+		return False
+	return True
+
+
+def _record_defw_directory_lifecycle_event(
+		event_type, service_record=None, peer_event=None, reason=None,
+		details=None):
+	controller = _controller_for_service_record(service_record or {})
+	if controller is None:
+		return
+	controller.record_defw_directory_event(
+		event_type, service_record=service_record,
+		peer_event=peer_event, reason=reason, details=details)
+
+
+def _record_site_registration_lifecycle(record, registered_record, peer,
+					directory_endpoint):
+	service_record = dict(record)
+	if isinstance(registered_record, dict):
+		service_record.update(registered_record)
+	if peer:
+		service_record.setdefault("runtime_id", peer.get("runtime_id"))
+		service_record.setdefault("peer_handle", peer.get("peer_handle"))
+	_record_defw_directory_lifecycle_event(
+		"registration", service_record=service_record,
+		details={"directory_endpoint": directory_endpoint})
+
+
+def _controller_for_service_record(record):
+	properties = record.get("properties") or {}
+	if not isinstance(properties, dict):
+		return None
+	controller_telemetry = properties.get("controller") or {}
+	if not isinstance(controller_telemetry, dict):
+		return None
+	target_id = controller_telemetry.get("target_id")
+	if target_id is None:
+		return None
+	return find_target_controller(target_id)
 
 
 def _site_registration_peer(defw_module):
@@ -569,6 +633,7 @@ def initialize_qpm_service(defw_module, message):
 	if uq.qpm_initialized:
 		return "already-initialized"
 
+	_install_defw_directory_lifecycle_hook(defw_module)
 	timeout = startup_timeout()
 	wait_reason = _startup_wait_reason(defw_module)
 	if wait_reason is not None:

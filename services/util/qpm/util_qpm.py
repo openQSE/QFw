@@ -511,6 +511,12 @@ class UTIL_QPM:
 		return self.controller.service_lifecycle_telemetry(
 			access_class=access_class or "operator")
 
+	def record_defw_directory_event(self, event_type, service_record=None,
+					peer_event=None, reason=None, details=None):
+		return self.controller.record_defw_directory_event(
+			event_type, service_record=service_record,
+			peer_event=peer_event, reason=reason, details=details)
+
 	def _cancel_provider_handle(self, status):
 		provider_handle = status.get("provider_handle")
 		if provider_handle is None or self.qrc is None:
