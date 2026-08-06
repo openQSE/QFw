@@ -2096,21 +2096,12 @@ class QPMTargetController:
 
 	def _close_reservation(self, reservation_id, close_kind, reason_code=0,
 			       now_ns=None):
+		if close_kind == "expire":
+			return self._close_expired_reservations(
+				reservation_id, now_ns=now_ns)
 		now_ns = now_ns or time.time_ns()
-		close_state = self.reservation_close_state.setdefault(
-			reservation_id,
-			{
-				"reason": close_kind,
-				"started_at_ns": now_ns,
-				"pending_removed": [],
-				"held_reconciled": [],
-				"scheduler_cancelled": [],
-				"provider_cancelled": [],
-				"provider_cancel_pending": [],
-				"provider_cancel_resolved": [],
-			})
-		close_state.setdefault("provider_cancel_resolved", [])
-		close_state["reason"] = close_kind
+		close_state = self._reservation_close_state_locked(
+			reservation_id, close_kind, now_ns)
 		self._remove_pending_for_reservation(reservation_id, close_state)
 		self._reconcile_holds_for_reservation(reservation_id, close_state)
 		self._refresh_provider_cancel_pending(reservation_id, close_state)
@@ -2129,19 +2120,103 @@ class QPMTargetController:
 		elif close_kind == "cancel":
 			result = cancel_reservation(
 				self.admission_context, reservation_id, reason_code)
-		elif close_kind == "expire":
-			expire_reservations(self.admission_context, now_ns)
-			result = {
-				"status": "accepted",
-				"reservation_id": reservation_id,
-				"reason": "expired",
-			}
 		else:
 			raise QPMAdmissionValidationError(
 				f"unsupported reservation close kind: {close_kind}")
 		close_state["completed_at_ns"] = time.time_ns()
 		close_state["status"] = result.get("status", "accepted")
 		return result
+
+	def _close_expired_reservations(self, reservation_id, now_ns=None):
+		now_ns = now_ns or time.time_ns()
+		expired_reservation_ids = self._expired_active_reservation_ids_locked(
+			reservation_id, now_ns)
+		if not expired_reservation_ids:
+			expired_reservation_ids = [reservation_id]
+		close_states = []
+		for expired_reservation_id in expired_reservation_ids:
+			close_state = self._reservation_close_state_locked(
+				expired_reservation_id, "expire", now_ns)
+			close_states.append((expired_reservation_id, close_state))
+		for expired_reservation_id, close_state in close_states:
+			self._remove_pending_for_reservation(
+				expired_reservation_id, close_state)
+			self._reconcile_holds_for_reservation(
+				expired_reservation_id, close_state)
+			self._refresh_provider_cancel_pending(
+				expired_reservation_id, close_state)
+		pending_qtask_ids = []
+		pending_reservation_ids = []
+		for expired_reservation_id, close_state in close_states:
+			if not close_state["provider_cancel_pending"]:
+				continue
+			close_state["status"] = "provider-cancel-pending"
+			pending_reservation_ids.append(expired_reservation_id)
+			pending_qtask_ids.extend(close_state["provider_cancel_pending"])
+		if pending_qtask_ids:
+			return {
+				"status": "pending",
+				"reservation_id": reservation_id,
+				"reason": "provider-cancel-pending",
+				"pending_reservation_ids": pending_reservation_ids,
+				"pending_qtask_ids": pending_qtask_ids,
+			}
+		expire_reservations(self.admission_context, now_ns)
+		for _, close_state in close_states:
+			close_state["completed_at_ns"] = time.time_ns()
+			close_state["status"] = "accepted"
+		return {
+			"status": "accepted",
+			"reservation_id": reservation_id,
+			"reason": "expired",
+		}
+
+	def _expired_active_reservation_ids_locked(self, reservation_id, now_ns):
+		reservations = []
+		try:
+			reservations = list_reservations(self.admission_context, {})
+		except Exception:
+			pass
+		if reservation_id is not None:
+			try:
+				requested = get_reservation(
+					self.admission_context, reservation_id)
+			except Exception:
+				requested = None
+			if requested is not None:
+				reservations.append(requested)
+		expired_reservation_ids = []
+		seen = set()
+		for reservation in reservations:
+			if reservation.get("state") != "active":
+				continue
+			expires_at_ns = reservation.get("expires_at_ns")
+			if not expires_at_ns or expires_at_ns > now_ns:
+				continue
+			expired_reservation_id = reservation.get("reservation_id")
+			if expired_reservation_id in seen:
+				continue
+			seen.add(expired_reservation_id)
+			expired_reservation_ids.append(expired_reservation_id)
+		return expired_reservation_ids
+
+	def _reservation_close_state_locked(
+			self, reservation_id, close_kind, now_ns):
+		close_state = self.reservation_close_state.setdefault(
+			reservation_id,
+			{
+				"reason": close_kind,
+				"started_at_ns": now_ns,
+				"pending_removed": [],
+				"held_reconciled": [],
+				"scheduler_cancelled": [],
+				"provider_cancelled": [],
+				"provider_cancel_pending": [],
+				"provider_cancel_resolved": [],
+			})
+		close_state.setdefault("provider_cancel_resolved", [])
+		close_state["reason"] = close_kind
+		return close_state
 
 	def _remove_pending_for_reservation(self, reservation_id, close_state):
 		for qtask_id, pending in list(self.pending_capacity.items()):
