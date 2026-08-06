@@ -735,6 +735,8 @@ class QPMTargetController:
 					f"reservation_id={reservation_id}")
 			self._require_reservation_active(reservation, operation)
 			self._require_reservation_not_expired(reservation)
+			self._require_reservation_matches_context_locked(
+				reservation, request_context)
 			return reservation
 
 	def authorize_capacity_hold(self, circuit):
@@ -2000,6 +2002,78 @@ class QPMTargetController:
 		raise QPMAdmissionValidationError(
 			f"expired reservation: reservation_id={reservation_id}")
 
+	def _require_reservation_matches_context_locked(
+			self, reservation, request_context):
+		request_metadata = dict(
+			getattr(request_context, "metadata", None) or {})
+		reservation_metadata = self._reservation_metadata_locked(
+			reservation)
+		reservation_id = reservation.get("reservation_id")
+		for binding in (
+				("device_id", "device_id",
+				 ("device_id", "target_device_id", "external_device_id"),
+				 ("external_device_id", "target_device_id")),
+				("scope_id", "scope_id",
+				 ("scope_id", "external_scope_id"),
+				 ("external_scope_id", "scope_id")),
+				("job_id", "job_id",
+				 ("job_id", "allocation_id", "external_job_id",
+				  "external_allocation_id"),
+				 ("external_job_id", "job_id", "external_allocation_id",
+				  "allocation_id")),
+				("session_id", None,
+				 ("session_id", "external_session_id"),
+				 ("external_session_id", "session_id")),
+		):
+			field_name, record_field, request_keys, metadata_keys = binding
+			request_value = _metadata_identifier_any(
+				request_metadata, *request_keys)
+			if request_value is None:
+				continue
+			expected_value = self._reservation_binding_value_locked(
+				reservation, reservation_metadata, record_field,
+				metadata_keys, field_name)
+			if expected_value is None:
+				continue
+			request_value = self._canonical_binding_value(
+				field_name, request_value)
+			if request_value != expected_value:
+				raise QPMAdmissionValidationError(
+					f"reservation {field_name} mismatch: "
+					f"reservation_id={reservation_id} "
+					f"expected={expected_value} requested={request_value}")
+		self._require_reservation_operation_matches_locked(
+			reservation_id, reservation_metadata, request_metadata)
+
+	def _reservation_binding_value_locked(
+			self, reservation, metadata, record_field, metadata_keys,
+			field_name):
+		if record_field is not None and reservation.get(record_field) is not None:
+			return self._canonical_binding_value(
+				field_name, reservation.get(record_field))
+		value = _metadata_identifier_any(metadata, *metadata_keys)
+		if value is None:
+			return None
+		return self._canonical_binding_value(field_name, value)
+
+	def _canonical_binding_value(self, field_name, value):
+		if isinstance(value, int) and not isinstance(value, bool):
+			return value
+		return self.canonicalize_external_id(field_name, value)
+
+	def _require_reservation_operation_matches_locked(
+			self, reservation_id, reservation_metadata, request_metadata):
+		expected = _operation_from_metadata(reservation_metadata)
+		requested = _operation_from_metadata(request_metadata)
+		if expected is None or requested is None:
+			return
+		if _operation_names_compatible(expected, requested):
+			return
+		raise QPMAdmissionValidationError(
+			f"reservation operation mismatch: "
+			f"reservation_id={reservation_id} "
+			f"expected={expected} requested={requested}")
+
 	def _reservation_metadata_for_id_locked(self, reservation_id):
 		if reservation_id is None:
 			return {}
@@ -2402,6 +2476,42 @@ def _metadata_identifier(metadata, direct_key, external_key):
 	if value is not None:
 		return value
 	return metadata.get(external_key)
+
+
+def _metadata_identifier_any(metadata, *keys):
+	for key in keys:
+		value = metadata.get(key)
+		if value is not None:
+			return value
+	return None
+
+
+def _operation_from_metadata(metadata):
+	for source in (
+			metadata,
+			metadata.get("run_context", {}),
+			metadata.get("workload", {})):
+		if not isinstance(source, dict):
+			continue
+		value = source.get("operation")
+		if value is None:
+			value = source.get("operation_type")
+		if value is not None:
+			return value
+	return None
+
+
+def _operation_names_compatible(expected, requested):
+	expected = _normalized_operation_name(expected)
+	requested = _normalized_operation_name(requested)
+	if expected == requested:
+		return True
+	execution_operations = ("execution", "async_run", "sync_run")
+	return expected == "execution" and requested in execution_operations
+
+
+def _normalized_operation_name(value):
+	return str(value).strip().lower().replace("-", "_")
 
 
 def _event_filter_value(payload, runtime, key):
