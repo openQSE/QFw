@@ -521,3 +521,82 @@ def test_lifecycle_telemetry_records_controls_and_reconciliation(monkeypatch):
 		response["qtask_id"])
 	assert status["outcome"] == "FAILED"
 	assert qpm.controller.scheduler_context.failed == [response["qtask_id"]]
+
+
+def test_reconciliation_keeps_provider_active_hold_until_cancel_terminal(
+		monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM()
+	qpm.fake_qrc.cancel_status = "pending"
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	qpm.controller.admission_context.reservation_states[
+		"reservation-1"] = "expired"
+	summary = qpm.reconcile_runtime_state(now_ns=789)
+	runtime = qpm.controller.task_for_cid(response["cid"])
+
+	assert summary["capacity_hold_faults"][0]["reason"] == (
+		"inactive-reservation-hold-provider-cancel-pending")
+	assert summary["capacity_hold_faults"][0]["provider_cancel_status"] == (
+		"pending")
+	assert qpm.fake_qrc.cancelled == [response["provider_handle"]]
+	assert response["qtask_id"] in qpm.controller.capacity_holds
+	assert response["qtask_id"] in qpm.controller.provider_inflight
+	assert runtime.state == "submitted"
+	assert qpm.controller.scheduler_context.failed == []
+
+
+def test_lifecycle_telemetry_records_defw_directory_events(monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM()
+	service_record = {
+		"service_id": "qpm-iqm",
+		"service_name": "QPM",
+		"service_type": "qfw.qpm",
+		"runtime_id": "runtime-2",
+		"peer_handle": "peer-2",
+		"generation": 2,
+		"state": "UP",
+	}
+
+	qpm.record_defw_directory_event("registration", service_record)
+	qpm.record_defw_directory_event(
+		"PEER_LOST",
+		dict(service_record, state="TIMED_OUT"),
+		peer_event={
+			"event_type": "PEER_LOST",
+			"peer_handle": "peer-2",
+			"remote_runtime_id": "runtime-2",
+			"reason": "heartbeat-timeout",
+			"timestamp": 101.5,
+		})
+	qpm.record_defw_directory_event(
+		"deregistration",
+		dict(service_record, state="DEREGISTERED"))
+	qpm.record_defw_directory_event(
+		"retention-purge",
+		dict(service_record, retention_deadline=102.5))
+
+	telemetry = qpm.get_service_lifecycle_telemetry()
+	events = [record["event"] for record in telemetry["lifecycle_events"]]
+	peer_lost = next(
+		record for record in telemetry["lifecycle_events"]
+		if record["event"] == "peer-lost")
+	audit_events = [record["event"] for record in telemetry["audit_records"]]
+
+	for event in (
+			"service-registration",
+			"service-restart",
+			"generation-change",
+			"peer-lost",
+			"service-timeout",
+			"service-deregistration",
+			"retention-purge"):
+		assert event in events
+		assert event in audit_events
+	assert peer_lost["reason"] == "heartbeat-timeout"
+	assert peer_lost["details"]["peer_remote_runtime_id"] == "runtime-2"

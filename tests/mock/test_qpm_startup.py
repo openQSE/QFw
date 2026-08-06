@@ -229,6 +229,131 @@ def test_qpm_startup_long_running_site_registration_registers_payload(
 	assert status["site_registration_required"] is True
 
 
+def test_qpm_startup_registration_records_lifecycle_telemetry(monkeypatch):
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+	from util.qpm.controller import (
+		clear_target_controllers,
+		controller_config,
+		get_target_controller,
+	)
+
+	reset_qpm_state(uq)
+	clear_target_controllers()
+	site_dirsvc = FakeSiteDirSvc()
+	controller = get_target_controller(
+		controller_config(None, target_id="startup-target"),
+		1,
+		admission_context_factory=lambda threading_mode: object(),
+		scheduler_context_factory=(
+			lambda threading_mode, target_id=None: object()),
+	)
+	record = site_qpm_record()
+	record["properties"]["controller"] = {"target_id": "startup-target"}
+	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
+	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+
+	state = startup.initialize_qpm_service(
+		FakeDefw(
+			site_ready={"site-a"},
+			site_dirsvc=site_dirsvc,
+			records=[record],
+		),
+		"ready",
+	)
+	telemetry = controller.service_lifecycle_telemetry()
+	registration = next(
+		item for item in telemetry["lifecycle_events"]
+		if item["event"] == "service-registration")
+
+	assert state == "initialized"
+	assert registration["source"] == "defw-directory"
+	assert registration["details"]["service_id"] == "qpm:iqm:site-a"
+	assert registration["details"]["directory_endpoint"] == "site-a"
+
+
+def test_qpm_startup_records_real_defw_directory_lifecycle(monkeypatch):
+	import time
+
+	import defw_directory
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+	from util.qpm.controller import (
+		clear_target_controllers,
+		controller_config,
+		get_target_controller,
+	)
+
+	reset_qpm_state(uq)
+	clear_target_controllers()
+	controller = get_target_controller(
+		controller_config(None, target_id="directory-target"),
+		1,
+		admission_context_factory=lambda threading_mode: object(),
+		scheduler_context_factory=(
+			lambda threading_mode, target_id=None: object()),
+	)
+	directory = defw_directory.Directory(retention_seconds=0.01)
+	monkeypatch.setattr(defw_directory, "directory", directory)
+	record = site_qpm_record()
+	record["properties"]["controller"] = {"target_id": "directory-target"}
+	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
+	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+
+	state = startup.initialize_qpm_service(
+		FakeDefw(resmgr=object()),
+		"ready",
+	)
+	registered = defw_directory.register_service(record)
+	defw_directory.apply_peer_event({
+		"event_type": "PEER_LOST",
+		"peer_handle": registered["peer_handle"],
+		"remote_runtime_id": registered["runtime_id"],
+		"reason": "heartbeat-timeout",
+		"timestamp": time.time() + 1,
+	})
+	restart = site_qpm_record()
+	restart["runtime_id"] = "qpm-runtime-2"
+	restart["peer_handle"] = "qpm-peer-2"
+	restart["endpoint"]["runtime_id"] = "qpm-runtime-2"
+	restart["properties"]["controller"] = {"target_id": "directory-target"}
+	restarted = defw_directory.register_service(restart)
+	defw_directory.deregister_service(
+		restarted["service_id"],
+		restarted["runtime_id"],
+		restarted["generation"],
+	)
+	defw_directory.purge_expired(now=time.time() + 2)
+
+	telemetry = controller.service_lifecycle_telemetry()
+	events = [record["event"] for record in telemetry["lifecycle_events"]]
+	audit_events = [record["event"] for record in telemetry["audit_records"]]
+	peer_lost = next(
+		record for record in telemetry["lifecycle_events"]
+		if record["event"] == "peer-lost")
+	generation_change = next(
+		record for record in telemetry["lifecycle_events"]
+		if record["event"] == "generation-change")
+
+	assert state == "initialized"
+	for event in (
+			"service-registration",
+			"peer-lost",
+			"service-timeout",
+			"service-restart",
+			"generation-change",
+			"service-deregistration",
+			"retention-purge"):
+		assert event in events
+		assert event in audit_events
+	assert peer_lost["reason"] == "heartbeat-timeout"
+	assert generation_change["details"]["previous_generation"] == 1
+	assert generation_change["details"]["current_generation"] == 2
+
+
 def test_qpm_startup_site_registration_waits_for_listener_before_registering(
 		monkeypatch):
 	import util.qpm.startup as startup
