@@ -72,6 +72,58 @@ class QPM(UTIL_QPM):
 		info['qfw_backend'] = 'circuit_runner.qb'
 		return info
 
+	def get_backend_info(self, lib=None, token=None):
+		return {
+			'backend': 'qb',
+			'metadata_supported': False,
+		}
+
+	def get_device_info(self, lib=None, token=None):
+		return {
+			'backend': 'qb',
+			'metadata_supported': False,
+		}
+
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
+				     token=None):
+		return {
+			'backend': 'qb',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,
+				     token=None):
+		return {
+			'backend': 'qb',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_coupling_graph(self, calibration_set_id=None, lib=None,
+			       token=None):
+		return {
+			'backend': 'qb',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_last_job_timing(self, cid=None, lib=None, reservation_id=None,
+				token=None):
+		return {
+			'backend': 'qb',
+			'cid': cid,
+			'metadata_supported': False,
+		}
+
+	def get_last_job_metadata(self, cid=None, lib=None, reservation_id=None,
+				  token=None):
+		return {
+			'backend': 'qb',
+			'cid': cid,
+			'metadata_supported': False,
+		}
+
 	def start_vqpus(self):
 		cfg_template = os.path.join(
 			os.environ['QFW_BIN_PATH'], 'QB', 'cfg', 'remote_backends.yaml')
