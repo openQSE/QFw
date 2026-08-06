@@ -2,6 +2,7 @@ import util.qpm.util_qpm as util_qpm
 from fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
+	QPM_TASK_FAILED,
 	QPM_TASK_QUEUED,
 	clear_target_controllers,
 )
@@ -14,13 +15,19 @@ class FakeQRC:
 		self.sync_cids = []
 		self.cancelled = []
 		self.cancel_status = "cancelled"
+		self.async_error = None
+		self.sync_error = None
 
 	def async_run(self, circuit):
 		self.async_cids.append(circuit.get_cid())
+		if self.async_error is not None:
+			raise self.async_error
 		return f"provider-{circuit.get_cid()}"
 
 	def sync_run(self, circuit):
 		self.sync_cids.append(circuit.get_cid())
+		if self.sync_error is not None:
+			raise self.sync_error
 		circuit.set_running()
 		circuit.set_exec_done()
 		return {
@@ -85,6 +92,27 @@ class SchedulerQPM(UTIL_QPM):
 			target_id=target_id,
 			admission_context_factory=FakeAdmissionContext,
 			scheduler_context_factory=FakeSchedulerContext,
+		)
+
+	def prepare_circuit(self, info):
+		info["qfw_backend"] = "scheduler-hook"
+		return info
+
+
+class FailingSubmitSchedulerContext(FakeSchedulerContext):
+	def submit_task(self, task):
+		self.submitted.append(dict(task))
+		raise RuntimeError("scheduler submit failed")
+
+
+class FailingSchedulerQPM(UTIL_QPM):
+	def __init__(self, target_id="scheduler-submit-failure"):
+		self.fake_qrc = FakeQRC()
+		super().__init__(
+			self.fake_qrc,
+			target_id=target_id,
+			admission_context_factory=FakeAdmissionContext,
+			scheduler_context_factory=FailingSubmitSchedulerContext,
 		)
 
 	def prepare_circuit(self, info):
@@ -259,6 +287,118 @@ def test_completion_accounting_precedes_terminal_response(monkeypatch):
 	assert context.actual[-1][1]["actual_credits"] == 2
 	assert context.actual[-1][1]["actual_rate_units"] == 1
 	assert scheduler.completed == [response["qtask_id"]]
+
+
+def test_scheduler_submission_failure_reconciles_capacity_hold(monkeypatch):
+	_setup(monkeypatch)
+	qpm = FailingSchedulerQPM()
+
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	context = qpm.controller.admission_context
+
+	assert response["outcome"] == "FAILED"
+	assert response["lifecycle_state"] == QPM_TASK_FAILED
+	assert response["cid"] == status["cid"]
+	assert response["qtask_id"] == 1
+	assert response["reason"] == "scheduler-submission-failed"
+	assert "result" not in response
+	assert response["error"]["reason"] == "scheduler-submission-failed"
+	assert response["error"]["error"] == "scheduler submit failed"
+	assert response["error"]["error_type"] == "RuntimeError"
+	assert status["outcome"] == "FAILED"
+	assert status["lifecycle_state"] == QPM_TASK_FAILED
+	assert status["reason"] == "scheduler-submission-failed"
+	assert "result" not in status
+	assert status["error"]["reason"] == "scheduler-submission-failed"
+	assert status["error"]["error"] == "scheduler submit failed"
+	assert status["error"]["error_type"] == "RuntimeError"
+	assert qpm.controller.capacity_holds == {}
+	assert context.returned[-1][1]["task_id"] == 1
+	assert context.actual[-1][1]["task_id"] == 1
+	assert qpm.controller.scheduler_context.submitted[0]["task_id"] == 1
+	assert qpm.fake_qrc.async_cids == []
+
+
+def test_async_provider_failure_preserves_failed_terminal_state(monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM(target_id="scheduler-async-provider-failure")
+	qpm.fake_qrc.async_error = RuntimeError("provider async failed")
+
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	context = qpm.controller.admission_context
+	scheduler = qpm.controller.scheduler_context
+
+	assert response["outcome"] == "FAILED"
+	assert response["lifecycle_state"] == QPM_TASK_FAILED
+	assert response["cid"] == status["cid"]
+	assert response["qtask_id"] == 1
+	assert response["reason"] == "provider-submission-failed"
+	assert "result" not in response
+	assert response["error"]["reason"] == "provider-submission-failed"
+	assert response["error"]["error"] == "provider async failed"
+	assert response["error"]["error_type"] == "RuntimeError"
+	assert status["outcome"] == "FAILED"
+	assert status["lifecycle_state"] == QPM_TASK_FAILED
+	assert status["reason"] == "provider-submission-failed"
+	assert "result" not in status
+	assert status["error"]["reason"] == "provider-submission-failed"
+	assert status["error"]["error"] == "provider async failed"
+	assert status["error"]["error_type"] == "RuntimeError"
+	assert scheduler.failed == [1]
+	assert scheduler.completed == []
+	assert context.returned[-1][1]["task_id"] == 1
+	assert context.actual[-1][1]["task_id"] == 1
+	assert qpm.controller.capacity_holds == {}
+
+
+def test_sync_provider_failure_preserves_failed_terminal_state(monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM(target_id="scheduler-sync-provider-failure")
+	qpm.fake_qrc.sync_error = RuntimeError("provider sync failed")
+
+	response = qpm.sync_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	context = qpm.controller.admission_context
+	scheduler = qpm.controller.scheduler_context
+
+	assert response["outcome"] == "FAILED"
+	assert response["lifecycle_state"] == QPM_TASK_FAILED
+	assert response["cid"] == status["cid"]
+	assert response["qtask_id"] == 1
+	assert response["reason"] == "provider-submission-failed"
+	assert "result" not in response
+	assert response["error"]["reason"] == "provider-submission-failed"
+	assert response["error"]["error"] == "provider sync failed"
+	assert response["error"]["error_type"] == "RuntimeError"
+	assert status["outcome"] == "FAILED"
+	assert status["lifecycle_state"] == QPM_TASK_FAILED
+	assert status["reason"] == "provider-submission-failed"
+	assert "result" not in status
+	assert status["error"]["reason"] == "provider-submission-failed"
+	assert status["error"]["error"] == "provider sync failed"
+	assert status["error"]["error_type"] == "RuntimeError"
+	assert scheduler.failed == [1]
+	assert scheduler.completed == []
+	assert context.returned[-1][1]["task_id"] == 1
+	assert context.actual[-1][1]["task_id"] == 1
+	assert qpm.controller.capacity_holds == {}
 
 
 def test_cancel_task_reconciles_scheduler_admission_and_provider(monkeypatch):
