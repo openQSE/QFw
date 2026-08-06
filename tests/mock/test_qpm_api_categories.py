@@ -78,6 +78,8 @@ def test_qpm_category_surfaces_accept_token_placeholders():
 	for cls, method_name in (
 		(QPMExecution, "sync_run"),
 		(QPMExecution, "async_run"),
+		(QPMExecution, "diagnostic_sync_run"),
+		(QPMExecution, "diagnostic_async_run"),
 		(QPMExecution, "cancel_task"),
 		(QPMExecution, "task_status"),
 		(QPMAdmissionControl, "reserve"),
@@ -105,6 +107,10 @@ def test_qpm_category_surfaces_use_token_first_order():
 			 "reason", "qtask_id"],
 		(QPMExecution, "task_status"):
 			["self", "cid", "reservation_id", "token", "qtask_id"],
+		(QPMExecution, "diagnostic_sync_run"):
+			["self", "info", "token", "reason"],
+		(QPMExecution, "diagnostic_async_run"):
+			["self", "info", "token", "reason"],
 		(QPMAdmissionPolicyConfig, "set_capacity_model"):
 			["self", "token", "device_id", "capacity_model"],
 		(QPMSchedulerControl, "set_dispatch_depth"):

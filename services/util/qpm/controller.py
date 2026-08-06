@@ -130,6 +130,7 @@ class QPMRuntimeTask:
 	request_metadata: dict = field(default_factory=dict)
 	external_ids: dict = field(default_factory=dict)
 	canonical_ids: dict = field(default_factory=dict)
+	diagnostic_bypass: bool = False
 	state: str = QPM_TASK_CREATED
 
 
@@ -1049,6 +1050,7 @@ class QPMTargetController:
 				token_metadata=_token_metadata(request_context.token),
 				owner_metadata=dict(owner_metadata),
 				request_metadata=request_metadata,
+				diagnostic_bypass=request_context.diagnostic_bypass,
 			)
 			runtime.external_ids, runtime.canonical_ids = (
 				self.canonicalize_reservation_metadata(request_metadata))
@@ -1071,13 +1073,19 @@ class QPMTargetController:
 		owner = metadata.get("owner", {})
 		if not isinstance(owner, dict):
 			owner = {}
-		owner_id = metadata.get("external_user_id") or _owner_identifier(owner)
+		owner_id = (
+			_metadata_identifier(metadata, "user_id", "external_user_id") or
+			_owner_identifier(owner))
 		for kind, value in (
 			("owner_id", owner_id),
-			("job_id", metadata.get("external_job_id")),
-			("allocation_id", metadata.get("external_allocation_id")),
-			("project_id", metadata.get("external_project_id")),
-			("session_id", metadata.get("external_session_id")),
+			("job_id", _metadata_identifier(
+				metadata, "job_id", "external_job_id")),
+			("allocation_id", _metadata_identifier(
+				metadata, "allocation_id", "external_allocation_id")),
+			("project_id", _metadata_identifier(
+				metadata, "project_id", "external_project_id")),
+			("session_id", _metadata_identifier(
+				metadata, "session_id", "external_session_id")),
 		):
 			if value is None:
 				continue
@@ -1263,6 +1271,7 @@ class QPMTargetController:
 			request_metadata=dict(runtime.request_metadata),
 			external_ids=dict(runtime.external_ids),
 			canonical_ids=dict(runtime.canonical_ids),
+			diagnostic_bypass=runtime.diagnostic_bypass,
 			state=runtime.state,
 		)
 		self.terminal_tasks_by_cid[snapshot.cid] = snapshot
@@ -2329,6 +2338,13 @@ def _owner_identifier(owner):
 		if value is not None:
 			return value
 	return None
+
+
+def _metadata_identifier(metadata, direct_key, external_key):
+	value = metadata.get(direct_key)
+	if value is not None:
+		return value
+	return metadata.get(external_key)
 
 
 def _event_filter_value(payload, runtime, key):

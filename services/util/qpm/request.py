@@ -12,6 +12,10 @@ REQUEST_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
+RESERVED_PAYLOAD_KEYS = (
+	"_qfw_diagnostic_bypass",
+)
+
 SCOPED_METADATA_KEYS = (
 	"owner",
 	"job_id",
@@ -32,6 +36,7 @@ class QPMRequestContext:
 	token: Any = None
 	timeout: Any = None
 	cancel_on_timeout: bool = False
+	diagnostic_bypass: bool = False
 	metadata: Dict[str, Any] = field(default_factory=dict)
 	auth_disabled: bool = True
 
@@ -65,7 +70,7 @@ def auth_disabled():
 def parse_execution_request(info, **overrides):
 	payload = dict(info or {})
 	context = _context_from_payload(payload, overrides)
-	for key in REQUEST_CONTEXT_KEYS + SCOPED_METADATA_KEYS:
+	for key in REQUEST_CONTEXT_KEYS + SCOPED_METADATA_KEYS + RESERVED_PAYLOAD_KEYS:
 		payload.pop(key, None)
 	payload.update(context.as_payload_fields())
 	return QPMExecutionRequest(payload=payload, context=context)

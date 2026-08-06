@@ -7,6 +7,7 @@ import uuid
 import time
 import queue
 import os
+from dataclasses import replace
 from defw_exception import (
 	DEFwError,
 	DEFwExecutionError,
@@ -339,7 +340,10 @@ class UTIL_QPM:
 
 	def _prepare_run_circuit(self, cid, require_selected_cid=False):
 		circuit = self.circuits[cid]
-		if not circuit.info.get("_qfw_diagnostic_bypass", False):
+		runtime = self.controller.task_for_cid(cid)
+		diagnostic_bypass = (
+			runtime.diagnostic_bypass if runtime is not None else False)
+		if not diagnostic_bypass:
 			try:
 				if (circuit.info["qtask_id"]
 						not in self.controller.capacity_holds):
@@ -516,14 +520,16 @@ class UTIL_QPM:
 		self.require_managed_execution(request)
 		return self._sync_run_request(request)
 
-	def diagnostic_sync_run(self, info, reason=None):
+	def diagnostic_sync_run(self, info, token=None, reason=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		request = parse_execution_request(info)
+		request = parse_execution_request(info, token=token)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_sync_run", reason=reason)
-		request.payload["_qfw_diagnostic_bypass"] = True
+		request = replace(
+			request,
+			context=replace(request.context, diagnostic_bypass=True))
 		return self._sync_run_request(request)
 
 	def _sync_run_request(self, request):
@@ -646,14 +652,16 @@ class UTIL_QPM:
 		self.require_managed_execution(request)
 		return self._async_run_request(request)
 
-	def diagnostic_async_run(self, info, reason=None):
+	def diagnostic_async_run(self, info, token=None, reason=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		request = parse_execution_request(info)
+		request = parse_execution_request(info, token=token)
 		self.require_diagnostic_bypass(
 			request, operation="diagnostic_async_run", reason=reason)
-		request.payload["_qfw_diagnostic_bypass"] = True
+		request = replace(
+			request,
+			context=replace(request.context, diagnostic_bypass=True))
 		return self._async_run_request(request)
 
 	def _async_run_request(self, request):

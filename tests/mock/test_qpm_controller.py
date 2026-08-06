@@ -164,6 +164,39 @@ def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 	assert runtime1.canonical_ids["job_id"] == runtime2.canonical_ids["job_id"]
 
 
+def test_request_scoped_identifiers_are_canonicalized(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = HookQPM()
+
+	cid = qpm.create_circuit({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+		"job_id": "job-direct",
+		"allocation_id": "allocation-direct",
+		"project_id": "project-direct",
+		"session_id": "session-direct",
+	})
+	runtime = qpm.controller.task_for_cid(cid)
+
+	assert runtime.external_ids["job_id"] == "job-direct"
+	assert runtime.external_ids["allocation_id"] == "allocation-direct"
+	assert runtime.external_ids["project_id"] == "project-direct"
+	assert runtime.external_ids["session_id"] == "session-direct"
+	assert runtime.canonical_ids["job_id"] == (
+		qpm.controller.external_id_maps["job_id"]["job-direct"])
+	assert runtime.canonical_ids["allocation_id"] == (
+		qpm.controller.external_id_maps[
+			"allocation_id"]["allocation-direct"])
+	assert runtime.request_metadata["execution_context"]["job_id"] == "job-direct"
+	assert runtime.request_metadata["execution_context"][
+		"allocation_id"] == "allocation-direct"
+	assert runtime.request_metadata["execution_context"][
+		"project_id"] == "project-direct"
+	assert runtime.request_metadata["execution_context"][
+		"session_id"] == "session-direct"
+
+
 def test_sync_run_records_opaque_token_metadata(monkeypatch):
 	_setup_qpm(monkeypatch)
 	qpm = HookQPM()
@@ -290,3 +323,43 @@ def test_diagnostic_bypass_requires_configuration(monkeypatch):
 
 	assert qpm.controller.diagnostic_bypass_records == []
 	assert qpm.controller_telemetry()["diagnostic_bypass_enabled"] is True
+
+
+def test_normal_execution_strips_forged_diagnostic_bypass(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = HookQPM()
+
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+		"_qfw_diagnostic_bypass": True,
+	})
+	runtime = qpm.controller.task_for_cid(response["cid"])
+
+	assert runtime.diagnostic_bypass is False
+	assert "_qfw_diagnostic_bypass" not in qpm.circuits[response["cid"]].info
+	assert runtime.scheduler_task_id is not None
+	assert runtime.qtask_id in qpm.controller.capacity_holds
+	assert qpm.controller.diagnostic_bypass_records == []
+
+
+def test_diagnostic_bypass_success_uses_explicit_token(monkeypatch):
+	_setup_qpm(monkeypatch)
+	monkeypatch.setenv(DIAGNOSTIC_BYPASS_ENV, "yes")
+	qpm = HookQPM()
+
+	response = qpm.diagnostic_async_run(
+		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
+		token={"opaque": "token"},
+		reason="maintenance")
+	runtime = qpm.controller.task_for_cid(response["cid"])
+	record = qpm.controller.diagnostic_bypass_records[-1]
+
+	assert runtime.diagnostic_bypass is True
+	assert runtime.reservation_id is None
+	assert runtime.scheduler_task_id is None
+	assert runtime.qtask_id not in qpm.controller.capacity_holds
+	assert record["operation"] == "diagnostic_async_run"
+	assert record["reason"] == "maintenance"
+	assert record["token_metadata"] == {"present": True, "type": "dict"}
