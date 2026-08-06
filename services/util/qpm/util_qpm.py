@@ -39,6 +39,10 @@ DIAGNOSTIC_BYPASS_ENV = "QFW_QPM_DIAGNOSTIC_BYPASS_ENABLED"
 QPM_SERVICE_TYPE = "qfw.qpm"
 QPM_DEFAULT_CLIENT_MODULE = "api_qpm"
 QPM_DEFAULT_CLIENT_CLASS = "QPM"
+MANAGED_SUBMISSION_FAILURE_REASONS = (
+	"scheduler-submission-failed",
+	"provider-submission-failed",
+)
 QPM_CATEGORY_API_BINDINGS = (
 	("execution", "api_qpm_execution", "QPMExecution"),
 	("admission", "api_qpm_admission_control", "QPMAdmissionControl"),
@@ -424,7 +428,19 @@ class UTIL_QPM:
 		self.controller.complete_scheduled_task(circuit, result=result)
 
 	def fail_provider_submission(self, circuit, error):
-		self.controller.fail_scheduled_task(circuit, error=error)
+		self.controller.fail_scheduled_task(
+			circuit, error=error, reason="provider-submission-failed")
+
+	def _failed_submission_status(self, cid, reservation_id):
+		if cid is None:
+			return None
+		status = self.controller.task_status_for_cid(
+			cid, reservation_id=reservation_id)
+		if (status.get("outcome") == "FAILED" and
+				status.get("reason")
+				in MANAGED_SUBMISSION_FAILURE_REASONS):
+			return status
+		return None
 
 	def finalize_provider_task(self, circuit, result=None):
 		state = circuit.getState()
@@ -567,6 +583,10 @@ class UTIL_QPM:
 					self.fail_provider_submission(circuit, e)
 					if "hosts" in circuit.info:
 						self.free_resources(circuit)
+				status = self._failed_submission_status(
+					cid, request.context.reservation_id)
+				if status is not None:
+					return status
 				raise e
 
 	def _sync_timeout_response(self, cid, request, message):
@@ -687,6 +707,10 @@ class UTIL_QPM:
 				if "hosts" in circuit.info:
 					self.free_resources(circuit)
 			self.process_oor_queue()
+			status = self._failed_submission_status(
+				cid, request.context.reservation_id)
+			if status is not None:
+				return status
 			raise e
 
 		return self.controller.task_status_for_cid(

@@ -41,6 +41,7 @@ from .scheduler import (
 	scheduler_task_count,
 	set_scheduler_policy as activate_scheduler_policy,
 	submit_scheduler_task,
+	QPMSchedulerError,
 	QPMSchedulerQueueEmpty,
 )
 
@@ -795,9 +796,17 @@ class QPMTargetController:
 				raise QPMAdmissionValidationError(
 					"scheduler submission requires an active "
 					"admission capacity hold")
-			scheduler_task_id = submit_scheduler_task(
-				self.scheduler_context,
-				self._scheduler_task_desc(circuit, runtime))
+			try:
+				scheduler_task_id = submit_scheduler_task(
+					self.scheduler_context,
+					self._scheduler_task_desc(circuit, runtime))
+			except Exception as error:
+				self.fail_scheduled_task(
+					circuit, error=error,
+					reason="scheduler-submission-failed")
+				raise QPMSchedulerError(
+					"scheduler task submission failed: "
+					f"qtask_id={qtask_id} error={error}") from error
 			runtime.scheduler_task_id = scheduler_task_id
 			self.qtask_id_by_scheduler_task_id[scheduler_task_id] = qtask_id
 			runtime.state = QPM_TASK_QUEUED
@@ -1207,7 +1216,7 @@ class QPMTargetController:
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
 			if runtime is None:
 				return None
-			if runtime.state in (QPM_TASK_COMPLETED, QPM_TASK_CANCELLED):
+			if runtime.state in QPM_TASK_TERMINAL_STATES:
 				return runtime
 			self._reconcile_task_hold_locked(runtime, circuit)
 			if runtime.scheduler_task_id is not None:
@@ -1220,7 +1229,7 @@ class QPMTargetController:
 			runtime.state = QPM_TASK_COMPLETED
 			return runtime
 
-	def fail_scheduled_task(self, circuit, error=None):
+	def fail_scheduled_task(self, circuit, error=None, reason=None):
 		qtask_id = circuit.info["qtask_id"]
 		with self.lock:
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
@@ -1240,6 +1249,7 @@ class QPMTargetController:
 			runtime.state = QPM_TASK_FAILED
 			if error is not None:
 				self.result_state[qtask_id] = {
+					"reason": reason,
 					"error": str(error),
 					"error_type": type(error).__name__,
 				}
@@ -1287,7 +1297,8 @@ class QPMTargetController:
 			self.selected_qtask_ids.discard(qtask_id)
 			self.provider_inflight.discard(qtask_id)
 			self.timeout_state.pop(qtask_id, None)
-			self.result_state.pop(qtask_id, None)
+			if runtime.state != QPM_TASK_FAILED:
+				self.result_state.pop(qtask_id, None)
 			return runtime
 
 	def _retain_terminal_task_locked(self, runtime):
@@ -1410,6 +1421,10 @@ class QPMTargetController:
 	def _task_status_locked(self, runtime, outcome=None, reason=None,
 				message=None, result=None):
 		timeout = self.timeout_state.get(runtime.qtask_id)
+		stored_result = self.result_state.get(runtime.qtask_id)
+		if (reason is None and runtime.state == QPM_TASK_FAILED and
+				isinstance(stored_result, dict)):
+			reason = stored_result.get("reason")
 		queue_observation = self._queue_observation_locked(runtime)
 		response = {
 			"outcome": outcome or self._task_outcome_locked(runtime),
@@ -1430,7 +1445,14 @@ class QPMTargetController:
 		if message is not None:
 			response["message"] = message
 		if result is not None:
-			response["result"] = result
+			if runtime.state == QPM_TASK_FAILED:
+				response["error"] = result
+			else:
+				response["result"] = result
+		elif runtime.state == QPM_TASK_FAILED and stored_result is not None:
+			response["error"] = (
+				dict(stored_result)
+				if isinstance(stored_result, dict) else stored_result)
 		if timeout is not None:
 			response["timeout"] = dict(timeout)
 		response["telemetry"] = {
