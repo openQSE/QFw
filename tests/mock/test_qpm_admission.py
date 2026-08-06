@@ -48,6 +48,9 @@ class FakeAdmissionContext:
 		self.threading = threading_mode
 		self.lock = threading.Lock()
 		self.requests = []
+		self.registered_profiles = []
+		self.policies = []
+		self.estimators = []
 		self.reservations = {}
 		self.authorized = []
 		self.consumed = []
@@ -56,10 +59,21 @@ class FakeAdmissionContext:
 		self.released = []
 		self.cancelled = []
 		self.expired = []
+		self.calls = []
 
 	def evaluate_request(self, request):
 		self.requests.append(("evaluate", dict(request)))
 		return self._decision(request, reservation_id=0)
+
+	def register_device_profile(self, profile):
+		self.registered_profiles.append(dict(profile))
+
+	def set_policy(self, device_id, policy_name, options=None):
+		self.policies.append((device_id, policy_name, dict(options or {})))
+
+	def set_estimator(self, device_id, estimator_name, options=None):
+		self.estimators.append(
+			(device_id, estimator_name, dict(options or {})))
 
 	def reserve_request(self, request):
 		with self.lock:
@@ -81,16 +95,19 @@ class FakeAdmissionContext:
 
 	def release_reservation(self, reservation_id, reason_code):
 		self.released.append((reservation_id, reason_code))
+		self.calls.append(("release", reservation_id, reason_code))
 		self.reservations[reservation_id]["state"] = "released"
 		return {"status": "accepted", "reservation_id": reservation_id}
 
 	def cancel_reservation(self, reservation_id, reason_code):
 		self.cancelled.append((reservation_id, reason_code))
+		self.calls.append(("cancel", reservation_id, reason_code))
 		self.reservations[reservation_id]["state"] = "cancelled"
 		return {"status": "accepted", "reservation_id": reservation_id}
 
 	def expire_reservations(self, now_ns):
 		self.expired.append(now_ns)
+		self.calls.append(("expire", now_ns))
 		for reservation in self.reservations.values():
 			expires_at_ns = reservation.get("expires_at_ns")
 			if expires_at_ns and expires_at_ns <= now_ns:
@@ -119,9 +136,11 @@ class FakeAdmissionContext:
 
 	def return_usage_request(self, reservation_id, usage):
 		self.returned.append((reservation_id, dict(usage)))
+		self.calls.append(("return", reservation_id, usage.get("task_id")))
 
 	def record_actual_request(self, reservation_id, actual):
 		self.actual.append((reservation_id, dict(actual)))
+		self.calls.append(("actual", reservation_id, actual.get("task_id")))
 
 	def _decision(self, request, reservation_id):
 		return {
@@ -141,6 +160,36 @@ class AdmissionQPM(UTIL_QPM):
 			self.fake_qrc,
 			target_id=target_id,
 			admission_context_factory=FakeAdmissionContext,
+			scheduler_context_factory=FakeSchedulerContext,
+		)
+
+	def prepare_circuit(self, info):
+		info["qfw_backend"] = "hook"
+		return info
+
+
+class LegacyOptionAdmissionContext(FakeAdmissionContext):
+	def __init__(self, threading_mode):
+		super().__init__(threading_mode)
+		self.loaded_configs = []
+
+	def set_policy(self, device_id, policy_name):
+		self.policies.append((device_id, policy_name))
+
+	def set_estimator(self, device_id, estimator_name="baseline"):
+		self.estimators.append((device_id, estimator_name))
+
+	def load_config_string(self, yaml_text):
+		self.loaded_configs.append(yaml_text)
+
+
+class LegacyOptionAdmissionQPM(UTIL_QPM):
+	def __init__(self, target_id="admission-legacy-options"):
+		self.fake_qrc = FakeQRC()
+		super().__init__(
+			self.fake_qrc,
+			target_id=target_id,
+			admission_context_factory=LegacyOptionAdmissionContext,
 			scheduler_context_factory=FakeSchedulerContext,
 		)
 
@@ -242,6 +291,102 @@ def test_admission_decision_kinds_are_structured(monkeypatch):
 		assert "reason" in decision
 
 
+def test_policy_configuration_reaches_admission_context(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	result = qpm.configure_admission_policy(
+		token="opaque-token",
+		device_id=77,
+		policy_name="credit",
+		policy_options={"total_credits": 16},
+		estimator_name="baseline",
+		estimator_options={"minimum_ns": 25},
+	)
+
+	assert result["status"] == "accepted"
+	assert qpm.controller.admission_context.policies == [
+		(77, "credit", {"total_credits": 16})]
+	assert qpm.controller.admission_context.estimators == [
+		(77, "baseline", {"minimum_ns": 25})]
+	assert result["admission_policy"]["policy_name"] == "credit"
+	assert result["estimator_policy"]["estimator_policy"][
+		"estimator_name"] == "baseline"
+
+
+def test_policy_options_reach_native_fallback_config(monkeypatch):
+	_setup(monkeypatch)
+	qpm = LegacyOptionAdmissionQPM()
+
+	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	result = qpm.configure_admission_policy(
+		token="opaque-token",
+		device_id=77,
+		policy_name="credit",
+		policy_options={
+			"allow_overcommit": True,
+			"overcommit_credits": 2,
+		},
+		estimator_name="baseline",
+		estimator_options={"observed_device_ns": 25},
+	)
+	configs = qpm.controller.admission_context.loaded_configs
+
+	assert result["status"] == "accepted"
+	assert "allow_overcommit: true" in configs[0]
+	assert "overcommit_credits: 2" in configs[0]
+	assert "observed_device_ns: 25" in configs[-1]
+	assert "device_id: 77" in configs[-1]
+
+
+def test_capacity_model_updates_admission_device_profile(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	result = qpm.set_capacity_model(capacity_model={
+		"credits": 64,
+		"rate": 4,
+		"concurrency": 2,
+		"ttl_ns": 9_000,
+		"window_ns": 60_000,
+	})
+	profile = qpm.controller.admission_context.registered_profiles[-1]
+
+	assert result["status"] == "accepted"
+	assert result["device_profile_version"] == 2
+	assert profile["total_credits"] == 64
+	assert profile["device_rate"] == 4
+	assert profile["concurrent_jobs"] == 2
+	assert profile["default_ttl_ns"] == 9_000
+	assert profile["time_span_ns"] == 60_000
+
+
+def test_capacity_model_uses_api_device_id_without_profile(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	result = qpm.set_capacity_model(
+		token="opaque-token",
+		device_id=77,
+		capacity_model={
+			"credits": 64,
+			"rate": 4,
+			"concurrency": 2,
+		},
+	)
+	profile = qpm.controller.admission_context.registered_profiles[-1]
+
+	assert result["status"] == "accepted"
+	assert result["capacity_model"]["device_id"] == 77
+	assert profile["device_id"] == 77
+	assert profile["total_credits"] == 64
+	assert profile["device_rate"] == 4
+	assert profile["concurrent_jobs"] == 2
+	assert profile["max_qubits"] == 1
+
+
 def test_execution_rejects_invalid_reservation_state(monkeypatch):
 	_setup(monkeypatch)
 	FakeAdmissionContext.reservation_state = "cancelled"
@@ -258,6 +403,49 @@ def test_execution_rejects_invalid_reservation_state(monkeypatch):
 		assert "state=cancelled" in str(exc)
 	else:
 		raise AssertionError("expected invalid reservation state")
+
+
+def test_execution_rejects_reservation_binding_mismatches(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+	reservation_id = qpm.reserve({
+		"owner": {"user": "alice"},
+		"job_id": "job-a",
+		"scope_id": "scope-a",
+		"target_device_id": "device-a",
+		"session_id": "session-a",
+		"run_context": {"operation": "async_run"},
+		"num_qubits": 2,
+	})["reservation_id"]
+	base_info = {
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+		"job_id": "job-a",
+		"scope_id": "scope-a",
+		"target_device_id": "device-a",
+		"session_id": "session-a",
+		"run_context": {"operation": "async_run"},
+	}
+
+	for binding, updates in (
+			("device_id", {"target_device_id": "device-b"}),
+			("scope_id", {"scope_id": "scope-b"}),
+			("job_id", {"job_id": "job-b"}),
+			("session_id", {"session_id": "session-b"}),
+			("operation", {"run_context": {"operation": "sync_run"}}),
+	):
+		info = dict(base_info)
+		info.update(updates)
+		try:
+			qpm.async_run(info)
+		except DEFwExecutionError as exc:
+			assert f"reservation {binding} mismatch" in str(exc)
+		else:
+			raise AssertionError(
+				f"expected reservation {binding} mismatch")
+
+	assert qpm.fake_qrc.async_cids == []
 
 
 def test_public_execution_accepts_positional_reservation_id(monkeypatch):
@@ -428,6 +616,47 @@ def test_release_cancel_and_expiration_reconcile_active_state(monkeypatch):
 	else:
 		raise AssertionError("expected expired reservation")
 	assert qpm.controller.admission_context.expired
+
+
+def test_expiration_sweep_reconciles_all_expired_holds_before_expire(
+		monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+	reservation_a = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_b = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_b,
+	})
+	qtask_id = response["qtask_id"]
+	now_ns = time.time_ns()
+	for reservation_id in (reservation_a, reservation_b):
+		qpm.controller.admission_context.reservations[
+			reservation_id]["expires_at_ns"] = now_ns - 1
+
+	result = qpm.controller.close_expired_reservation(
+		reservation_a, now_ns=now_ns)
+	calls = qpm.controller.admission_context.calls
+	expire_index = next(
+		index for index, call in enumerate(calls)
+		if call == ("expire", now_ns))
+	return_index = calls.index(("return", reservation_b, qtask_id))
+	actual_index = calls.index(("actual", reservation_b, qtask_id))
+	close_state_a = qpm.controller.reservation_close_state[reservation_a]
+	close_state_b = qpm.controller.reservation_close_state[reservation_b]
+
+	assert result["status"] == "accepted"
+	assert return_index < expire_index
+	assert actual_index < expire_index
+	assert qtask_id not in qpm.controller.capacity_holds
+	assert close_state_a["status"] == "accepted"
+	assert close_state_b["held_reconciled"] == [qtask_id]
+	assert close_state_b["status"] == "accepted"
+	assert qpm.controller.admission_context.reservations[
+		reservation_a]["state"] == "expired"
+	assert qpm.controller.admission_context.reservations[
+		reservation_b]["state"] == "expired"
 
 
 def test_release_waits_when_provider_cancellation_is_unsupported(monkeypatch):

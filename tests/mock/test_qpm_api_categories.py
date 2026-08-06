@@ -135,7 +135,8 @@ def test_util_qpm_control_methods_accept_token_first_order():
 			self.dispatch_depth = None
 			self.include_restricted = None
 
-		def set_capacity_model(self, capacity_model):
+		def set_capacity_model(self, capacity_model, device_id=None):
+			self.device_id = device_id
 			self.capacity_model = capacity_model
 			return {"capacity_model": capacity_model}
 
