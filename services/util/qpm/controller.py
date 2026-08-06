@@ -1037,7 +1037,9 @@ class QPMTargetController:
 			payload["qtask_id"] = qtask_id
 			reservation_metadata = self._reservation_metadata_for_id_locked(
 				request_context.reservation_id)
-			owner_metadata = reservation_metadata.get("owner", {})
+			request_metadata = _request_metadata(
+				reservation_metadata, request_context.metadata)
+			owner_metadata = request_metadata.get("owner", {})
 			if not isinstance(owner_metadata, dict):
 				owner_metadata = {}
 			runtime = QPMRuntimeTask(
@@ -1046,10 +1048,10 @@ class QPMTargetController:
 				reservation_id=request_context.reservation_id,
 				token_metadata=_token_metadata(request_context.token),
 				owner_metadata=dict(owner_metadata),
-				request_metadata=dict(reservation_metadata),
+				request_metadata=request_metadata,
 			)
 			runtime.external_ids, runtime.canonical_ids = (
-				self.canonicalize_reservation_metadata(reservation_metadata))
+				self.canonicalize_reservation_metadata(request_metadata))
 			self.terminal_tasks_by_cid.pop(cid, None)
 			self.runtime_by_cid[cid] = runtime
 			self.runtime_by_qtask_id[qtask_id] = runtime
@@ -1269,13 +1271,17 @@ class QPMTargetController:
 
 	def record_diagnostic_bypass(self, operation, request_context,
 				     reason=None):
+		owner_metadata = request_context.metadata.get("owner", {})
+		if not isinstance(owner_metadata, dict):
+			owner_metadata = {}
 		record = {
 			"operation": operation,
 			"reason": reason,
 			"target_id": self.config.target_id,
 			"reservation_id": request_context.reservation_id,
 			"token_metadata": _token_metadata(request_context.token),
-			"owner_metadata": {},
+			"owner_metadata": dict(owner_metadata),
+			"request_metadata": dict(request_context.metadata),
 			"auth_disabled": request_context.auth_disabled,
 			"timestamp": time.time(),
 		}
@@ -2360,3 +2366,13 @@ def _token_metadata(token):
 		"present": True,
 		"type": type(token).__name__,
 	}
+
+
+def _request_metadata(reservation_metadata, context_metadata):
+	metadata = dict(reservation_metadata or {})
+	context_metadata = dict(context_metadata or {})
+	for key, value in context_metadata.items():
+		metadata.setdefault(key, value)
+	if context_metadata:
+		metadata["execution_context"] = context_metadata
+	return metadata

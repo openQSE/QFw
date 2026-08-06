@@ -203,19 +203,25 @@ class UTIL_QPM:
 			elif len(comp) == 2:
 				self.free_hosts[comp[0]] = int(comp[1])
 
-	def create_circuit(self, info):
+	def create_circuit(self, info, request=None):
 		start = time.time()
 
 		cid = str(uuid.uuid4())
-		prepared_info = dict(info)
+		prepared_info = dict(request.payload if request is not None else info)
 		hook_info = self.prepare_circuit(prepared_info)
 		if hook_info is not None:
 			prepared_info = hook_info
-		request = parse_execution_request(prepared_info)
-		runtime = self.controller.register_circuit(cid, request.context,
-							   request.payload)
+		if request is None:
+			request = parse_execution_request(prepared_info)
+			request_context = request.context
+			request_payload = request.payload
+		else:
+			request_context = request.context
+			request_payload = prepared_info
+		runtime = self.controller.register_circuit(
+			cid, request_context, request_payload)
 		self.circuits[cid] = Circuit(
-			cid, request.payload, self.free_resources_and_oor)
+			cid, request_payload, self.free_resources_and_oor)
 		self.circuits[cid].set_ready()
 		logging.debug(
 			f"{cid} qtask {runtime.qtask_id} added to circuit database "
@@ -225,13 +231,13 @@ class UTIL_QPM:
 	def prepare_circuit(self, info):
 		return info
 
-	def delete_circuit(self, cid, reservation_id=None):
+	def delete_circuit(self, cid, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
 		if reservation_id is not None:
 			request = parse_execution_request(
-				{}, reservation_id=reservation_id)
+				{}, reservation_id=reservation_id, token=token)
 			self.require_managed_execution(request)
 		error = self.controller.task_reservation_error(
 			cid=cid, reservation_id=reservation_id,
@@ -432,11 +438,11 @@ class UTIL_QPM:
 		return self.cancel_task(
 			cid=cid, reservation_id=reservation_id, reason=reason)
 
-	def cancel_task(self, cid=None, qtask_id=None, reservation_id=None,
-			reason=None):
+	def cancel_task(self, cid=None, reservation_id=None, token=None,
+			reason=None, qtask_id=None):
 		if reservation_id is not None:
 			request = parse_execution_request(
-				{}, reservation_id=reservation_id)
+				{}, reservation_id=reservation_id, token=token)
 			self.require_managed_execution(request)
 		status = self.controller.cancel_task(
 			cid=cid, qtask_id=qtask_id, reason=reason,
@@ -445,7 +451,8 @@ class UTIL_QPM:
 		self.process_oor_queue()
 		return status
 
-	def task_status(self, cid=None, qtask_id=None, reservation_id=None):
+	def task_status(self, cid=None, reservation_id=None, token=None,
+		    qtask_id=None):
 		if qtask_id is not None:
 			return self.controller.task_status_for_qtask_id(
 				qtask_id, reservation_id=reservation_id,
@@ -454,30 +461,33 @@ class UTIL_QPM:
 			cid, reservation_id=reservation_id,
 			require_reservation=True)
 
-	def get_task_metadata(self, cid=None, qtask_id=None,
-			      reservation_id=None):
+	def get_task_metadata(self, token=None, cid=None, reservation_id=None,
+			      qtask_id=None):
+		token, cid, reservation_id, qtask_id = (
+			_token_task_metadata_args(
+				token, cid, reservation_id, qtask_id))
 		return self.task_status(
 			cid=cid, qtask_id=qtask_id,
-			reservation_id=reservation_id)
+			reservation_id=reservation_id, token=token)
 
-	def get_telemetry_access_model(self):
+	def get_telemetry_access_model(self, token=None):
 		return self.controller.telemetry_access_model()
 
-	def get_capacity_snapshot(self, device_id=None, scope_id=None,
+	def get_capacity_snapshot(self, token=None, device_id=None, scope_id=None,
 				  access_class=None):
 		return self.controller.capacity_snapshot(
 			device_id=device_id, scope_id=scope_id,
 			access_class=access_class or "manager-aggregate")
 
-	def get_queue_metrics(self, device_id=None, access_class=None):
+	def get_queue_metrics(self, token=None, device_id=None, access_class=None):
 		return self.controller.queue_metrics(
 			device_id=device_id,
 			access_class=access_class or "manager-aggregate")
 
-	def reconcile_runtime_state(self, now_ns=None):
+	def reconcile_runtime_state(self, token=None, now_ns=None):
 		return self.controller.reconcile_runtime_state(now_ns=now_ns)
 
-	def get_service_lifecycle_telemetry(self, access_class=None):
+	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
 		return self.controller.service_lifecycle_telemetry(
 			access_class=access_class or "operator")
 
@@ -491,7 +501,7 @@ class UTIL_QPM:
 			return
 		status["provider_cancel_status"] = "unsupported"
 
-	def sync_run(self, info, reservation_id=None, timeout=None,
+	def sync_run(self, info, reservation_id=None, token=None, timeout=None,
 				 cancel_on_timeout=False):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
@@ -499,6 +509,7 @@ class UTIL_QPM:
 		request = parse_execution_request(
 			info,
 			reservation_id=reservation_id,
+			token=token,
 			timeout=timeout,
 			cancel_on_timeout=cancel_on_timeout,
 		)
@@ -516,7 +527,7 @@ class UTIL_QPM:
 		return self._sync_run_request(request)
 
 	def _sync_run_request(self, request):
-		cid = self.create_circuit(request.payload)
+		cid = self.create_circuit(request.payload, request=request)
 		deadline = _sync_deadline(request.context.timeout)
 		while True:
 			circuit = None
@@ -620,7 +631,7 @@ class UTIL_QPM:
 			self.process_oor_queue()
 			raise e
 
-	def async_run(self, info, reservation_id=None, timeout=None,
+	def async_run(self, info, reservation_id=None, token=None, timeout=None,
 				  cancel_on_timeout=False):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
@@ -628,6 +639,7 @@ class UTIL_QPM:
 		request = parse_execution_request(
 			info,
 			reservation_id=reservation_id,
+			token=token,
 			timeout=timeout,
 			cancel_on_timeout=cancel_on_timeout,
 		)
@@ -648,7 +660,7 @@ class UTIL_QPM:
 		cid = None
 		circuit = None
 		try:
-			cid = self.create_circuit(request.payload)
+			cid = self.create_circuit(request.payload, request=request)
 			circuit = self._prepare_run_circuit(
 				cid, require_selected_cid=True)
 			return self.submit_provider_async(circuit, return_status=True)
@@ -681,7 +693,7 @@ class UTIL_QPM:
 		self.controller.set_task_state(
 			runtime.qtask_id, QPM_TASK_PENDING_CAPACITY)
 
-	def read_cq(self, cid=None, reservation_id=None):
+	def read_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -690,13 +702,15 @@ class UTIL_QPM:
 		if error is not None:
 			return error
 
-		r = self.qrc.read_cq(cid)
+		try:
+			r = self.qrc.read_cq(cid)
+		except DEFwInProgress as e:
+			return self._completion_in_progress_response(
+				cid, reservation_id, "read_cq", str(e))
 
 		if not r:
-			if cid:
-				raise DEFwInProgress(f"{cid} still in progress")
-			else:
-				raise DEFwInProgress("No ready QTs")
+			return self._completion_in_progress_response(
+				cid, reservation_id, "read_cq")
 
 		self.all_results.append(r)
 		cid = r.get("cid") if isinstance(r, dict) else None
@@ -709,7 +723,7 @@ class UTIL_QPM:
 			self.controller.forget_terminal_task_for_cid(cid)
 		return r
 
-	def peek_cq(self, cid=None, reservation_id=None):
+	def peek_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -718,13 +732,15 @@ class UTIL_QPM:
 		if error is not None:
 			return error
 
-		r = self.qrc.peak_cq(cid)
+		try:
+			r = self.qrc.peak_cq(cid)
+		except DEFwInProgress as e:
+			return self._completion_in_progress_response(
+				cid, reservation_id, "peek_cq", str(e))
 
 		if not r:
-			if cid:
-				raise DEFwInProgress(f"{cid} still in progress")
-			else:
-				raise DEFwInProgress("No ready QTs")
+			return self._completion_in_progress_response(
+				cid, reservation_id, "peek_cq")
 
 		cid = r.get("cid") if isinstance(r, dict) else None
 		runtime = self.controller.task_for_cid(cid)
@@ -733,6 +749,26 @@ class UTIL_QPM:
 			if circuit is not None:
 				self.complete_provider_submission(circuit, result=r)
 		return r
+
+	def _completion_in_progress_response(self, cid, reservation_id, operation,
+					     message=None):
+		reason = "completion-not-ready"
+		if cid is not None:
+			status = self.controller.task_status_for_cid(
+				cid, reservation_id=reservation_id, reason=reason)
+		else:
+			status = {
+				"outcome": "IN_PROGRESS",
+				"lifecycle_state": "no-ready-completion",
+				"reservation_id": reservation_id,
+				"reason": reason,
+			}
+		if message:
+			status["message"] = message
+		status["completion_ready"] = False
+		status["poll_operation"] = operation
+		return {key: value for key, value in status.items()
+			if value is not None}
 
 	def _result_selector_reservation_error(self, cid, reservation_id):
 		if reservation_id is not None and cid is None:
@@ -749,10 +785,10 @@ class UTIL_QPM:
 			require_reservation=True)
 
 	def register_event_notification(self, ep, evtype, class_id,
-					reservation_id=None, filters=None):
+					token=None, reservation_id=None, filters=None):
 		if reservation_id is not None:
 			request = parse_execution_request(
-				{}, reservation_id=reservation_id)
+				{}, reservation_id=reservation_id, token=token)
 			self.require_managed_execution(request)
 		push_info = {
 			"class": BaseEventAPI(class_id=class_id, target=ep),
@@ -840,27 +876,65 @@ class UTIL_QPM:
 		telemetry["diagnostic_bypass_enabled"] = diagnostic_bypass_enabled()
 		return telemetry
 
-	def configure_device_profile(self, profile=None, **overrides):
+	def configure_device_profile(self, token=None, device_id=None,
+				     profile=None, **overrides):
+		if profile is None and isinstance(token, dict):
+			profile = token
+			token = None
 		device_profile = dict(profile or {})
+		if device_id is not None:
+			device_profile["device_id"] = device_id
 		device_profile.update(overrides)
 		return self.controller.configure_device_profile(device_profile)
 
-	def get_admission_policy(self):
+	def get_device_profile(self, token=None, device_id=None):
+		return self.controller.get_device_profile()
+
+	def configure_admission_policy(self, token=None, device_id=None,
+				       policy_name=None, policy_options=None,
+				       estimator_name=None,
+				       estimator_options=None):
+		policy = {
+			"policy_name": policy_name,
+			"policy_options": dict(policy_options or {}),
+		}
+		if device_id is not None:
+			policy["device_id"] = device_id
+		result = self.controller.set_admission_policy(policy)
+		if estimator_name is not None or estimator_options:
+			estimator = {
+				"estimator_name": estimator_name,
+				"estimator_options": dict(estimator_options or {}),
+			}
+			result["estimator_policy"] = (
+				self.controller.set_estimator_policy(estimator))
+		return result
+
+	def get_admission_policy(self, token=None, device_id=None):
 		return self.controller.get_admission_policy()
 
-	def set_admission_policy(self, policy):
+	def set_admission_policy(self, policy, token=None, device_id=None):
 		return self.controller.set_admission_policy(policy)
 
-	def get_capacity_model(self):
+	def get_capacity_model(self, token=None, device_id=None):
 		return self.controller.get_capacity_model()
 
-	def set_capacity_model(self, capacity_model):
+	def set_capacity_model(self, token=None, device_id=None,
+			       capacity_model=None):
+		if capacity_model is None and device_id is None:
+			capacity_model = token
+			token = None
+		else:
+			token, device_id, capacity_model = (
+				_token_device_payload_args(
+					token, device_id, capacity_model,
+					legacy_payload_first=True))
 		return self.controller.set_capacity_model(capacity_model)
 
-	def get_estimator_policy(self):
+	def get_estimator_policy(self, token=None, device_id=None):
 		return self.controller.get_estimator_policy()
 
-	def set_estimator_policy(self, estimator):
+	def set_estimator_policy(self, estimator, token=None, device_id=None):
 		return self.controller.set_estimator_policy(estimator)
 
 	def retry_pending_capacity(self, reservation_id=None):
@@ -869,67 +943,112 @@ class UTIL_QPM:
 		self.process_oor_queue()
 		return results
 
-	def get_scheduler_status(self):
-		return self.controller.get_scheduler_status()
-
-	def get_scheduler_policy(self):
-		return self.controller.get_scheduler_policy()
-
-	def set_scheduler_policy(self, policy):
+	def configure_scheduler_policy(self, token=None, device_id=None,
+				       policy_name=None, policy_options=None):
+		policy = {
+			"policy_name": policy_name,
+			"policy_options": dict(policy_options or {}),
+		}
+		if device_id is not None:
+			policy["device_id"] = device_id
 		return self.controller.set_scheduler_policy(policy)
 
-	def pause(self, target_id=None, reason=None):
+	def get_scheduler_status(self, token=None, device_id=None):
+		return self.controller.get_scheduler_status()
+
+	def get_scheduler_policy(self, token=None, device_id=None):
+		return self.controller.get_scheduler_policy()
+
+	def set_scheduler_policy(self, policy, token=None, device_id=None):
+		return self.controller.set_scheduler_policy(policy)
+
+	def pause_execution_target(self, token=None, device_id=None,
+				   reason=None):
 		return self.controller.pause_scheduler(reason=reason)
 
-	def resume(self, target_id=None):
+	def resume_execution_target(self, token=None, device_id=None):
 		return self.controller.resume_scheduler()
 
-	def drain(self, target_id=None, mode="graceful", timeout_s=None):
+	def drain_execution_target(self, token=None, device_id=None,
+				   mode="graceful", timeout_s=None):
 		return self.controller.drain_scheduler(
 			mode=mode, timeout_s=timeout_s)
 
-	def set_dispatch_depth(self, max_inflight, target_id=None):
+	def pause(self, target_id=None, reason=None, token=None):
+		return self.controller.pause_scheduler(reason=reason)
+
+	def resume(self, target_id=None, token=None):
+		return self.controller.resume_scheduler()
+
+	def drain(self, target_id=None, mode="graceful", timeout_s=None,
+		  token=None):
+		return self.controller.drain_scheduler(
+			mode=mode, timeout_s=timeout_s)
+
+	def set_dispatch_depth(self, token=None, device_id=None,
+			   max_inflight=None):
+		if max_inflight is None and device_id is None:
+			max_inflight = token
+			token = None
+		else:
+			token, device_id, max_inflight = _token_device_payload_args(
+				token, device_id, max_inflight)
 		return self.controller.set_dispatch_depth(max_inflight)
 
-	def get_scheduler_queue_state(self, target_id=None,
+	def get_scheduler_queue_state(self, token=None, device_id=None,
 				      include_restricted=False):
+		token, device_id, include_restricted = (
+			_token_device_payload_args(
+				token, device_id, include_restricted))
 		return self.controller.get_scheduler_queue_state(
 			include_restricted=include_restricted)
 
-	def evaluate(self, request):
-		return self.controller.evaluate_reservation(request)
+	def evaluate(self, token=None, request=None):
+		token, request = _token_request_args(token, request)
+		return self.controller.evaluate_reservation(request, token=token)
 
-	def reserve(self, request=None, *args, **kwargs):
+	def reserve(self, token=None, request=None, *args, **kwargs):
+		token, request = _token_request_args(token, request)
 		if not isinstance(request, dict):
 			raise DEFwExecutionError(
 				"legacy service reservation is not supported by the "
 				"QPM admission API")
-		return self.controller.reserve_admission(request)
+		return self.controller.reserve_admission(request, token=token)
 
-	def renew(self, reservation_id, request=None):
+	def renew(self, token=None, reservation_id=None, request=None):
+		token, reservation_id, request = _token_reservation_request_args(
+			token, reservation_id, request)
 		return self.controller.renew_admission(
-			reservation_id, request=request)
+			reservation_id, request=request, token=token)
 
-	def release(self, reservation_id=None, reason=None, services=None):
+	def release(self, token=None, reservation_id=None, reason=None,
+		    services=None):
+		token, reservation_id, reason = _token_reservation_reason_args(
+			token, reservation_id, reason)
 		if reservation_id is None or isinstance(
 				reservation_id, (list, tuple, set)):
 			raise DEFwExecutionError(
 				"legacy service release is not supported by the "
 				"QPM admission API")
 		return self.controller.release_admission(
-			reservation_id, reason_code=reason or 0)
+			reservation_id, reason_code=reason or 0, token=token)
 
-	def cancel(self, reservation_id, reason=None):
+	def cancel(self, token=None, reservation_id=None, reason=None):
+		token, reservation_id, reason = _token_reservation_reason_args(
+			token, reservation_id, reason)
 		return self.controller.cancel_admission(
-			reservation_id, reason_code=reason or 0)
+			reservation_id, reason_code=reason or 0, token=token)
 
-	def get_reservation(self, reservation_id):
+	def get_reservation(self, token=None, reservation_id=None):
+		token, reservation_id = _token_reservation_args(
+			token, reservation_id)
 		return self.controller.get_admission_reservation(
-			reservation_id)
+			reservation_id, token=token)
 
-	def list_reservations(self, filters=None):
+	def list_reservations(self, token=None, filters=None):
+		token, filters = _token_filters_args(token, filters)
 		return self.controller.list_admission_reservations(
-			filters=filters)
+			filters=filters, token=token)
 
 	def release_service(self, services=None):
 		global qpm_shutdown
@@ -987,6 +1106,60 @@ class UTIL_QPM:
 def diagnostic_bypass_enabled():
 	value = os.environ.get(DIAGNOSTIC_BYPASS_ENV, "no").strip().lower()
 	return value in ("1", "true", "yes", "on", "y")
+
+
+def _token_request_args(token, request):
+	if request is None and isinstance(token, dict):
+		return None, token
+	return token, request
+
+
+def _token_reservation_args(token, reservation_id):
+	if reservation_id is None:
+		return None, token
+	return token, reservation_id
+
+
+def _token_reservation_request_args(token, reservation_id, request):
+	if reservation_id is None:
+		return None, token, request
+	if isinstance(reservation_id, dict) and request is None:
+		return None, token, reservation_id
+	return token, reservation_id, request
+
+
+def _token_reservation_reason_args(token, reservation_id, reason):
+	if reservation_id is None:
+		return None, token, reason
+	if reason is None and not isinstance(reservation_id, str):
+		return None, token, reservation_id
+	return token, reservation_id, reason
+
+
+def _token_filters_args(token, filters):
+	return token, filters
+
+
+def _token_device_payload_args(token, device_id, payload,
+			       legacy_payload_first=False):
+	if payload is None:
+		if isinstance(device_id, dict):
+			return None, token, device_id
+		if isinstance(token, dict):
+			return None, None, token
+		return token, device_id, payload
+	if (legacy_payload_first and isinstance(token, dict)
+			and not isinstance(payload, dict)):
+		return device_id, payload, token
+	return token, device_id, payload
+
+
+def _token_task_metadata_args(token, cid, reservation_id, qtask_id):
+	if qtask_id is not None:
+		return token, cid, reservation_id, qtask_id
+	if cid is None:
+		return None, token, reservation_id, qtask_id
+	return token, cid, reservation_id, qtask_id
 
 
 def _sync_deadline(timeout):

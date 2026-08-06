@@ -142,6 +142,7 @@ def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": "reservation-1",
+		"token": "opaque-token",
 	})
 	cid2 = qpm.create_circuit({
 		"qasm": "OPENQASM 2.0;",
@@ -154,12 +155,39 @@ def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 	assert runtime1.qtask_id == 1
 	assert runtime2.qtask_id == 2
 	assert qpm.circuits[cid1].info["qtask_id"] == 1
+	assert "token" not in qpm.circuits[cid1].info
 	assert qpm.controller.task_for_qtask_id(1) is runtime1
 	assert qpm.controller.qtask_ids_by_reservation["reservation-1"] == {1, 2}
-	assert runtime1.token_metadata == {}
+	assert runtime1.token_metadata == {"present": True, "type": "str"}
 	assert runtime1.external_ids["owner_id"] == "alice"
 	assert runtime1.canonical_ids["owner_id"] == runtime2.canonical_ids["owner_id"]
 	assert runtime1.canonical_ids["job_id"] == runtime2.canonical_ids["job_id"]
+
+
+def test_sync_run_records_opaque_token_metadata(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = HookQPM()
+
+	result = qpm.sync_run(
+		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
+		reservation_id="reservation-1",
+		token="opaque-token")
+	runtime = qpm.controller.terminal_tasks_by_cid[result["cid"]]
+
+	assert runtime.token_metadata == {"present": True, "type": "str"}
+
+
+def test_async_run_records_dict_token_metadata(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = HookQPM()
+
+	result = qpm.async_run(
+		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
+		reservation_id="reservation-1",
+		token={"opaque": "token"})
+	runtime = qpm.controller.task_for_cid(result["cid"])
+
+	assert runtime.token_metadata == {"present": True, "type": "dict"}
 
 
 def test_provider_hooks_run_outside_controller_lock(monkeypatch):

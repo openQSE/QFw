@@ -91,6 +91,46 @@ class CompletingQPM(UTIL_QPM):
 		return info
 
 
+class PendingCompletionQRC:
+	def __init__(self):
+		self.async_cids = []
+		self.push_info = None
+
+	def async_run(self, circuit):
+		self.async_cids.append(circuit.get_cid())
+		return circuit.get_cid()
+
+	def sync_run(self, circuit):
+		return {"cid": circuit.get_cid()}
+
+	def read_cq(self, cid=None):
+		return None
+
+	def peak_cq(self, cid=None):
+		return None
+
+	def register_event_notification(self, info):
+		self.push_info = info
+
+	def shutdown(self):
+		pass
+
+
+class PendingCompletionQPM(UTIL_QPM):
+	def __init__(self, target_id="ops-pending-completion"):
+		self.fake_qrc = PendingCompletionQRC()
+		super().__init__(
+			self.fake_qrc,
+			target_id=target_id,
+			admission_context_factory=FakeAdmissionContext,
+			scheduler_context_factory=FakeSchedulerContext,
+		)
+
+	def prepare_circuit(self, info):
+		info["qfw_backend"] = "pending-completion-hook"
+		return info
+
+
 def test_managed_operations_flow_reports_telemetry(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-target")
@@ -312,6 +352,41 @@ def test_result_reads_keep_reservation_scope_after_cleanup(monkeypatch):
 	assert correct_peek["qtask_id"] == response["qtask_id"]
 	assert correct_read["qtask_id"] == response["qtask_id"]
 	assert response["cid"] not in qpm.controller.terminal_tasks_by_cid
+
+
+def test_completion_polling_returns_structured_in_progress_status(
+		monkeypatch):
+	_setup(monkeypatch)
+	qpm = PendingCompletionQPM(target_id="ops-pending-results")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+
+	peeked = qpm.peek_cq(cid=response["cid"], reservation_id=reservation_id)
+	read = qpm.read_cq(cid=response["cid"], reservation_id=reservation_id)
+	empty = qpm.peek_cq()
+
+	assert peeked["completion_ready"] is False
+	assert peeked["poll_operation"] == "peek_cq"
+	assert peeked["reason"] == "completion-not-ready"
+	assert peeked["cid"] == response["cid"]
+	assert peeked["qtask_id"] == response["qtask_id"]
+	assert peeked["reservation_id"] == reservation_id
+	assert peeked["outcome"] == "ACCEPTED"
+	assert read["completion_ready"] is False
+	assert read["poll_operation"] == "read_cq"
+	assert read["cid"] == response["cid"]
+	assert qpm.controller.task_for_cid(response["cid"]) is not None
+	assert empty == {
+		"outcome": "IN_PROGRESS",
+		"lifecycle_state": "no-ready-completion",
+		"reason": "completion-not-ready",
+		"completion_ready": False,
+		"poll_operation": "peek_cq",
+	}
 
 
 def test_result_reads_allow_terminal_reservation_state(monkeypatch):
