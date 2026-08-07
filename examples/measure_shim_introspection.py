@@ -179,7 +179,6 @@ def run_repeated(args):
 	return records
 
 
-
 def render(records):
 	first = records[0]
 	context = first.get("context", {})
