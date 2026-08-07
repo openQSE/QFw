@@ -96,6 +96,35 @@ serve a call is skipped), so you can see QDMI and QRMI results back-to-back:
 ./qfw_shim_smoke.sh --libs qdmi,qrmi --call get_device_info
 ```
 
+### `measure_shim_introspection.py`
+
+Measures what device introspection costs through each shim library, cold and
+warm, for the QRMI/QDMI comparison. Read-only: no circuits, no QPU time.
+
+Unlike the wrappers above this is a standalone script. It drives the shim
+drivers directly rather than going through the QPM service, so DEFw RPC does
+not sit in the measurement, and it needs no Slurm allocation — QRMI's
+`target()` is not reservation-bound and QDMI needs only an initialized session.
+Activate the environment and run it:
+
+```bash
+python measure_shim_introspection.py
+python measure_shim_introspection.py --repeat 5 --warm-iterations 10
+python measure_shim_introspection.py --json
+```
+
+The two libraries pay their network cost at different moments — QRMI on the
+first call (`target()`, then cached per driver instance), QDMI at open (session
+init fetches the device data) — so the report separates open, first call, and
+warm calls, and compares the cold totals. Each cold sample runs in a fresh
+subprocess, because both drivers cache on the instance and the FoMaC loader
+registers its device library process-wide.
+
+The script refuses to report a timing whose call returned no qubits. QRMI's
+`target()` does not raise when its fetches fail; it substitutes nulls, so an
+unreachable endpoint otherwise yields believable numbers that measure only the
+speed of failing.
+
 ### `qfw_qiskit_simple.sh`
 
 Runs a simple Qiskit GHZ-style circuit through the NWQ-Sim QFw backend.

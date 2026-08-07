@@ -1,0 +1,85 @@
+{
+  "schema": "qfw-execution-measurement-v0",
+  "timestamp": "2026-08-05T18:16:40.918352+00:00",
+  "host": "c5",
+  "shots": 10,
+  "repeat": 2,
+  "context": {
+    "base_url": "https://qccsw.ccs.ornl.gov:8443",
+    "provider_device_id": "default"
+  },
+  "connection_counting": {
+    "requested": true,
+    "port": 8443,
+    "supported": true
+  },
+  "libraries": {
+    "qrmi": {
+      "library": "qrmi",
+      "device_id": "ornl-iqm-20q",
+      "warm_seconds": 5.10478937800508,
+      "runs": [
+        {
+          "total_seconds": 1.164964166993741,
+          "prep_seconds": 0.06641958202817477,
+          "submit_seconds": 0.14032137498725206,
+          "wait_seconds": 0.6528262509964406,
+          "result_fetch_seconds": 0.30539695898187347,
+          "driver_total_wall_seconds": 1.0985552509955596,
+          "connections": 1,
+          "counts": {
+            "1": 10
+          },
+          "shots": 10
+        },
+        {
+          "total_seconds": 1.0165807919984218,
+          "prep_seconds": 0.06895666601485573,
+          "submit_seconds": 0.12586091700359248,
+          "wait_seconds": 0.5270201669773087,
+          "result_fetch_seconds": 0.2947430420026649,
+          "driver_total_wall_seconds": 0.9476394589873962,
+          "connections": 1,
+          "counts": {
+            "1": 10
+          },
+          "shots": 10
+        }
+      ]
+    },
+    "qdmi": {
+      "library": "qdmi",
+      "device_id": "ornl-iqm-20q",
+      "warm_seconds": 2.6587965009966865,
+      "runs": [
+        {
+          "total_seconds": 2.9898956249817275,
+          "prep_seconds": 0.06573229195782915,
+          "submit_seconds": 1.7452996250067372,
+          "wait_seconds": 0.6535746250010561,
+          "result_fetch_seconds": 0.525289083016105,
+          "driver_total_wall_seconds": 2.9241820000170264,
+          "connections": 3,
+          "counts": {
+            "1": 10
+          },
+          "shots": 10
+        },
+        {
+          "total_seconds": 4.047199502005242,
+          "prep_seconds": 0.06667570900754072,
+          "submit_seconds": 1.4359246249950957,
+          "wait_seconds": 2.025372835021699,
+          "result_fetch_seconds": 0.5192263329809066,
+          "driver_total_wall_seconds": 3.9805564600101206,
+          "connections": 4,
+          "counts": {
+            "0": 4,
+            "1": 6
+          },
+          "shots": 10
+        }
+      ]
+    }
+  }
+}

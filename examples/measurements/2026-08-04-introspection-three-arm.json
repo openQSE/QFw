@@ -1,0 +1,494 @@
+[
+  {
+    "schema": "qfw-introspection-measurement-v0",
+    "timestamp": "2026-08-05T22:14:22.555804+00:00",
+    "host": "c5",
+    "warm_iterations": 5,
+    "context": {
+      "base_url": "https://qccsw.ccs.ornl.gov:8443",
+      "provider_device_id": "default"
+    },
+    "connection_counting": {
+      "requested": true,
+      "port": 8443,
+      "supported": true
+    },
+    "libraries": {
+      "qrmi": {
+        "library": "qrmi",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 3.91600769944489e-06,
+        "open_seconds": 0.005464708985527977,
+        "first_call_seconds": 1.4299504590162542,
+        "qubits_seen": 20,
+        "cold_seconds": 1.4354151680017821,
+        "cold_connections": 1,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.012426291999872774,
+              0.011797542014392093,
+              0.01157316699391231,
+              0.01175425000838004,
+              0.011578125006053597
+            ],
+            "median_seconds": 0.01175425000838004,
+            "min_seconds": 0.01157316699391231,
+            "max_seconds": 0.012426291999872774
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.017728625010931864,
+              0.01737679200596176,
+              0.01747983298264444,
+              0.017171709012473002,
+              0.017696334020001814
+            ],
+            "median_seconds": 0.01747983298264444,
+            "min_seconds": 0.017171709012473002,
+            "max_seconds": 0.017728625010931864
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              0.01954924999154173,
+              0.0185523749969434,
+              0.02040466698235832,
+              0.019158167007844895,
+              0.019083416991634294
+            ],
+            "median_seconds": 0.019158167007844895,
+            "min_seconds": 0.0185523749969434,
+            "max_seconds": 0.02040466698235832
+          }
+        },
+        "warm_connections": 0
+      },
+      "qdmi": {
+        "library": "qdmi",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 6.624992238357663e-06,
+        "open_seconds": 2.9179517519951332,
+        "first_call_seconds": 0.025808375008637086,
+        "qubits_seen": 20,
+        "cold_seconds": 2.9437601270037703,
+        "cold_connections": 5,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.016574084002058953,
+              0.013877790974220261,
+              0.012312750011915341,
+              0.011524250003276393,
+              0.011476792016765103
+            ],
+            "median_seconds": 0.012312750011915341,
+            "min_seconds": 0.011476792016765103,
+            "max_seconds": 0.016574084002058953
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.016679167019901797,
+              0.016931917023612186,
+              0.016158792015630752,
+              0.01629754199529998,
+              0.01647858298383653
+            ],
+            "median_seconds": 0.01647858298383653,
+            "min_seconds": 0.016158792015630752,
+            "max_seconds": 0.016931917023612186
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              0.012252084008650854,
+              0.012363542016828433,
+              0.012712167022982612,
+              0.012326125026447698,
+              0.012022459006402642
+            ],
+            "median_seconds": 0.012326125026447698,
+            "min_seconds": 0.012022459006402642,
+            "max_seconds": 0.012712167022982612
+          }
+        },
+        "warm_connections": 0
+      },
+      "native": {
+        "library": "native",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 0.0008223339973483235,
+        "open_seconds": 1.2759019170189276,
+        "first_call_seconds": 1.5551560420135502,
+        "qubits_seen": 20,
+        "cold_seconds": 2.831057959032478,
+        "cold_connections": 4,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.4669009589997586,
+              0.5159274170000572,
+              0.6080895010090899,
+              0.5345202079915907,
+              0.604920707992278
+            ],
+            "median_seconds": 0.5345202079915907,
+            "min_seconds": 0.4669009589997586,
+            "max_seconds": 0.6080895010090899
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.5201565419847611,
+              0.503245125990361,
+              0.6027516670001205,
+              0.5992967510246672,
+              0.5978261250129435
+            ],
+            "median_seconds": 0.5978261250129435,
+            "min_seconds": 0.503245125990361,
+            "max_seconds": 0.6027516670001205
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              1.8259317929914687,
+              1.5269513340026606,
+              1.7583159180067014,
+              1.5850991669867653,
+              1.6022010000015143
+            ],
+            "median_seconds": 1.6022010000015143,
+            "min_seconds": 1.5269513340026606,
+            "max_seconds": 1.8259317929914687
+          }
+        },
+        "warm_connections": 25
+      }
+    }
+  },
+  {
+    "schema": "qfw-introspection-measurement-v0",
+    "timestamp": "2026-08-05T22:14:44.489154+00:00",
+    "host": "c5",
+    "warm_iterations": 5,
+    "context": {
+      "base_url": "https://qccsw.ccs.ornl.gov:8443",
+      "provider_device_id": "default"
+    },
+    "connection_counting": {
+      "requested": true,
+      "port": 8443,
+      "supported": true
+    },
+    "libraries": {
+      "qrmi": {
+        "library": "qrmi",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 3.1249946914613247e-06,
+        "open_seconds": 0.002935583994258195,
+        "first_call_seconds": 0.8901081250223797,
+        "qubits_seen": 20,
+        "cold_seconds": 0.8930437090166379,
+        "cold_connections": 1,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.013958250026917085,
+              0.012224249978316948,
+              0.011737875000108033,
+              0.01137466699583456,
+              0.011669542000163347
+            ],
+            "median_seconds": 0.011737875000108033,
+            "min_seconds": 0.01137466699583456,
+            "max_seconds": 0.013958250026917085
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.017280208005104214,
+              0.016860583011293784,
+              0.01672620899626054,
+              0.01669350001611747,
+              0.016706624999642372
+            ],
+            "median_seconds": 0.01672620899626054,
+            "min_seconds": 0.01669350001611747,
+            "max_seconds": 0.017280208005104214
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              0.019107165979221463,
+              0.018406957999104634,
+              0.018166415975429118,
+              0.018114124977728352,
+              0.018167125002946705
+            ],
+            "median_seconds": 0.018167125002946705,
+            "min_seconds": 0.018114124977728352,
+            "max_seconds": 0.019107165979221463
+          }
+        },
+        "warm_connections": 0
+      },
+      "qdmi": {
+        "library": "qdmi",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 7.041991921141744e-06,
+        "open_seconds": 2.8632232089876197,
+        "first_call_seconds": 0.01780000000144355,
+        "qubits_seen": 20,
+        "cold_seconds": 2.8810232089890633,
+        "cold_connections": 5,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.018091832986101508,
+              0.014413500000955537,
+              0.013096667011268437,
+              0.012133416981669143,
+              0.01167429200722836
+            ],
+            "median_seconds": 0.013096667011268437,
+            "min_seconds": 0.01167429200722836,
+            "max_seconds": 0.018091832986101508
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.017274832993280143,
+              0.01696066599106416,
+              0.01596233301097527,
+              0.015955916984239593,
+              0.015982957993401214
+            ],
+            "median_seconds": 0.015982957993401214,
+            "min_seconds": 0.015955916984239593,
+            "max_seconds": 0.017274832993280143
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              0.012086833012290299,
+              0.012060541979735717,
+              0.012210957997012883,
+              0.012051166995661333,
+              0.012078667001333088
+            ],
+            "median_seconds": 0.012078667001333088,
+            "min_seconds": 0.012051166995661333,
+            "max_seconds": 0.012210957997012883
+          }
+        },
+        "warm_connections": 0
+      },
+      "native": {
+        "library": "native",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 0.0008513339853379875,
+        "open_seconds": 1.2219560839876067,
+        "first_call_seconds": 1.526734168000985,
+        "qubits_seen": 20,
+        "cold_seconds": 2.7486902519885916,
+        "cold_connections": 4,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.5749752499978058,
+              0.49808379099704325,
+              0.5096164999995381,
+              0.5998878340178635,
+              0.5964439589879476
+            ],
+            "median_seconds": 0.5749752499978058,
+            "min_seconds": 0.49808379099704325,
+            "max_seconds": 0.5998878340178635
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.5166205840068869,
+              0.49750008300179616,
+              0.5032894589821808,
+              0.6063552499981597,
+              0.503237958997488
+            ],
+            "median_seconds": 0.5032894589821808,
+            "min_seconds": 0.49750008300179616,
+            "max_seconds": 0.6063552499981597
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              1.7527174169954378,
+              1.6905251260031946,
+              1.6580393339972943,
+              1.4689055839844514,
+              1.5098778340034187
+            ],
+            "median_seconds": 1.6580393339972943,
+            "min_seconds": 1.4689055839844514,
+            "max_seconds": 1.7527174169954378
+          }
+        },
+        "warm_connections": 25
+      }
+    }
+  },
+  {
+    "schema": "qfw-introspection-measurement-v0",
+    "timestamp": "2026-08-05T22:15:05.366253+00:00",
+    "host": "c5",
+    "warm_iterations": 5,
+    "context": {
+      "base_url": "https://qccsw.ccs.ornl.gov:8443",
+      "provider_device_id": "default"
+    },
+    "connection_counting": {
+      "requested": true,
+      "port": 8443,
+      "supported": true
+    },
+    "libraries": {
+      "qrmi": {
+        "library": "qrmi",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 3.2919924706220627e-06,
+        "open_seconds": 0.003221332997782156,
+        "first_call_seconds": 0.9149270009947941,
+        "qubits_seen": 20,
+        "cold_seconds": 0.9181483339925762,
+        "cold_connections": 1,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.012995833007153124,
+              0.011762750014895573,
+              0.011797207989729941,
+              0.011514499987242743,
+              0.011512208002386615
+            ],
+            "median_seconds": 0.011762750014895573,
+            "min_seconds": 0.011512208002386615,
+            "max_seconds": 0.012995833007153124
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.017027041991241276,
+              0.01671704201726243,
+              0.016460916987853125,
+              0.016450416995212436,
+              0.016574582987232134
+            ],
+            "median_seconds": 0.016574582987232134,
+            "min_seconds": 0.016450416995212436,
+            "max_seconds": 0.017027041991241276
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              0.018932791019324213,
+              0.018288457999005914,
+              0.018184791988460347,
+              0.018046374985715374,
+              0.018081708025420085
+            ],
+            "median_seconds": 0.018184791988460347,
+            "min_seconds": 0.018046374985715374,
+            "max_seconds": 0.018932791019324213
+          }
+        },
+        "warm_connections": 0
+      },
+      "qdmi": {
+        "library": "qdmi",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 6.459013093262911e-06,
+        "open_seconds": 2.602106126025319,
+        "first_call_seconds": 0.01947237498825416,
+        "qubits_seen": 20,
+        "cold_seconds": 2.6215785010135733,
+        "cold_connections": 5,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.013020125014008954,
+              0.013218457985203713,
+              0.013179082976421341,
+              0.01338737501646392,
+              0.01307279200409539
+            ],
+            "median_seconds": 0.013179082976421341,
+            "min_seconds": 0.013020125014008954,
+            "max_seconds": 0.01338737501646392
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.017728125007124618,
+              0.017318166996119544,
+              0.01697891700314358,
+              0.017191666993312538,
+              0.017225916002644226
+            ],
+            "median_seconds": 0.017225916002644226,
+            "min_seconds": 0.01697891700314358,
+            "max_seconds": 0.017728125007124618
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              0.012808250001398847,
+              0.013060375000350177,
+              0.013321791018825024,
+              0.013175540982047096,
+              0.012355584010947496
+            ],
+            "median_seconds": 0.013060375000350177,
+            "min_seconds": 0.012355584010947496,
+            "max_seconds": 0.013321791018825024
+          }
+        },
+        "warm_connections": 0
+      },
+      "native": {
+        "library": "native",
+        "device_id": "ornl-iqm-20q",
+        "construct_seconds": 0.0007899999909568578,
+        "open_seconds": 1.3144460420007817,
+        "first_call_seconds": 1.5470900850195903,
+        "qubits_seen": 20,
+        "cold_seconds": 2.861536127020372,
+        "cold_connections": 4,
+        "warm": {
+          "get_device_info": {
+            "samples": [
+              0.47516904200892895,
+              0.49935208397801034,
+              0.48875800002133474,
+              0.5125729999854229,
+              0.498407250008313
+            ],
+            "median_seconds": 0.498407250008313,
+            "min_seconds": 0.47516904200892895,
+            "max_seconds": 0.5125729999854229
+          },
+          "get_coupling_graph": {
+            "samples": [
+              0.5010105420078617,
+              0.5003575419832487,
+              0.505330915999366,
+              0.4936750420019962,
+              0.5049817920080386
+            ],
+            "median_seconds": 0.5010105420078617,
+            "min_seconds": 0.4936750420019962,
+            "max_seconds": 0.505330915999366
+          },
+          "get_calibration_snapshot": {
+            "samples": [
+              1.638594458985608,
+              1.5065817499998957,
+              1.5438162499922328,
+              1.4854696679976769,
+              1.5377942089980934
+            ],
+            "median_seconds": 1.5377942089980934,
+            "min_seconds": 1.4854696679976769,
+            "max_seconds": 1.638594458985608
+          }
+        },
+        "warm_connections": 25
+      }
+    }
+  }
+]

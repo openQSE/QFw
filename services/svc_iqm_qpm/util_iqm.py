@@ -3,7 +3,7 @@ from defw_exception import DEFwExecutionError
 from util.device_access import (
 	QPU_DEVICE_ENV, resolve_device_access, resolve_qpu_user)
 from util.iqm_transcode import (
-	active_qubits, build_iqm_circuit, to_jsonable)
+	build_iqm_circuit, to_jsonable)
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 import inspect

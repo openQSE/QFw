@@ -1,3 +1,28 @@
 [flake8]
-ignore = W191,E101,E265,E203
+# QFw is a tab-indented codebase. pycodestyle's indentation checks assume
+# spaces, so several of them misfire here and are disabled below.
+#
+# Use extend-ignore, NOT ignore. "ignore" REPLACES pycodestyle's default
+# ignore list (E121,E123,E126,E226,E24,E704,W503,W504); "extend-ignore" adds
+# to it. Switching this key back to "ignore" silently re-enables ~65
+# violations across the tree, most of them E126 and W503.
+#
+#   W191  indentation contains tabs                 - by design
+#   E101  indentation contains mixed whitespace     - by design
+#   E265  block comment should start with '# '      - existing style
+#   E203  whitespace before ':'                     - conflicts with slicing style
+#   E117  over-indented                             - see note below
+#   E128  continuation line under-indented for visual indent
+#
+# E117: pycodestyle picks indent_char from the first physical line in the file
+# that starts with whitespace, counting lines inside string literals. A module
+# docstring with a space-indented body therefore marks the whole file as
+# space-indented, after which every one-tab block (8 columns) reads as
+# "over-indented". Both files under examples/ trip this.
+#
+# E128: visual-indent alignment lines a continuation up with the column after
+# an opening bracket. Tabs advance to 8-column stops, so that column is not
+# reachable. E121/E123/E126 are off by default for the same reason; E128
+# simply is not.
+extend-ignore = W191,E101,E265,E203,E117,E128
 max-line-length = 120
