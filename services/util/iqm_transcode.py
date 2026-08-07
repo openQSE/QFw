@@ -32,6 +32,7 @@ def to_jsonable(value):
 		return to_jsonable(value.dict())
 	return str(value)
 
+
 def load_iqm_pulse_module():
 	try:
 		from iqm.pulse import Circuit, CircuitOperation
@@ -40,6 +41,7 @@ def load_iqm_pulse_module():
 			f"failed to import iqm.pulse circuit objects: {exc}") from exc
 	return Circuit, CircuitOperation
 
+
 def active_qubits(dynamic_architecture):
 	data = to_jsonable(dynamic_architecture)
 	qubits = data.get("qubits") or []
@@ -47,6 +49,7 @@ def active_qubits(dynamic_architecture):
 		raise DEFwExecutionError(
 			"IQM dynamic architecture did not report active qubits")
 	return [str(qubit) for qubit in qubits]
+
 
 def logical_to_physical_qubits(qasm_circuit, dynamic_architecture, mapping):
 	physical = active_qubits(dynamic_architecture)
@@ -65,6 +68,7 @@ def logical_to_physical_qubits(qasm_circuit, dynamic_architecture, mapping):
 			f"{len(physical)} active qubits")
 	return {index: physical[index] for index in range(num_qubits)}
 
+
 def eval_angle(value):
 	allowed = {"pi": math.pi}
 	try:
@@ -72,6 +76,7 @@ def eval_angle(value):
 	except Exception as exc:
 		raise DEFwExecutionError(
 			f"unsupported angle expression in OpenQASM: {value!r}") from exc
+
 
 def split_qasm_statements(qasm):
 	statements = []
@@ -85,6 +90,7 @@ def split_qasm_statements(qasm):
 				statements.append(part)
 	return statements
 
+
 def load_qiskit_circuit(qasm):
 	try:
 		from qiskit import QuantumCircuit
@@ -96,6 +102,7 @@ def load_qiskit_circuit(qasm):
 	except Exception as exc:
 		raise DEFwExecutionError(
 			f"failed to parse OpenQASM through qiskit: {exc}") from exc
+
 
 def serialize_qiskit_to_iqm(qasm, dynamic_architecture, mapping):
 	Circuit, _ = load_iqm_pulse_module()
@@ -123,6 +130,7 @@ def serialize_qiskit_to_iqm(qasm, dynamic_architecture, mapping):
 		metadata={"logical_to_physical": index_to_name},
 	)
 
+
 def parse_ref(ref, qregs):
 	ref = ref.strip()
 	match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$", ref)
@@ -134,6 +142,7 @@ def parse_ref(ref, qregs):
 	if ref in qregs:
 		return [(ref, index) for index in range(qregs[ref])]
 	raise DEFwExecutionError(f"unknown OpenQASM qubit reference {ref}")
+
 
 def build_manual_iqm_circuit(qasm, dynamic_architecture, mapping):
 	Circuit, CircuitOperation = load_iqm_pulse_module()
@@ -245,6 +254,7 @@ def build_manual_iqm_circuit(qasm, dynamic_architecture, mapping):
 		instructions=tuple(operations),
 		metadata={"logical_to_physical": to_jsonable(qubit_map)},
 	)
+
 
 def build_iqm_circuit(qasm, dynamic_architecture, mapping):
 	try:

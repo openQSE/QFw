@@ -44,11 +44,11 @@ def _status_str(status):
 class QrmiDriver(BaseDriver):
 	name = "qrmi"
 	CAPABILITIES = frozenset({
-		"get_device_info",          # target() -> qhw-iqm device
-		"get_coupling_graph",       # target() -> qhw-iqm coupling
-		"get_calibration_snapshot", # target() -> qhw-iqm calibration
-		"get_dynamic_backend_info", # target() -> dynamic architecture
-		"get_backend_info",         # target() -> native composite + qhw device
+		"get_device_info",           # target() -> qhw-iqm device
+		"get_coupling_graph",        # target() -> qhw-iqm coupling
+		"get_calibration_snapshot",  # target() -> qhw-iqm calibration
+		"get_dynamic_backend_info",  # target() -> dynamic architecture
+		"get_backend_info",          # target() -> native composite + qhw device
 		"run_circuit",
 		"get_last_job_timing",
 		"get_last_job_metadata",

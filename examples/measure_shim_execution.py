@@ -56,7 +56,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from measurement_support import (  # noqa: E402
-	ConnectionSampler, MeasurementError, driver_for, endpoint_context,
+	ConnectionSampler, driver_for, endpoint_context,
 	endpoint_port, fmt_ms, open_handle, require_counts, require_qubits)
 
 # One qubit, flipped and measured: the smallest circuit that still exercises
