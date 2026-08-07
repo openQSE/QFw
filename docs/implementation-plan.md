@@ -65,9 +65,9 @@ The following adjustments are needed for requirement-level traceability:
    reconciliation tasks with explicit requirement IDs.
 8. Move the DEFw build-system migration to the start of Phase 1 so CMake is
    the baseline before transport and C/Python refactors begin.
-9. Rename DEFw-resmgr to DEFw-dirsvc early in Phase 1 so directory-service
-   semantics, APIs, configuration, and code names are established before the
-   deeper transport and registration refactors.
+9. Replace the legacy DEFw discovery manager with DEFw-dirsvc early in Phase 1
+   so directory-service semantics, APIs, configuration, and code names are
+   established before the deeper transport and registration refactors.
 10. Support multiple directory-service scopes so allocation-local and
    site-scoped long-running services use the same resolver contract.
 11. Split the DEFw C transport refactor from the Python directory migration so
@@ -114,7 +114,7 @@ changes.
 | Commit ID | Primary repo | Plan tasks | Scope and exit criteria |
 | --- | --- | --- | --- |
 | PH1-C01 | DEFw | PH1.1 | Replace SCons with CMake as the authoritative DEFw build and install system while preserving current behavior, the DEFw executor runtime model, SWIG artifacts, extension module names, typemap compatibility, install layout, and test entry points. |
-| PH1-C02 | DEFw | PH1.2 | Rename DEFw-resmgr to DEFw-dirsvc across service names, APIs, configuration, code ownership, tests, and documentation while keeping any required compatibility aliases thin and explicitly deprecated. |
+| PH1-C02 | DEFw | PH1.2 | Replace the legacy DEFw discovery manager with DEFw-dirsvc across service names, APIs, configuration, code ownership, tests, and documentation while keeping any required compatibility aliases thin and explicitly deprecated. |
 | PH1-C03 | DEFw | PH1.3 | Replace the internal C multi-list model with one authoritative connection table. Preserve current behavior through C-only tests and manual smoke coverage. |
 | PH1-C04 | DEFw | PH1.4 | Rebuild the existing SWIG-exported iterator and connect functions as filtered views over the single C table. Python code should not change in this commit. |
 | PH1-C05 | DEFw | PH1.5 | Preserve request, response, event, and active-connect callback semantics while the C storage model changes. RPC request/response tests should still pass. |
@@ -185,15 +185,15 @@ changes.
 | PH7-C01 | QFw | PH7.1 | Implement telemetry/discovery access partitioning. |
 | PH7-C02 | QFw | PH7.2, PH7.3 | Add admission capacity snapshots, queue metrics, and estimate telemetry. |
 | PH7-C03 | QFw | PH7.4, PH7.5 | Add reconciliation, recovery, service lifecycle telemetry, and audit records. |
-| PH7-C04 | DEFw, QFw | PH7.6 | Remove DEFw four-list compatibility exports, Python view adapters, legacy resmgr reservation compatibility, and unmanaged execution bypasses. |
+| PH7-C04 | DEFw, QFw | PH7.6 | Remove DEFw four-list compatibility exports, Python view adapters, deprecated directory reservation compatibility, and unmanaged execution bypasses. |
 | PH7-C05 | QFw, DEFw | PH7.7 | Add end-to-end and operations tests across operation modes, managed execution, telemetry, reconciliation, SWIG behavior, and build outputs. |
 
 ## Phase 1. Directory And Transport Foundation
 
-Phase 1 renames DEFw-resmgr to DEFw-dirsvc and makes the service a
-service-record, API-binding, and endpoint directory instead of a QPM capacity
-owner. This phase is scoped to the DEFw repository and starts by replacing
-SCons with CMake. The rename and the C transport-layer and C/Python
+Phase 1 replaces the legacy DEFw discovery manager with DEFw-dirsvc and makes
+the service a service-record, API-binding, and endpoint directory instead of a
+QPM capacity owner. This phase is scoped to the DEFw repository and starts by
+replacing SCons with CMake. The rename and the C transport-layer and C/Python
 interaction refactors follow after the CMake build reproduces the current DEFw
 outputs. Provider execution behavior should remain unchanged in this phase.
 
@@ -268,16 +268,16 @@ Primary requirements: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`,
      typemap behavior, and runtime search paths.
    - Reqs: none; build infrastructure cleanup.
 
-2. PH1.2 Rename DEFw-resmgr to DEFw-dirsvc.
-   - Rename the DEFw resource-manager service, modules, scripts,
-     configuration keys, log labels, service names, and tests to use
+2. PH1.2 Replace the legacy discovery manager with DEFw-dirsvc.
+   - Rename the DEFw discovery service, modules, scripts, configuration keys,
+     log labels, service names, and tests to use
      `DEFw-dirsvc` or `dirsvc` where the component acts as the directory
      service.
    - Rename public and internal directory APIs so registration, deregistration,
      service lookup, endpoint resolution, and API-binding lookup no longer use
      resource reservation terminology.
-   - Replace old configuration names such as `register-with-resmgr` and
-     `resmgr-endpoint` with `register-with-dirsvc` and `dirsvc-endpoint`.
+   - Use configuration names such as `register-with-dirsvc` and
+     `dirsvc-endpoint` for directory-service registration.
    - Keep any required compatibility aliases thin, local to this transition,
      and explicitly deprecated. New implementation work must call the
      `dirsvc` names.
@@ -468,7 +468,7 @@ Primary requirements: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`,
 
 13. PH1.13 Replace query-on-discovery behavior.
    - Make registration provide the service record used by discovery.
-   - Make `get_services()` read the Python directory instead of rebuilding the
+   - Make `resolve_services()` read the Python directory instead of rebuilding the
      directory by reloading C lists and querying every service.
    - Add filters for service name, service type, API binding name, client API
      class, service API class, selector name, selector aliases, and selector
@@ -510,12 +510,12 @@ Primary requirements: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`,
      `service_type`, `runtime_id`, `generation`, endpoint, and selector
      metadata.
    - Add a client binding path that connects to a selected endpoint without
-     calling legacy resmgr `reserve()`.
+     calling any directory `reserve()` path.
    - Route the new client binding path through the selected API binding so QFw
      can request execution, telemetry, admission, or control surfaces without
      forcing the client class and service class to share a name.
    - Remove `DEFwServiceInfo.consume_capacity()` from the QPM connection path.
-   - Deprecate legacy resmgr `reserve()` and `release()` semantics for QPM.
+   - Remove directory `reserve()` and `release()` semantics for QPM.
    - Reqs: `DISC-002`, `DISC-004`, `OPM-003`.
 
 16. PH1.16 Add DEFw transport, SWIG, and directory tests.
@@ -556,7 +556,7 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`,
    - Provide a client-facing `resolver.connect(...)` path that resolves the
      service and selected binding, connects to the endpoint, and returns the
      selected client proxy object.
-   - Replace direct QFw use of legacy `defw.connect_to_resource(chosen,
+   - Replace direct QFw use of legacy `defw.connect_to_binding(chosen,
      "QPM")` with the resolver plus binding-aware DEFw connection helper.
    - Reqs: `DISC-004`, `API-003`.
 
@@ -1020,7 +1020,7 @@ Primary requirements: `CAT-005`, `API-002`, `API-004`, `CTRL-002` through
    - Reqs: `DISC-001`, `CTRL-004`, `CAT-005`.
 
 6. PH7.6 Remove managed-execution compatibility debt.
-   - Remove deprecated QPM use of legacy resmgr `reserve()` and `release()`.
+   - Remove deprecated QPM use of directory `reserve()` and `release()`.
    - Remove or strictly gate compatibility execution paths that can bypass
      admission authorization or scheduler selection.
    - Remove old DEFw four-list compatibility exports and Python view adapters

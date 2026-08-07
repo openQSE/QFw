@@ -19,24 +19,24 @@
 
 ## Operation Mode: QFw-Managed Services
 
-In QFw-managed mode, QFw owns the lifecycle of the DEFw resource manager and
-QPM services. QPM registers with DEFw-resmgr for discovery, but reservation and
-release semantics are handled by the QPM service through admission-control.
+In QFw-managed mode, QFw owns the lifecycle of DEFw-dirsvc and QPM services.
+QPM registers with DEFw-dirsvc for discovery, but reservation and release
+semantics are handled by the QPM service through admission-control.
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant Launcher as QFw launcher
-    participant ResMgr as DEFw-resmgr
+    participant DirSvc as DEFw-dirsvc
     participant QPM as QPM-service
     participant Admission as admission-control
 
-    Launcher->>ResMgr: start
+    Launcher->>DirSvc: start
     Launcher->>QPM: start DEFw-wrapped service
-    QPM->>ResMgr: register service metadata
+    QPM->>DirSvc: register service metadata
 
-    Client->>ResMgr: get_services("QPM", type, capability)
-    ResMgr-->>Client: QPM service info / endpoint
+    Client->>DirSvc: resolve_services("QPM", type, capability)
+    DirSvc-->>Client: QPM service info / endpoint
 
     Client->>QPM: reserve(request)
     QPM->>Admission: reserve(request)
@@ -58,7 +58,7 @@ sequenceDiagram
 
 In long-running mode, the QPM service is already running on the resource as a
 DEFw-wrapped service. It listens for DEFw RPC calls on a known endpoint, but it
-does not have to register with a DEFw resource manager. QFw initialization must
+does not have to register with DEFw-dirsvc. QFw initialization must
 resolve the QPM endpoint from configuration or another registry and then use the
 same QPM reservation and release APIs.
 
@@ -66,12 +66,12 @@ same QPM reservation and release APIs.
 sequenceDiagram
     participant Client
     participant Resolver as QFw QPM resolver
-    participant ResMgr as DEFw-resmgr
+    participant DirSvc as DEFw-dirsvc
     participant QPM as long-running QPM-service
     participant Admission as admission-control
 
     QPM->>QPM: start DEFw RPC listener
-    Note over QPM,ResMgr: Registration with DEFw-resmgr is optional in this mode.
+    Note over QPM,DirSvc: Registration with DEFw-dirsvc is optional in this mode.
 
     Client->>Resolver: request QPM handle
     Resolver->>Resolver: load configured QPM endpoint
@@ -112,8 +112,8 @@ validate tokens or authorize callers from them.
 
 | Requirement ID | Requirement |
 | --- | --- |
-| OPM-001 | The QFw shall support a QFw-managed operation mode in which QFw starts DEFw-resmgr and QPM services, and QPM services register with DEFw-resmgr for discovery. |
-| OPM-002 | The QFw shall support a long-running QPM operation mode in which a DEFw-wrapped QPM service is already listening on a known endpoint and is not required to register with DEFw-resmgr. |
+| OPM-001 | The QFw shall support a QFw-managed operation mode in which QFw starts DEFw-dirsvc and QPM services, and QPM services register with DEFw-dirsvc for discovery. |
+| OPM-002 | The QFw shall support a long-running QPM operation mode in which a DEFw-wrapped QPM service is already listening on a known endpoint and is not required to register with DEFw-dirsvc. |
 | OPM-003 | The QFw shall keep service deployment ownership independent from reservation ownership. A service may be QFw-managed or externally managed, but reservation state shall be owned by the QPM admission path backed by qhw-admission. |
 
 </details>
@@ -125,10 +125,10 @@ validate tokens or authorize callers from them.
 
 | Requirement ID | Requirement |
 | --- | --- |
-| DISC-001 | The DEFw resource manager shall provide service registration, deregistration, and discovery for services that choose to register with it. |
-| DISC-002 | The DEFw resource manager shall not own QPM admission reservation state or perform QPM admission capacity accounting. |
-| DISC-003 | DEFw-wrapped services shall support a startup configuration that allows them to listen for DEFw RPC calls without registering with a DEFw resource manager. |
-| DISC-004 | The QFw shall provide a QPM resolution path that can obtain a QPM client binding from either DEFw-resmgr discovery or a configured long-running QPM endpoint. |
+| DISC-001 | DEFw-dirsvc shall provide service registration, deregistration, and discovery for services that choose to register with it. |
+| DISC-002 | DEFw-dirsvc shall not own QPM admission reservation state or perform QPM admission capacity accounting. |
+| DISC-003 | DEFw-wrapped services shall support a startup configuration that allows them to listen for DEFw RPC calls without registering with DEFw-dirsvc. |
+| DISC-004 | The QFw shall provide a QPM resolution path that can obtain a QPM client binding from either DEFw-dirsvc discovery or a configured long-running QPM endpoint. |
 | DISC-005 | A long-running QPM service shall remain callable by DEFw clients and DEFw services through DEFw RPC. |
 
 </details>

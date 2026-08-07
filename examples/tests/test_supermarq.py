@@ -10,7 +10,7 @@ import getopt
 from defw import me
 from defw_exception import DEFwInProgress, DEFwNotReady, DEFwError
 from defw_util import prformat, fg
-from defw_app_util import defw_get_resource_mgr, defw_reserve_service_by_name
+from defw_app_util import defw_get_directory_service, defw_bind_service_by_name
 from time import sleep, time
 from defw_event_baseapi import BaseEventAPI
 
@@ -233,8 +233,8 @@ if __name__ == "__main__":
 	else:
 		raise DEFwError(f"Provided backend '{backend}' not supported")
 
-	rmgr = defw_get_resource_mgr()
-	qpm = defw_reserve_service_by_name(rmgr, 'QPM', svc_type=svc_type)[0]
+	dirsvc = defw_get_directory_service()
+	qpm = defw_bind_service_by_name(dirsvc, 'QPM', svc_type=svc_type)[0]
 
 	wait = 0
 	while wait < system_up_timeout:

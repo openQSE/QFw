@@ -11,7 +11,7 @@ import yaml
 from api_qpm import QPM, QPMCapability, QPMType
 import defw
 from defw import me
-from defw_app_util import defw_get_resource_mgr
+from defw_app_util import defw_get_directory_service
 from defw_event_baseapi import BaseEventAPI
 from defw_exception import DEFwError, DEFwNotReady
 from defw_util import fg, prformat
@@ -159,28 +159,37 @@ def run_introspection(call, qpm, libs, cap_map, failures):
 		call_api(label, func, failures, **kwargs)
 
 
+def _binding_properties(binding):
+	service_record = binding.get("service_record", binding)
+	return dict(service_record.get("properties") or {})
+
+
 def reserve_shim_qpm(device_id, timeout):
-	rmgr = defw_get_resource_mgr()
+	dirsvc = defw_get_directory_service()
 	svc_type = QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE
 	svc_cap = QPMCapability.QPM_CAP_SUPERCONDUCTING
 	start = time()
 
 	while time() - start < timeout:
-		infos = rmgr.get_services("QPM", svc_type, svc_cap)
+		bindings = dirsvc.resolve_services(
+			service_name="QPM",
+			svc_type=svc_type,
+			svc_caps=svc_cap,
+		)
 		matches = []
-		for info in infos:
-			props = info.get_properties()
+		for binding in bindings:
+			props = _binding_properties(binding)
 			if props.get("provider") != "shim":
 				continue
 			if device_id and props.get("device_id") != device_id:
 				continue
-			matches.append(info)
+			matches.append(binding)
 
 		if matches:
 			prformat(
 				fg.green + fg.bold,
-				f"selected shim QPM: {matches[0].get_properties()}")
-			return defw.connect_to_resource(matches, "QPM")[0]
+				f"selected shim QPM: {_binding_properties(matches[0])}")
+			return defw.connect_to_binding(matches[0])
 
 		sleep(1)
 

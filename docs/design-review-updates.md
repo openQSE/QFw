@@ -22,7 +22,7 @@ Review issue file: design-review.jsonl
 - DR-P1-001: major open - Reservation lifecycle states do not match current qhw-admission states.
 - DR-P1-002: major open - Estimated capacity hold semantics are not mapped to concrete qhw-admission calls.
 - DR-P1-003: major open - Managed task lifecycle mapping to qhw-scheduler states is undefined.
-- DR-P1-004: major open - Long-running QPM startup omits the current resource-manager initialization gate.
+- DR-P1-004: major open - Long-running QPM startup omits the current directory-service initialization gate.
 - DR-P1-005: major open - Qiskit adapter migration for reservation-scoped execution is undefined.
 - DR-P1-006: major open - QPM controller threading mode for admission and scheduler contexts is unspecified.
 
@@ -38,7 +38,7 @@ Changes made:
 - Aligned reservation lifecycle with qhw-admission states: `PENDING`, `ACTIVE`, `RELEASED`, `EXPIRED`, `CANCELLED`; moved renew and over-limit to operation/compliance semantics.
 - Mapped estimated capacity holds to concrete qhw-admission calls: `authorize_usage()`, `consume()`, `return_usage()`, and `record_actual()`.
 - Added managed task lifecycle mapping to qhw-scheduler states and calls, including QPM overlays for `SUBMITTED` and `TIMED_OUT`.
-- Defined long-running QPM startup behavior around `DEFW_DISABLE_RESMGR`, `qpm_wait_resmgr()`, resolver health checks, and a `startup-readiness-gate`.
+- Defined long-running QPM startup behavior around `DEFW_DISABLE_DIRSVC`, `qpm_wait_dirsvc()`, resolver health checks, and a `startup-readiness-gate`.
 - Defined Qiskit adapter migration through a QPM resolver and reservation-aware `QFwBackend.run()` / `QFwJob` request flow.
 - Specified QPM controller threading defaults and constraints for qhw-admission and qhw-scheduler contexts.
 
@@ -201,37 +201,37 @@ changed_files:
  ### QFw API Categories
 @@ -850,6 +924,15 @@
  turning the long-running service into a separate non-DEFw protocol while
- removing the requirement that a DEFw-resmgr always be present.
+ removing the requirement that a DEFw-dirsvc always be present.
  
-+The current QPM modules mark themselves ready only after `defw.resmgr` exists.
++The current QPM modules mark themselves ready only after `defw.dirsvc` exists.
 +Long-running mode must replace that readiness gate. A long-running QPM is ready
 +when its DEFw listener is accepting RPC calls, its QRC provider path is
 +initialized, its qhw-admission and qhw-scheduler contexts are constructed, and
 +the target device profile and policies have been loaded. Optional
-+DEFw-resmgr registration may happen later or not at all. Failure to register
-+with a resmgr must not keep a configured long-running service in
++DEFw-dirsvc registration may happen later or not at all. Failure to register
++with a dirsvc must not keep a configured long-running service in
 +`DEFwNotReady` when the service is otherwise callable by endpoint.
 +
  </details>
  
  <details>
 @@ -914,6 +997,22 @@
- | `register-with-resmgr` | Boolean controlling whether the service registers with DEFw-resmgr. |
+ | `register-with-dirsvc` | Boolean controlling whether the service registers with DEFw-dirsvc. |
  | `listen-endpoint` | Stable endpoint or port used by long-running clients. |
- | `resmgr-endpoint` | Optional DEFw-resmgr endpoint for QFw-managed registration. |
-+| `startup-readiness-gate` | `resmgr-ready` for registered mode or `listener-and-controller-ready` for long-running endpoint mode. |
+ | `dirsvc-endpoint` | Optional DEFw-dirsvc endpoint for QFw-managed registration. |
++| `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for long-running endpoint mode. |
 +
 +The option must map to the existing DEFw startup behavior. `defwp-wrapper`
-+defaults `DEFW_DISABLE_RESMGR` to `yes`, and the C listener attempts a parent
-+resource-manager connection only when resource-manager use is enabled and a
++defaults `DEFW_DISABLE_DIRSVC` to `yes`, and the C listener attempts a parent
++directory-service connection only when directory-service use is enabled and a
 +parent name is configured. QFw-managed service launch sets
-+`DEFW_DISABLE_RESMGR=no` and provides parent host, port, and name. A
-+long-running unregistered QPM should set `DEFW_DISABLE_RESMGR=yes`, leave
++`DEFW_DISABLE_DIRSVC=no` and provides parent host, port, and name. A
++long-running unregistered QPM should set `DEFW_DISABLE_DIRSVC=yes`, leave
 +registration disabled, and use the listener/controller readiness gate above.
 +
-+Provider QPM modules that currently wait in `qpm_wait_resmgr()` need a
++Provider QPM modules that currently wait in `qpm_wait_dirsvc()` need a
 +configuration-aware readiness path. In registered mode they may keep the
-+existing resmgr wait. In endpoint mode they should call the common QPM
++existing dirsvc wait. In endpoint mode they should call the common QPM
 +completion routine after listener and controller initialization, then expose
 +health and metadata over DEFw RPC so the configured-endpoint resolver can
 +validate the service.
@@ -248,8 +248,8 @@ changed_files:
 +6. Query the connected service for QPM service metadata.
 +7. Verify that the service metadata matches the requested service name,
     provider, device ID, type, and capabilities.
--7. Return the same QPM client binding shape used by the DEFw-resmgr discovery
-+8. Return the same QPM client binding shape used by the DEFw-resmgr discovery
+-7. Return the same QPM client binding shape used by the DEFw-dirsvc discovery
++8. Return the same QPM client binding shape used by the DEFw-dirsvc discovery
     path.
  
  After resolution, reservation and release behavior should be identical for
@@ -417,8 +417,8 @@ changed_files:
  
 +The Qiskit adapter migrates through the same API change. The current
 +`qfw_lookup_service.get_qpm()` path should become a QPM resolver wrapper. In
-+QFw-managed mode it keeps the existing `rmgr.get_services("QPM", ...)` lookup
-+and `defw.connect_to_resource()` binding. In long-running mode it reads the
++QFw-managed mode it keeps the existing `dirsvc.resolve_services("QPM", ...)` lookup
++and `defw.connect_to_binding()` binding. In long-running mode it reads the
 +configured endpoint descriptor, connects directly to the DEFw-wrapped QPM, and
 +validates readiness and metadata before returning the same QPM client binding.
 +
@@ -430,7 +430,7 @@ changed_files:
 +renaming. `QFwJob._run_experiment_async()` then includes those fields in the
 +managed execution request and calls the reservation-scoped QPM execution API.
 +
-+The adapter must not treat DEFw-resmgr service selection as a reservation.
++The adapter must not treat DEFw-dirsvc service selection as a reservation.
 +Reservation creation belongs to the QPM admission API and is normally performed
 +by a trusted workflow manager, load manager, prolog, or site service before the
 +application runs. A compatibility helper may request a reservation for trusted
@@ -738,7 +738,7 @@ changed_files:
 +`record_actual()` when measured usage is known. The terminal
 +`qhw_adm_release()` call is the last admission operation for the reservation.
  
- Release is an admission lifecycle operation, not a DEFw-resmgr deregistration
+ Release is an admission lifecycle operation, not a DEFw-dirsvc deregistration
  operation.
 @@ -1146,11 +1264,15 @@
  cancelled, and matches the requested job, session, scope, target device, and
@@ -981,7 +981,7 @@ changed_files:
 +Until that pass-through exists, Estimator submissions are incompatible with
 +reservation-scoped production execution.
  
- The adapter must not treat DEFw-resmgr service selection as a reservation.
+ The adapter must not treat DEFw-dirsvc service selection as a reservation.
  Reservation creation belongs to the QPM admission API and is normally performed
 ```
 
@@ -1116,7 +1116,7 @@ changed_files:
 +capacity and `record_actual()` when measured usage is known. The terminal
  `qhw_adm_release()` call is the last admission operation for the reservation.
  
- Release is an admission lifecycle operation, not a DEFw-resmgr deregistration
+ Release is an admission lifecycle operation, not a DEFw-dirsvc deregistration
 @@ -1325,10 +1347,16 @@
  QPM maps that hold to qhw-admission usage calls. It builds a
  `qhw_adm_usage_t` with `reservation_id`, the QPM qtask ID in `task_id`, the

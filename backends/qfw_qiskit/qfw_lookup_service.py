@@ -2,7 +2,7 @@ import logging
 import os
 
 import defw
-from defw_app_util import defw_get_resource_mgr, SYSTEM_UP_TIMEOUT
+from defw_app_util import defw_get_directory_service, SYSTEM_UP_TIMEOUT
 from .qpm_resolver import (
 	DIRECT_ENDPOINT_FALLBACK_ENV,
 	DIRECT_QPM_ENDPOINT_ENV,
@@ -12,9 +12,9 @@ from .qpm_resolver import (
 )
 
 
-def _reserve_qpm(rmgr, qpm_type, qpm_cap, timeout=SYSTEM_UP_TIMEOUT):
+def _connect_qpm(dirsvc, qpm_type, qpm_cap, timeout=SYSTEM_UP_TIMEOUT):
 	want = os.environ.get(QPM_IMPL_ENV)
-	resolver = QPMResolver.from_environment(rmgr=rmgr, defw_module=defw)
+	resolver = QPMResolver.from_environment(dirsvc=dirsvc, defw_module=defw)
 	request = {
 		"timeout": timeout,
 		"qpm_type": qpm_type,
@@ -34,9 +34,9 @@ def _external_qpm_resolution_configured():
 	return bool(os.environ.get(DIRECT_QPM_ENDPOINT_ENV))
 
 
-def _optional_resource_manager():
+def _optional_directory_service():
 	try:
-		return defw_get_resource_mgr()
+		return defw_get_directory_service()
 	except Exception:
 		if _external_qpm_resolution_configured():
 			return None
@@ -50,8 +50,8 @@ def test_qpm(qpm_api):
 
 def get_qpm(qpm_type=-1, qpm_cap=-1):
 	# Grab a qpm if one exists.
-	rmgr = _optional_resource_manager()
-	qpm_api = _reserve_qpm(rmgr, qpm_type, qpm_cap)
+	dirsvc = _optional_directory_service()
+	qpm_api = _connect_qpm(dirsvc, qpm_type, qpm_cap)
 
 	logging.debug(f"got the qpm {qpm_api}")
 

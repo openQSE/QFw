@@ -203,25 +203,25 @@ def start_dvm(node_list):
 	logging.debug("DVM startup output: stdout=%s stderr=%s", out, err)
 	return rc
 
-def start_resmgr(target, launcher, env_dict):
-	resmgr = f"resmgr_{target}"
+def start_dirsvc(target, launcher, env_dict):
+	dirsvc = f"dirsvc_{target}"
 	tmp_path = qfw_tmp_dir()
-	pref_path = os.path.join(tmp_path, 'defw_resmgr_pref.yaml')
+	pref_path = os.path.join(tmp_path, 'defw_dirsvc_pref.yaml')
 
-	env =  {'DEFW_AGENT_NAME': resmgr,
+	env =  {'DEFW_AGENT_NAME': dirsvc,
 			'DEFW_LISTEN_PORT': str(8090),
 			'DEFW_TELNET_PORT': str(8091),
-			'DEFW_ONLY_LOAD_MODULE': 'svc_resmgr',
+			'DEFW_ONLY_LOAD_MODULE': 'svc_dirsvc',
 			'DEFW_LOAD_NO_INIT': '',
 			'DEFW_SHELL_TYPE': 'daemon',
-			'DEFW_AGENT_TYPE': 'resmgr',
+			'DEFW_AGENT_TYPE': 'dirsvc',
 			'DEFW_PARENT_PORT': str(8090),
-			'DEFW_PARENT_NAME': resmgr,
+			'DEFW_PARENT_NAME': dirsvc,
 			'DEFW_LOG_LEVEL': "error",
-			'DEFW_DISABLE_RESMGR': "no",
-#			'DEFW_LOG_DIR': os.path.join('/tmp', resmgr),
+			'DEFW_DISABLE_DIRSVC': "no",
+#			'DEFW_LOG_DIR': os.path.join('/tmp', dirsvc),
 			'DEFW_LOG_DIR': os.path.join(os.path.split(cdefw_global.get_defw_tmp_dir())[0],
-							resmgr),
+							dirsvc),
 			'DEFW_PREF_PATH': pref_path,
 			'DEFW_PARENT_HOSTNAME': target}
 
@@ -283,7 +283,7 @@ def service_registers_with_dirsvc(service):
 		return False
 	return True
 
-def start_service(service, resmgr, g0, g1, launcher, env_dict,
+def start_service(service, dirsvc_node, g0, g1, launcher, env_dict,
 				  listen_port, telnet_port):
 	name = service.get('name', None)
 	module = service.get('module', None)
@@ -299,11 +299,11 @@ def start_service(service, resmgr, g0, g1, launcher, env_dict,
 		service.get('direct-endpoint-fallback'),
 		False,
 	)
-	dirsvc_host = service.get('dirsvc-host', resmgr)
+	dirsvc_host = service.get('dirsvc-host', dirsvc_node)
 	dirsvc_port = service.get('dirsvc-port', 8090)
 	dirsvc_name = service.get(
 		'dirsvc-name',
-		service.get('parent-name', f"resmgr_{resmgr}"),
+		service.get('parent-name', f"dirsvc_{dirsvc_node}"),
 	)
 
 	env =  {'DEFW_AGENT_NAME': agent_name,
@@ -317,7 +317,7 @@ def start_service(service, resmgr, g0, g1, launcher, env_dict,
 			'DEFW_PARENT_PORT': str(dirsvc_port),
 			'DEFW_PARENT_NAME': dirsvc_name,
 			'DEFW_LOG_LEVEL': service.get('log-level', "error"),
-			'DEFW_DISABLE_RESMGR': (
+			'DEFW_DISABLE_DIRSVC': (
 				"no" if register_with_dirsvc else "yes"),
 			'QFW_QPM_OPERATION_MODE': operation_mode,
 			'QFW_QPM_REGISTER_WITH_DIRSVC': config_bool_env(
@@ -367,7 +367,7 @@ def start_service(service, resmgr, g0, g1, launcher, env_dict,
 		f"Service {name} STARTED: pid {pid} agent {agent_name} on {target}")
 	return pid, env['DEFW_LOG_DIR']
 
-def start_services(services_config, resmgr, g0, g1, launcher, env_dict):
+def start_services(services_config, dirsvc_node, g0, g1, launcher, env_dict):
 	services = load_services_config(services_config)
 	listen_port = 8290
 	telnet_port = 8291
@@ -375,7 +375,7 @@ def start_services(services_config, resmgr, g0, g1, launcher, env_dict):
 	dirs = []
 
 	for service in services:
-		pid, log_dir = start_service(service, resmgr, g0, g1, launcher,
+		pid, log_dir = start_service(service, dirsvc_node, g0, g1, launcher,
 									 env_dict, listen_port, telnet_port)
 		pids.append(pid)
 		dirs.append(log_dir)
@@ -501,9 +501,9 @@ def start(g0, g1, launcher, shutdown, dvm, env_dict, services_config):
 			logging.debug("DVM STARTED")
 			me.exit()
 
-		# Start the Resource Manager
-		pid = start_resmgr(g1[0], launcher, env_dict)
-		logging.debug(f"RESMGR STARTED: {pid}")
+		# Start the directory service
+		pid = start_dirsvc(g1[0], launcher, env_dict)
+		logging.debug(f"DIRSVC STARTED: {pid}")
 
 		# Start the configured services
 		service_pids, service_log_dirs = start_services(services_config, g1[0],

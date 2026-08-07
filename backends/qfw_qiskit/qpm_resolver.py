@@ -260,26 +260,26 @@ class QPMResolver:
 		self._allow_ambiguous = allow_ambiguous
 
 	@classmethod
-	def from_resource_manager(cls, rmgr, defw_module=defw, sleeper=sleep):
+	def from_directory_service(cls, dirsvc, defw_module=defw, sleeper=sleep):
 		directory = DirectoryScope(
 			name="allocation-local",
 			scope="allocation-local",
-			client=rmgr,
+			client=dirsvc,
 			identity="allocation-local",
 			priority=100,
 		)
 		return cls([directory], DEFwQPMConnector(defw_module), sleeper)
 
 	@classmethod
-	def from_environment(cls, rmgr=None, defw_module=defw, sleeper=sleep,
+	def from_environment(cls, dirsvc=None, defw_module=defw, sleeper=sleep,
 						 directory_client_factory=None):
 		directories = []
 		local_endpoint = os.environ.get(LOCAL_DIRSVC_ENDPOINT_ENV)
-		if rmgr is not None:
+		if dirsvc is not None:
 			directories.append(DirectoryScope(
 				name="allocation-local",
 				scope="allocation-local",
-				client=rmgr,
+				client=dirsvc,
 				endpoint=local_endpoint,
 				identity=local_endpoint or "allocation-local",
 				priority=100,

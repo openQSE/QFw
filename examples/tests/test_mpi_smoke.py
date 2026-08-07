@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from defw_app_util import defw_get_resource_mgr, defw_reserve_service_by_name
+from defw_app_util import defw_get_directory_service, defw_bind_service_by_name
 
 
 def validate_result(result, expected_np):
@@ -36,12 +36,12 @@ def validate_result(result, expected_np):
 	return records
 
 
-def reserve_mpi_smoke(resmgr, timeout):
+def bind_mpi_smoke(dirsvc, timeout):
 	deadline = time.time() + timeout
 	last_error = None
 	while time.time() < deadline:
 		try:
-			return defw_reserve_service_by_name(resmgr, 'MPISmoke')[0]
+			return defw_bind_service_by_name(dirsvc, 'MPISmoke')[0]
 		except Exception as err:
 			last_error = err
 			time.sleep(1)
@@ -54,8 +54,8 @@ def main():
 	api = None
 
 	try:
-		resmgr = defw_get_resource_mgr(timeout=timeout)
-		api = reserve_mpi_smoke(resmgr, timeout)
+		dirsvc = defw_get_directory_service(timeout=timeout)
+		api = bind_mpi_smoke(dirsvc, timeout)
 		result = api.run_pid_hello(np)
 		records = validate_result(result, np)
 		print(json.dumps({

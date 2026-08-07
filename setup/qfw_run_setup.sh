@@ -17,8 +17,8 @@ export DEFW_AGENT_TYPE=agent
 export DEFW_LOG_LEVEL=all
 export DEFW_PY_LOGLEVEL=debug,DEFW_ALL
 export DEFW_LOAD_NO_INIT=svc_launcher
-export DEFW_ONLY_LOAD_MODULE=svc_resmgr
-export DEFW_DISABLE_RESMGR=yes
+export DEFW_ONLY_LOAD_MODULE=svc_dirsvc
+export DEFW_DISABLE_DIRSVC=yes
 export DEFW_AGENT_NAME=qfw_setup_phase_2.1
 export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 export QFW_DVM_URI_PATH=$QFW_RUN_TMP_PATH/prte_dvm/dvm-uri
@@ -34,7 +34,7 @@ unset DEFW_SHELL_TYPE
 unset DEFW_LISTEN_PORT
 unset DEFW_AGENT_TYPE
 unset DEFW_LOG_LEVEL
-unset DEFW_DISABLE_RESMGR
+unset DEFW_DISABLE_DIRSVC
 unset DEFW_PY_LOGLEVEL
 unset DEFW_LOAD_NO_INIT
 unset DEFW_ONLY_LOAD_MODULE

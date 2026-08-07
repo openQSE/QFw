@@ -197,15 +197,17 @@ def _install_defw_stubs():
 	if "defw_app_util" not in sys.modules:
 		defw_app_util = types.ModuleType("defw_app_util")
 
-		def defw_get_resource_mgr():
-			raise AssertionError("defw_get_resource_mgr must be patched in tests")
+		def defw_get_directory_service():
+			raise AssertionError(
+				"defw_get_directory_service must be patched in tests")
 
-		def defw_reserve_service_by_name(*args, **kwargs):
-			raise AssertionError("defw_reserve_service_by_name must be patched in tests")
+		def defw_bind_service_by_name(*args, **kwargs):
+			raise AssertionError(
+				"defw_bind_service_by_name must be patched in tests")
 
 		defw_app_util.SYSTEM_UP_TIMEOUT = 1
-		defw_app_util.defw_get_resource_mgr = defw_get_resource_mgr
-		defw_app_util.defw_reserve_service_by_name = defw_reserve_service_by_name
+		defw_app_util.defw_get_directory_service = defw_get_directory_service
+		defw_app_util.defw_bind_service_by_name = defw_bind_service_by_name
 		sys.modules["defw_app_util"] = defw_app_util
 
 	if "defw_event_baseapi" not in sys.modules:

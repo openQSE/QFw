@@ -3,7 +3,7 @@
 # Startup:
 #  - The Simulation Environment Components
 #     - PRTE DVM
-#     - Resource Manager
+#     - Directory Service
 #     - DEFw Launcher
 #     - QPM
 #
@@ -51,7 +51,7 @@ echo "QFw run logs: ${QFW_RUN_TMP_PATH}"
 # on 1 node. However, at this point I'm not sure if this will work with
 # the current code. So let's keep it this way.
 #
-# qfw_setup.py will start the resmgr, a Launcher on each node, a QPM on
+# qfw_setup.py will start the directory service, a Launcher on each node, a QPM on
 # the current node and a QTM on the group 0 head node.
 #
 # There is some implication with regards to the environment we have to
@@ -59,7 +59,8 @@ echo "QFw run logs: ${QFW_RUN_TMP_PATH}"
 #
 #  1. Since anything started by qfw_setup.py on the node which
 #  qfw_setup.py is running on will inherit the environment, we don't have
-#  to manually propagate the environment. This is true for the resmgr, QPM
+#  to manually propagate the environment. This is true for the directory service,
+#  QPM
 #  and one of the Launchers.
 #
 #  2. Anything spawned on a node other than the one qfw_setup.py is
@@ -78,7 +79,7 @@ export DEFW_SHELL_TYPE=cmdline
 export DEFW_LISTEN_PORT=9095
 export DEFW_AGENT_TYPE=agent
 export DEFW_LOG_LEVEL=all
-export DEFW_DISABLE_RESMGR=yes
+export DEFW_DISABLE_DIRSVC=yes
 export DEFW_PY_LOGLEVEL=debug,DEFW_ALL
 
 echo "*******START PHASE ONE SETUP: PRTE*******"
@@ -90,7 +91,7 @@ unset DEFW_SHELL_TYPE
 unset DEFW_LISTEN_PORT
 unset DEFW_AGENT_TYPE
 unset DEFW_LOG_LEVEL
-unset DEFW_DISABLE_RESMGR
+unset DEFW_DISABLE_DIRSVC
 unset DEFW_PY_LOGLEVEL
 if [ $setup_rc -ne 0 ]; then
 	echo "Failed to setup Quantum Framework"
@@ -105,7 +106,7 @@ export DEFW_SHELL_TYPE=cmdline
 export DEFW_LISTEN_PORT=9095
 export DEFW_AGENT_TYPE=agent
 export DEFW_LOG_LEVEL=all
-export DEFW_DISABLE_RESMGR=yes
+export DEFW_DISABLE_DIRSVC=yes
 export DEFW_PY_LOGLEVEL=debug,DEFW_ALL
 python3 $QFW_SETUP_PATH/qfw_setup.py --prun --groups "$het_groups" \
 	--services-config "$services_config" &
@@ -115,7 +116,7 @@ unset DEFW_SHELL_TYPE
 unset DEFW_LISTEN_PORT
 unset DEFW_AGENT_TYPE
 unset DEFW_LOG_LEVEL
-unset DEFW_DISABLE_RESMGR
+unset DEFW_DISABLE_DIRSVC
 unset DEFW_PY_LOGLEVEL
 echo "*******COMPLETED PHASE TWO SETUP*******"
 

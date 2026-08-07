@@ -33,7 +33,7 @@ def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
 	}
 
 
-class FakeDirectoryResourceManager:
+class FakeDirectoryService:
 	def __init__(self, records):
 		self.records = list(records)
 		self.queries = []
@@ -61,30 +61,28 @@ class BindingDefwModule:
 		service_id = resolved_binding["service_record"]["service_id"]
 		return self.qpms.get(service_id, self.default_qpm)
 
-	def connect_to_resource(self, service_infos, resource_name):
-		raise AssertionError("legacy connect_to_resource must not be used")
-
 
 def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
 	fake_qpm = FakeQPM()
 	record = qpm_directory_record("qpm-iqm", fake_qpm)
-	rmgr = FakeDirectoryResourceManager([record])
+	dirsvc = FakeDirectoryService([record])
 	fake_defw = BindingDefwModule([record])
 
-	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
+	monkeypatch.setattr(
+		lookup_service, "defw_get_directory_service", lambda: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
 
 	assert result is fake_qpm
-	assert len(rmgr.queries) == 1
-	assert rmgr.queries[0]["service_name"] == "QPM"
-	assert rmgr.queries[0]["service_type"] == "qfw.qpm"
-	assert rmgr.queries[0]["binding_name"] == "execution"
-	assert rmgr.queries[0]["svc_type"] == 4
-	assert rmgr.queries[0]["svc_caps"] == 2
+	assert len(dirsvc.queries) == 1
+	assert dirsvc.queries[0]["service_name"] == "QPM"
+	assert dirsvc.queries[0]["service_type"] == "qfw.qpm"
+	assert dirsvc.queries[0]["binding_name"] == "execution"
+	assert dirsvc.queries[0]["svc_type"] == 4
+	assert dirsvc.queries[0]["svc_caps"] == 2
 	assert len(fake_defw.binding_connections) == 1
 	binding = fake_defw.binding_connections[0]
 	assert binding["service_record"]["service_id"] == "qpm-iqm"
@@ -97,10 +95,11 @@ def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
 
 	fake_qpm = FakeQPM(test_error=RuntimeError("probe failed"))
 	record = qpm_directory_record("qpm-iqm", fake_qpm)
-	rmgr = FakeDirectoryResourceManager([record])
+	dirsvc = FakeDirectoryService([record])
 	fake_defw = BindingDefwModule([record])
 
-	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
+	monkeypatch.setattr(
+		lookup_service, "defw_get_directory_service", lambda: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
@@ -109,35 +108,35 @@ def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
 	assert fake_qpm.shutdown_called is True
 
 
-def test_get_qpm_propagates_reservation_failures(monkeypatch):
+def test_get_qpm_propagates_directory_failures(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
 	class FailingDirectory:
 		def resolve_services(self, **kwargs):
-			raise RuntimeError("reserve failed")
+			raise RuntimeError("directory lookup failed")
 
 	monkeypatch.setattr(
 		lookup_service,
-		"defw_get_resource_mgr",
+		"defw_get_directory_service",
 		lambda: FailingDirectory(),
 	)
 
 	try:
 		lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
 	except RuntimeError as exc:
-		assert str(exc) == "reserve failed"
+		assert str(exc) == "directory lookup failed"
 	else:
-		raise AssertionError("expected reservation failure to propagate")
+		raise AssertionError("expected directory lookup failure to propagate")
 
 
-def test_get_qpm_uses_direct_endpoint_without_resource_manager(monkeypatch):
+def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
 	fake_qpm = FakeQPM()
 	fake_defw = BindingDefwModule(default_qpm=fake_qpm)
 
-	def unavailable_resource_manager():
-		raise RuntimeError("allocation-local resource manager unavailable")
+	def unavailable_directory_service():
+		raise RuntimeError("allocation-local directory service unavailable")
 
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
 	monkeypatch.delenv("QFW_QPM_IMPL", raising=False)
@@ -145,8 +144,8 @@ def test_get_qpm_uses_direct_endpoint_without_resource_manager(monkeypatch):
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
 	monkeypatch.setattr(
-		lookup_service, "defw_get_resource_mgr",
-		unavailable_resource_manager)
+		lookup_service, "defw_get_directory_service",
+		unavailable_directory_service)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
@@ -166,11 +165,12 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 	shim_qpm = FakeQPM()
 	native = qpm_directory_record("native", native_qpm, provider="iqm")
 	shim = qpm_directory_record("shim", shim_qpm, provider="shim")
-	rmgr = FakeDirectoryResourceManager([native, shim])
+	dirsvc = FakeDirectoryService([native, shim])
 	fake_defw = BindingDefwModule([native, shim])
 
 	monkeypatch.setenv("QFW_QPM_IMPL", "shim")
-	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
+	monkeypatch.setattr(
+		lookup_service, "defw_get_directory_service", lambda: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
@@ -187,11 +187,12 @@ def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):
 	from qfw_qiskit.qpm_resolver import QPMProviderPolicyError
 
 	shim = qpm_directory_record("shim", FakeQPM(), provider="shim")
-	rmgr = FakeDirectoryResourceManager([shim])
+	dirsvc = FakeDirectoryService([shim])
 	fake_defw = BindingDefwModule([shim])
 
 	monkeypatch.setenv("QFW_QPM_IMPL", "iqm")
-	monkeypatch.setattr(lookup_service, "defw_get_resource_mgr", lambda: rmgr)
+	monkeypatch.setattr(
+		lookup_service, "defw_get_directory_service", lambda: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	try:
@@ -217,7 +218,7 @@ def test_resolver_rejects_ambiguous_requested_provider():
 		[DirectoryScope(
 			"allocation-local",
 			"allocation-local",
-			client=FakeDirectoryResourceManager([first, second]),
+			client=FakeDirectoryService([first, second]),
 			priority=100,
 		)],
 		sleeper=lambda seconds: None,

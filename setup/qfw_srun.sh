@@ -49,12 +49,12 @@ export DEFW_AGENT_TYPE=agent
 export DEFW_LOG_LEVEL=error
 export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_LOAD_NO_INIT=svc_launcher
-export DEFW_ONLY_LOAD_MODULE=svc_resmgr
-export DEFW_DISABLE_RESMGR=yes
+export DEFW_ONLY_LOAD_MODULE=svc_dirsvc
+export DEFW_DISABLE_DIRSVC=yes
 
 node=$(qfw_group_head "${QFW_GROUP_1_NODELIST}")
 
-echo "resource manager is located on: ****$node****"
+echo "directory service is located on: ****$node****"
 
 filename=$(basename "$1" | cut -f 1 -d '.')
 
@@ -62,13 +62,13 @@ export DEFW_AGENT_NAME=${filename}_${hostname}
 export DEFW_LISTEN_PORT=9600
 export DEFW_PARENT_HOSTNAME=$node
 export DEFW_PARENT_PORT=8090
-export DEFW_PARENT_NAME=resmgr
+export DEFW_PARENT_NAME=dirsvc_${node}
 export DEFW_AGENT_TYPE=agent
 export DEFW_SHELL_TYPE=cmdline
 export DEFW_LOG_LEVEL=error
 export DEFW_LOG_DIR=$QFW_RUN_TMP_PATH/${DEFW_AGENT_NAME}
 export DEFW_ONLY_LOAD_MODULE=$load_modules
-export DEFW_DISABLE_RESMGR=no
+export DEFW_DISABLE_DIRSVC=no
 export DEFW_PY_LOGLEVEL=debug,DEFW_ALL
 
 set -xe
@@ -82,6 +82,6 @@ unset DEFW_SHELL_TYPE
 unset DEFW_LISTEN_PORT
 unset DEFW_AGENT_TYPE
 unset DEFW_LOG_LEVEL
-unset DEFW_DISABLE_RESMGR
+unset DEFW_DISABLE_DIRSVC
 unset DEFW_PY_LOGLEVEL
 exit $app_rc

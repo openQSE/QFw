@@ -35,8 +35,8 @@ export DEFW_AGENT_TYPE=agent
 export DEFW_LOG_LEVEL=all
 export DEFW_LOG_DIR=${qfw_log_base}/${DEFW_AGENT_NAME}_${hostname}
 export DEFW_LOAD_NO_INIT=svc_launcher
-export DEFW_ONLY_LOAD_MODULE=svc_resmgr
-export DEFW_DISABLE_RESMGR=yes
+export DEFW_ONLY_LOAD_MODULE=svc_dirsvc
+export DEFW_DISABLE_DIRSVC=yes
 
 source $QFW_SETUP_PATH/qfw_lib_path.sh
 
@@ -52,7 +52,7 @@ unset DEFW_LOG_LEVEL
 unset DEFW_LOG_DIR
 unset DEFW_LOAD_NO_INIT
 unset DEFW_ONLY_LOAD_MODULE
-unset DEFW_DISABLE_RESMGR
+unset DEFW_DISABLE_DIRSVC
 unset qfw_log_base
 
 if [[ $rc -ne 0 ]]; then

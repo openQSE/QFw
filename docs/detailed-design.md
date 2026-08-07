@@ -25,12 +25,11 @@ identified by the same requirement ID.
 
 ## Design Context
 
-The current QFw client path discovers QPM through DEFw-resmgr. The Qiskit
-lookup path asks DEFw-resmgr for QPM service metadata, then calls
-`defw.connect_to_resource()` to create the QPM client binding. The current
-DEFw-resmgr `reserve()` path also performs local `DEFwServiceInfo` capacity
-accounting and calls the service `reserve()` callback before returning service
-endpoints.
+The QFw client path discovers QPM through DEFw-dirsvc. The Qiskit lookup path
+asks DEFw-dirsvc for QPM binding metadata, then calls
+`defw.connect_to_binding()` to create the selected QPM client binding. DEFw
+directory lookup does not perform capacity accounting or call the QPM
+`reserve()` callback.
 
 The current execution flow is:
 
@@ -50,17 +49,14 @@ the authoritative reservation store. Long-running QPM services remain
 DEFw-wrapped RPC services and register with a site-scoped DEFw-dirsvc rather
 than with an allocation-local directory service.
 
-Relevant current implementation points:
+Relevant implementation points:
 
-- `backends/qfw_qiskit/qfw_lookup_service.py` discovers QPM by calling
-  `rmgr.get_services("QPM", ...)`.
-- `DEFw/python/infra/defw.py` implements `connect_to_resource()` by calling
-  `resmgr.reserve()`, connecting to returned endpoints, and constructing the
-  service API wrapper.
-- `DEFw/python/services/svc_resmgr/svc_resmgr.py` implements
-  `get_services()`, `reserve()`, and `release()`.
-- `DEFw/python/infra/defw_agent_baseapi.py` currently uses the service
-  `reserve()` callback as part of service activation.
+- `backends/qfw_qiskit/qfw_lookup_service.py` discovers QPM by resolving
+  binding records through DEFw-dirsvc.
+- `DEFw/python/infra/defw.py` implements `connect_to_binding()` by connecting
+  to the selected endpoint and constructing the requested service API wrapper.
+- `DEFw/python/services/svc_dirsvc/svc_dirsvc.py` implements registration,
+  deregistration, directory queries, binding resolution, and generation checks.
 - `services/util/qpm/util_qpm.py` currently owns QPM execution submission,
   local host-slot accounting, completion queues, and event registration.
 - Provider-specific QPM services derive from `UTIL_QPM`, set metadata, and
@@ -325,7 +321,7 @@ change. It should not create separate execution paths inside each QPM service.
 ### Current Execution Flow
 
 The current execution path sends client work directly from QPM into QRC after
-local host-slot checks. DEFw-resmgr may be used to discover the service and
+local host-slot checks. DEFw-dirsvc may be used to discover the service and
 construct the client binding, but it does not participate in execution after
 the client is bound to the QPM service.
 
@@ -696,12 +692,12 @@ expires, the directory deletes the inactive record from its database.
 A separate audit log may record that deletion, but service discovery and
 operator directory queries no longer return the purged record.
 
-The legacy resmgr `reserve()` behavior should be replaced by separate directory,
-transport, and QPM operations. The directory owns service registration,
-service lifecycle, service-record lookup, selected API binding resolution, and
-endpoint resolution. The transport layer owns connection establishment and
-heartbeat events. The QPM service owns admission reservation, scheduler
-insertion, task lifecycle, and provider dispatch.
+The legacy combined discovery and service-activation behavior is replaced by
+separate directory, transport, and QPM operations. The directory owns service
+registration, service lifecycle, service-record lookup, selected API binding
+resolution, and endpoint resolution. The transport layer owns connection
+establishment and heartbeat events. The QPM service owns admission reservation,
+scheduler insertion, task lifecycle, and provider dispatch.
 
 The control flow should use these steps:
 
@@ -967,18 +963,18 @@ instantiates or reuses a class, and invokes the requested method. If the
 selected class or method is missing, normal DEFw remote exception handling
 returns the failure to the caller.
 
-The existing single-class assumption in the resource connection helper should
-be replaced by binding-aware construction. A caller resolves a service by
-service filters and requested binding filters, then creates the client proxy
-from the selected binding's `client_module` and `client_class`. The proxy sends
-RPCs to the selected binding's `service_module` and `service_class`.
+The existing single-class assumption in the connection helper should be
+replaced by binding-aware construction. A caller resolves a service by service
+filters and requested binding filters, then creates the client proxy from the
+selected binding's `client_module` and `client_class`. The proxy sends RPCs to
+the selected binding's `service_module` and `service_class`.
 
-Legacy `connect_to_resource(service_infos, res_name)` constructs the proxy by
-looking up `service_apis[res_name]` and then instantiating a class with the
-same name as `res_name`. `BaseRemote` then sends `type(self).__name__` as the
-remote service class during `instantiate_class` and `method_call` RPCs. The new
-binding-aware path must keep that convention as a compatibility fallback, but
-it adds an explicit RPC target override.
+The old connection helper constructed the proxy by looking up
+`service_apis[service_name]` and then instantiating a class with the same name
+as `service_name`. `BaseRemote` then sends `type(self).__name__` as the remote
+service class during `instantiate_class` and `method_call` RPCs. The
+binding-aware path keeps that convention as a compatibility fallback, but it
+adds an explicit RPC target override.
 
 The binding-aware construction path is:
 
@@ -1504,7 +1500,7 @@ record and API binding. This avoids turning the long-running service into a
 separate non-DEFw protocol while removing the requirement that the allocation
 itself launches the QPM service.
 
-The current QPM modules mark themselves ready only after `defw.resmgr` exists.
+The current QPM modules mark themselves ready only after `defw.dirsvc` exists.
 Long-running mode must replace that readiness gate. A long-running QPM is ready
 when its DEFw listener is accepting RPC calls, its QRC provider path is
 initialized, its qhw-admission and qhw-scheduler contexts are constructed, the
@@ -1549,11 +1545,11 @@ binding class, selector name, selector aliases, and selector resources.
 
 ### DISC-002
 
-The existing `svc_resmgr.reserve()` implementation calls
+The removed discovery-service activation path called
 `service_info.consume_capacity()` before activating the service callback. That
-capacity is stored on the queried `DEFwServiceInfo` object, not in an
-admission-grade resource database. The target design should remove QPM
-admission capacity accounting from this path.
+capacity was stored on the queried `DEFwServiceInfo` object, not in an
+admission-grade resource database. The target design removes QPM admission
+capacity accounting from this path.
 
 Directory resolution should return service records, selected API bindings, and
 endpoints. Transport binding should connect the client to the selected
@@ -1581,16 +1577,16 @@ Candidate configuration fields:
 | `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for direct fallback/debug endpoint mode. |
 
 The option must map to the existing DEFw startup behavior. `defwp-wrapper`
-defaults `DEFW_DISABLE_RESMGR` to `yes`, and the C listener attempts a parent
-resource-manager connection only when resource-manager use is enabled and a
+defaults `DEFW_DISABLE_DIRSVC` to `yes`, and the C listener attempts a parent
+directory-service connection only when directory-service use is enabled and a
 parent name is configured. QFw-managed service launch sets
-`DEFW_DISABLE_RESMGR=no` and provides parent host, port, and name. A
+`DEFW_DISABLE_DIRSVC=no` and provides parent host, port, and name. A
 long-running QPM should register with the configured site-scoped DEFw-dirsvc
 in production deployments. Direct unregistered listener mode should set
-`DEFW_DISABLE_RESMGR=yes`, leave registration disabled, and use the
+`DEFW_DISABLE_DIRSVC=yes`, leave registration disabled, and use the
 listener/controller readiness gate only when fallback or diagnostics require it.
 
-Provider QPM modules that currently wait in `qpm_wait_resmgr()` need a
+Provider QPM modules that currently wait in `qpm_wait_dirsvc()` need a
 configuration-aware readiness path. In registered mode they may keep the
 existing directory-service wait after it is renamed. In direct endpoint mode
 they should call the common QPM completion routine after listener and
