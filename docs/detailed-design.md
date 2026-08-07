@@ -5,6 +5,7 @@
 - [Purpose](#purpose)
 - [Design Context](#design-context)
 - [Build And Installation Model](#build-and-installation-model)
+- [Installation And Runtime Startup Model](#installation-and-runtime-startup-model)
 - [Managed Resource Model](#managed-resource-model)
 - [QFw Controller Architecture](#qfw-controller-architecture)
 - [Requirement Design Notes](#requirement-design-notes)
@@ -46,8 +47,8 @@ client
 The target design separates these concerns. DEFw-dirsvc owns registered-service
 discovery, while QPM owns the active reservation flow and uses qhw-admission as
 the authoritative reservation store. Long-running QPM services remain
-DEFw-wrapped RPC services and register with a site-scoped DEFw-dirsvc rather
-than with an allocation-local directory service.
+DEFw-wrapped RPC services and register with the DEFw-dirsvc selected by their
+service configuration.
 
 Relevant implementation points:
 
@@ -174,6 +175,843 @@ Tests should cover generated SWIG outputs, installed Python package imports,
 exported CMake targets, runtime search paths, string output typemaps, counted
 string-list typemaps, compatibility typemaps used by current wrappers, NULL
 allocation-failure handling, and typed opaque-handle round trips.
+
+</details>
+
+<details open>
+<summary><strong>Installation And Runtime Startup Model</strong></summary>
+
+## Installation And Runtime Startup Model
+
+QFw supports two runtime layouts. A source-tree layout is used for development
+and local testing. An installed-prefix layout is used for shared cluster
+deployments. Both layouts expose the same command surface, so applications and
+batch scripts do not depend on the filesystem shape behind the installation.
+
+The installed prefix owns QFw commands, role launchers, installed Python
+packages, service definitions, default configuration templates, and examples.
+DEFw may be installed in the same prefix or in a separate prefix selected by
+site configuration. On a system installation, the software prefix should live
+under `/opt/openqse`, such as `/opt/openqse/qfw/current`. Client-readable
+default configuration files live under the QFw installation. Privileged
+service and device configuration belongs under `/etc/openqse/qfw` or a
+site-selected equivalent. A typical combined prefix has this shape:
+
+```text
+<prefix>/
+  bin/
+    qfw-activate
+    defw-python
+    qfw-setup
+    qfw-srun
+    qfw-teardown
+    qfw-dirsvc-start
+    qfw-service-start
+  libexec/qfw/
+    qfw-setup-driver
+    service-lifecycle/
+    shell-helpers/
+  lib/qfw/
+    services/
+    service-apis/
+  lib/pythonX.Y/site-packages/
+    qfw_qiskit/
+    defw/
+  share/qfw/
+    examples/
+    config/
+      site.yaml
+      runtime.yaml
+      runtime/
+        local.yaml
+        hybrid.yaml
+      services/
+        qfw_services.yaml
+        service-runtime.yaml
+      device/
+        device-access.yaml
+  share/defw/
+    config/
+      defw_generic.yaml
+```
+
+The canonical `site.yaml` is client-readable and records only installation
+prefixes and directory-service discovery information. The default runtime file
+is also client-readable. Privileged service and device configuration lives in
+separate files with tighter permissions. Client and job behavior comes from a
+runtime configuration selected by `qfw-setup`, wrapper defaults, or an explicit
+operator/debug override. Environment variables remain supported as overrides,
+but configuration files are the stable deployment contract.
+
+### Installation Paths
+
+The implementation uses fixed installed locations for packaged QFw material.
+The examples below use `/opt/openqse/qfw/current` as the QFw prefix and
+`/opt/openqse/defw/current` as the DEFw prefix. A deployment may choose a
+different prefix, but the relative paths under each prefix remain the same.
+
+| Path | Owner | Purpose |
+| --- | --- | --- |
+| `/opt/openqse/qfw/current` | QFw package | QFw installation prefix, exported as `QFW_PREFIX`. |
+| `/opt/openqse/qfw/current/bin/qfw-activate` | QFw package | Shell activation entry point. |
+| `/opt/openqse/qfw/current/bin/defw-python` | QFw package | DEFw-backed Python launcher for user applications. |
+| `/opt/openqse/qfw/current/bin/qfw-setup` | QFw package | User job setup command. |
+| `/opt/openqse/qfw/current/bin/qfw-srun` | QFw package | User application launch command. |
+| `/opt/openqse/qfw/current/bin/qfw-teardown` | QFw package | User job cleanup command. |
+| `/opt/openqse/qfw/current/bin/qfw-dirsvc-start` | QFw package | One-directory-service lifecycle command. |
+| `/opt/openqse/qfw/current/bin/qfw-service-start` | QFw package | One-service-instance lifecycle command. |
+| `/opt/openqse/qfw/current/libexec/qfw` | QFw package | Private helper scripts used by public commands. |
+| `/opt/openqse/qfw/current/lib/qfw/services` | QFw package | Installed QPM and utility service modules. |
+| `/opt/openqse/qfw/current/lib/qfw/service-apis` | QFw package | Installed DEFw service API bindings and proxies. |
+| `/opt/openqse/qfw/current/lib/pythonX.Y/site-packages` | QFw package | Installed QFw Python packages and adapters. |
+| `/opt/openqse/qfw/current/share/qfw/config/site.yaml` | QFw package | Default client-readable site configuration. |
+| `/opt/openqse/qfw/current/share/qfw/config/runtime.yaml` | QFw package | Implicit site-only runtime profile. |
+| `/opt/openqse/qfw/current/share/qfw/config/runtime/local.yaml` | QFw package | Local runtime profile. |
+| `/opt/openqse/qfw/current/share/qfw/config/runtime/hybrid.yaml` | QFw package | Hybrid runtime profile. |
+| `/opt/openqse/qfw/current/share/qfw/config/services/qfw_services.yaml` | QFw package | Job-local service manifest used by local and hybrid profiles. |
+| `/opt/openqse/qfw/current/share/qfw/config/services/service-runtime.yaml` | QFw package | Reference service-runtime template. |
+| `/opt/openqse/qfw/current/share/qfw/config/device/device-access.yaml` | QFw package | Reference device-access template without production secrets. |
+| `/opt/openqse/qfw/current/share/qfw/examples` | QFw package | Installed examples. |
+| `/opt/openqse/defw/current` | DEFw package | DEFw installation prefix, exported as `DEFW_PREFIX`. |
+| `/opt/openqse/defw/current/share/defw/config/defw_generic.yaml` | DEFw package | Default DEFw configuration template. |
+
+Site-owned files live outside the software prefix when they contain privileged
+policy or service material. These files are not modified by normal user jobs:
+
+| Path | Owner | Purpose |
+| --- | --- | --- |
+| `/etc/openqse/qfw/env.sh` | Site | Environment file for service-manager units. |
+| `/etc/openqse/qfw/site.yaml` | Site | Optional site-owned site configuration selected by service units or wrappers. |
+| `/etc/openqse/qfw/services/service-runtime.yaml` | Site | Active service-runtime policy for production service launch. |
+| `/etc/openqse/qfw/device/device-access.yaml` | Site | Active device-access policy and credential-provider selection. |
+
+The default user-facing site configuration remains the packaged
+`share/qfw/config/site.yaml` unless `--site-config` or `QFW_SITE_CONFIG`
+selects a different file. Job-local service inventory remains packaged under
+`share/qfw/config/services/qfw_services.yaml`; a standard installation does not
+copy it to `/etc/openqse/qfw`.
+
+### Activation
+
+`qfw-activate` is an environment bootstrap step. It makes QFw commands and
+runtime paths visible in the current shell and defines `qfw_deactivate` to
+restore the previous environment. Activation does not start a directory
+service, start QPM, register a service, connect to a directory service, or
+replace the user's Python executable.
+
+Every public command installed under `<prefix>/bin` must be executable.
+Activation prepends that directory to `PATH` so users and service wrappers can
+call `qfw-setup`, `qfw-srun`, `qfw-teardown`, `qfw-dirsvc-start`, and
+`qfw-service-start` by name. Activation also augments `LD_LIBRARY_PATH` only
+for libraries that are not already reachable through RPATH or runpath.
+
+An installed activation exports the logical path variables used by the role
+wrappers:
+
+```bash
+QFW_PREFIX=/opt/openqse/qfw/current
+QFW_BIN_PATH=$QFW_PREFIX/bin
+QFW_LIBEXEC_DIR=$QFW_PREFIX/libexec/qfw
+QFW_SHARE_DIR=$QFW_PREFIX/share/qfw
+QFW_CONFIG_DIR=/etc/openqse/qfw
+QFW_SITE_CONFIG=$QFW_SHARE_DIR/config/site.yaml
+DEFW_PREFIX=/opt/openqse/defw/current
+DEFW_CONFIG_PATH=$DEFW_PREFIX/share/defw/config/defw_generic.yaml
+```
+
+When DEFw is installed in the same prefix as QFw, `DEFW_PREFIX` points at
+`QFW_PREFIX`. A source-tree activation exports the same logical variables, but
+resolves them to checkout-relative directories. This keeps scripts from
+encoding source paths such as `QFw/setup` or `QFw/DEFw/src`.
+
+Activation may also add installed QFw and DEFw Python package directories to
+`PYTHONPATH` for source or non-wheel deployments. A normal Python package
+installation should prefer the active environment's site-packages over ad hoc
+path injection.
+
+### DEFw Python Entry Point
+
+DEFw embeds CPython in the `defwp` executable. QFw therefore needs an explicit
+Python-through-DEFw entry point for client applications and command-line
+helpers that must run inside a DEFw agent. The installed entry point is named
+`defw-python`.
+
+`defw-python` preserves the user's active Python environment. It detects the
+active virtual environment through `VIRTUAL_ENV` or through `python3` and adds
+that environment's site-packages to the interpreter search path used by DEFw.
+It then invokes the installed `defwp-wrapper` with the original script and
+arguments.
+
+```bash
+source /path/to/user/venv/bin/activate
+pip install qiskit pennylane supermarq
+source /opt/openqse/qfw/current/bin/qfw-activate
+defw-python my_app.py
+```
+
+DEFw and the active virtual environment must use the same Python major and
+minor version. `defw-python` checks the active Python version against
+`defwp --py-version` and fails with a direct diagnostic when they differ. This
+keeps user dependencies in the user's virtual environment while avoiding the
+source-mode practice of replacing `python`, `python3`, and `pythonX.Y` inside
+the virtual environment.
+
+The venv-rewriting behavior can remain as an explicit legacy development
+option. Installed deployments use `defw-python` and leave the Python
+environment intact.
+
+### Runtime Roles
+
+Installed public commands use hyphenated names. Source modules may keep normal
+Python naming, but user-facing executables should not mix underscores and
+hyphens. QFw startup has three layers.
+
+`qfw-activate` is the common environment bootstrap. It prepares commands,
+library paths, Python paths, and DEFw defaults for every role. It does not own
+any process lifecycle.
+
+`qfw-setup`, `qfw-srun`, and `qfw-teardown` define the user job lifecycle.
+This lifecycle is used for both production client jobs and local simulator
+jobs. `qfw-setup` reads `site.yaml`, reads the selected runtime configuration,
+creates job-owned run and log directories, validates resolver policy, and
+starts local services only when `local-services` is present. `qfw-srun` runs
+the user application in the prepared QFw context through `defw-python`.
+`qfw-teardown` stops only job-owned processes and cleans job-owned runtime
+state.
+
+`qfw-dirsvc-start` and `qfw-service-start` define the service lifecycle. They
+are used by administrators, service managers, or local runtime profile setup
+code. Each invocation owns one process lifecycle. `qfw-dirsvc-start` starts
+one DEFw-dirsvc process. `qfw-service-start` starts one named QPM or utility
+service instance. The commands prepare DEFw configuration, create service run
+and log directories, start the process they own, handle shutdown signals, and
+clean service-owned runtime state. QPM service startup waits for directory
+registration to succeed before reporting the service as ready. These commands
+do not call `qfw-setup` or `qfw-teardown` because those commands are scoped to
+a user job.
+
+| Command | Lifecycle | Responsibility |
+| --- | --- | --- |
+| `qfw-activate` | Environment | Prepare QFw, DEFw, Python, and library paths for the current shell or service unit. |
+| `qfw-setup` | User job | Prepare a job runtime context and optionally start job-owned local services. |
+| `qfw-srun` | User job | Run one application in the prepared QFw runtime context. |
+| `qfw-teardown` | User job | Stop job-owned local services and clean job runtime state. |
+| `qfw-dirsvc-start` | Service | Start and own one DEFw-dirsvc process. |
+| `qfw-service-start` | Service | Start and own one named QPM or utility service instance. |
+
+The job lifecycle and service lifecycle share lower-level helpers for config
+loading, DEFw preparation, run-directory creation, PID files, signal handling,
+and cleanup. The user-visible lifecycles remain separate so user job cleanup
+cannot stop site-owned services.
+
+### Deployment Modes
+
+Production deployments run site infrastructure outside user allocations. The
+site starts the production directory service and long-running QPM services
+through privileged service management. User jobs still use the standard job
+lifecycle, but `qfw-setup` starts no local services when the runtime file does
+not contain `local-services`.
+
+Simulator and development deployments use the same job lifecycle. A named
+runtime profile opts in to local service startup. The local profile starts a
+job-owned DEFw-dirsvc, launcher, PRTE or other simulator support, and QPM
+services, then uses only those local services for discovery. The hybrid profile
+starts the same local services while also allowing discovery through the site
+directory. `qfw-teardown` stops the job-owned processes and clears the run
+directory.
+
+The normal user flow is the same in both modes:
+
+```bash
+source /opt/openqse/qfw/current/bin/qfw-activate
+qfw-setup
+qfw-srun my_app.py
+qfw-teardown
+```
+
+Local simulator jobs select the local profile:
+
+```bash
+source /opt/openqse/qfw/current/bin/qfw-activate
+qfw-setup --profile local
+qfw-srun my_app.py
+qfw-teardown
+```
+
+Site services use service lifecycle commands instead of the job lifecycle:
+
+```bash
+source /opt/openqse/qfw/current/bin/qfw-activate
+qfw-dirsvc-start --site-config /etc/openqse/qfw/site.yaml
+qfw-service-start \
+  --service-id iqm \
+  --site-config /etc/openqse/qfw/site.yaml \
+  --service-runtime-config /etc/openqse/qfw/services/service-runtime.yaml \
+  --device-access-config /etc/openqse/qfw/device/device-access.yaml
+```
+
+A service manager may either source `qfw-activate` in a small wrapper or use an
+equivalent environment file, such as `/etc/openqse/qfw/env.sh`, before calling
+the executable under `/opt/openqse/qfw/current/bin`.
+
+Long-running production services should be manageable through Linux service
+management when the host supports it. A site package can install systemd unit
+templates such as `qfw-dirsvc@.service` and `qfw-qpm@.service`. A deployment
+can then start, stop, restart, and enable specific service instances with
+standard commands:
+
+```bash
+systemctl enable --now qfw-dirsvc@site.service
+systemctl enable --now qfw-qpm@iqm.service
+systemctl restart qfw-qpm@iqm.service
+```
+
+The unit should load `/etc/openqse/qfw/env.sh` or call a wrapper that sources
+`qfw-activate`, then run `qfw-dirsvc-start` or `qfw-service-start`. The unit's
+startup timeout should exceed the QFw directory connection timeout so systemd
+does not kill a service while QFw is still waiting for a reachable directory.
+For QPM units, the systemd instance name identifies the production service
+through unit configuration and is passed to `qfw-service-start` as the service
+id. It is not resolved through `qfw_services.yaml`. A deployment that runs
+several production QPM services enables several `qfw-qpm@...` units.
+
+The selected behavior comes from client runtime configuration or an explicit
+command-line option. It does not come from `site.yaml`. The compatibility
+between production and local deployments comes from keeping the user job flow
+the same.
+
+The following sequence shows the two lifecycles and where they meet:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Admin as Site service manager
+    participant Act as qfw-activate
+    participant DStart as qfw-dirsvc-start
+    participant SStart as qfw-service-start
+    participant Dir as DEFw-dirsvc
+    participant QPM as QPM service
+    participant User as User job
+    participant Setup as qfw-setup
+    participant LStart as local service launcher
+    participant Srun as qfw-srun
+    participant App as user application
+    participant Tear as qfw-teardown
+
+    rect rgb(238, 244, 255)
+        Admin->>Act: prepare service environment
+        Admin->>DStart: start site directory service
+        DStart->>Dir: create listener and service state
+        Admin->>SStart: start long-running QPM
+        SStart->>Dir: resolve directory endpoint from site.yaml
+        SStart->>QPM: start with service and device config
+        QPM->>Dir: register service bindings
+        alt registration succeeds before timeout
+            Dir-->>QPM: registration accepted
+        else directory unavailable past timeout
+            QPM-->>SStart: fail startup
+            SStart-->>Admin: exit nonzero
+        end
+    end
+
+    rect rgb(246, 246, 246)
+        User->>Act: prepare job environment
+        User->>Setup: select runtime config
+        Setup->>Setup: create job run and log state
+        alt runtime requests local services
+            Setup->>DStart: start job-owned directory service
+            loop selected manifest entry
+                Setup->>LStart: start one job-owned service
+                LStart->>SStart: qfw-service-start service-id
+                SStart->>QPM: start one QPM service instance
+                QPM->>Dir: register local service binding
+            end
+        else production client runtime
+            Setup->>Setup: leave site services running
+        end
+        User->>Srun: launch application
+        Srun->>App: run through defw-python
+        App->>Dir: discover QPM binding
+        alt discovery succeeds before timeout
+            Dir-->>App: return QPM binding
+            App->>QPM: call QPM admission and execution APIs
+        else directory unavailable past timeout
+            App-->>Srun: fail discovery
+            Srun-->>User: exit nonzero
+        end
+        User->>Tear: end job runtime
+        Tear->>Tear: stop only job-owned services
+    end
+```
+
+### Site Configuration
+
+The canonical site configuration records installed prefixes and the default
+directory-service endpoint for the selected deployment. It is readable by
+clients and service launchers. It does not contain resolver order,
+local-service startup policy, service launch policy, service manifests,
+device-access configuration, or credentials.
+
+Each QFw installation provides a default site configuration path:
+
+```text
+<prefix>/share/qfw/config/site.yaml
+```
+
+`qfw-setup` resolves the site configuration in this order:
+
+1. `qfw-setup --site-config <path>`;
+2. `QFW_SITE_CONFIG`;
+3. `<prefix>/share/qfw/config/site.yaml`.
+
+The command-line override is intended for debugging, tests, alternate local
+deployments, and service-manager wiring. `QFW_SITE_CONFIG` may also select a
+non-default site file when a site wrapper or service manager prepares the
+environment.
+
+Production deployments may manage the active site file through site packaging
+or set `QFW_SITE_CONFIG` to a site-owned path such as
+`/etc/openqse/qfw/site.yaml`. Privileged service-launch policy and device
+material still live outside the software prefix so permissions can differ by
+configuration class:
+
+```text
+/etc/openqse/qfw/site.yaml
+/etc/openqse/qfw/env.sh
+/etc/openqse/qfw/services/service-runtime.yaml
+/etc/openqse/qfw/device/device-access.yaml
+```
+
+The production site file can be written as:
+
+```yaml
+install:
+  qfw-prefix: /opt/openqse/qfw/current
+  defw-prefix: /opt/openqse/defw/current
+
+directory:
+  site:
+    name: ornl-site-dirsvc
+    endpoint: login01:8090
+    connect-timeout-seconds: 300
+```
+
+A source-tree development site file may use the same shape with a localhost
+site endpoint. That endpoint gives the implicit profile a directory to query
+during local development:
+
+```yaml
+install:
+  qfw-prefix: /home/user/openQSE/QFw
+  defw-prefix: /home/user/openQSE/QFw/DEFw
+
+directory:
+  site:
+    name: qfw-local-dirsvc
+    endpoint: localhost:8090
+    connect-timeout-seconds: 300
+```
+
+Local and hybrid profiles create a separate job-local endpoint from runtime
+settings, described below.
+
+The path to the canonical configuration is exported as `QFW_SITE_CONFIG`.
+Source-tree examples are templates only; production startup should not depend
+on writable source-tree files.
+
+### Directory Readiness
+
+Clients and QPM services must not run indefinitely without a reachable
+directory service. Each configured directory endpoint has a bounded connection
+window. The default timeout is 300 seconds. Site endpoints set this value
+through `connect-timeout-seconds` in `site.yaml`; job-local endpoints set it
+through the selected runtime profile.
+
+`qfw-setup` waits for the directory endpoint needed by the selected runtime
+configuration. A production client job waits for the site directory service. A
+local profile job starts the local directory service and then waits for it to
+accept registrations and lookups. A hybrid profile job waits for both the
+started local directory service and the configured site directory service. If a
+required directory is not reachable before the timeout, setup fails and
+`qfw-srun` should not run the application.
+
+`qfw-service-start` uses the same timeout when starting one named service
+instance. The service must register its bindings with the configured directory
+before it is considered ready. If registration cannot complete before the
+timeout, the service exits nonzero. This prevents it from continuing to run in
+a state where clients cannot discover it.
+
+`qfw-srun` may also validate the prepared directory environment before
+launching the application. A direct client lookup that loses directory
+connectivity returns a structured discovery error rather than falling back to
+an undiscoverable QPM.
+
+### Client Runtime Configuration
+
+Client runtime configuration controls how a job discovers services and whether
+the job starts local services. It is a client or job selection, not a site
+configuration file.
+
+Each QFw installation provides runtime profile templates. The implicit profile
+is selected when `qfw-setup` receives no profile or explicit runtime file:
+
+```text
+<prefix>/share/qfw/config/runtime.yaml
+```
+
+The implicit profile is the production/client shape. It uses only the
+site-global directory endpoint from the selected `site.yaml` and starts no
+job-owned services:
+
+```yaml
+resolver:
+  scope-order:
+    - site
+```
+
+Named profiles map to installed runtime templates under:
+
+```text
+<prefix>/share/qfw/config/runtime/
+```
+
+The local profile launches a job-owned directory service and local QPM
+services. It never queries the site-global directory service:
+
+```text
+<prefix>/share/qfw/config/runtime/local.yaml
+```
+
+```yaml
+resolver:
+  scope-order:
+    - local
+
+local-services:
+  start-dirsvc: true
+  start-qpm: true
+```
+
+The hybrid profile launches local services and can also discover site-global
+services. The resolver tries local services first and then the site-global
+directory when the requested service is not available locally:
+
+```text
+<prefix>/share/qfw/config/runtime/hybrid.yaml
+```
+
+```yaml
+resolver:
+  scope-order:
+    - local
+    - site
+
+local-services:
+  start-dirsvc: true
+  start-qpm: true
+```
+
+The local directory endpoint is prepared from runtime configuration. A runtime
+can set a fixed `endpoint` when the bind address and port are known in advance.
+For normal job-local startup, the runtime names the bind host and lets
+`qfw-setup` choose a free port:
+
+```yaml
+local-services:
+  dirsvc:
+    name: qfw-local-dirsvc
+    bind-host: 127.0.0.1
+    port: auto
+  service-manifest: <prefix>/share/qfw/config/services/qfw_services.yaml
+```
+
+When `local-services.start-dirsvc` is true, `qfw-setup` starts a job-owned
+DEFw-dirsvc at the resolved local endpoint and waits for it to accept
+registrations and lookups. Job-owned QPM services register with that local
+directory. Site-global services continue to register with the site directory
+from `site.yaml`.
+
+`qfw-setup` keeps generated local endpoints in the launcher environment. It
+sets the DEFw listener and parent-directory environment values used by the
+job-owned DEFw-dirsvc, QPM services, and `qfw-srun`. Dynamic endpoints are
+never written back to `site.yaml`, installed runtime templates, or an endpoint
+state file. Service wrappers and client resolvers read the prepared
+environment to find the local directory endpoint, the site directory endpoint,
+and the selected lookup order. The QFw shell wrapper layer must make this
+environment visible to `qfw-srun`; a standalone setup subprocess cannot export
+new values back to its parent shell.
+
+Clients and wrappers resolve the runtime configuration in this order:
+
+1. explicit command-line option, such as `qfw-setup --runtime-config`;
+2. explicit profile, such as `qfw-setup --profile local`;
+3. `QFW_RUNTIME_CONFIG`;
+4. `QFW_RUNTIME_PROFILE`;
+5. the installed default runtime at `<prefix>/share/qfw/config/runtime.yaml`.
+
+A profile name resolves to
+`<prefix>/share/qfw/config/runtime/<profile>.yaml`. The implicit profile is
+the installed default runtime file and does not require a profile name.
+
+This keeps production client jobs on the installed default. Examples, tests,
+and local simulator runs select a named profile or a dedicated runtime file
+explicitly.
+
+For example, a local simulator run can select the local profile:
+
+```bash
+qfw-setup --profile local
+qfw-srun my_app.py
+qfw-teardown
+```
+
+A hybrid run starts local services while still allowing discovery of
+site-global services:
+
+```bash
+qfw-setup --profile hybrid
+qfw-srun my_app.py
+qfw-teardown
+```
+
+If `local-services` is absent, `qfw-setup` starts no local services. This
+keeps production client jobs on the site-only discovery path while letting each
+runtime file decide whether local infrastructure is created.
+
+### Job-Local Service Manifest
+
+The job-local service manifest describes QPM and simulator services that QFw
+may start inside a user job. The source-tree form is `setup/qfw_services.yaml`.
+The installed form is package-owned and lives under the QFw prefix:
+
+```text
+<prefix>/share/qfw/config/services/qfw_services.yaml
+```
+
+This manifest is used only by runtime profiles that start local services. The
+implicit site-only profile does not read it. Production QPM services are
+started by site service management and register with the site directory; they
+are not launched from the job-local manifest.
+
+The packaged manifest is the normal service inventory for local and hybrid
+profiles. A standard installation does not copy this file to
+`/etc/openqse/qfw`. The runtime profile may select a subset of manifest entries
+for a particular local job. If a profile does not provide a subset,
+`qfw-setup` starts all entries in the packaged manifest.
+
+Each manifest entry names one service and the information needed to start it:
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Stable service name used by runtime profile selection and logs. |
+| `module` | QPM service module to start. |
+| `load-modules` | DEFw modules loaded into the service process. |
+| `agent-prefix` | Prefix used for the DEFw agent name. |
+| `target` | Launch target or placement group selected by the local runtime. |
+| `assigned-hosts` | Optional host group for simulator or local service placement. |
+| `assigned-hosts-env` | Environment variable that receives the selected host list. |
+| `device-id` | Optional device profile identifier for device-backed QPM services. |
+
+`qfw-setup` expands the selected runtime profile into one start request per
+selected manifest entry. A local-service launcher helper runs inside the job
+lifecycle and invokes `qfw-service-start` once for each selected entry.
+`qfw-service-start` starts only the named service entry it is given and reports
+readiness only after that service has registered with the job-local directory
+service. If a required entry fails to start, `qfw-setup` fails the local
+runtime setup and tears down any job-owned services already started.
+
+### Configure Profiles
+
+Install-profile files, such as the YAML files under `setup/config`, are inputs
+to `qfw_configure`. They select the source or install base, module or explicit
+dependency paths, virtual environment, MPI transport setup, dependency build
+version, and default service-runtime template. `qfw_configure` uses these
+profiles to generate activation and build helper scripts. Clients and QPM
+services do not read them during normal execution.
+
+The existing `runtime-mode` key in these profiles describes the configure
+environment, such as `cluster` or `container`. It is separate from client
+runtime behavior and resolver order.
+
+### Service Runtime Configuration
+
+Service-runtime files, such as the YAML files under `services/config`, describe
+launch policy for service-side workloads after QFw has been activated. They
+carry MPI launch settings, backend wrappers, and transport-specific MPI
+arguments. The QFw install should ship these files as templates under
+`share/qfw/config/services/service-runtime.yaml`. A site deployment should copy
+the selected policy to a site-owned path such as
+`/etc/openqse/qfw/services/service-runtime.yaml` and make it visible to service
+launchers through `QFW_SERVICE_RUNTIME_CONFIG`.
+
+The installed service-runtime file can use the same schema as the existing
+templates:
+
+```yaml
+mpi-launch:
+  launcher: mpirun
+  allow-run-as-root: auto
+  export-env:
+    - LD_LIBRARY_PATH
+  bind-to: core
+  map-by: ppr:1:l3cache
+  mca:
+    btl: ^tcp,ofi,vader,openib
+    pml: ^ucx
+    mtl: ofi
+    opal_common_ofi_provider_include: shm+cxi:linkx
+
+backends:
+  tnqvm:
+    wrapper: gpuwrapper.sh
+  nwqsim:
+    wrapper: null
+```
+
+Service-runtime files do not decide which QPM services exist. Job-local
+service inventory comes from the packaged `qfw_services.yaml` manifest when a
+local or hybrid runtime profile starts services. Production service inventory
+comes from the site service manager. Neither inventory is part of `site.yaml`.
+
+### Device Access Configuration
+
+Device-access configuration contains provider endpoints, provider device
+aliases, library preferences, per-device capability overrides, and credential
+provider selection. Source-tree files under `services/dev-config` are
+development templates. The installed reference template lives at
+`share/qfw/config/device/device-access.yaml`. In production, this configuration
+is privileged service material and belongs under a site-owned path such as
+`/etc/openqse/qfw/device/device-access.yaml`. The `device` subdirectory is the
+boundary for privileged device material. User jobs should not receive these
+files.
+
+QPM obtains provider secrets through a credential-provider interface. The
+interface is a QFw service-side Python module or library used by QPM before it
+calls QRMI, QDMI, or a provider adapter. The caller passes the authenticated
+caller identity, device id, provider name, and requested operation. The
+provider returns the credential material or a credential handle needed by the
+adapter. User applications, directory discovery, qhw-admission, and
+qhw-scheduler never receive provider API keys.
+
+The credential provider is called when a QPM creates or first needs a
+service-side caller session. QPM caches the returned provider credential inside
+the service process and reuses it for later submit, status, cancel, and result
+operations. The cache entry is scoped by caller identity, device id, provider,
+and credential scope. Deregistration, disconnect, session timeout, credential
+expiration, provider refresh failure, or policy revocation removes the cached
+entry. QPM still authorizes every operation against QPM policy and reservation
+state; cached provider credentials do not grant blanket access to QPM APIs.
+
+Production credential providers run with the QPM service identity and may read
+site secret stores, privileged files, hardware security modules, external
+credential services, or site-specific plugins. Local and hybrid profiles run
+job-owned QPM services with user-level permissions. Those profiles should use
+simulators, development credentials, or explicitly safe test material rather
+than production hardware credentials. No provider secret is exported to the
+user application environment.
+
+The referenced device-access file can be written as:
+
+```yaml
+qpus:
+  ornl-iqm-20q:
+    provider: iqm
+    provider-device-id: default
+    url: https://qccsw.ccs.ornl.gov/
+    credential-provider: iqm-site
+    libraries:
+      - qrmi
+      - qdmi
+    preference: qdmi
+    execution-owner: qrmi
+
+credential-providers:
+  iqm-site:
+    type: site-plugin
+    plugin: openqse_qfw_iqm_credentials
+  iqm-dev-yaml:
+    type: yaml-file
+    path: /path/to/dev/qpu-users.yaml
+```
+
+The YAML credential provider is a reference and development implementation.
+Its input file can be written as:
+
+```yaml
+users:
+  alice:
+    devices:
+      ornl-iqm-20q:
+        api-key: iqm-token-reference-or-secret
+```
+
+QPM services register with directory services. Clients only resolve services
+and bind to the selected endpoint. A long-running QPM reads the site
+configuration at startup to locate the site DEFw-dirsvc. It reads
+service-runtime and device-access configuration from service-launcher paths or
+environment, then registers service records with selected API bindings. User
+applications read the runtime environment prepared by `qfw-setup`, then connect
+directly to the selected QPM binding.
+
+### Environment Variables
+
+Configuration files are the primary deployment interface. Environment variables
+select a configuration file, override a narrow setting for tests or one-off
+runs, or expose paths prepared by activation. Command-line options take
+precedence over environment variables when both are present.
+
+Client and resolver variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `QFW_SITE_CONFIG` | Path to the canonical QFw site configuration. |
+| `QFW_RUNTIME_CONFIG` | Optional path to any runtime-schema YAML file. |
+| `QFW_RUNTIME_PROFILE` | Optional profile name, such as `local` or `hybrid`, used when no explicit runtime path is supplied. |
+| `QFW_SITE_DIRSVC_ENDPOINTS` | Override for site directory endpoints from `site.yaml`; normally unset. |
+| `QFW_QPM_RESOLVER_SCOPE_ORDER` | Override for `resolver.scope-order` from runtime configuration. |
+
+Service-launch variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `QFW_SERVICE_RUNTIME_CONFIG` | Path to service-side MPI and backend launch policy. |
+| `QFW_DEVICE_ACCESS_CFG` | Privileged device-access configuration path for QPM services. |
+| `QFW_QPM_OPERATION_MODE` | QPM operation-mode override, such as `long-running` or `qfw-managed`. |
+| `QFW_QPM_REGISTER_WITH_DIRSVC` | Override controlling whether a QPM registers with a directory service. |
+| `DEFW_DISABLE_DIRSVC` | Low-level DEFw listener setting written by wrappers; users should not set it directly. |
+
+Activation variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `QFW_PREFIX` | Installed or source-tree QFw root selected by activation. |
+| `QFW_BIN_PATH` | QFw command directory. |
+| `QFW_LIBEXEC_DIR` | Directory for helper scripts used by wrapper commands. |
+| `QFW_SHARE_DIR` | Installed QFw share directory for examples and templates. |
+| `QFW_CONFIG_DIR` | Default site-owned configuration directory. |
+| `DEFW_PREFIX` | DEFw installation root selected by activation. |
+| `DEFW_CONFIG_PATH` | Default DEFw configuration template path. |
+
+Standard external variables used by the runtime:
+
+| Variable | Purpose |
+| --- | --- |
+| `VIRTUAL_ENV` | Active Python virtual environment detected by `defw-python`. |
+| `LD_LIBRARY_PATH` | Dynamic-library search path augmented by activation or MPI policy. |
+
+### Lifecycle Ownership
+
+Every process started by QFw has an owning scope. Site-owned directory services
+and long-running QPM services are managed by site service management and are
+not stopped by user teardown. Job-local directory services, simulator QPMs,
+launchers, and temporary runtime helpers are owned by the job and are cleaned
+up by `qfw-teardown`.
+
+Run directories hold logs, generated DEFw preference files, PID files, and
+local service state. The activation layer selects the base temp directory,
+while `qfw-setup` or the role-specific start commands create a run ID
+beneath it. This lets client-only jobs collect logs without owning the site
+services they use.
 
 </details>
 
@@ -1078,61 +1916,60 @@ record is no longer part of service discovery or operator directory queries.
 #### Directory Service Scope And Resolver Policy
 
 QFw discovery should use directory services in every normal operation mode.
-Allocation-local services and long-running site services differ in where the
-directory service runs, not in the client discovery contract.
+The selected `site.yaml` defines the site-global directory endpoint for the job
+or service environment. Runtime profiles decide whether a job also starts and
+uses a job-local directory service.
 
-`setup/qfw_services.yaml` remains the allocation launch manifest. It tells QFw
-setup which services to start inside a job allocation, where to start them,
-which DEFw modules to load, and which environment values to provide to the
-service processes. Those allocation-managed services register with the
-allocation-local DEFw-dirsvc after startup.
+`setup/qfw_services.yaml` is the source-tree form of the job-local service
+manifest. Installed jobs read the packaged copy under
+`<prefix>/share/qfw/config/services/qfw_services.yaml`. The manifest tells QFw
+setup which local services may be started inside a job allocation, where to
+start them, which DEFw modules to load, and which environment values to
+provide to the service processes. Those job-managed services register with the
+job-local DEFw-dirsvc started by `qfw-setup` after startup.
 
 Long-running QPM services are site infrastructure. They are not launched from
 `qfw_services.yaml` for each allocation. Instead, they register with one or
-more site-scoped DEFw-dirsvc instances managed by the site, partition, node
-group, or service group. A single site-scoped directory service should front
-many long-running services when possible. Running one directory service per QPM
+more DEFw-dirsvc instances managed by the site, partition, node group, or
+service group. A single shared directory service should front many
+long-running services when possible. Running one directory service per QPM
 would move endpoint selection back into the client and lose the benefit of a
 directory.
 
-The SLURM plugin, resource manager, prolog, or equivalent site launcher
-reads privileged site configuration and injects allocation-scoped directory
-service information into the job environment. The injected data identifies the
-DEFw-dirsvc endpoints the allocation may use and carries any policy context
-needed to connect to them. The privileged site configuration can live
-outside the user's writable tree, such as under `/etc/qfw`, while the
-allocation receives a filtered path or materialized copy in its run directory.
+A scheduler plugin, prolog, or equivalent site launcher may export
+`QFW_SITE_CONFIG`, `QFW_RUNTIME_CONFIG`, or `QFW_RUNTIME_PROFILE` into the job
+environment. In production, `QFW_SITE_CONFIG` normally points at the
+client-readable production site file and the implicit runtime profile uses only
+the site-global directory. In simulator and development runs, the local or
+hybrid profile starts a job-local directory service from runtime profile
+settings. Privileged service-runtime and device-access configuration remains
+outside the user job environment unless a local development runtime explicitly
+provides safe test material.
 
-An allocation may have several directory services in scope at the same time:
-
-| Scope | Lifecycle | Typical contents |
-| --- | --- | --- |
-| `allocation-local` | Started and stopped with the job allocation. | Simulators, smoke-test services, development QPMs, and per-job services launched from `qfw_services.yaml`. |
-| `site` | Long-running site infrastructure. | Hardware QPMs, shared simulators, and production services registered outside the allocation. |
-
-The QFw resolver uses one discovery model for both scopes:
+The QFw resolver uses one discovery model for both site-global and job-local
+directory services:
 
 ```text
 QFw resolver
-  -> read configured directory-service endpoints and policy
+  -> read site-global and prepared job-local endpoints plus policy
   -> query enabled DEFw-dirsvc instances
   -> collect service records and selected API bindings
   -> filter by service type, selector, API binding, caller policy, and mode
   -> return a selected binding or a structured ambiguity/error outcome
 ```
 
-Each returned record should be annotated with its directory scope and directory
-identity. The resolver may query directories in configured order or query them
-all and then apply a deterministic selection policy. The policy should define
-scope preference, tie-breakers, and ambiguity handling. A resolver must not
+Each returned record should be annotated with its directory identity. The
+resolver may query directories in configured order or query them all and then
+apply a deterministic selection policy. The policy should define preferences,
+tie-breakers, and ambiguity handling. A resolver must not
 silently replace a requested hardware service with a simulator just because the
 hardware is busy. Hardware admission delay, rejection, or queue pressure is an
-admission and scheduler outcome. Fallback to an allocation-local simulator is a
+admission and scheduler outcome. Fallback to a job-local simulator is a
 workflow, caller, or site-policy decision that should be explicit.
 
 The minimal resolver implementation supports multiple directory endpoints,
-ordered lookup, filtering by service record and API binding, scope annotation,
-deterministic tie-breaking, and structured ambiguity errors. A later QFw
+ordered lookup, filtering by service record and API binding, directory identity
+annotation, deterministic tie-breaking, and structured ambiguity errors. A later QFw
 internal scheduler can use the same multi-directory candidate set to choose
 among endpoints based on load, admission estimates, scheduler state, or policy.
 That scheduler is a higher-level selection component rather than the baseline
@@ -1140,9 +1977,9 @@ resolver behavior.
 
 Direct configured QPM endpoint resolution remains useful for diagnostics and
 controlled fallback. It should not be the primary long-running service model.
-The primary model is that long-running QPMs register with a site-scoped
+The primary model is that long-running QPMs register with the production
 DEFw-dirsvc, and clients discover them through the same directory-service
-contract used for allocation-local services.
+contract used for job-local services.
 
 ### QPM Override Handling
 
@@ -1475,7 +2312,7 @@ reallocating or deriving them independently.
 ### OPM-001
 
 QFw-managed mode should preserve the current launch pattern: QFw starts the
-allocation-local DEFw-dirsvc and starts QPM services described by QFw service
+job-local DEFw-dirsvc and starts QPM services described by QFw service
 configuration. QPM services register with DEFw-dirsvc so clients can resolve
 service records and selected API bindings through the directory service.
 
@@ -1491,9 +2328,10 @@ path and implemented inside QPM.
 ### OPM-002
 
 Long-running mode should allow a QPM service to start as a DEFw-wrapped
-service and register with a site-scoped DEFw-dirsvc. QFw initialization should
-receive the permitted site-scoped directory-service endpoint from site
-infrastructure and use the same directory lookup contract as QFw-managed mode.
+service and register with the DEFw-dirsvc selected by its site configuration.
+QFw initialization should receive the permitted production directory-service
+endpoint from site infrastructure and use the same directory lookup contract as
+QFw-managed mode.
 
 The service still uses DEFw RPC after the client resolves the selected service
 record and API binding. This avoids turning the long-running service into a
@@ -1505,7 +2343,7 @@ Long-running mode must replace that readiness gate. A long-running QPM is ready
 when its DEFw listener is accepting RPC calls, its QRC provider path is
 initialized, its qhw-admission and qhw-scheduler contexts are constructed, the
 target device profile and policies have been loaded, and registration with the
-site-scoped DEFw-dirsvc has completed when site discovery requires it. Direct
+configured DEFw-dirsvc has completed when site discovery requires it. Direct
 endpoint readiness is a fallback/debug path and should not be the primary
 production long-running mode.
 
@@ -1562,8 +2400,8 @@ endpoint. QPM reservation should be exposed only through the QPM admission API.
 
 ### DISC-003
 
-DEFw service startup should distinguish allocation-local registration,
-site-scoped registration, and direct fallback/debug listener mode. Registration
+DEFw service startup should distinguish job-local registration,
+site-global registration, and direct fallback/debug listener mode. Registration
 settings should be explicit so accidental unregistered services are easy to
 diagnose.
 
@@ -1573,7 +2411,7 @@ Candidate configuration fields:
 | --- | --- |
 | `register-with-dirsvc` | Boolean controlling whether the service registers with a DEFw-dirsvc. |
 | `listen-endpoint` | Stable endpoint or port used by long-running clients. |
-| `dirsvc-endpoint` | DEFw-dirsvc endpoint used for allocation-local or site-scoped registration. |
+| `dirsvc-endpoint` | DEFw-dirsvc endpoint used for job-local or site-global registration. |
 | `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for direct fallback/debug endpoint mode. |
 
 The option must map to the existing DEFw startup behavior. `defwp-wrapper`
@@ -1581,7 +2419,7 @@ defaults `DEFW_DISABLE_DIRSVC` to `yes`, and the C listener attempts a parent
 directory-service connection only when directory-service use is enabled and a
 parent name is configured. QFw-managed service launch sets
 `DEFW_DISABLE_DIRSVC=no` and provides parent host, port, and name. A
-long-running QPM should register with the configured site-scoped DEFw-dirsvc
+long-running QPM should register with the configured production DEFw-dirsvc
 in production deployments. Direct unregistered listener mode should set
 `DEFW_DISABLE_DIRSVC=yes`, leave registration disabled, and use the
 listener/controller readiness gate only when fallback or diagnostics require it.
@@ -1601,30 +2439,33 @@ fallback resolver can validate the service.
 ### DISC-004
 
 QFw should add a QPM resolver layer between clients and QPM discovery. The
-resolver queries one or more DEFw-dirsvc instances. QFw-managed services use
-an allocation-local directory service. Long-running services register with a
-site-scoped directory service whose endpoint is injected into the allocation by
-site infrastructure.
+resolver queries one or more DEFw-dirsvc instances. QFw-managed local services
+register with the job-local directory service started by `qfw-setup`.
+Long-running services register with the shared directory service whose endpoint
+is recorded in the site configuration.
 
-The resolver input is a directory-service scope configuration rather than a
-list of primary QPM endpoints:
+The resolver input is the site configuration plus client runtime profile rather
+than a list of primary QPM endpoints. `site.yaml` provides the site-global
+directory endpoint:
+
+```yaml
+directory:
+  site:
+    name: ornl-site-dirsvc
+    endpoint: login01:8090
+```
+
+The selected runtime configuration provides lookup order:
 
 ```yaml
 resolver:
-  directories:
-    - name: allocation-local
-      scope: allocation-local
-      endpoint: ${QFW_LOCAL_DIRSVC_ENDPOINT}
-      priority: 100
-    - name: site
-      scope: site
-      endpoint: ${QFW_SITE_DIRSVC_ENDPOINT}
-      priority: 50
-  selection:
-    default-order:
-      - site
-      - allocation-local
+  scope-order:
+    - local
+    - site
 ```
+
+The implicit profile uses only `site`. The local profile uses only `local`.
+The hybrid profile uses `local` first and then `site`.
 
 The resolver path should:
 
@@ -2348,10 +3189,11 @@ production behavior should require the reservation ID.
 
 The Qiskit adapter migrates through the same API change. The current
 `qfw_lookup_service.get_qpm()` path should become a QPM resolver wrapper. The
-resolver talks to the enabled DEFw-dirsvc instances, whether they are
-allocation-local, site-scoped, or both. It resolves the selected service record
-and API binding, then constructs the same QPM client binding regardless of
-which directory scope returned the record.
+resolver talks to the enabled DEFw-dirsvc instances from the selected runtime
+profile. It may use the site-global directory, the job-local directory, or both
+in the configured order. It resolves the selected service record and API
+binding, then constructs the same QPM client binding regardless of which
+configured directory returned the record.
 
 `QFwBackend.run()` should accept reservation context through backend options or
 run keyword arguments, including `reservation_id`, opaque token, execution
