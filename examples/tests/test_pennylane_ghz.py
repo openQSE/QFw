@@ -3,9 +3,12 @@ import sys
 import time
 
 from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_example_report import emit_result
 
 
 def run_simulation(dev, itrs):
+	records = []
+
 	@qml.qnode(dev)
 	def circuit():
 		qml.Hadamard(0)
@@ -17,10 +20,16 @@ def run_simulation(dev, itrs):
 		start_time = time.time()
 		result = circuit()
 		end_time = time.time()
+		records.append({
+			"iteration": i,
+			"overall_time_ms": (end_time - start_time) * 1000,
+			"result": result,
+		})
 
 		print(f"\n\n OVERALL TIME TAKEN ({(end_time - start_time) * 1000:.2f}) ms")
 		print("Output:", result)
 		print("\n\n")
+	return records
 
 
 nq = int(sys.argv[1])
@@ -43,4 +52,14 @@ else:
 
 dev = qml.device('qiskit.remote', wires=nq, backend=backend_instance, shots=1024)
 
-run_simulation(dev, itrs)
+records = run_simulation(dev, itrs)
+emit_result(
+	"ghz-pennylane",
+	parameters={
+		"qubits": nq,
+		"backend": sim_type,
+		"iterations": itrs,
+		"shots": 1024,
+	},
+	metrics={"iterations": records},
+)

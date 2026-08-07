@@ -16,6 +16,7 @@ try:
     )
 except ImportError as exc:
     raise RuntimeError("test_qiskit_qaoa.py only runs against Qiskit V2 primitives") from exc
+from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
 import sys
@@ -78,3 +79,13 @@ end_time = time.time()
 print("Time Taken: ", (end_time - start_time) * 1000, " ms")
 print("Objective value:", qaoa_result.fval)
 print("Optimal solution:", qaoa_result.x)
+emit_result(
+    "qaoa",
+    parameters={"backend": sim_type, "shots": 1024},
+    metrics={
+        "duration_ms": (end_time - start_time) * 1000,
+        "objective_value": qaoa_result.fval,
+        "optimal_solution": qaoa_result.x,
+    },
+    artifacts={"graph": "max_cut_graph.png"},
+)

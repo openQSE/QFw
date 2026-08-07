@@ -1,6 +1,9 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
 
 usage() {
 	cat <<EOF
@@ -52,16 +55,10 @@ if [[ -n "${lib}" && "${lib}" != "qrmi" && "${lib}" != "qdmi" ]]; then
 	exit 1
 fi
 
-cleanup() {
-	qfw_teardown.sh >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 echo "Starting QFw shim smoke test with ${libs:+libs=${libs} }${lib:+lib=${lib}}"
-qfw_setup.sh --services-config "$QFW_PATH/examples/qfw_shim_smoke_services.yaml"
-qfw_srun.sh --load-modules api_qpm \
+qfw_example_begin "shim-smoke" "$@"
+qfw_example_setup --services-config "$QFW_PATH/examples/qfw_shim_smoke_services.yaml"
+qfw_example_srun --load-modules api_qpm \
 	"$QFW_PATH/examples/tests/test_shim_smoke.py" "$@"
 
-trap - EXIT
 echo "Stopping QFw shim smoke test"
-qfw_teardown.sh

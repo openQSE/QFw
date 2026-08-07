@@ -6,6 +6,7 @@ import sys
 import time
 
 from defw_app_util import defw_get_directory_service, defw_bind_service_by_name
+from qfw_example_report import emit_result
 
 
 def validate_result(result, expected_np):
@@ -58,12 +59,18 @@ def main():
 		api = bind_mpi_smoke(dirsvc, timeout)
 		result = api.run_pid_hello(np)
 		records = validate_result(result, np)
-		print(json.dumps({
+		summary = {
 			'status': 'ok',
 			'service_host': result.get('service_host'),
 			'service_pid': result.get('service_pid'),
 			'mpi_records': records,
-		}, sort_keys=True))
+		}
+		print(json.dumps(summary, sort_keys=True))
+		emit_result(
+			"mpi-smoke",
+			parameters={"np": np, "timeout": timeout},
+			metrics=summary,
+		)
 		return 0
 	finally:
 		if api is not None:

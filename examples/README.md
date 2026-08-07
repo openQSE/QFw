@@ -10,8 +10,24 @@ cd "$QFW_PATH/examples"
 ```
 
 Each wrapper starts QFw with `qfw_setup.sh`, runs one application through
-`qfw_srun.sh`, and then calls `qfw_teardown.sh`. Do not call
+`qfw_srun.sh`, and tears QFw down even when the application fails. Do not call
 `qfw_deactivate` until the wrapper has completed.
+
+Each wrapper and example emits machine-readable result records as JSON lines.
+Records are printed with a `QFW_EXAMPLE_RESULT ` prefix in the log. When
+`QFW_EXAMPLE_RESULT_FILE` is set, the same JSON records are appended to that
+file. The stable fields are:
+
+```text
+schema: qfw-example-wrapper-v1 or qfw-example-result-v1
+kind: wrapper or example
+example: example name
+status: ok, error, or running
+timestamp_ns: record timestamp
+parameters: example input parameters
+metrics: example-specific measurements
+artifacts: generated files, when any
+```
 
 ## Quick Run
 
@@ -27,14 +43,16 @@ Each wrapper starts QFw with `qfw_setup.sh`, runs one application through
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
 
-To run the standard examples sequentially and collect per-example logs:
+To run the standard examples sequentially and collect per-example logs and
+JSONL result files:
 
 ```bash
 ./qfw_run_all.sh
 ```
 
 The runner continues after failures, prints a final summary, and exits
-nonzero if any example fails. Logs are written under
+nonzero if any example fails. Logs, per-example JSONL files, and
+`summary.jsonl` are written under
 `$QFW_TMP_PATH/examples-run-<timestamp>` or `/tmp` when `QFW_TMP_PATH` is
 unset.
 
@@ -43,6 +61,7 @@ Useful overrides:
 ```bash
 QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
 QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
+QFW_RUN_ALL_SHIM_LIB=qrmi ./qfw_run_all.sh
 ```
 
 ## Example Wrappers
@@ -74,10 +93,10 @@ QFW_MPI_SMOKE_NP=2 QFW_MPI_SMOKE_TIMEOUT=40 ./qfw_mpi_smoke.sh
 ### `qfw_shim_smoke.sh`
 
 Starts only the QRMI/QDMI bifurcation shim service from
-`qfw_shim_smoke_services.yaml`, reserves the shim QPM through the resource
-manager, and calls the shim service over DEFw RPC. The test covers device
-introspection, coupling graph, calibration snapshot, backend info, async
-circuit execution, completion notification, and last-job metadata.
+`qfw_shim_smoke_services.yaml`, resolves the shim QPM through DEFw-dirsvc, and
+calls the shim service over DEFw RPC. The test covers device introspection,
+coupling graph, calibration snapshot, backend info, async circuit execution,
+completion notification, and last-job metadata.
 
 ```bash
 ./qfw_shim_smoke.sh --lib qdmi

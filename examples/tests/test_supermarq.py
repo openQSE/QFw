@@ -13,6 +13,7 @@ from defw_util import prformat, fg
 from defw_app_util import defw_get_directory_service, defw_bind_service_by_name
 from time import sleep, time
 from defw_event_baseapi import BaseEventAPI
+from qfw_example_report import emit_result, parse_bool
 
 req_timeout = 20
 system_up_timeout = 40
@@ -52,9 +53,10 @@ def async_wait_read_cq(api, total_circ):
 				continue
 			else:
 				raise e
+	return total_circuits_completed
 
 
-def result_reader(total_circ, event_api):
+def result_reader(total_circ, event_api, result_state):
 	total_circuits_completed = 0
 	results = []
 
@@ -75,6 +77,8 @@ def result_reader(total_circ, event_api):
 		f" Expected: {total_circ}. Time: {time()}")
 	for r in results:
 		logging.defw_app(f"{yaml.dump(r.get_event())}")
+	result_state["completed"] = total_circuits_completed
+	result_state["results"] = results
 
 
 EVENT_TYPE_CIRC_RESULT = 1
@@ -84,8 +88,6 @@ def async_run_circuit(api, cb, start_qubits=20, num_shots=1, itr=30, increase=Tr
 	start_time = time()
 
 	logging.defw_app(f"Application start: {start_time}")
-
-	total_circ = itr
 
 	qasm = []
 	qubits = []
@@ -98,16 +100,19 @@ def async_run_circuit(api, cb, start_qubits=20, num_shots=1, itr=30, increase=Tr
 
 		if increase:
 			start_qubits += 1
+	total_circ = len(qasm)
 
 	runner = None
 	event_api = None
+	result_state = {"completed": 0, "results": []}
 	if not read_cq:
 		event_api = BaseEventAPI()
 		event_api.register_external()
 		logging.defw_app(f"Registering Event: {time()}")
 		api.register_event_notification(
 			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id())
-		runner = threading.Thread(target=result_reader, args=(len(qasm), event_api,))
+		runner = threading.Thread(
+			target=result_reader, args=(total_circ, event_api, result_state,))
 		runner.start()
 
 	i = 0
@@ -126,28 +131,48 @@ def async_run_circuit(api, cb, start_qubits=20, num_shots=1, itr=30, increase=Tr
 		i += 1
 
 	if read_cq:
-		async_wait_read_cq(api, total_circ)
+		completed = async_wait_read_cq(api, total_circ)
 	else:
 		runner.join()
+		completed = result_state["completed"]
+
+	if completed != total_circ:
+		raise DEFwError(
+			f"only received {completed} of {total_circ} circuit completions")
 
 	logging.defw_app(f'thread joined at {time()}')
 
-	prformat(fg.orange + fg.bold, f"****{itr} {start_qubits} qubit circuits completed in {time() - start_time}")
+	duration = time() - start_time
+	prformat(fg.orange + fg.bold, f"****{itr} {start_qubits} qubit circuits completed in {duration}")
+	return {
+		"mode": "async",
+		"submitted_circuits": len(qasm),
+		"completed_circuits": completed,
+		"duration_sec": duration,
+		"read_cq": read_cq,
+	}
 
 
 def run_circuit(api, cb, start, itr, num_shots, increase):
 	nqubits = start
+	records = []
+	start_time = time()
 	for x in range(0, itr):
 		qasm = cb(nqubits, 1)
 
 		for q in qasm:
 			info = {}
 			info['qasm'] = q
-			info['num_qubits'] = x
+			info['num_qubits'] = nqubits
 			info['num_shots'] = num_shots
 			info['compiler'] = 'staq'
 			try:
 				circ_result = api.sync_run(info)
+				records.append({
+					"iteration": x,
+					"num_qubits": nqubits,
+					"result": circ_result,
+				})
 				logging.debug(yaml.dump(circ_result, sort_keys=False))
 				prformat(fg.green + fg.bold, yaml.dump(circ_result, sort_keys=False))
 			except Exception as e:
@@ -155,6 +180,11 @@ def run_circuit(api, cb, start, itr, num_shots, increase):
 				logging.defw_app(e)
 				raise e
 		nqubits += increase
+	return {
+		"mode": "sync",
+		"iterations": records,
+		"duration_sec": time() - start_time,
+	}
 
 
 # This will throw an exception if there is a problem
@@ -206,7 +236,7 @@ if __name__ == "__main__":
 			elif name in ['-o', '--shots']:
 				num_shots = int(value)
 			elif name in ['-s', '--increase']:
-				increase = int(value)
+				increase = parse_bool(value)
 			elif name in ['-y', '--run']:
 				runtype = value.lower()
 			elif name in ['-m', '--method']:
@@ -253,13 +283,27 @@ if __name__ == "__main__":
 		test_qpm(qpm)
 
 		if runtype == "sync":
-			run_circuit(qpm, op, startqbit, iterations, num_shots, increase)
+			metrics = run_circuit(
+				qpm, op, startqbit, iterations, num_shots, increase)
 		elif runtype == "async":
-			async_run_circuit(
+			metrics = async_run_circuit(
 				qpm, op, start_qubits=startqbit, num_shots=num_shots,
 				itr=iterations, increase=increase, read_cq=False)
 		else:
 			raise ValueError(f"Unknown run type {runtype}. Expect: async, sync")
+		emit_result(
+			"supermarq",
+			parameters={
+				"run": runtype,
+				"iterations": iterations,
+				"startqbit": startqbit,
+				"shots": num_shots,
+				"increase": increase,
+				"method": getattr(op, "__name__", str(op)),
+				"backend": backend or "tnqvm",
+			},
+			metrics=metrics,
+		)
 		qpm.shutdown()
 	except Exception as e:
 		logging.defw_app(f"QTM ran into an exception {e}")

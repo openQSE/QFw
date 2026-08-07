@@ -14,6 +14,7 @@ import numpy as np
 
 # ------------------ QFW Backend -------------------- #
 from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_example_report import emit_result
 # --------------------------------------------------- #
 backend = QFwBackend(betype=QFwBackendType.QFW_TYPE_NWQSIM, capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
 #backend = Aer.get_backend('statevector_simulator')
@@ -97,3 +98,17 @@ if rank == 0:
 	print(f"Total number of circuit execution: {total_itr * size}")
 	print(f"Sub-energies: {all_energies}")
 	print(f"Combined ground state energy: {final_energy}")
+	emit_result(
+		"qiskit-vqe",
+		parameters={
+			"max_iterations": max_iter,
+			"mpi_size": size,
+			"backend": "nwqsim",
+		},
+		metrics={
+			"duration_sec": time.time() - start_time,
+			"circuit_executions": total_itr * size,
+			"sub_energies": all_energies,
+			"combined_ground_state_energy": final_energy,
+		},
+	)

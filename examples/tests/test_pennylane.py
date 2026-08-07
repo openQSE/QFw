@@ -5,6 +5,7 @@ from qiskit_aer import noise
 
 # ------------------ QFW simulator ------------------ #
 from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
 # Error probabilities
@@ -42,6 +43,12 @@ def circuit(x, y, z):
 
 
 # Result of noisy simulator
+result = circuit(0.2, 0.1, 0.3)
 print("\n \t ------------------- \n")
-print("Whatever this should be doing = ", circuit(0.2, 0.1, 0.3))
+print("Whatever this should be doing = ", result)
 print("\n \t ------------------- \n")
+emit_result(
+	"pennylane",
+	parameters={"qubits": 2, "backend": "nwqsim", "shots": 1024},
+	metrics={"expectation_value": result},
+)

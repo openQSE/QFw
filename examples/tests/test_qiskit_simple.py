@@ -3,6 +3,8 @@ from qiskit import QuantumCircuit
 import sys
 
 from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_example_report import emit_result
+
 qfw_nwqsim_qiskit_backend = QFwBackend(
 	betype=QFwBackendType.QFW_TYPE_NWQSIM,
 	capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
@@ -22,3 +24,11 @@ counts = result.get_counts(qc)
 
 print(counts)
 print(result.get_statevector(qc))
+emit_result(
+	"qiskit-simple",
+	parameters={"qubits": nq, "shots": 1024, "backend": "nwqsim"},
+	metrics={
+		"counts": counts,
+		"time_taken_sec": getattr(result, "time_taken", None),
+	},
+)

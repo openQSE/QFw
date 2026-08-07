@@ -1,21 +1,27 @@
 #!/bin/bash
 
+set -euo pipefail
+
 uname -a
 echo "# START-TIME: $(date)"
-echo "#            SLURM_NNODES: $SLURM_NNODES"
-echo "#            SLURM_NPROCS: $SLURM_NPROCS"
-echo "#             SLURM_JOBID: $SLURM_JOBID"
-echo "# SLURM_JOB_CPUS_PER_NODE: $SLURM_JOB_CPUS_PER_NODE"
-echo "#  SLURM_THREADS_PER_CORE: $SLURM_THREADS_PER_CORE"
+echo "#            SLURM_NNODES: ${SLURM_NNODES:-}"
+echo "#            SLURM_NPROCS: ${SLURM_NPROCS:-}"
+echo "#             SLURM_JOBID: ${SLURM_JOBID:-}"
+echo "# SLURM_JOB_CPUS_PER_NODE: ${SLURM_JOB_CPUS_PER_NODE:-}"
+echo "#  SLURM_THREADS_PER_CORE: ${SLURM_THREADS_PER_CORE:-}"
 echo "#----"
 
-module list
+module list || true
 
 echo "##################################"
 
-set -xe
+set -x
 
-qfw_setup.sh
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
+
+qfw_example_begin "ghz-${1:-unknown}" "$@"
+qfw_example_setup
 
 # takes:
 #   the framework: qiskit or pennylane
@@ -27,18 +33,15 @@ qfw_setup.sh
 #
 echo "Running $1 for $2 #qubits with $3 for $4 itrs"
 if [[ $1 == "qiskit" ]]; then
-    qfw_srun.sh $QFW_PATH/examples/tests/test_qiskit_ghz.py $2 $3 $4
+    qfw_example_srun "$QFW_PATH/examples/tests/test_qiskit_ghz.py" "$2" "$3" "$4"
 elif [[ $1 == "pennylane" ]]; then
-    qfw_srun.sh $QFW_PATH/examples/tests/test_pennylane_ghz.py $2 $3 $4
+    qfw_example_srun "$QFW_PATH/examples/tests/test_pennylane_ghz.py" "$2" "$3" "$4"
 else
     echo "Error: Unknown option $1"
     exit 1
 fi
 
-qfw_teardown.sh
-
 echo "# RC=$?"
 echo "#########"
 
 echo "# END-TIME: $(date)"
-

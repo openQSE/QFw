@@ -15,6 +15,7 @@ from defw_app_util import defw_get_directory_service
 from defw_event_baseapi import BaseEventAPI
 from defw_exception import DEFwError, DEFwNotReady
 from defw_util import fg, prformat
+from qfw_example_report import emit_result
 
 EVENT_TYPE_CIRC_RESULT = 1
 DEFAULT_CALL_SEQUENCE = (
@@ -476,7 +477,26 @@ def main():
 		except Exception:
 			pass
 
-	return summarize_failures(failures)
+	rc = summarize_failures(failures)
+	emit_result(
+		"shim-smoke",
+		status="ok" if rc == 0 else "error",
+		parameters={
+			"lib": args.lib,
+			"libs": libs,
+			"call": args.call,
+			"device_id": args.device_id,
+			"shots": args.shots,
+		},
+		metrics={
+			"failed_call_count": len(failures),
+			"failed_calls": [
+				{"label": label, "error": f"{type(exc).__name__}: {exc}"}
+				for label, exc in failures
+			],
+		},
+	)
+	return rc
 
 
 if __name__ == "__main__":

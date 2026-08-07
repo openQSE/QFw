@@ -1,8 +1,13 @@
 #!/bin/bash
 
-set -xe
+set -euo pipefail
+set -x
 
-qfw_setup.sh
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
+
+qfw_example_begin "supermarq" "$@"
+qfw_example_setup
 
 # test_supermarq.py takes
 #   run: sync or async
@@ -14,10 +19,6 @@ qfw_setup.sh
 #   method: ghz or vqe
 #   backend: The backend type to use: tnqvm, nwqsim or qb
 #
-qfw_srun.sh "$QFW_PATH/examples/tests/test_supermarq.py" --run $1 \
-			--iterations $2 --startqbit $3 --shots $4 \
-			--increase $5 --method $6 --backend $7
-
-
-qfw_teardown.sh
-
+qfw_example_srun "$QFW_PATH/examples/tests/test_supermarq.py" --run "$1" \
+			--iterations "$2" --startqbit "$3" --shots "$4" \
+			--increase "$5" --method "$6" --backend "$7"

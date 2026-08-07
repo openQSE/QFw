@@ -1,11 +1,13 @@
 #!/bin/bash
 
-set -xe
+set -euo pipefail
+set -x
 
-qfw_setup.sh
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
+
+qfw_example_begin "qiskit-vqe" "$@"
+qfw_example_setup
 
 # takes the number of VQE iterations
-qfw_srun.sh "$QFW_PATH/examples/tests/test_qiskit_vqe.py" $1
-
-qfw_teardown.sh
-
+qfw_example_srun "$QFW_PATH/examples/tests/test_qiskit_vqe.py" "$1"
