@@ -305,9 +305,9 @@ def admission_policy_path():
 		os.environ.get("QFW_SHIM_SMOKE_ADMISSION_POLICY_PATH"),
 		os.environ.get("QHW_ADMISSION_POLICY_PATH"),
 	]
-	qfw_path = os.environ.get("QFW_PATH")
-	if qfw_path:
-		base_dir = os.path.dirname(qfw_path)
+	qfw_prefix = os.environ.get("QFW_PREFIX")
+	if qfw_prefix:
+		base_dir = os.path.dirname(qfw_prefix)
 		candidates.extend([
 			os.path.join(base_dir, "qhw-admission", "build", "policies"),
 			os.path.join(

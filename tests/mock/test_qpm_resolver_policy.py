@@ -1,3 +1,5 @@
+from defw_exception import DEFwReserveError
+
 from qfw_qiskit.qpm_resolver import (
 	DEFwDirectoryClient,
 	DEFwQPMConnector,
@@ -37,9 +39,11 @@ class DirectoryClient:
 	def __init__(self, records, latest_generation=None):
 		self.records = list(records)
 		self.latest_generation = latest_generation
+		self.queries = []
 
 	def resolve_service(self, **kwargs):
 		self.kwargs = kwargs
+		self.queries.append(kwargs)
 		return list(self.records)
 
 	def get_service_generation(self, service_id):
@@ -205,6 +209,78 @@ def test_resolver_from_environment_selects_site_scoped_directory(monkeypatch):
 	assert resolved.directory_scope == "site"
 	assert resolved.directory_identity == "site-a"
 	assert set(clients.keys()) == {"site-a"}
+
+
+def test_resolver_from_environment_site_scope_does_not_query_local_or_direct(
+		monkeypatch):
+	local = DirectoryClient([directory_record("local-qpm")])
+	site = DirectoryClient([])
+	clients = {}
+
+	def client_factory(endpoint):
+		clients[endpoint] = site
+		return site
+
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
+	resolver = QPMResolver.from_environment(
+		dirsvc=local,
+		directory_client_factory=client_factory,
+		sleeper=lambda seconds: None,
+	)
+
+	try:
+		resolver.resolve(
+			service_type="qfw.qpm",
+			selector_resource="IQM-20q",
+			api_category="execution",
+			timeout=1,
+		)
+	except DEFwReserveError:
+		pass
+	else:
+		raise AssertionError("expected site-only resolver to reject fallback")
+
+	assert set(clients.keys()) == {"site-a"}
+	assert site.queries
+	assert local.queries == []
+
+
+def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
+		monkeypatch):
+	local = DirectoryClient([])
+	clients = {}
+
+	def client_factory(endpoint):
+		clients[endpoint] = DirectoryClient([directory_record("site-qpm")])
+		return clients[endpoint]
+
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "local")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
+	resolver = QPMResolver.from_environment(
+		dirsvc=local,
+		directory_client_factory=client_factory,
+		sleeper=lambda seconds: None,
+	)
+
+	try:
+		resolver.resolve(
+			service_type="qfw.qpm",
+			selector_resource="IQM-20q",
+			api_category="execution",
+			timeout=1,
+		)
+	except DEFwReserveError:
+		pass
+	else:
+		raise AssertionError("expected local-only resolver to reject fallback")
+
+	assert local.queries
+	assert clients == {}
 
 
 def test_resolver_from_environment_allows_direct_endpoint_fallback(monkeypatch):

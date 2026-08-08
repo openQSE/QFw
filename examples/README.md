@@ -5,12 +5,12 @@ activated inside a Slurm allocation. They are integration examples, not
 unit tests.
 
 ```bash
-source /path/to/QFw/setup/qfw_activate
-cd "$QFW_PATH/examples"
+source /opt/openqse/qfw/current/bin/qfw-activate
+cd "$QFW_SHARE_DIR/examples"
 ```
 
-Each wrapper starts QFw with `qfw_setup.sh`, runs one application through
-`qfw_srun.sh`, and tears QFw down even when the application fails. Do not call
+Each wrapper starts QFw with `qfw-setup`, runs one application through
+`qfw-srun`, and tears QFw down even when the application fails. Do not call
 `qfw_deactivate` until the wrapper has completed.
 
 Each wrapper and example emits machine-readable result records as JSON lines.
@@ -53,8 +53,8 @@ JSONL result files:
 The runner continues after failures, prints a final summary, and exits
 nonzero if any example fails. Logs, per-example JSONL files, and
 `summary.jsonl` are written under
-`$QFW_TMP_PATH/examples-run-<timestamp>` or `/tmp` when `QFW_TMP_PATH` is
-unset.
+`$QFW_RUN_BASE_DIR/examples-run-<timestamp>`. If `QFW_RUN_BASE_DIR` is unset,
+`qfw_run_all.sh` uses `${TMPDIR:-/tmp}/examples-run-<timestamp>`.
 
 Useful overrides:
 

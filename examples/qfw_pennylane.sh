@@ -10,4 +10,4 @@ qfw_example_begin "pennylane" "$@"
 qfw_example_setup
 
 # Tests pennylane with nwqsim
-qfw_example_srun "$QFW_PATH/examples/tests/test_pennylane.py"
+qfw_example_srun "$(qfw_example_path tests/test_pennylane.py)"

@@ -1,0 +1,957 @@
+import argparse
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from . import config as qfw_config
+
+
+COMMANDS = {
+    "qfw-setup",
+    "qfw-srun",
+    "qfw-teardown",
+    "qfw-dirsvc-start",
+    "qfw-service-start",
+}
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] not in COMMANDS:
+        print("Usage: qfw_runtime.commands <command> [args...]", file=sys.stderr)
+        return 2
+    command = argv.pop(0)
+    try:
+        if command == "qfw-setup":
+            return qfw_setup(argv)
+        if command == "qfw-srun":
+            return qfw_srun(argv)
+        if command == "qfw-teardown":
+            return qfw_teardown(argv)
+        if command == "qfw-dirsvc-start":
+            return qfw_dirsvc_start(argv)
+        if command == "qfw-service-start":
+            return qfw_service_start(argv)
+    except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return 1
+    return 2
+
+
+def qfw_setup(argv):
+    parser = argparse.ArgumentParser(prog="qfw-setup")
+    parser.add_argument("--site-config")
+    parser.add_argument("--runtime-config")
+    parser.add_argument("--profile")
+    parser.add_argument("--run-id")
+    parser.add_argument("--run-dir")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-start-services", action="store_true")
+    args = parser.parse_args(argv)
+
+    site_path = qfw_config.resolve_site_config(args.site_config)
+    site = qfw_config.load_yaml(site_path)
+    prefixes = qfw_config.site_install_prefixes(site)
+    runtime_path = qfw_config.resolve_runtime_config(
+        explicit=args.runtime_config,
+        profile=args.profile,
+        qfw_prefix_override=prefixes["qfw_prefix"],
+    )
+    runtime = qfw_config.load_yaml(runtime_path)
+    state = qfw_config.prepare_run_state(
+        site_path,
+        runtime_path,
+        site,
+        runtime,
+        profile=args.profile or os.environ.get("QFW_RUNTIME_PROFILE"),
+        run_id=args.run_id,
+        run_dir=args.run_dir,
+        dry_run=args.dry_run,
+    )
+
+    try:
+        if state["local_services"] and not (
+                args.dry_run or args.no_start_services):
+            _start_job_local_services(state)
+        if not args.dry_run:
+            _wait_required_directories(state)
+        state["setup_complete"] = True
+        state["setup_completed_at_ns"] = time.time_ns()
+        qfw_config.write_state(state)
+    except Exception as exc:
+        state["setup_error"] = str(exc)
+        qfw_config.write_state(state)
+        _cleanup_job_processes(state)
+        qfw_config.clear_current_run(state)
+        raise
+
+    print(state["run_dir"])
+    return 0
+
+
+def qfw_srun(argv):
+    parser = argparse.ArgumentParser(prog="qfw-srun")
+    parser.add_argument("--run-dir")
+    parser.add_argument("application", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    if not args.application:
+        parser.error("application command is required")
+
+    state = qfw_config.read_state(args.run_dir)
+    if not state.get("setup_complete"):
+        print(
+            f"QFw runtime setup is incomplete: {state.get('run_dir')}",
+            file=sys.stderr,
+        )
+        return 1
+    env = os.environ.copy()
+    env.update(state.get("environment") or {})
+    defw_python = _command_path("defw-python", env=env)
+    return subprocess.run([str(defw_python), *args.application], env=env).returncode
+
+
+def qfw_teardown(argv):
+    parser = argparse.ArgumentParser(prog="qfw-teardown")
+    parser.add_argument("--run-dir")
+    parser.add_argument("--keep-run-dir", action="store_true")
+    args = parser.parse_args(argv)
+
+    state = qfw_config.read_state(args.run_dir)
+    errors = []
+    for process in reversed(state.get("processes") or []):
+        if process.get("owner") != "job":
+            continue
+        try:
+            _terminate_process(int(process["pid"]))
+        except Exception as exc:
+            errors.append(str(exc))
+    qfw_config.clear_current_run(state)
+    if not args.keep_run_dir:
+        shutil.rmtree(state["run_dir"], ignore_errors=True)
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+    return 0
+
+
+def qfw_dirsvc_start(argv):
+    parser = argparse.ArgumentParser(prog="qfw-dirsvc-start")
+    parser.add_argument("--site-config")
+    parser.add_argument("--run-dir")
+    parser.add_argument("--name")
+    parser.add_argument("--host")
+    parser.add_argument("--listen-port", type=int)
+    parser.add_argument("--telnet-port", type=int, default=8091)
+    parser.add_argument("--timeout", type=int)
+    parser.add_argument("--pid-file")
+    parser.add_argument("--ready-file")
+    parser.add_argument("--background", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    site = _load_optional_site(args.site_config)
+    site_dir = qfw_config.site_directory(site) if site else {}
+    site_host, site_port = _split_endpoint(site_dir.get("endpoint", ""))
+    dirsvc_name = args.name or site_dir.get("name", "qfw-dirsvc")
+    dirsvc_host = args.host or site_host
+    dirsvc_port = args.listen_port if args.listen_port is not None else site_port
+    if not dirsvc_port:
+        dirsvc_port = 8090
+    startup_timeout = (
+        args.timeout if args.timeout is not None else
+        int(site_dir.get("connect_timeout_seconds", 40))
+    )
+    endpoint = f"{dirsvc_host}:{dirsvc_port}"
+
+    run_dir = _service_run_dir(args.run_dir, dirsvc_name)
+    log_dir = run_dir / "logs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = Path(args.pid_file) if args.pid_file else run_dir / "pid"
+    ready_file = (
+        Path(args.ready_file) if args.ready_file else run_dir / "ready.json")
+    env = os.environ.copy()
+    env.update({
+        "DEFW_AGENT_NAME": dirsvc_name,
+        "DEFW_LISTEN_PORT": str(dirsvc_port),
+        "DEFW_TELNET_PORT": str(args.telnet_port),
+        "DEFW_ONLY_LOAD_MODULE": "svc_dirsvc",
+        "DEFW_LOAD_NO_INIT": "",
+        "DEFW_SHELL_TYPE": "daemon",
+        "DEFW_AGENT_TYPE": "dirsvc",
+        "DEFW_PARENT_HOSTNAME": dirsvc_host,
+        "DEFW_PARENT_PORT": str(dirsvc_port),
+        "DEFW_PARENT_NAME": dirsvc_name,
+        "DEFW_LOG_LEVEL": os.environ.get("DEFW_LOG_LEVEL", "error"),
+        "DEFW_DISABLE_DIRSVC": "no",
+        "DEFW_LOG_DIR": str(log_dir),
+    })
+    if args.site_config:
+        env["QFW_SITE_CONFIG"] = str(qfw_config.resolve_site_config(
+            args.site_config))
+    return _start_defw_owned_process(
+        dirsvc_name,
+        env,
+        pid_file,
+        ready_file,
+        startup_timeout,
+        args.background,
+        args.dry_run,
+        {
+            "role": "dirsvc",
+            "name": dirsvc_name,
+            "endpoint": endpoint,
+            "startup_timeout": startup_timeout,
+        },
+        lambda: _directory_endpoint_ready(endpoint),
+    )
+
+
+def qfw_service_start(argv):
+    parser = argparse.ArgumentParser(prog="qfw-service-start")
+    parser.add_argument("--service-id", required=True)
+    parser.add_argument("--service-manifest")
+    parser.add_argument("--site-config")
+    parser.add_argument("--service-runtime-config")
+    parser.add_argument("--device-access-config")
+    parser.add_argument("--module")
+    parser.add_argument("--load-modules")
+    parser.add_argument("--operation-mode", default="long-running")
+    parser.add_argument("--run-dir")
+    parser.add_argument("--listen-port", type=int, default=8290)
+    parser.add_argument("--telnet-port", type=int, default=8291)
+    parser.add_argument("--timeout", type=int)
+    parser.add_argument("--pid-file")
+    parser.add_argument("--ready-file")
+    parser.add_argument("--background", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    service = _resolve_service(args)
+    service_id = args.service_id
+    run_dir = _service_run_dir(args.run_dir, service_id)
+    log_dir = run_dir / "logs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = Path(args.pid_file) if args.pid_file else run_dir / "pid"
+    ready_file = (
+        Path(args.ready_file) if args.ready_file else run_dir / "ready.json")
+    site = _load_optional_site(args.site_config)
+    site_dir = qfw_config.site_directory(site) if site else {}
+    startup_timeout = (
+        args.timeout if args.timeout is not None else
+        int(site_dir.get("connect_timeout_seconds", 40))
+    )
+    module = args.module or service.get("module")
+    if not module:
+        raise SystemExit("qfw-service-start requires --module or a manifest entry")
+    load_modules = args.load_modules or service.get("load-modules") or module
+    operation_mode = service.get("operation-mode", args.operation_mode)
+    register = qfw_config.bool_config(
+        service.get("register-with-dirsvc"),
+        default=operation_mode != "direct",
+    )
+    direct_fallback = qfw_config.bool_config(
+        service.get("direct-endpoint-fallback"),
+        default=False,
+    )
+    dirsvc_endpoint = (
+        service.get("dirsvc-endpoint") or
+        os.environ.get("QFW_LOCAL_DIRSVC_ENDPOINT") or
+        site_dir.get("endpoint", "")
+    )
+    dirsvc_host, dirsvc_port = _split_endpoint(dirsvc_endpoint)
+    dirsvc_name = (
+        service.get("dirsvc-name") or
+        os.environ.get("QFW_LOCAL_DIRSVC_NAME") or
+        site_dir.get("name", "qfw-site-dirsvc")
+    )
+    service_host = str(service.get("bind-host", service.get("host", "127.0.0.1")))
+    service_port = int(service.get("listen-port", args.listen_port))
+    env = os.environ.copy()
+    env.update({
+        "DEFW_AGENT_NAME": service_id,
+        "DEFW_LISTEN_PORT": str(service_port),
+        "DEFW_TELNET_PORT": str(service.get("telnet-port", args.telnet_port)),
+        "DEFW_ONLY_LOAD_MODULE": load_modules,
+        "DEFW_LOAD_NO_INIT": "",
+        "DEFW_SHELL_TYPE": "daemon",
+        "DEFW_AGENT_TYPE": service.get("agent-type", "service"),
+        "DEFW_PARENT_HOSTNAME": dirsvc_host,
+        "DEFW_PARENT_PORT": str(dirsvc_port),
+        "DEFW_PARENT_NAME": dirsvc_name,
+        "DEFW_LOG_LEVEL": service.get("log-level", "error"),
+        "DEFW_DISABLE_DIRSVC": "no" if register else "yes",
+        "DEFW_LOG_DIR": str(log_dir),
+        "DEFW_PY_LOGLEVEL": "debug,DEFW_ALL",
+        "QFW_QPM_OPERATION_MODE": operation_mode,
+        "QFW_QPM_SERVICE_ID": service_id,
+        "QFW_QPM_SERVICE_MODULE": module,
+        "QFW_QPM_REGISTER_WITH_DIRSVC": "yes" if register else "no",
+        "QFW_QPM_DIRECT_ENDPOINT_FALLBACK": (
+            "yes" if direct_fallback else "no"),
+        "QFW_STARTUP_TIMEOUT": str(startup_timeout),
+    })
+    if site_dir.get("endpoint"):
+        env["QFW_SITE_DIRSVC_ENDPOINTS"] = site_dir["endpoint"]
+    if args.service_runtime_config:
+        env["QFW_SERVICE_RUNTIME_CONFIG"] = str(Path(
+            args.service_runtime_config).expanduser().resolve())
+    if args.device_access_config:
+        env["QFW_DEVICE_ACCESS_CFG"] = str(Path(
+            args.device_access_config).expanduser().resolve())
+    if service.get("device-id"):
+        env["QFW_QPU_DEVICE_ID"] = str(service["device-id"])
+    if service.get("direct-qpm-endpoint"):
+        env["QFW_DIRECT_QPM_ENDPOINT"] = str(service["direct-qpm-endpoint"])
+    if args.site_config:
+        env["QFW_SITE_CONFIG"] = str(qfw_config.resolve_site_config(
+            args.site_config))
+    return _start_defw_owned_process(
+        service_id,
+        env,
+        pid_file,
+        ready_file,
+        startup_timeout,
+        args.background,
+        args.dry_run,
+        {
+            "role": "service",
+            "service_id": service_id,
+            "module": module,
+            "endpoint": f"{service_host}:{service_port}",
+            "dirsvc_name": dirsvc_name,
+            "dirsvc_endpoint": dirsvc_endpoint,
+            "startup_timeout": startup_timeout,
+            "register_with_dirsvc": register,
+        },
+        lambda: _service_ready(
+            service_id,
+            f"{service_host}:{service_port}",
+            register,
+            dirsvc_endpoint,
+        ),
+    )
+
+
+def _start_job_local_services(state):
+    local_config = state["local_services"]
+    env = os.environ.copy()
+    env.update(state["environment"])
+    processes = state.get("processes") or []
+    local_timeout = _directory_timeout(state, "allocation-local")
+    if qfw_config.bool_config(local_config.get("start-dirsvc"), False):
+        local = state["local_dirsvc"]
+        pid_file = Path(state["state_dir"]) / "dirsvc.pid"
+        ready_file = Path(state["state_dir"]) / "dirsvc-ready.json"
+        _run_checked([
+            str(_command_path("qfw-dirsvc-start", env=env)),
+            "--background",
+            "--run-dir", state["run_dir"],
+            "--name", local["name"],
+            "--host", local["host"],
+            "--listen-port", str(local["port"]),
+            "--timeout", str(local_timeout),
+            "--pid-file", str(pid_file),
+            "--ready-file", str(ready_file),
+        ], env)
+        processes.append({
+            "owner": "job",
+            "role": "dirsvc",
+            "pid": int(pid_file.read_text(encoding="utf-8").strip()),
+        })
+        state["processes"] = processes
+        qfw_config.write_state(state)
+
+    if qfw_config.bool_config(local_config.get("start-qpm"), False):
+        manifest_path = Path(state["service_manifest"])
+        services = qfw_config.load_service_manifest(manifest_path)
+        selected = qfw_config.selected_service_names(local_config, services)
+        launch_specs = _local_service_launch_specs(
+            local_config, services, selected)
+        state["local_service_launches"] = launch_specs
+        qfw_config.write_state(state)
+        for launch in launch_specs:
+            service_id = launch["service_id"]
+            pid_file = Path(state["state_dir"]) / f"{service_id}.pid"
+            ready_file = Path(state["state_dir"]) / f"{service_id}-ready.json"
+            _run_checked([
+                str(_command_path("qfw-service-start", env=env)),
+                "--background",
+                "--run-dir", state["run_dir"],
+                "--service-id", service_id,
+                "--service-manifest", str(manifest_path),
+                "--site-config", state["site_config"],
+                "--timeout", str(local_timeout),
+                "--pid-file", str(pid_file),
+                "--ready-file", str(ready_file),
+                "--operation-mode", "qfw-managed",
+                "--listen-port", str(launch["listen_port"]),
+                "--telnet-port", str(launch["telnet_port"]),
+            ], env)
+            processes.append({
+                "owner": "job",
+                "role": "service",
+                "service_id": service_id,
+                "endpoint": launch["endpoint"],
+                "listen_port": launch["listen_port"],
+                "telnet_port": launch["telnet_port"],
+                "pid": int(pid_file.read_text(encoding="utf-8").strip()),
+            })
+            state["processes"] = processes
+            qfw_config.write_state(state)
+    state["processes"] = processes
+    qfw_config.write_state(state)
+
+
+def _local_service_launch_specs(local_config, services, selected):
+    listen_base = _positive_int(
+        local_config.get("service-listen-port-base", 8290),
+        "local-services.service-listen-port-base",
+    )
+    telnet_base = _positive_int(
+        local_config.get("service-telnet-port-base", 8291),
+        "local-services.service-telnet-port-base",
+    )
+    port_stride = _positive_int(
+        local_config.get("service-port-stride", 100),
+        "local-services.service-port-stride",
+    )
+    used_ports = {}
+    launch_specs = []
+    next_listen = listen_base
+    next_telnet = telnet_base
+    for service_id in selected:
+        service = qfw_config.service_by_name(services, service_id)
+        service_host = str(service.get(
+            "bind-host", service.get("host", "127.0.0.1")))
+        listen_config = _service_port_value(service, "listen-port")
+        listen_port = _reserve_service_port(
+            used_ports,
+            service_id,
+            "listen",
+            listen_config,
+            next_listen,
+            port_stride,
+        )
+        next_listen = (
+            listen_port + port_stride if listen_config is None else
+            _next_available_port(next_listen, port_stride, used_ports)
+        )
+        telnet_config = _service_port_value(service, "telnet-port")
+        telnet_port = _reserve_service_port(
+            used_ports,
+            service_id,
+            "telnet",
+            telnet_config,
+            next_telnet,
+            port_stride,
+        )
+        next_telnet = (
+            telnet_port + port_stride if telnet_config is None else
+            _next_available_port(next_telnet, port_stride, used_ports)
+        )
+        launch_specs.append({
+            "service_id": service_id,
+            "host": service_host,
+            "endpoint": f"{service_host}:{listen_port}",
+            "listen_port": listen_port,
+            "telnet_port": telnet_port,
+        })
+    return launch_specs
+
+
+def _service_port_value(service, key):
+    return service.get(key, service.get(key.replace("-", "_")))
+
+
+def _reserve_service_port(used_ports, service_id, kind, configured,
+                          start, stride):
+    if configured is None:
+        port = _next_available_port(start, stride, used_ports)
+    else:
+        port = _positive_int(configured, f"{service_id}.{kind}-port")
+    if port in used_ports:
+        owner = used_ports[port]
+        raise ValueError(
+            f"duplicate local service {kind} port {port} for {service_id}; "
+            f"already used by {owner}"
+        )
+    used_ports[port] = f"{service_id} {kind}"
+    return port
+
+
+def _next_available_port(start, stride, used_ports):
+    port = start
+    while port in used_ports:
+        port += stride
+    return port
+
+
+def _positive_int(value, name):
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer: {value!r}") from exc
+    if result <= 0:
+        raise ValueError(f"{name} must be a positive integer: {value!r}")
+    return result
+
+
+def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
+                              background, dry_run, ready_payload, ready_probe):
+    if dry_run or env.get("QFW_STARTUP_DRY_RUN") == "1":
+        pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
+        _write_ready(ready_file, ready_payload)
+        return 0
+
+    wrapper = _defwp_wrapper_path(env)
+    stdout_log = _open_process_log(env, name, "stdout")
+    stderr_log = _open_process_log(env, name, "stderr")
+    try:
+        process = subprocess.Popen(
+            [str(wrapper), "-d"],
+            env=env,
+            start_new_session=True,
+            stdout=stdout_log,
+            stderr=stderr_log,
+        )
+    finally:
+        stdout_log.close()
+        stderr_log.close()
+    pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
+    try:
+        _wait_process_ready(process, timeout, name, ready_probe)
+        _write_ready(ready_file, ready_payload)
+        if background:
+            return 0
+        return _wait_foreground(process, pid_file, ready_file)
+    except Exception:
+        _terminate_process(process.pid)
+        pid_file.unlink(missing_ok=True)
+        ready_file.unlink(missing_ok=True)
+        raise
+
+
+def _wait_foreground(process, pid_file, ready_file):
+    terminating = {"active": False}
+
+    def terminate(_signum, _frame):
+        terminating["active"] = True
+        _terminate_process(process.pid)
+
+    old_int = signal.signal(signal.SIGINT, terminate)
+    old_term = signal.signal(signal.SIGTERM, terminate)
+    try:
+        return process.wait()
+    finally:
+        signal.signal(signal.SIGINT, old_int)
+        signal.signal(signal.SIGTERM, old_term)
+        if terminating["active"]:
+            _terminate_process(process.pid)
+        pid_file.unlink(missing_ok=True)
+        ready_file.unlink(missing_ok=True)
+
+
+def _open_process_log(env, name, stream_name):
+    log_dir = Path(env.get("DEFW_LOG_DIR") or _default_process_log_dir())
+    log_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in name
+    )
+    return (log_dir / f"{safe_name}.{stream_name}.log").open(
+        "a",
+        encoding="utf-8",
+    )
+
+
+def _default_process_log_dir():
+    return qfw_config.qfw_run_base_dir() / "logs"
+
+
+def _wait_process_ready(process, timeout, name, ready_probe):
+    deadline = time.monotonic() + max(0, timeout)
+    last_error = None
+    while True:
+        returncode = process.poll()
+        if returncode is not None:
+            raise RuntimeError(
+                f"{name} exited during startup with status {returncode}")
+        try:
+            if ready_probe():
+                return
+        except Exception as exc:
+            last_error = exc
+        if time.monotonic() >= deadline:
+            detail = f": {last_error}" if last_error else ""
+            raise TimeoutError(
+                f"{name} readiness timed out after {timeout} seconds{detail}")
+        time.sleep(0.1)
+
+
+def _write_ready(path, payload):
+    data = dict(payload)
+    data["ready"] = True
+    data["timestamp_ns"] = time.time_ns()
+    with Path(path).open("w", encoding="utf-8") as stream:
+        json.dump(data, stream, sort_keys=True)
+        stream.write("\n")
+
+
+def _wait_required_directories(state):
+    for requirement in state.get("directory_requirements") or []:
+        endpoint = requirement["endpoint"]
+        timeout = int(requirement.get("connect_timeout_seconds", 300))
+        name = requirement.get("name") or requirement.get("scope") or endpoint
+        _wait_for_ready(
+            f"directory {name} at {endpoint}",
+            timeout,
+            lambda endpoint=endpoint: _directory_endpoint_ready(endpoint),
+        )
+
+
+def _wait_for_ready(name, timeout, probe):
+    deadline = time.monotonic() + max(0, timeout)
+    last_error = None
+    while True:
+        try:
+            if probe():
+                return
+        except Exception as exc:
+            last_error = exc
+        if time.monotonic() >= deadline:
+            detail = f": {last_error}" if last_error else ""
+            raise TimeoutError(
+                f"{name} readiness timed out after {timeout} seconds{detail}")
+        time.sleep(0.1)
+
+
+def _directory_timeout(state, scope):
+    for requirement in state.get("directory_requirements") or []:
+        if requirement.get("scope") == scope:
+            return int(requirement.get("connect_timeout_seconds", 300))
+    return 300
+
+
+def _cleanup_job_processes(state):
+    errors = []
+    for process in reversed(state.get("processes") or []):
+        if process.get("owner") != "job":
+            continue
+        try:
+            _terminate_process(int(process["pid"]))
+        except Exception as exc:
+            errors.append(str(exc))
+    if errors:
+        print(
+            "errors while cleaning partially started services: " +
+            "; ".join(errors),
+            file=sys.stderr,
+        )
+
+
+def _service_ready(service_id, service_endpoint, register, dirsvc_endpoint):
+    if not _service_endpoint_ready(service_endpoint):
+        return False
+    if not register:
+        return True
+    if not dirsvc_endpoint:
+        return False
+    return _directory_service_registered(dirsvc_endpoint, service_id)
+
+
+def _directory_endpoint_ready(endpoint):
+    records = _directory_query(endpoint)
+    if records is not None:
+        return True
+    return False
+
+
+def _directory_service_registered(endpoint, service_id):
+    records = _directory_query(endpoint, service_id=service_id)
+    if records is None:
+        return False
+    for record in records:
+        if _record_service_id(record) == service_id:
+            return True
+    return False
+
+
+def _directory_query(endpoint, service_id=None):
+    try:
+        client = _directory_client(endpoint)
+        if service_id and hasattr(client, "resolve_services"):
+            return _as_list(client.resolve_services(service_id=service_id))
+        if service_id and hasattr(client, "resolve_service"):
+            return _as_list(client.resolve_service(service_id=service_id))
+        if hasattr(client, "query_directory"):
+            return _as_list(client.query_directory())
+        if hasattr(client, "query"):
+            return _as_list(client.query())
+        if hasattr(client, "resolve_services"):
+            return _as_list(client.resolve_services(service_id="__qfw_ready__"))
+        if hasattr(client, "resolve_service"):
+            return _as_list(client.resolve_service(service_id="__qfw_ready__"))
+    except Exception:
+        return None
+    return None
+
+
+def _directory_client(endpoint):
+    import defw
+
+    if hasattr(defw, "connect_to_directory"):
+        return defw.connect_to_directory(endpoint)
+    if hasattr(defw, "connect_to_binding"):
+        return defw.connect_to_binding(_directory_binding_record(endpoint))
+    if hasattr(defw, "connect_to_endpoint"):
+        return defw.connect_to_endpoint(endpoint, _directory_api_binding())
+    raise RuntimeError("DEFw does not expose a directory client connector")
+
+
+def _service_endpoint_ready(endpoint):
+    return _defw_endpoint_ready(endpoint) is True
+
+
+def _defw_endpoint_ready(endpoint):
+    try:
+        client = _endpoint_client(endpoint)
+        if hasattr(client, "is_ready"):
+            return bool(client.is_ready())
+        if hasattr(client, "ready"):
+            ready = client.ready
+            return bool(ready() if callable(ready) else ready)
+        return False
+    except Exception:
+        return False
+
+
+def _endpoint_client(endpoint):
+    import defw
+
+    if hasattr(defw, "connect_to_endpoint"):
+        return defw.connect_to_endpoint(endpoint)
+    if hasattr(defw, "connect_to_binding"):
+        return defw.connect_to_binding(_endpoint_binding_record(endpoint))
+    raise RuntimeError("DEFw does not expose an endpoint connector")
+
+
+def _endpoint_binding_record(endpoint):
+    endpoint_record = _endpoint_record(endpoint, default_name="qfw-service")
+    return {
+        "service_record": {
+            "service_id": f"service:{endpoint}",
+            "service_name": "QFwService",
+            "service_type": "qfw.service",
+            "runtime_id": endpoint_record["runtime_id"],
+            "endpoint": endpoint_record,
+            "selector": {},
+            "properties": {},
+        },
+        "selected_binding": {
+            "binding_name": "readiness",
+            "client_module": "api_qpm_execution",
+            "client_class": "QPMExecution",
+            "service_module": "",
+            "service_class": "",
+            "version": 1,
+        },
+    }
+
+
+def _directory_binding_record(endpoint):
+    endpoint_record = _endpoint_record(endpoint, default_name="dirsvc")
+    return {
+        "service_record": {
+            "service_id": f"dirsvc:{endpoint}",
+            "service_name": "DEFwDirSvc",
+            "service_type": "defw.dirsvc",
+            "runtime_id": endpoint_record["runtime_id"],
+            "endpoint": endpoint_record,
+            "selector": {
+                "resources": ["DEFwDirSvc"],
+                "aliases": ["dirsvc", "directory"],
+            },
+            "properties": {},
+        },
+        "selected_binding": _directory_api_binding(),
+    }
+
+
+def _directory_api_binding():
+    return {
+        "binding_name": "directory",
+        "client_module": "api_dirsvc",
+        "client_class": "DEFwDirSvc",
+        "service_module": "svc_dirsvc.svc_dirsvc",
+        "service_class": "DEFwDirSvc",
+        "version": 1,
+    }
+
+
+def _endpoint_record(endpoint, default_name=None):
+    host, port = _split_endpoint(endpoint)
+    return {
+        "address": host,
+        "listen_port": port,
+        "pid": 0,
+        "node_name": default_name or host,
+        "hostname": host,
+        "runtime_id": f"{host}:{port}",
+    }
+
+
+def _record_service_id(record):
+    if not isinstance(record, dict):
+        return None
+    service = record.get("service_record")
+    if isinstance(service, dict):
+        return service.get("service_id")
+    return record.get("service_id")
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _resolve_service(args):
+    if args.service_manifest:
+        manifest_path = qfw_config.resolve_path(args.service_manifest)
+        services = qfw_config.load_service_manifest(manifest_path)
+        return qfw_config.service_by_name(services, args.service_id)
+    return {
+        "name": args.service_id,
+        "module": args.module,
+        "load-modules": args.load_modules or args.module,
+        "operation-mode": args.operation_mode,
+    }
+
+
+def _load_optional_site(site_config):
+    if not site_config:
+        resolved = qfw_config.resolve_site_config(None)
+        if not resolved.exists():
+            return {}
+        return qfw_config.load_yaml(resolved)
+    return qfw_config.load_yaml(qfw_config.resolve_site_config(site_config))
+
+
+def _split_endpoint(endpoint):
+    if isinstance(endpoint, dict):
+        host = (
+            endpoint.get("address") or
+            endpoint.get("host") or
+            endpoint.get("hostname") or
+            "127.0.0.1"
+        )
+        port = (
+            endpoint.get("listen_port") or
+            endpoint.get("listen-port") or
+            endpoint.get("port") or
+            0
+        )
+        return str(host), int(port)
+    if not endpoint:
+        return "127.0.0.1", 0
+    value = str(endpoint).strip()
+    if "://" in value:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(value)
+        return parsed.hostname or "127.0.0.1", int(parsed.port or 0)
+    if ":" not in value:
+        return value, 0
+    host, port = value.rsplit(":", 1)
+    return host, int(port)
+
+
+def _service_run_dir(run_dir, name):
+    if run_dir:
+        return Path(run_dir).expanduser().resolve() / "services" / name
+    return qfw_config.qfw_run_base_dir() / "services" / name
+
+
+def _command_path(name, env=None):
+    env = env or os.environ
+    bin_path = env.get("QFW_BIN_PATH")
+    candidate = (
+        Path(bin_path).expanduser().resolve() / name
+        if bin_path else
+        qfw_config.qfw_bin_path() / name
+    )
+    if candidate.exists():
+        return candidate
+    found = shutil.which(name, path=env.get("PATH"))
+    if found:
+        return Path(found)
+    raise FileNotFoundError(f"unable to find QFw command: {name}")
+
+
+def _defwp_wrapper_path(env):
+    defw_prefix = Path(env.get("DEFW_PREFIX") or qfw_config.defw_prefix())
+    qfw_bin = (
+        Path(env["QFW_BIN_PATH"]).expanduser().resolve()
+        if env.get("QFW_BIN_PATH") else
+        qfw_config.qfw_bin_path()
+    )
+    for candidate in (
+            defw_prefix / "bin" / "defwp-wrapper",
+            qfw_bin / "defwp-wrapper"):
+        if candidate.exists():
+            return candidate
+    found = shutil.which("defwp-wrapper", path=env.get("PATH"))
+    if found:
+        return Path(found)
+    raise FileNotFoundError("unable to find defwp-wrapper")
+
+
+def _run_checked(command, env):
+    result = subprocess.run(command, env=env)
+    if result.returncode:
+        raise RuntimeError(
+            f"command failed with {result.returncode}: {' '.join(command)}")
+
+
+def _terminate_process(pid):
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

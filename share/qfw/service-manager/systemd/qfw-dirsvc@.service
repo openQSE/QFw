@@ -1,0 +1,13 @@
+[Unit]
+Description=QFw DEFw directory service instance %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -lc 'source /etc/openqse/qfw/env.sh && exec qfw-dirsvc-start --site-config "${QFW_SITE_CONFIG}"'
+Restart=on-failure
+TimeoutStartSec=360
+
+[Install]
+WantedBy=multi-user.target

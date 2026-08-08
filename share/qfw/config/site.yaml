@@ -1,0 +1,9 @@
+install:
+  qfw-prefix: <prefix>
+  defw-prefix: <defw-prefix>
+
+directory:
+  site:
+    name: qfw-site-dirsvc
+    endpoint: 127.0.0.1:8090
+    connect-timeout-seconds: 300

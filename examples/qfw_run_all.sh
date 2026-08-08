@@ -7,7 +7,7 @@ usage() {
 Usage: ./qfw_run_all.sh
 
 Run the QFw example wrappers sequentially. Each wrapper owns its own
-qfw_setup.sh and qfw_teardown.sh lifecycle.
+qfw-setup and qfw-teardown lifecycle.
 
 Environment overrides:
   QFW_RUN_ALL_BACKEND=<nwqsim|tnqvm>  Backend for backend-selectable tests
@@ -25,21 +25,16 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 	exit 0
 fi
 
-if [[ -z "${QFW_PATH:-}" ]]; then
-	echo "ERROR: QFW_PATH is not set. Source qfw_activate first." >&2
-	exit 1
-fi
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
 
-examples_dir="${QFW_PATH}/examples"
+examples_dir="$(qfw_example_examples_dir)"
 if [[ ! -d "${examples_dir}" ]]; then
 	echo "ERROR: examples directory not found: ${examples_dir}" >&2
 	exit 1
 fi
 
-if ! command -v qfw_setup.sh >/dev/null 2>&1; then
-	echo "ERROR: qfw_setup.sh is not in PATH. Source qfw_activate first." >&2
-	exit 1
-fi
+qfw_example_require_runtime || exit $?
 
 backend="${QFW_RUN_ALL_BACKEND:-nwqsim}"
 qubits="${QFW_RUN_ALL_QUBITS:-4}"
@@ -48,7 +43,7 @@ shots="${QFW_RUN_ALL_SHOTS:-128}"
 vqe_iterations="${QFW_RUN_ALL_VQE_ITERS:-1}"
 shim_lib="${QFW_RUN_ALL_SHIM_LIB:-qdmi}"
 timestamp="$(date +%Y%m%d-%H%M%S)"
-log_root="${QFW_TMP_PATH:-/tmp}/examples-run-${timestamp}"
+log_root="${QFW_RUN_BASE_DIR:-${TMPDIR:-/tmp}}/examples-run-${timestamp}"
 
 mkdir -p "${log_root}"
 

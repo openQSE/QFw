@@ -57,8 +57,8 @@ fi
 
 echo "Starting QFw shim smoke test with ${libs:+libs=${libs} }${lib:+lib=${lib}}"
 qfw_example_begin "shim-smoke" "$@"
-qfw_example_setup --services-config "$QFW_PATH/examples/qfw_shim_smoke_services.yaml"
-qfw_example_srun --load-modules api_qpm \
-	"$QFW_PATH/examples/tests/test_shim_smoke.py" "$@"
+qfw_example_setup_local_services qfw_shim_smoke_services.yaml shim-ornl-20q
+qfw_example_srun_with_modules api_qpm \
+	"$(qfw_example_path tests/test_shim_smoke.py)" "$@"
 
 echo "Stopping QFw shim smoke test"

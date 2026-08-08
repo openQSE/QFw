@@ -19,6 +19,6 @@ qfw_example_setup
 #   method: ghz or vqe
 #   backend: The backend type to use: tnqvm, nwqsim or qb
 #
-qfw_example_srun "$QFW_PATH/examples/tests/test_supermarq.py" --run "$1" \
+qfw_example_srun "$(qfw_example_path tests/test_supermarq.py)" --run "$1" \
 			--iterations "$2" --startqbit "$3" --shots "$4" \
 			--increase "$5" --method "$6" --backend "$7"

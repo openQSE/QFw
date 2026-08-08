@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_script_dir() {
+	local source="$1"
+	local dir
+
+	while [[ -L "${source}" ]]; do
+		dir="$(cd -P "$(dirname "${source}")" && pwd)"
+		source="$(readlink "${source}")"
+		[[ "${source}" == /* ]] || source="${dir}/${source}"
+	done
+
+	cd -P "$(dirname "${source}")" && pwd
+}
+
+prepend_path() {
+	local var_name="$1"
+	local path_value="$2"
+	local current_value="${!var_name:-}"
+
+	[[ -d "${path_value}" ]] || return 0
+	case ":${current_value}:" in
+		*":${path_value}:"*) return 0 ;;
+	esac
+	if [[ -n "${current_value}" ]]; then
+		export "${var_name}=${path_value}:${current_value}"
+	else
+		export "${var_name}=${path_value}"
+	fi
+}
+
+script_dir="$(resolve_script_dir "${BASH_SOURCE[0]}")"
+if [[ -z "${_QFW_ACTIVE:-}" && -r "${script_dir}/qfw-activate" ]]; then
+	# shellcheck source=/dev/null
+	source "${script_dir}/qfw-activate"
+fi
+
+qfw_prefix="${QFW_PREFIX:-$(cd "${script_dir}/.." && pwd)}"
+defw_prefix="${DEFW_PREFIX:-${qfw_prefix}}"
+
+defwp_bin="${defw_prefix}/bin/defwp"
+defwp_wrapper="${defw_prefix}/bin/defwp-wrapper"
+if [[ ! -x "${defwp_wrapper}" && -x "${qfw_prefix}/bin/defwp-wrapper" ]]; then
+	defwp_wrapper="${qfw_prefix}/bin/defwp-wrapper"
+fi
+if [[ ! -x "${defwp_bin}" ]]; then
+	echo "Unable to find DEFw executable: ${defwp_bin}" >&2
+	exit 127
+fi
+if [[ ! -x "${defwp_wrapper}" ]]; then
+	echo "Unable to find DEFw wrapper: ${defwp_wrapper}" >&2
+	exit 127
+fi
+
+if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+	user_python="${VIRTUAL_ENV}/bin/python"
+else
+	user_python="$(command -v python3)"
+fi
+
+user_py_version="$("${user_python}" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+defw_py_version="$("${defwp_bin}" --py-version | awk -F. 'NR == 1 {print $1 "." $2}')"
+if [[ -z "${defw_py_version}" ]]; then
+	echo "Unable to determine DEFw Python version from ${defwp_bin}" >&2
+	exit 1
+fi
+if [[ "${user_py_version}" != "${defw_py_version}" ]]; then
+	echo "Python version mismatch: active Python ${user_py_version}, DEFw ${defw_py_version}" >&2
+	exit 1
+fi
+
+venv_pythonpath="$("${user_python}" - <<'PY'
+import site
+import sys
+
+paths = []
+try:
+    paths.extend(site.getsitepackages())
+except Exception:
+    pass
+try:
+    paths.append(site.getusersitepackages())
+except Exception:
+    pass
+for item in sys.path:
+    if item and ("site-packages" in item or "dist-packages" in item):
+        paths.append(item)
+seen = set()
+ordered = []
+for item in paths:
+    if item and item not in seen:
+        seen.add(item)
+        ordered.append(item)
+print(":".join(ordered))
+PY
+)"
+if [[ -n "${venv_pythonpath}" ]]; then
+	IFS=':' read -r -a venv_paths <<< "${venv_pythonpath}"
+	for venv_path in "${venv_paths[@]}"; do
+		prepend_path PYTHONPATH "${venv_path}"
+	done
+fi
+
+export DEFW_PATH="${DEFW_PATH:-${defw_prefix}}"
+exec "${defwp_wrapper}" "$@"

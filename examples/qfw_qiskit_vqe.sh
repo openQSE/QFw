@@ -10,4 +10,4 @@ qfw_example_begin "qiskit-vqe" "$@"
 qfw_example_setup
 
 # takes the number of VQE iterations
-qfw_example_srun "$QFW_PATH/examples/tests/test_qiskit_vqe.py" "$1"
+qfw_example_srun "$(qfw_example_path tests/test_qiskit_vqe.py)" "$1"

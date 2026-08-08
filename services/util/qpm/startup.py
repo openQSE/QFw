@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 import threading
@@ -235,10 +236,12 @@ def _ensure_site_registration(defw_module):
 		for record in records:
 			try:
 				registered_record = _register_site_record(
-					client, record, peer)
-				registered.append(registered_record)
-				_record_site_registration_lifecycle(
-					record, registered_record, peer, endpoint)
+					client, record, peer, defw_module)
+				registered_records = _as_list(registered_record)
+				registered.extend(registered_records)
+				for lifecycle_record in registered_records or [record]:
+					_record_site_registration_lifecycle(
+						record, lifecycle_record, peer, endpoint)
 			except Exception:
 				logging.exception(
 					"failed to register QPM service with site dirsvc")
@@ -300,6 +303,9 @@ def _query_local_service_info(defw_module):
 
 def _service_info_record(defw_module, service_info):
 	properties = _service_info_properties(service_info)
+	lifecycle_service_id = os.environ.get("QFW_QPM_SERVICE_ID")
+	if lifecycle_service_id:
+		properties.setdefault("service_id", lifecycle_service_id)
 	capability, legacy_type, legacy_capabilities = \
 		_service_info_capability(service_info)
 	service_name = service_info.get_service_name()
@@ -389,16 +395,76 @@ def _site_dirsvc_client(defw_module, endpoint):
 	return None
 
 
-def _register_site_record(client, record, peer):
-	for method_name in ("register_service", "register"):
-		method = getattr(client, method_name, None)
-		if method is None:
-			continue
-		try:
-			return method(record, peer=peer)
-		except TypeError:
-			return method(record)
+def _register_site_record(client, record, peer, defw_module):
+	register_service = getattr(client, "register_service", None)
+	if register_service is not None:
+		if _register_service_uses_context(register_service):
+			service_ep = _site_registration_service_endpoint(defw_module)
+			if service_ep is None:
+				raise AttributeError(
+					"QPM DEFw endpoint unavailable for site registration")
+			return register_service(
+				service_ep,
+				context=_site_registration_context(record),
+			)
+		return _register_raw_site_record(register_service, record, peer)
+
+	register = getattr(client, "register", None)
+	if register is not None:
+		return _register_raw_site_record(register, record, peer)
 	raise AttributeError("site dirsvc client does not expose register_service")
+
+
+def _register_service_uses_context(method):
+	try:
+		parameters = inspect.signature(method).parameters
+	except (TypeError, ValueError):
+		return True
+	if "context" in parameters:
+		return True
+	for parameter in parameters.values():
+		if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+			return True
+	return False
+
+
+def _register_raw_site_record(method, record, peer):
+	try:
+		return method(record, peer=peer)
+	except TypeError:
+		return method(record)
+
+
+def _site_registration_context(record):
+	return {
+		"service_id": record.get("service_id"),
+		"service_name": record.get("service_name"),
+		"service_type": record.get("service_type"),
+		"api_bindings": record.get("api_bindings"),
+		"selector": record.get("selector"),
+		"properties": record.get("properties"),
+		"capability": record.get("capability"),
+		"legacy_type": record.get("legacy_type"),
+		"legacy_capabilities": record.get("legacy_capabilities"),
+	}
+
+
+def _site_registration_service_endpoint(defw_module):
+	endpoint = _call_or_read(defw_module, (
+		"qpm_site_registration_endpoint",
+		"site_registration_endpoint",
+		"registration_endpoint",
+	))
+	if _is_defw_service_endpoint(endpoint):
+		return endpoint
+	endpoint = _defw_endpoint(defw_module)
+	if _is_defw_service_endpoint(endpoint):
+		return endpoint
+	return None
+
+
+def _is_defw_service_endpoint(endpoint):
+	return endpoint is not None and hasattr(endpoint, "get_id")
 
 
 def _install_defw_directory_lifecycle_hook(defw_module):

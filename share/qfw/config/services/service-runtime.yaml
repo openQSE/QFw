@@ -1,0 +1,27 @@
+mpi-launch:
+  launcher: mpirun
+  allow-run-as-root: auto
+  export-env:
+    - LD_LIBRARY_PATH
+  bind-to: core
+  map-by: ppr:1:l3cache
+  mca:
+    btl: ^tcp,ofi,vader,openib
+    pml: ^ucx
+    mtl: ofi
+    opal_common_ofi_provider_include: shm+cxi:linkx
+
+backends:
+  tnqvm:
+    wrapper: gpuwrapper.sh
+  nwqsim:
+    wrapper: null
+
+qpm:
+  completion-queues:
+    retention:
+      completion-ttl-seconds: 3600
+      terminal-reservation-retention-seconds: 3600
+      max-records-per-reservation: 1024
+      max-bytes-per-reservation: 67108864
+      purge-interval-seconds: 60

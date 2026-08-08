@@ -1,0 +1,15 @@
+[Unit]
+Description=QFw QPM service instance %i
+After=network-online.target qfw-dirsvc@site.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=QFW_QPM_SERVICE_ID=%i
+EnvironmentFile=/etc/openqse/qfw/services/qpm/%i.env
+ExecStart=/bin/bash -lc 'source /etc/openqse/qfw/env.sh && exec qfw-service-start --service-id "${QFW_QPM_SERVICE_ID}" --module "${QFW_QPM_MODULE}" --load-modules "${QFW_QPM_LOAD_MODULES:-${QFW_QPM_MODULE}}" --operation-mode "${QFW_QPM_OPERATION_MODE:-long-running}" --site-config "${QFW_SITE_CONFIG}" --service-runtime-config "${QFW_SERVICE_RUNTIME_CONFIG}" --device-access-config "${QFW_DEVICE_ACCESS_CFG}"'
+Restart=on-failure
+TimeoutStartSec=360
+
+[Install]
+WantedBy=multi-user.target

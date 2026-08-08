@@ -2,6 +2,7 @@ import pathlib
 import sys
 import types
 import logging
+import ast
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -88,13 +89,89 @@ def _install_yaml_stub():
 		return repr(data)
 
 	def load(data, Loader=None):
+		return safe_load(data)
+
+	def safe_load(data):
+		if hasattr(data, "read"):
+			data = data.read()
+		text = str(data or "")
+		if not text.strip():
+			return {}
+		try:
+			return ast.literal_eval(text)
+		except (SyntaxError, ValueError):
+			return _parse_simple_yaml(text)
+
+	def _parse_simple_yaml(text):
+		root = {}
+		stack = [(-1, root)]
+		lines = []
+		for raw_line in text.splitlines():
+			stripped = raw_line.strip()
+			if not stripped or stripped.startswith("#"):
+				continue
+			indent = len(raw_line) - len(raw_line.lstrip(" "))
+			lines.append((indent, stripped))
+		for index, (indent, line) in enumerate(lines):
+			while stack and indent <= stack[-1][0]:
+				stack.pop()
+			parent = stack[-1][1]
+			next_line = lines[index + 1] if index + 1 < len(lines) else None
+			if line.startswith("- "):
+				item = line[2:].strip()
+				if ":" not in item:
+					parent.append(_yaml_scalar(item))
+					continue
+				entry = {}
+				parent.append(entry)
+				key, value = _yaml_key_value(item, indent, next_line)
+				entry[key] = value
+				if value in ({}, []):
+					stack.append((indent, value))
+				else:
+					entry[key] = value
+					stack.append((indent, entry))
+				continue
+			key, value = _yaml_key_value(line, indent, next_line)
+			if not isinstance(parent, dict):
+				continue
+			parent[key] = value
+			if value in ({}, []):
+				stack.append((indent, value))
+		return root
+
+	def _yaml_key_value(line, indent=0, next_line=None):
+		key, _, raw_value = line.partition(":")
+		key = key.strip()
+		raw_value = raw_value.strip()
+		if not raw_value:
+			return key, _yaml_container(indent, next_line)
+		return key, _yaml_scalar(raw_value)
+
+	def _yaml_container(indent, next_line):
+		if next_line and next_line[0] > indent and next_line[1].startswith("- "):
+			return []
 		return {}
+
+	def _yaml_scalar(value):
+		value = value.strip()
+		if value in {"{}", "[]"}:
+			return ast.literal_eval(value)
+		if value.lower() in {"true", "false"}:
+			return value.lower() == "true"
+		if value.lower() in {"null", "none"}:
+			return None
+		try:
+			return int(value)
+		except ValueError:
+			return value.strip("\"'")
 
 	yaml.Dumper = Dumper
 	yaml.SafeLoader = SafeLoader
 	yaml.FullLoader = FullLoader
 	yaml.dump = dump
 	yaml.load = load
+	yaml.safe_load = safe_load
 	sys.modules["yaml"] = yaml
 
 

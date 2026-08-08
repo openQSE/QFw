@@ -23,6 +23,12 @@ DIRECT_QPM_SERVICE_MODULE_ENV = "QFW_DIRECT_QPM_SERVICE_MODULE"
 DIRECT_QPM_SERVICE_CLASS_ENV = "QFW_DIRECT_QPM_SERVICE_CLASS"
 SIMULATOR_FALLBACK_ENV = "QFW_QPM_ALLOW_SIMULATOR_FALLBACK"
 DEFAULT_SCOPE_ORDER = ("site", "allocation-local", "direct")
+SCOPE_ALIASES = {
+	"local": "allocation-local",
+	"allocation-local": "allocation-local",
+	"site": "site",
+	"direct": "direct",
+}
 QPM_TYPE_HARDWARE = 1 << 0
 QPM_TYPE_SIMULATOR = 1 << 1
 SIMULATOR_PROVIDERS = {"simulator", "nwqsim", "tnqvm", "qb"}
@@ -256,7 +262,8 @@ class QPMResolver:
 		self._directories = list(directories)
 		self._connector = connector or DEFwQPMConnector()
 		self._sleep = sleeper
-		self._selection_order = list(selection_order or [])
+		self._selection_order = _normalize_scope_order(
+			selection_order or [])
 		self._allow_ambiguous = allow_ambiguous
 
 	@classmethod
@@ -274,8 +281,13 @@ class QPMResolver:
 	def from_environment(cls, dirsvc=None, defw_module=defw, sleeper=sleep,
 						 directory_client_factory=None):
 		directories = []
+		order = _split_env_list(os.environ.get(RESOLVER_SCOPE_ORDER_ENV))
+		if not order:
+			order = list(DEFAULT_SCOPE_ORDER)
+		order = _normalize_scope_order(order)
 		local_endpoint = os.environ.get(LOCAL_DIRSVC_ENDPOINT_ENV)
-		if dirsvc is not None:
+		if dirsvc is not None and _names_allowed(
+				("allocation-local", local_endpoint), order):
 			directories.append(DirectoryScope(
 				name="allocation-local",
 				scope="allocation-local",
@@ -284,22 +296,26 @@ class QPMResolver:
 				identity=local_endpoint or "allocation-local",
 				priority=100,
 			))
-		for index, endpoint in enumerate(
-			_split_env_list(os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV))):
+		for index, endpoint in enumerate(_split_env_list(
+				os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV))):
+			name = f"site-{index}"
+			if not _names_allowed(("site", endpoint, name), order):
+				continue
 			client = (
 				directory_client_factory(endpoint)
 				if directory_client_factory is not None else
 				DEFwDirectoryClient(endpoint, defw_module)
 			)
 			directories.append(DirectoryScope(
-				name=f"site-{index}",
+				name=name,
 				scope="site",
 				client=client,
 				endpoint=endpoint,
 				identity=endpoint,
 				priority=50,
 			))
-		if _env_enabled(DIRECT_ENDPOINT_FALLBACK_ENV):
+		if (_env_enabled(DIRECT_ENDPOINT_FALLBACK_ENV) and
+				_names_allowed(("direct", "direct-endpoint"), order)):
 			endpoint = os.environ.get(DIRECT_QPM_ENDPOINT_ENV)
 			if endpoint:
 				provider = os.environ.get(
@@ -321,9 +337,6 @@ class QPMResolver:
 					identity="direct-endpoint",
 					priority=-100,
 				))
-		order = _split_env_list(os.environ.get(RESOLVER_SCOPE_ORDER_ENV))
-		if not order:
-			order = list(DEFAULT_SCOPE_ORDER)
 		return cls(
 			directories,
 			DEFwQPMConnector(defw_module),
@@ -360,7 +373,8 @@ class QPMResolver:
 	def _collect_candidates(self, request):
 		candidates = []
 		for directory in self._directories:
-			if not directory.enabled:
+			if (not directory.enabled or
+					not self._directory_allowed(directory)):
 				continue
 			records = self._query_directory(directory, request)
 			for record in records:
@@ -370,7 +384,8 @@ class QPMResolver:
 					request,
 					len(candidates),
 				)
-				if self._matches_request(candidate, request):
+				if (self._candidate_allowed(candidate) and
+						self._matches_request(candidate, request)):
 					candidates.append(candidate)
 		return candidates
 
@@ -559,13 +574,30 @@ class QPMResolver:
 		if not self._selection_order:
 			return 0
 		names = (
-			candidate.directory_scope,
-			candidate.directory_identity,
+			_normalize_scope_name(candidate.directory_scope),
+			_normalize_scope_name(candidate.directory_identity),
 		)
 		for name in names:
 			if name in self._selection_order:
 				return self._selection_order.index(name)
 		return len(self._selection_order)
+
+	def _directory_allowed(self, directory):
+		if not self._selection_order:
+			return True
+		return _names_allowed((
+			_normalize_scope_name(directory.scope),
+			_normalize_scope_name(directory.identity),
+			_normalize_scope_name(directory.name),
+		), self._selection_order)
+
+	def _candidate_allowed(self, candidate):
+		if not self._selection_order:
+			return True
+		return _names_allowed((
+			_normalize_scope_name(candidate.directory_scope),
+			_normalize_scope_name(candidate.directory_identity),
+		), self._selection_order)
 
 	def _reject_stale_generation(self, resolved):
 		if resolved.generation is None:
@@ -826,6 +858,30 @@ def _split_env_list(value):
 		return []
 	return [item.strip() for item in value.replace(";", ",").split(",")
 		if item.strip()]
+
+
+def _normalize_scope_name(name):
+	if name is None:
+		return None
+	value = str(name).strip()
+	return SCOPE_ALIASES.get(value, value)
+
+
+def _normalize_scope_order(order):
+	normalized = []
+	for item in order:
+		name = _normalize_scope_name(item)
+		if name:
+			normalized.append(name)
+	return normalized
+
+
+def _names_allowed(names, selection_order):
+	for item in names:
+		name = _normalize_scope_name(item)
+		if name and name in selection_order:
+			return True
+	return False
 
 
 def _env_enabled(name):

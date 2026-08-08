@@ -45,15 +45,44 @@ class FakeSiteDirSvc:
 		}
 
 
+class FakeEndpoint:
+	def __init__(self):
+		self.name = "qpm-node"
+		self.hostname = "qpm-node.example"
+		self.remote_uuid = "qpm-runtime-1"
+		self.blk_uuid = "qpm-peer-1"
+
+	def get_id(self):
+		return self.remote_uuid
+
+
+class FakeDefwDirSvc:
+	def __init__(self):
+		self.registrations = []
+
+	def register_service(self, service_ep, context=None):
+		context = dict(context or {})
+		self.registrations.append((service_ep, context))
+		return [{
+			"service_id": context["service_id"],
+			"service_type": context["service_type"],
+			"runtime_id": service_ep.get_id(),
+			"peer_handle": service_ep.blk_uuid,
+			"generation": 1,
+		}]
+
+
 class FakeDefw:
 	def __init__(self, dirsvc=None, site_ready=None, site_dirsvc=None,
-		     records=None, listener_ready=True, controller_ready=True):
+		     records=None, listener_ready=True, controller_ready=True,
+		     endpoint=None):
 		self.dirsvc = dirsvc
 		self.site_ready = set(site_ready or [])
 		self.site_dirsvc = site_dirsvc
 		self.records = list(records or [])
 		self.listener_is_ready = listener_ready
 		self.controller_is_ready = controller_ready
+		self.endpoint = endpoint or FakeEndpoint()
 
 	def site_dirsvc_ready(self, endpoint):
 		return endpoint in self.site_ready
@@ -72,6 +101,9 @@ class FakeDefw:
 			"peer_handle": "qpm-peer-1",
 			"endpoint": site_qpm_record()["endpoint"],
 		}
+
+	def qpm_site_registration_endpoint(self):
+		return self.endpoint
 
 	def qpm_listener_ready(self):
 		return self.listener_is_ready
@@ -227,6 +259,41 @@ def test_qpm_startup_long_running_site_registration_registers_payload(
 	assert status["operation_mode"] == "long-running"
 	assert status["register_with_dirsvc"] is True
 	assert status["site_registration_required"] is True
+
+
+def test_qpm_startup_long_running_site_registration_uses_defw_api(
+		monkeypatch):
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+
+	reset_qpm_state(uq)
+	site_dirsvc = FakeDefwDirSvc()
+	endpoint = FakeEndpoint()
+	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
+	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+
+	state = startup.initialize_qpm_service(
+		FakeDefw(
+			site_ready={"site-a"},
+			site_dirsvc=site_dirsvc,
+			records=[site_qpm_record()],
+			endpoint=endpoint,
+		),
+		"ready",
+	)
+
+	assert state == "initialized"
+	assert uq.qpm_initialized is True
+	assert len(site_dirsvc.registrations) == 1
+	registered_endpoint, context = site_dirsvc.registrations[0]
+	assert registered_endpoint is endpoint
+	assert context["service_id"] == "qpm:iqm:site-a"
+	assert context["service_type"] == "qfw.qpm"
+	assert context["selector"]["aliases"] == ["iqm"]
+	assert context["api_bindings"][0]["binding_name"] == "execution"
+	assert context["properties"]["provider"] == "iqm"
 
 
 def test_qpm_startup_registration_records_lifecycle_telemetry(monkeypatch):

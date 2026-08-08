@@ -11,4 +11,4 @@ qfw_example_setup
 
 # Takes number of qubits
 #  ex: test_qiskit_simple.py 10
-qfw_example_srun "$QFW_PATH/examples/tests/test_qiskit_simple.py" "$1"
+qfw_example_srun "$(qfw_example_path tests/test_qiskit_simple.py)" "$1"

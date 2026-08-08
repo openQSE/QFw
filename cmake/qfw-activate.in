@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	echo "qfw-activate must be sourced" >&2
+	exit 2
+fi
+
+_qfw_resolve_script_dir() {
+	local source="$1"
+	local dir
+
+	while [[ -L "${source}" ]]; do
+		dir="$(cd -P "$(dirname "${source}")" && pwd)"
+		source="$(readlink "${source}")"
+		[[ "${source}" == /* ]] || source="${dir}/${source}"
+	done
+
+	cd -P "$(dirname "${source}")" && pwd
+}
+
+_qfw_prepend_path() {
+	local var_name="$1"
+	local path_value="$2"
+	local current_value="${!var_name:-}"
+
+	[[ -d "${path_value}" ]] || return 0
+	case ":${current_value}:" in
+		*":${path_value}:"*) return 0 ;;
+	esac
+	if [[ -n "${current_value}" ]]; then
+		export "${var_name}=${path_value}:${current_value}"
+	else
+		export "${var_name}=${path_value}"
+	fi
+}
+
+_qfw_save_var() {
+	local var_name="$1"
+	local old_name="_QFW_OLD_${var_name}"
+	local set_name="_QFW_OLD_${var_name}_SET"
+
+	if [[ -v "${var_name}" ]]; then
+		export "${old_name}=${!var_name}"
+		export "${set_name}=1"
+	else
+		export "${old_name}="
+		unset "${set_name}"
+	fi
+}
+
+_qfw_restore_var() {
+	local var_name="$1"
+	local old_name="_QFW_OLD_${var_name}"
+	local set_name="_QFW_OLD_${var_name}_SET"
+
+	if [[ "${!set_name:-}" == "1" ]]; then
+		export "${var_name}=${!old_name}"
+	else
+		unset "${var_name}"
+	fi
+	unset "${old_name}" "${set_name}"
+}
+
+if [[ -n "${_QFW_ACTIVE:-}" ]]; then
+	return 0
+fi
+
+_qfw_script_dir="$(_qfw_resolve_script_dir "${BASH_SOURCE[0]}")"
+_qfw_script_prefix="$(cd "${_qfw_script_dir}/.." && pwd)"
+_qfw_configured_source_prefix="@CMAKE_CURRENT_SOURCE_DIR@"
+_qfw_configured_generated_prefix="@QFW_GENERATED_DIR@"
+if [[ -d "${_qfw_configured_source_prefix}/share/qfw" ]]; then
+	_qfw_configured_source_prefix="$(
+		cd "${_qfw_configured_source_prefix}" && pwd
+	)"
+fi
+if [[ -d "${_qfw_configured_generated_prefix}" ]]; then
+	_qfw_configured_generated_prefix="$(
+		cd "${_qfw_configured_generated_prefix}" && pwd
+	)"
+fi
+
+for _qfw_var in \
+	PATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
+	QFW_LIBEXEC_DIR QFW_SHARE_DIR QFW_CONFIG_DIR QFW_SITE_CONFIG \
+	QFW_RUN_BASE_DIR DEFW_PREFIX DEFW_PATH DEFW_CONFIG_PATH \
+	DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH; do
+	_qfw_save_var "${_qfw_var}"
+done
+unset _qfw_var
+
+export _QFW_ACTIVE=1
+if [[ -z "${QFW_PREFIX:-}" &&
+      "${_qfw_script_prefix}" == "${_qfw_configured_generated_prefix}" &&
+      -d "${_qfw_configured_source_prefix}/share/qfw" ]]; then
+	export QFW_PREFIX="${_qfw_configured_source_prefix}"
+else
+	export QFW_PREFIX="${QFW_PREFIX:-${_qfw_script_prefix}}"
+fi
+if [[ -x "${_qfw_script_dir}/qfw-setup" && "${_qfw_script_dir}" != "${QFW_PREFIX}/bin" ]]; then
+	export QFW_BIN_PATH="${_qfw_script_dir}"
+elif [[ -n "${QFW_BIN_PATH:-}" ]]; then
+	export QFW_BIN_PATH
+else
+	export QFW_BIN_PATH="${QFW_PREFIX}/bin"
+fi
+if [[ -x "${_qfw_script_dir}/../libexec/qfw/qfw-setup-driver" ]]; then
+	export QFW_LIBEXEC_DIR="$(cd "${_qfw_script_dir}/../libexec/qfw" && pwd)"
+elif [[ -d "${QFW_PREFIX}/libexec/qfw" ]]; then
+	export QFW_LIBEXEC_DIR="${QFW_PREFIX}/libexec/qfw"
+else
+	export QFW_LIBEXEC_DIR="${QFW_PREFIX}/setup"
+fi
+export QFW_SHARE_DIR="${QFW_PREFIX}/share/qfw"
+export QFW_CONFIG_DIR="${QFW_CONFIG_DIR:-/etc/openqse/qfw}"
+export QFW_SITE_CONFIG="${QFW_SITE_CONFIG:-${QFW_SHARE_DIR}/config/site.yaml}"
+export QFW_RUN_BASE_DIR="${QFW_RUN_BASE_DIR:-${TMPDIR:-/tmp}/qfw-runs}"
+
+if [[ -z "${DEFW_PREFIX:-}" ]]; then
+	if [[ "@QFW_DEFAULT_DEFW_PREFIX@" != "" && "@QFW_DEFAULT_DEFW_PREFIX@" != "self" ]]; then
+		export DEFW_PREFIX="@QFW_DEFAULT_DEFW_PREFIX@"
+	elif [[ -d "${QFW_PREFIX}/DEFw" && ! -x "${QFW_PREFIX}/bin/defwp" ]]; then
+		export DEFW_PREFIX="${QFW_PREFIX}/DEFw"
+	else
+		export DEFW_PREFIX="${QFW_PREFIX}"
+	fi
+fi
+export DEFW_PATH="${DEFW_PATH:-${DEFW_PREFIX}}"
+if [[ -z "${DEFW_CONFIG_PATH:-}" ]]; then
+	if [[ -r "${DEFW_PREFIX}/share/defw/config/defw_generic.yaml" ]]; then
+		export DEFW_CONFIG_PATH="${DEFW_PREFIX}/share/defw/config/defw_generic.yaml"
+	else
+		export DEFW_CONFIG_PATH="${DEFW_PREFIX}/python/config/defw_generic.yaml"
+	fi
+fi
+
+_qfw_prepend_path PATH "${QFW_BIN_PATH}"
+_qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/lib"
+_qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/src"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/setup"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/backends"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/services"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/service-apis"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/python"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/src"
+
+if [[ -d "${QFW_PREFIX}/lib/qfw/services" ]]; then
+	export DEFW_EXTERNAL_SERVICES_PATH="${DEFW_EXTERNAL_SERVICES_PATH:-${QFW_PREFIX}/lib/qfw/services}"
+else
+	export DEFW_EXTERNAL_SERVICES_PATH="${DEFW_EXTERNAL_SERVICES_PATH:-${QFW_PREFIX}/services}"
+fi
+if [[ -d "${QFW_PREFIX}/lib/qfw/service-apis" ]]; then
+	export DEFW_EXTERNAL_SERVICE_APIS_PATH="${DEFW_EXTERNAL_SERVICE_APIS_PATH:-${QFW_PREFIX}/lib/qfw/service-apis}"
+else
+	export DEFW_EXTERNAL_SERVICE_APIS_PATH="${DEFW_EXTERNAL_SERVICE_APIS_PATH:-${QFW_PREFIX}/service-apis}"
+fi
+
+qfw_deactivate() {
+	if [[ -z "${_QFW_ACTIVE:-}" ]]; then
+		return 0
+	fi
+
+	local _qfw_var
+	for _qfw_var in \
+		PATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
+		QFW_LIBEXEC_DIR QFW_SHARE_DIR QFW_CONFIG_DIR QFW_SITE_CONFIG \
+		QFW_RUN_BASE_DIR DEFW_PREFIX DEFW_PATH DEFW_CONFIG_PATH \
+		DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH; do
+		_qfw_restore_var "${_qfw_var}"
+	done
+	unset _qfw_var
+	unset _QFW_ACTIVE
+	unset -f qfw_deactivate
+	unset -f _qfw_resolve_script_dir
+	unset -f _qfw_prepend_path
+	unset -f _qfw_save_var
+	unset -f _qfw_restore_var
+}
+
+unset _qfw_script_dir _qfw_script_prefix
+unset _qfw_configured_source_prefix _qfw_configured_generated_prefix

@@ -1,0 +1,505 @@
+import json
+import os
+import shlex
+import socket
+import tempfile
+import uuid
+from pathlib import Path
+
+import yaml
+
+
+SCOPE_ALIASES = {
+    "local": "allocation-local",
+    "allocation-local": "allocation-local",
+    "site": "site",
+    "direct": "direct",
+}
+
+
+def _split_config_list(value):
+    if not value:
+        return []
+    if isinstance(value, str):
+        items = value.replace(";", ",").split(",")
+    else:
+        items = value
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def qfw_prefix():
+    value = os.environ.get("QFW_PREFIX")
+    if value:
+        return Path(value).expanduser().resolve()
+    source_path = Path(__file__).resolve()
+    if source_path.parent.name == "qfw_runtime":
+        setup_dir = source_path.parent.parent
+        if setup_dir.name == "setup":
+            return setup_dir.parent
+    return Path.cwd().resolve()
+
+
+def defw_prefix():
+    value = os.environ.get("DEFW_PREFIX")
+    if value:
+        return Path(value).expanduser().resolve()
+    prefix = qfw_prefix()
+    source_defw = prefix / "DEFw"
+    if source_defw.exists() and not (prefix / "bin" / "defwp").exists():
+        return source_defw
+    return prefix
+
+
+def qfw_share_dir(prefix=None):
+    if prefix is not None:
+        return Path(prefix).expanduser().resolve() / "share" / "qfw"
+    value = os.environ.get("QFW_SHARE_DIR")
+    if value:
+        return Path(value).expanduser().resolve()
+    return qfw_prefix() / "share" / "qfw"
+
+
+def qfw_bin_path(prefix=None):
+    if prefix is not None:
+        return Path(prefix).expanduser().resolve() / "bin"
+    value = os.environ.get("QFW_BIN_PATH")
+    if value:
+        return Path(value).expanduser().resolve()
+    return qfw_prefix() / "bin"
+
+
+def qfw_run_base_dir():
+    value = (
+        os.environ.get("QFW_RUN_BASE_DIR") or
+        os.environ.get("QFW_TMP_PATH") or
+        os.path.join(tempfile.gettempdir(), "qfw-runs")
+    )
+    return Path(value).expanduser().resolve()
+
+
+def load_yaml(path):
+    path = Path(path).expanduser()
+    with path.open("r", encoding="utf-8") as stream:
+        data = yaml.safe_load(stream) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"configuration must be a mapping: {path}")
+    return data
+
+
+def expand_config_value(value, qfw_prefix_value=None, defw_prefix_value=None):
+    if value is None:
+        return None
+    qfw_value = Path(qfw_prefix_value).expanduser().resolve() \
+        if qfw_prefix_value is not None else qfw_prefix()
+    defw_value = Path(defw_prefix_value).expanduser().resolve() \
+        if defw_prefix_value is not None else defw_prefix()
+    text = str(value)
+    text = text.replace("<prefix>", str(qfw_value))
+    text = text.replace("<qfw-prefix>", str(qfw_value))
+    text = text.replace("<defw-prefix>", str(defw_value))
+    return os.path.expanduser(text)
+
+
+def resolve_path(value, base=None, qfw_prefix_value=None,
+                 defw_prefix_value=None):
+    value = expand_config_value(
+        value,
+        qfw_prefix_value=qfw_prefix_value,
+        defw_prefix_value=defw_prefix_value,
+    )
+    if value is None:
+        return None
+    path = Path(value)
+    if not path.is_absolute() and base is not None:
+        path = Path(base) / path
+    return path.expanduser().resolve()
+
+
+def resolve_site_config(explicit=None):
+    selected = (
+        explicit or
+        os.environ.get("QFW_SITE_CONFIG") or
+        str(qfw_share_dir() / "config" / "site.yaml")
+    )
+    return resolve_path(selected)
+
+
+def resolve_runtime_config(explicit=None, profile=None,
+                           qfw_prefix_override=None):
+    if explicit:
+        return resolve_path(explicit, qfw_prefix_value=qfw_prefix_override)
+    if profile:
+        return (
+            qfw_share_dir(qfw_prefix_override) /
+            "config" / "runtime" / f"{profile}.yaml"
+        )
+    env_config = os.environ.get("QFW_RUNTIME_CONFIG")
+    if env_config:
+        return resolve_path(env_config, qfw_prefix_value=qfw_prefix_override)
+    env_profile = os.environ.get("QFW_RUNTIME_PROFILE")
+    if env_profile:
+        return (
+            qfw_share_dir(qfw_prefix_override) /
+            "config" / "runtime" / f"{env_profile}.yaml"
+        )
+    return qfw_share_dir(qfw_prefix_override) / "config" / "runtime.yaml"
+
+
+def site_install_prefixes(site_config):
+    install = site_config.get("install") or {}
+    if not isinstance(install, dict):
+        raise ValueError("install must be a mapping")
+    qfw_value = (
+        install.get("qfw-prefix") or
+        install.get("qfw_prefix") or
+        install.get("prefix")
+    )
+    qfw_path = (
+        resolve_path(qfw_value)
+        if qfw_value is not None else
+        qfw_prefix()
+    )
+    defw_value = install.get("defw-prefix") or install.get("defw_prefix")
+    if defw_value is not None:
+        defw_path = resolve_path(
+            defw_value,
+            qfw_prefix_value=qfw_path,
+            defw_prefix_value=defw_prefix(),
+        )
+    else:
+        source_defw = qfw_path / "DEFw"
+        if source_defw.exists() and not (qfw_path / "bin" / "defwp").exists():
+            defw_path = source_defw
+        else:
+            defw_path = qfw_path
+    return {
+        "qfw_prefix": qfw_path,
+        "defw_prefix": defw_path,
+    }
+
+
+def site_directory(site_config):
+    directory = site_config.get("directory") or {}
+    site = directory.get("site") or {}
+    endpoint = site.get("endpoint")
+    if not endpoint:
+        return {}
+    return {
+        "name": site.get("name", "qfw-site-dirsvc"),
+        "endpoint": str(endpoint),
+        "endpoints": [str(endpoint)],
+        "connect_timeout_seconds": int(
+            site.get("connect-timeout-seconds", 300)),
+    }
+
+
+def resolver_scope_order(runtime_config):
+    resolver = runtime_config.get("resolver") or {}
+    scopes = resolver.get("scope-order") or ["site"]
+    return normalize_resolver_scope_order(scopes)
+
+
+def normalize_resolver_scope_order(scopes):
+    normalized = []
+    for scope in _split_config_list(scopes):
+        scope_name = SCOPE_ALIASES.get(str(scope).strip())
+        if not scope_name:
+            raise ValueError(f"unsupported resolver scope: {scope}")
+        normalized.append(scope_name)
+    return normalized
+
+
+def directory_readiness_requirements(scope_order, site_dir, local_dir):
+    requirements = []
+    for scope in scope_order:
+        if scope == "site":
+            site_endpoints = site_dir.get("endpoints") or [
+                site_dir.get("endpoint")]
+            site_endpoints = [endpoint for endpoint in site_endpoints
+                              if endpoint]
+            if not site_endpoints:
+                raise ValueError("site resolver scope requires a site directory endpoint")
+            for endpoint in site_endpoints:
+                requirements.append({
+                    "scope": "site",
+                    "name": site_dir.get("name", "qfw-site-dirsvc"),
+                    "endpoint": endpoint,
+                    "connect_timeout_seconds": int(
+                        site_dir.get("connect_timeout_seconds", 300)),
+                })
+        elif scope == "allocation-local":
+            if not local_dir.get("endpoint"):
+                raise ValueError(
+                    "local resolver scope requires a local directory endpoint")
+            requirements.append({
+                "scope": "allocation-local",
+                "name": local_dir.get("name", "qfw-local-dirsvc"),
+                "endpoint": local_dir["endpoint"],
+                "connect_timeout_seconds": int(
+                    local_dir.get("connect_timeout_seconds", 300)),
+            })
+    return requirements
+
+
+def local_services(runtime_config):
+    value = runtime_config.get("local-services") or {}
+    if not isinstance(value, dict):
+        raise ValueError("local-services must be a mapping")
+    return value
+
+
+def bool_config(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def allocate_local_endpoint(local_config, dry_run=False):
+    dirsvc = local_config.get("dirsvc") or {}
+    host = str(dirsvc.get("bind-host", "127.0.0.1"))
+    configured_port = dirsvc.get("port", "auto")
+    if str(configured_port).strip().lower() == "auto" and dry_run:
+        port = 0
+    elif str(configured_port).strip().lower() == "auto":
+        port = _free_tcp_port(host)
+    else:
+        port = int(configured_port)
+    name = str(dirsvc.get("name", "qfw-local-dirsvc"))
+    return name, host, port, f"{host}:{port}"
+
+
+def service_manifest_path(local_config, qfw_prefix_value=None,
+                          defw_prefix_value=None):
+    manifest = local_config.get(
+        "service-manifest",
+        "<prefix>/share/qfw/config/services/qfw_services.yaml",
+    )
+    return resolve_path(
+        manifest,
+        qfw_prefix_value=qfw_prefix_value,
+        defw_prefix_value=defw_prefix_value,
+    )
+
+
+def selected_service_names(local_config, manifest_services):
+    selected = local_config.get("services")
+    if selected is None:
+        return [str(item["name"]) for item in manifest_services
+                if "name" in item]
+    if isinstance(selected, str):
+        return [selected]
+    return [str(item) for item in selected]
+
+
+def load_service_manifest(path):
+    data = load_yaml(path)
+    services = data.get("services") or []
+    if not isinstance(services, list):
+        raise ValueError(f"services must be a list: {path}")
+    return services
+
+
+def prepare_run_state(site_config_path, runtime_config_path, site_config,
+                      runtime_config, profile=None, run_id=None,
+                      run_dir=None, dry_run=False):
+    prefixes = site_install_prefixes(site_config)
+    qfw_install_prefix = prefixes["qfw_prefix"]
+    defw_install_prefix = prefixes["defw_prefix"]
+    run_id = run_id or os.environ.get("QFW_RUN_ID") or uuid.uuid4().hex
+    if run_dir:
+        run_root = Path(run_dir).expanduser().resolve()
+        run_base = run_root.parent
+    else:
+        run_base = qfw_run_base_dir()
+        run_root = run_base / run_id
+    log_dir = run_root / "logs"
+    state_dir = run_root / "state"
+    run_root.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    local_config = local_services(runtime_config)
+    site_dir = site_directory(site_config)
+    scope_order = resolver_scope_order(runtime_config)
+    scope_override = os.environ.get("QFW_QPM_RESOLVER_SCOPE_ORDER")
+    if scope_override:
+        scope_order = normalize_resolver_scope_order(scope_override)
+    endpoint_override = os.environ.get("QFW_SITE_DIRSVC_ENDPOINTS")
+    if endpoint_override:
+        site_endpoints = _split_config_list(endpoint_override)
+        if site_endpoints:
+            site_dir = dict(site_dir)
+            site_dir.setdefault(
+                "name",
+                os.environ.get("QFW_SITE_DIRSVC_NAME", "qfw-site-dirsvc"),
+            )
+            site_dir.setdefault(
+                "connect_timeout_seconds",
+                int(os.environ.get("QFW_DIRSVC_CONNECT_TIMEOUT_SECONDS", 300)),
+            )
+            site_dir["endpoint"] = site_endpoints[0]
+            site_dir["endpoints"] = site_endpoints
+    local_endpoint = ""
+    local_name = ""
+    local_port = None
+    local_host = ""
+    manifest_path = None
+    if local_config:
+        local_name, local_host, local_port, local_endpoint = (
+            allocate_local_endpoint(local_config, dry_run=dry_run))
+        manifest_path = service_manifest_path(
+            local_config,
+            qfw_prefix_value=qfw_install_prefix,
+            defw_prefix_value=defw_install_prefix,
+        )
+
+    environment = {
+        "QFW_PREFIX": str(qfw_install_prefix),
+        "QFW_BIN_PATH": str(qfw_bin_path(qfw_install_prefix)),
+        "QFW_LIBEXEC_DIR": str(qfw_install_prefix / "libexec" / "qfw"),
+        "QFW_SHARE_DIR": str(qfw_share_dir(qfw_install_prefix)),
+        "DEFW_PREFIX": str(defw_install_prefix),
+        "DEFW_PATH": str(defw_install_prefix),
+        "DEFW_CONFIG_PATH": str(
+            defw_install_prefix / "share" / "defw" /
+            "config" / "defw_generic.yaml"
+        ),
+        "QFW_SITE_CONFIG": str(site_config_path),
+        "QFW_RUNTIME_CONFIG": str(runtime_config_path),
+        "QFW_RUN_ID": run_id,
+        "QFW_RUN_TMP_PATH": str(run_root),
+        "QFW_LOG_DIR": str(log_dir),
+        "QFW_QPM_RESOLVER_SCOPE_ORDER": ",".join(scope_order),
+    }
+    if profile:
+        environment["QFW_RUNTIME_PROFILE"] = profile
+    if site_dir:
+        site_endpoints = site_dir.get("endpoints") or [site_dir["endpoint"]]
+        environment["QFW_SITE_DIRSVC_ENDPOINTS"] = ",".join(site_endpoints)
+        environment["QFW_SITE_DIRSVC_NAME"] = site_dir["name"]
+        environment["QFW_DIRSVC_CONNECT_TIMEOUT_SECONDS"] = str(
+            site_dir["connect_timeout_seconds"])
+    if local_endpoint:
+        environment["QFW_LOCAL_DIRSVC_ENDPOINT"] = local_endpoint
+        environment["QFW_LOCAL_DIRSVC_NAME"] = local_name
+        environment["DEFW_PARENT_HOSTNAME"] = local_host
+        environment["DEFW_PARENT_PORT"] = str(local_port)
+        environment["DEFW_PARENT_NAME"] = local_name
+    if manifest_path is not None:
+        environment["QFW_SERVICE_MANIFEST"] = str(manifest_path)
+    if dry_run:
+        environment["QFW_STARTUP_DRY_RUN"] = "1"
+
+    directory_requirements = directory_readiness_requirements(
+        scope_order,
+        site_dir,
+        {
+            "endpoint": local_endpoint,
+            "name": local_name,
+            "connect_timeout_seconds": int(
+                (local_config.get("dirsvc") or {}).get(
+                    "connect-timeout-seconds",
+                    local_config.get("connect-timeout-seconds", 300),
+                )
+            ) if local_config else 300,
+        } if local_endpoint else {},
+    )
+
+    state = {
+        "run_id": run_id,
+        "run_base_dir": str(run_base),
+        "run_dir": str(run_root),
+        "log_dir": str(log_dir),
+        "state_dir": str(state_dir),
+        "site_config": str(site_config_path),
+        "runtime_config": str(runtime_config_path),
+        "profile": profile,
+        "resolver_scope_order": scope_order,
+        "directory_requirements": directory_requirements,
+        "site_directory": site_dir,
+        "local_services": local_config,
+        "local_dirsvc": {
+            "name": local_name,
+            "host": local_host,
+            "port": local_port,
+            "endpoint": local_endpoint,
+        },
+        "service_manifest": str(manifest_path) if manifest_path else "",
+        "environment": environment,
+        "processes": [],
+        "dry_run": bool(dry_run),
+        "setup_complete": False,
+    }
+    write_state(state)
+    write_env_file(state)
+    write_current_run(run_base, run_id)
+    return state
+
+
+def state_path(state):
+    return Path(state["state_dir"]) / "runtime-state.json"
+
+
+def write_state(state):
+    with state_path(state).open("w", encoding="utf-8") as stream:
+        json.dump(state, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+
+
+def read_state(run_dir=None):
+    if run_dir is None:
+        run_dir = current_run_dir()
+    path = Path(run_dir) / "state" / "runtime-state.json"
+    with path.open("r", encoding="utf-8") as stream:
+        return json.load(stream)
+
+
+def write_env_file(state):
+    path = Path(state["run_dir"]) / "qfw-runtime-env.sh"
+    with path.open("w", encoding="utf-8") as stream:
+        for name, value in sorted(state["environment"].items()):
+            stream.write(f"export {name}={shlex.quote(str(value))}\n")
+
+
+def write_current_run(run_base, run_id):
+    run_base = Path(run_base)
+    run_base.mkdir(parents=True, exist_ok=True)
+    with (run_base / "current").open("w", encoding="utf-8") as stream:
+        stream.write(f"{run_id}\n")
+
+
+def current_run_dir():
+    if os.environ.get("QFW_RUN_TMP_PATH"):
+        return Path(os.environ["QFW_RUN_TMP_PATH"]).expanduser().resolve()
+    run_base = qfw_run_base_dir()
+    current = run_base / "current"
+    if not current.exists():
+        raise FileNotFoundError(
+            "No QFw runtime state is active; run qfw-setup first")
+    run_id = current.read_text(encoding="utf-8").strip()
+    if not run_id:
+        raise FileNotFoundError(f"empty QFw current run marker: {current}")
+    return run_base / run_id
+
+
+def clear_current_run(state):
+    current = Path(state["run_base_dir"]) / "current"
+    if not current.exists():
+        return
+    if current.read_text(encoding="utf-8").strip() == state["run_id"]:
+        current.unlink()
+
+
+def service_by_name(services, service_id):
+    for service in services:
+        if str(service.get("name", "")) == service_id:
+            return dict(service)
+    raise ValueError(f"service not found in manifest: {service_id}")
+
+
+def _free_tcp_port(host):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
