@@ -1,6 +1,7 @@
 import threading
 import time
 
+import pytest
 import util.qpm.util_qpm as util_qpm
 from defw_exception import DEFwExecutionError
 from fakes import FakeSchedulerContext
@@ -239,8 +240,35 @@ def _setup(monkeypatch):
 	FakeAdmissionContext.usage_status = "accepted"
 	FakeAdmissionContext.reservation_state = "active"
 	FakeAdmissionContext.expires_at_ns = 0
+	for env_name in (
+			"QFW_SERVICE_RUNTIME_CONFIG",
+			"QFW_QPM_COMPLETION_TTL_SECONDS",
+			"QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS",
+			"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS",
+			"QFW_QPM_COMPLETION_MAX_RECORDS",
+			"QFW_QPM_COMPLETION_MAX_RECORDS_PER_RESERVATION",
+			"QFW_QPM_COMPLETION_MAX_BYTES",
+			"QFW_QPM_COMPLETION_MAX_BYTES_PER_RESERVATION",
+			"QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS"):
+		monkeypatch.delenv(env_name, raising=False)
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
+
+
+def _assert_terminal_queue_garbage_collected(qpm, reservation_id, cid):
+	terminal_at_ns = (
+		qpm.controller.completion_queues[reservation_id].terminal_at_ns)
+	terminal_retention_ns = int(
+		qpm.controller.completion_retention[
+			"terminal_reservation_retention_seconds"] *
+		1_000_000_000)
+	summary = qpm.controller.purge_completion_queues(
+		now_ns=terminal_at_ns + terminal_retention_ns)
+	result = qpm.peek_cq(cid=cid, reservation_id=reservation_id)
+
+	assert reservation_id in summary["purged_reservations"]
+	assert reservation_id not in qpm.controller.completion_queues
+	assert result["outcome"] == "NO_LONGER_RETAINED"
 
 
 def test_reserve_stores_unverified_request_metadata(monkeypatch):
@@ -261,6 +289,84 @@ def test_reserve_stores_unverified_request_metadata(monkeypatch):
 	assert reservation["request_metadata"]["external_job_id"] == "job-7"
 	assert qpm.controller.admission_context.requests[-1][1]["task_class"][
 		"qubit_count"] == 4
+
+
+def test_completion_retention_loads_service_runtime_config(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	config = tmp_path / "service-runtime.yaml"
+	config.write_text(
+		"qpm:\n"
+		"  completion-queues:\n"
+		"    retention:\n"
+		"      completion-ttl-seconds: 9\n"
+		"      terminal-reservation-retention-seconds: 8\n"
+		"      max-records-per-reservation: 7\n"
+		"      max-bytes-per-reservation: 6\n"
+		"      purge-interval-seconds: 5\n",
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_SERVICE_RUNTIME_CONFIG", str(config))
+
+	qpm = AdmissionQPM(target_id="admission-retention-config")
+	retention = qpm.controller.completion_retention
+
+	assert retention["completion_ttl_seconds"] == 9
+	assert retention["terminal_reservation_retention_seconds"] == 8
+	assert retention["max_records_per_reservation"] == 7
+	assert retention["max_bytes_per_reservation"] == 6
+	assert retention["purge_interval_seconds"] == 5
+
+
+def test_completion_retention_accepts_documented_environment_overrides(
+		monkeypatch):
+	_setup(monkeypatch)
+	monkeypatch.setenv("QFW_QPM_COMPLETION_TTL_SECONDS", "19")
+	monkeypatch.setenv(
+		"QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS", "18")
+	monkeypatch.setenv("QFW_QPM_COMPLETION_MAX_RECORDS", "17")
+	monkeypatch.setenv("QFW_QPM_COMPLETION_MAX_BYTES", "16")
+	monkeypatch.setenv("QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS", "15")
+
+	qpm = AdmissionQPM(target_id="admission-retention-env")
+	retention = qpm.controller.completion_retention
+
+	assert retention["completion_ttl_seconds"] == 19
+	assert retention["terminal_reservation_retention_seconds"] == 18
+	assert retention["max_records_per_reservation"] == 17
+	assert retention["max_bytes_per_reservation"] == 16
+	assert retention["purge_interval_seconds"] == 15
+
+
+def test_completion_retention_rejects_invalid_environment_overrides(
+		monkeypatch):
+	for env_name, value in (
+			("QFW_QPM_COMPLETION_TTL_SECONDS", "0"),
+			("QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS", "-1"),
+			("QFW_QPM_COMPLETION_MAX_RECORDS", "many")):
+		_setup(monkeypatch)
+		monkeypatch.setenv(env_name, value)
+		with pytest.raises(ValueError, match="completion retention"):
+			AdmissionQPM(target_id=f"admission-retention-invalid-{env_name}")
+
+
+def test_completion_retention_rejects_invalid_service_runtime_config(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	config = tmp_path / "service-runtime.yaml"
+	config.write_text(
+		"qpm:\n"
+		"  completion-queues:\n"
+		"    retention:\n"
+		"      completion-ttl-seconds: 5\n"
+		"      terminal-reservation-retention-seconds: 4\n"
+		"      max-records-per-reservation: 3\n"
+		"      max-bytes-per-reservation: 2\n"
+		"      purge-interval-seconds: never\n",
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_SERVICE_RUNTIME_CONFIG", str(config))
+
+	with pytest.raises(ValueError, match="purge-interval-seconds"):
+		AdmissionQPM(target_id="admission-retention-invalid-config")
 
 
 def test_legacy_service_reserve_release_are_rejected(monkeypatch):
@@ -616,6 +722,46 @@ def test_release_cancel_and_expiration_reconcile_active_state(monkeypatch):
 	else:
 		raise AssertionError("expected expired reservation")
 	assert qpm.controller.admission_context.expired
+
+
+def test_reservation_close_cancelled_tasks_do_not_block_completion_queue_gc(
+		monkeypatch):
+	for close_kind, reason in (
+			("release", 21),
+			("cancel", 22),
+			("expire", 23)):
+		_setup(monkeypatch)
+		monkeypatch.setenv(
+			"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS",
+			"1")
+		qpm = AdmissionQPM(
+			target_id=f"admission-close-retention-gc-{close_kind}")
+		reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+		response = qpm.async_run({
+			"qasm": "OPENQASM 2.0;",
+			"num_qubits": 2,
+			"reservation_id": reservation_id,
+		})
+
+		if close_kind == "release":
+			result = qpm.release(reservation_id, reason=reason)
+		elif close_kind == "cancel":
+			result = qpm.cancel(reservation_id, reason=reason)
+		else:
+			now_ns = time.time_ns()
+			qpm.controller.admission_context.reservations[
+				reservation_id]["expires_at_ns"] = now_ns - 1
+			result = qpm.controller.close_expired_reservation(
+				reservation_id, now_ns=now_ns)
+
+		runtime = qpm.controller.task_for_cid(response["cid"])
+
+		assert result["status"] == "accepted"
+		assert runtime.state == QPM_TASK_CANCELLED
+		assert response["qtask_id"] in (
+			qpm.controller.qtask_ids_by_reservation[reservation_id])
+		_assert_terminal_queue_garbage_collected(
+			qpm, reservation_id, response["cid"])
 
 
 def test_expiration_sweep_reconciles_all_expired_holds_before_expire(

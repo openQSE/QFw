@@ -1,8 +1,11 @@
+import time
+
 from defw_exception import DEFwExecutionError
 from fakes import FakeSchedulerContext
 from test_qpm_admission import AdmissionQPM, FakeAdmissionContext, _setup
 import util.qpm.util_qpm as util_qpm
 from util.qpm.util_qpm import UTIL_QPM
+from util.qpm.request import parse_execution_request
 
 
 class CapturingEventAPI:
@@ -42,7 +45,7 @@ class CompletingQRC:
 		}
 		self.async_cids.append(cid)
 		circuit.set_exec_done()
-		circuit.free_resources(circuit)
+		circuit.free_resources(circuit, result=result)
 		if self.push_info:
 			event = CompletionEvent(self.push_info["evtype"], result)
 			delivered = self.push_info["class"].put(event)
@@ -88,6 +91,44 @@ class CompletingQPM(UTIL_QPM):
 
 	def prepare_circuit(self, info):
 		info["qfw_backend"] = "completion-hook"
+		return info
+
+
+class FailingCompletionQRC(CompletingQRC):
+	def async_run(self, circuit):
+		cid = circuit.get_cid()
+		result = {
+			"cid": cid,
+			"qtask_id": circuit.info["qtask_id"],
+			"result": {
+				"provider_error": "async provider failed",
+			},
+			"rc": 7,
+		}
+		self.async_cids.append(cid)
+		circuit.set_fail()
+		circuit.free_resources(circuit, result=result)
+		if self.push_info:
+			event = CompletionEvent(self.push_info["evtype"], result)
+			delivered = self.push_info["class"].put(event)
+			if delivered is not False:
+				return cid
+		self.circuit_results.append(result)
+		return cid
+
+
+class FailingCompletionQPM(UTIL_QPM):
+	def __init__(self, target_id="ops-failing-completion"):
+		self.fake_qrc = FailingCompletionQRC()
+		super().__init__(
+			self.fake_qrc,
+			target_id=target_id,
+			admission_context_factory=FakeAdmissionContext,
+			scheduler_context_factory=FakeSchedulerContext,
+		)
+
+	def prepare_circuit(self, info):
+		info["qfw_backend"] = "failing-completion-hook"
 		return info
 
 
@@ -172,6 +213,119 @@ def test_managed_operations_flow_reports_telemetry(monkeypatch):
 	assert after_cancel["held_capacity"]["qtask_count"] == 0
 	assert released["status"] == "accepted"
 	assert qpm.controller.admission_context.released == [(reservation_id, 7)]
+
+
+def test_completion_queue_created_and_lazily_repaired(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM(target_id="ops-cq-create")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+
+	assert reservation_id in qpm.controller.completion_queues
+
+	qpm.controller.completion_queues.pop(reservation_id)
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+
+	assert reservation_id in qpm.controller.completion_queues
+	assert response["qtask_id"] in (
+		qpm.controller.qtask_ids_by_reservation[reservation_id])
+
+
+def test_completion_queue_supports_scoped_oldest_peek_and_read(monkeypatch):
+	_setup(monkeypatch)
+	qpm = CompletingQPM(target_id="ops-cq-scoped")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	first = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	second = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+
+	first_peek = qpm.peek_cq(reservation_id=reservation_id)
+	second_peek = qpm.peek_cq(reservation_id=reservation_id)
+	first_read = qpm.read_cq(reservation_id=reservation_id)
+	second_read = qpm.read_cq(reservation_id=reservation_id)
+
+	assert first_peek["cid"] == first["cid"]
+	assert second_peek["cid"] == first["cid"]
+	assert first_read["cid"] == first["cid"]
+	assert second_read["cid"] == second["cid"]
+	assert first_read["poll_operation"] == "read_cq"
+	assert second_read["completion_ready"] is True
+
+
+def test_qb_qrc_completion_sink_feeds_reservation_queue(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	import util.qpm.util_qrc as util_qrc
+	from svc_qb_qpm.svc_qrc import QRC as QBQRC
+
+	monkeypatch.setattr(util_qrc, "Event", CompletionEvent)
+
+	class QBQPM(UTIL_QPM):
+		def __init__(self):
+			self.qb_qrc = QBQRC(start=False)
+			super().__init__(
+				self.qb_qrc,
+				target_id="ops-qb-cq",
+				admission_context_factory=FakeAdmissionContext,
+				scheduler_context_factory=FakeSchedulerContext,
+			)
+
+		def prepare_circuit(self, info):
+			info["qfw_backend"] = "qb-hook"
+			return info
+
+	class DoneLauncher:
+		def status(self, pid):
+			return b"", b"", 0
+
+	class WorkerQueue:
+		def put(self, item):
+			return None
+
+	qpm = QBQPM()
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	request = parse_execution_request({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	qpm.require_managed_execution(request)
+	cid = qpm.create_circuit(request.payload, request=request)
+	circuit = qpm._prepare_run_circuit(cid, require_selected_cid=True)
+	qpm.controller.start_provider_submission(
+		circuit, provider_handle=f"provider-{cid}")
+	qasm_file = tmp_path / "qb-task.qasm"
+	qasm_file.write_text("OPENQASM 2.0;", encoding="utf-8")
+	(qasm_file.parent / f"{qasm_file.name}.result").write_text(
+		"result: qb-complete\n", encoding="utf-8")
+	qpm.qb_qrc.worker_pool = [{
+		"active_tasks": [{
+			"launcher": DoneLauncher(),
+			"pid": 7,
+			"circ": circuit,
+			"qasm_file": str(qasm_file),
+		}],
+		"queue": WorkerQueue(),
+	}]
+
+	qpm.qb_qrc.check_active_tasks(0)
+	completion = qpm.read_cq(cid=cid, reservation_id=reservation_id)
+
+	assert completion["completion_ready"] is True
+	assert completion["cid"] == cid
+	assert completion["qtask_id"] == circuit.info["qtask_id"]
+	assert completion["result"]["result"] == "qb-complete"
+	assert qpm.qb_qrc.circuit_results == []
 
 
 def test_operations_timeout_expiration_and_reconciliation(monkeypatch):
@@ -320,6 +474,12 @@ def test_completion_events_keep_reservation_scope_after_cleanup(monkeypatch):
 	assert qpm.controller.task_for_cid(response["cid"]) is None
 	assert sinks["class-a"].events[0]["cid"] == response["cid"]
 	assert sinks["class-a"].events[0]["qtask_id"] == response["qtask_id"]
+	peeked = qpm.peek_cq(
+		cid=response["cid"], reservation_id=reservation_id)
+	read = qpm.read_cq(
+		cid=response["cid"], reservation_id=reservation_id)
+	assert peeked["cid"] == response["cid"]
+	assert read["cid"] == response["cid"]
 	assert qpm.fake_qrc.circuit_results == []
 
 
@@ -352,6 +512,7 @@ def test_result_reads_keep_reservation_scope_after_cleanup(monkeypatch):
 	assert correct_peek["qtask_id"] == response["qtask_id"]
 	assert correct_read["qtask_id"] == response["qtask_id"]
 	assert response["cid"] not in qpm.controller.terminal_tasks_by_cid
+	assert qpm.fake_qrc.circuit_results == []
 
 
 def test_completion_polling_returns_structured_in_progress_status(
@@ -381,12 +542,73 @@ def test_completion_polling_returns_structured_in_progress_status(
 	assert read["cid"] == response["cid"]
 	assert qpm.controller.task_for_cid(response["cid"]) is not None
 	assert empty == {
-		"outcome": "IN_PROGRESS",
-		"lifecycle_state": "no-ready-completion",
-		"reason": "completion-not-ready",
+		"outcome": "INVALID_RESERVATION",
+		"lifecycle_state": "invalid-reservation",
+		"reason": "reservation-required",
+		"message": (
+			"reservation_id is required for managed completion polling"),
 		"completion_ready": False,
 		"poll_operation": "peek_cq",
 	}
+
+
+def test_completion_polling_without_reservation_rejects_provider_queue(
+		monkeypatch):
+	_setup(monkeypatch)
+	qpm = CompletingQPM(target_id="ops-unscoped-provider-results")
+	local_result = {"cid": "provider-local", "result": "local"}
+	qpm.fake_qrc.circuit_results.append(local_result)
+
+	read = qpm.read_cq()
+	peek = qpm.peek_cq()
+
+	assert read["outcome"] == "INVALID_RESERVATION"
+	assert read["reason"] == "reservation-required"
+	assert peek["outcome"] == "INVALID_RESERVATION"
+	assert peek["reason"] == "reservation-required"
+	assert qpm.fake_qrc.circuit_results == [local_result]
+
+
+def test_completion_polling_rejects_missing_reservation(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM(target_id="ops-missing-reservation")
+
+	result = qpm.peek_cq(reservation_id="missing-reservation")
+
+	assert result["outcome"] == "MISSING_RESERVATION"
+	assert result["lifecycle_state"] == "missing-reservation"
+	assert result["reason"] == "missing-reservation"
+	assert result["completion_ready"] is False
+
+
+def test_failed_provider_completion_is_published_once(monkeypatch):
+	_setup(monkeypatch)
+	qpm = FailingCompletionQPM(target_id="ops-provider-failure-completion")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	first = qpm.read_cq(cid=response["cid"], reservation_id=reservation_id)
+	second = qpm.read_cq(cid=response["cid"], reservation_id=reservation_id)
+
+	assert first["completion_ready"] is True
+	assert first["outcome"] == "FAILED"
+	assert first["reason"] == "provider-execution-failed"
+	assert first["rc"] == 7
+	assert first["result"]["provider_error"] == "async provider failed"
+	assert second["completion_ready"] is False
+	assert second["reason"] == "completion-not-ready"
+	assert qpm.controller.completion_queues[
+		reservation_id].dequeued_records == [{
+			"cid": response["cid"],
+			"qtask_id": response["qtask_id"],
+			"reservation_id": reservation_id,
+			"dequeue_time_ns": first["qpm_cq_dequeue_time_ns"],
+			"operation": "read_cq",
+		}]
 
 
 def test_result_reads_allow_terminal_reservation_state(monkeypatch):
@@ -411,6 +633,95 @@ def test_result_reads_allow_terminal_reservation_state(monkeypatch):
 	assert status["outcome"] == "COMPLETED"
 	assert peeked["cid"] == response["cid"]
 	assert read["cid"] == response["cid"]
+
+
+def test_completion_retention_evicts_records_with_structured_status(
+		monkeypatch):
+	_setup(monkeypatch)
+	monkeypatch.setenv(
+		"QFW_QPM_COMPLETION_MAX_RECORDS_PER_RESERVATION", "1")
+	qpm = CompletingQPM(target_id="ops-retention-records")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	first = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	second = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+
+	evicted = qpm.read_cq(
+		cid=first["cid"], reservation_id=reservation_id)
+	retained = qpm.read_cq(
+		cid=second["cid"], reservation_id=reservation_id)
+
+	assert evicted["outcome"] == "NO_LONGER_RETAINED"
+	assert evicted["reason"] == "completion-no-longer-retained"
+	assert evicted["retention_reason"] == "max-records-exceeded"
+	assert retained["cid"] == second["cid"]
+	assert retained["completion_ready"] is True
+
+
+def test_terminal_completion_queue_garbage_collection(monkeypatch):
+	_setup(monkeypatch)
+	monkeypatch.setenv(
+		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS", "1")
+	qpm = CompletingQPM(target_id="ops-retention-terminal")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+
+	qpm.release(reservation_id, reason=7)
+	terminal_at_ns = (
+		qpm.controller.completion_queues[reservation_id].terminal_at_ns)
+	summary = qpm.controller.purge_completion_queues(
+		now_ns=terminal_at_ns + 1_000_000_000)
+	result = qpm.peek_cq(cid=response["cid"], reservation_id=reservation_id)
+
+	assert reservation_id in summary["purged_reservations"]
+	assert reservation_id not in qpm.controller.completion_queues
+	assert result["outcome"] == "NO_LONGER_RETAINED"
+	assert result["retention_reason"] in (
+		"terminal-reservation-retention-expired",
+		"terminal-reservation-garbage-collected")
+
+
+def test_completion_purge_worker_expires_idle_terminal_queue(monkeypatch):
+	_setup(monkeypatch)
+	monkeypatch.setenv(
+		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS", "1")
+	monkeypatch.setenv("QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS", "1")
+	qpm = CompletingQPM(target_id="ops-retention-worker")
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	qpm.release(reservation_id, reason=7)
+	qpm.controller.completion_queues[
+		reservation_id].terminal_at_ns = time.time_ns() - 2_000_000_000
+
+	try:
+		deadline = time.time() + 2.5
+		while (time.time() < deadline and
+				reservation_id in qpm.controller.completion_queues):
+			time.sleep(0.05)
+		assert reservation_id not in qpm.controller.completion_queues
+	finally:
+		qpm.controller.stop_completion_purge_worker()
+
+	result = qpm.peek_cq(cid=response["cid"], reservation_id=reservation_id)
+	assert result["outcome"] == "NO_LONGER_RETAINED"
+	assert result["retention_reason"] in (
+		"terminal-reservation-retention-expired",
+		"terminal-reservation-garbage-collected")
 
 
 def test_operations_reject_unmanaged_execution(monkeypatch):

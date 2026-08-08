@@ -53,6 +53,7 @@ class FakeAdmissionContext:
 		self.consumed = []
 		self.returned = []
 		self.actual = []
+		self.released = []
 		self.reservation_states = {}
 
 	def get_reservation_record(self, reservation_id):
@@ -82,6 +83,11 @@ class FakeAdmissionContext:
 
 	def record_actual_request(self, reservation_id, actual):
 		self.actual.append((reservation_id, dict(actual)))
+
+	def release_reservation(self, reservation_id, reason_code):
+		self.released.append((reservation_id, reason_code))
+		self.reservation_states[reservation_id] = "released"
+		return {"status": "accepted", "reservation_id": reservation_id}
 
 
 class SchedulerQPM(UTIL_QPM):
@@ -124,7 +130,26 @@ def _setup(monkeypatch):
 	clear_target_controllers()
 	FakeAdmissionContext.usage_status = "accepted"
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
+	monkeypatch.delenv(
+		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS",
+		raising=False)
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
+
+
+def _assert_terminal_queue_garbage_collected(qpm, reservation_id, cid):
+	terminal_at_ns = (
+		qpm.controller.completion_queues[reservation_id].terminal_at_ns)
+	terminal_retention_ns = int(
+		qpm.controller.completion_retention[
+			"terminal_reservation_retention_seconds"] *
+		1_000_000_000)
+	summary = qpm.controller.purge_completion_queues(
+		now_ns=terminal_at_ns + terminal_retention_ns)
+	result = qpm.peek_cq(cid=cid, reservation_id=reservation_id)
+
+	assert reservation_id in summary["purged_reservations"]
+	assert reservation_id not in qpm.controller.completion_queues
+	assert result["outcome"] == "NO_LONGER_RETAINED"
 
 
 def test_scheduler_control_state_is_target_scoped(monkeypatch):
@@ -300,6 +325,8 @@ def test_scheduler_submission_failure_reconciles_capacity_hold(monkeypatch):
 	})
 
 	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	completion = qpm.read_cq(
+		cid=response["cid"], reservation_id="reservation-1")
 	context = qpm.controller.admission_context
 
 	assert response["outcome"] == "FAILED"
@@ -318,11 +345,38 @@ def test_scheduler_submission_failure_reconciles_capacity_hold(monkeypatch):
 	assert status["error"]["reason"] == "scheduler-submission-failed"
 	assert status["error"]["error"] == "scheduler submit failed"
 	assert status["error"]["error_type"] == "RuntimeError"
+	assert completion["completion_ready"] is True
+	assert completion["outcome"] == "FAILED"
+	assert completion["reason"] == "scheduler-submission-failed"
+	assert completion["error"]["error"] == "scheduler submit failed"
 	assert qpm.controller.capacity_holds == {}
 	assert context.returned[-1][1]["task_id"] == 1
 	assert context.actual[-1][1]["task_id"] == 1
 	assert qpm.controller.scheduler_context.submitted[0]["task_id"] == 1
 	assert qpm.fake_qrc.async_cids == []
+
+
+def test_scheduler_failed_task_does_not_block_completion_queue_gc(
+		monkeypatch):
+	_setup(monkeypatch)
+	monkeypatch.setenv(
+		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS", "1")
+	qpm = FailingSchedulerQPM(
+		target_id="scheduler-failed-retention-gc")
+
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	qpm.release("reservation-1", reason=9)
+
+	assert response["outcome"] == "FAILED"
+	assert response["qtask_id"] in (
+		qpm.controller.qtask_ids_by_reservation["reservation-1"])
+	_assert_terminal_queue_garbage_collected(
+		qpm, "reservation-1", response["cid"])
 
 
 def test_async_provider_failure_preserves_failed_terminal_state(monkeypatch):
@@ -337,6 +391,8 @@ def test_async_provider_failure_preserves_failed_terminal_state(monkeypatch):
 	})
 
 	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	completion = qpm.read_cq(
+		cid=response["cid"], reservation_id="reservation-1")
 	context = qpm.controller.admission_context
 	scheduler = qpm.controller.scheduler_context
 
@@ -356,11 +412,36 @@ def test_async_provider_failure_preserves_failed_terminal_state(monkeypatch):
 	assert status["error"]["reason"] == "provider-submission-failed"
 	assert status["error"]["error"] == "provider async failed"
 	assert status["error"]["error_type"] == "RuntimeError"
+	assert completion["completion_ready"] is True
+	assert completion["outcome"] == "FAILED"
+	assert completion["reason"] == "provider-submission-failed"
+	assert completion["error"]["error"] == "provider async failed"
 	assert scheduler.failed == [1]
 	assert scheduler.completed == []
 	assert context.returned[-1][1]["task_id"] == 1
 	assert context.actual[-1][1]["task_id"] == 1
 	assert qpm.controller.capacity_holds == {}
+
+
+def test_provider_failed_task_does_not_block_completion_queue_gc(
+		monkeypatch):
+	_setup(monkeypatch)
+	monkeypatch.setenv(
+		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS", "1")
+	qpm = SchedulerQPM(target_id="scheduler-provider-failed-retention-gc")
+	qpm.fake_qrc.async_error = RuntimeError("provider async failed")
+
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	qpm.release("reservation-1", reason=10)
+
+	assert response["outcome"] == "FAILED"
+	_assert_terminal_queue_garbage_collected(
+		qpm, "reservation-1", response["cid"])
 
 
 def test_sync_provider_failure_preserves_failed_terminal_state(monkeypatch):
@@ -413,14 +494,43 @@ def test_cancel_task_reconciles_scheduler_admission_and_provider(monkeypatch):
 	cancelled = qpm.cancel_task(
 		qtask_id=response["qtask_id"], reservation_id="reservation-1",
 		reason="user-request")
+	completion = qpm.read_cq(
+		cid=response["cid"], reservation_id="reservation-1")
 
 	assert cancelled["outcome"] == "CANCELLED"
 	assert cancelled["lifecycle_state"] == QPM_TASK_CANCELLED
 	assert cancelled["provider_cancel_status"] == "cancelled"
+	assert completion["completion_ready"] is True
+	assert completion["outcome"] == "CANCELLED"
+	assert completion["reason"] == "user-request"
+	assert completion["provider_cancel_status"] == "cancelled"
 	assert qpm.fake_qrc.cancelled == [response["provider_handle"]]
 	assert qpm.controller.scheduler_context.cancelled == [response["qtask_id"]]
 	assert qpm.controller.admission_context.returned[-1][1]["task_id"] == (
 		response["qtask_id"])
+
+
+def test_cancelled_task_does_not_block_completion_queue_gc(monkeypatch):
+	_setup(monkeypatch)
+	monkeypatch.setenv(
+		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS", "1")
+	qpm = SchedulerQPM(target_id="scheduler-cancelled-retention-gc")
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	cancelled = qpm.cancel_task(
+		qtask_id=response["qtask_id"], reservation_id="reservation-1",
+		reason="user-request")
+	qpm.release("reservation-1", reason=11)
+
+	assert cancelled["outcome"] == "CANCELLED"
+	assert response["qtask_id"] in (
+		qpm.controller.qtask_ids_by_reservation["reservation-1"])
+	_assert_terminal_queue_garbage_collected(
+		qpm, "reservation-1", response["cid"])
 
 
 def test_cancel_task_keeps_provider_pending_nonterminal(monkeypatch):
