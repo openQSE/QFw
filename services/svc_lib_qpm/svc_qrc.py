@@ -84,10 +84,13 @@ class QRC:
 			return self._result_dict(circ, output, -1)
 
 	def _async_runner(self, circ):
+		result = None
 		try:
 			result = self._run_circuit(circ, raise_on_error=False)
 		finally:
-			circ.free_resources(circ)
+			circ.free_resources(circ, result=result)
+		if result is None:
+			return
 		self._push_or_store_result(result)
 
 	def sync_run(self, circ):

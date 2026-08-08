@@ -116,7 +116,7 @@ class UTIL_QRC:
 				'cq_dequeue_time': -1
 			}
 
-			circ.free_resources(circ)
+			circ.free_resources(circ, result=r)
 			self._push_or_store_result(r)
 
 		for task_info in complete:
@@ -190,7 +190,7 @@ class UTIL_QRC:
 						'cq_enqueue_time': time.time(),
 						'cq_dequeue_time': -1
 					}
-					circ.free_resources(circ)
+					circ.free_resources(circ, result=r)
 					self._push_or_store_result(r)
 				else:
 					self.worker_pool[my_id]['active_tasks'].append(task_info)

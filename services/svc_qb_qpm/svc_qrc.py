@@ -74,8 +74,7 @@ class QRC(UTIL_QRC):
 				'cq_enqueue_time': time.time(),
 				'cq_dequeue_time': -1
 			}
-			with self.circuit_results_lock:
-				self.circuit_results.append(r)
+			self._push_or_store_result(r)
 
 		for task_info in complete:
 			self.worker_pool[wid]['active_tasks'].remove(task_info)

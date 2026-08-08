@@ -198,6 +198,8 @@ class UTIL_QPM:
 			self.controller.resources_initialized = True
 		self.all_results = self.controller.all_results
 		self.push_info = self.controller.push_info
+		self._ensure_qrc_event_dispatcher("completion")
+		self.controller.start_completion_purge_worker()
 
 	def setup_host_resources(self, max_ppn):
 		hl = expand_host_list(os.environ['QFW_QPM_ASSIGNED_HOSTS'])
@@ -319,8 +321,8 @@ class UTIL_QPM:
 			except DEFwOutOfResources:
 				break
 
-	def free_resources(self, circ):
-		self.finalize_provider_task(circ)
+	def free_resources(self, circ, result=None):
+		self.finalize_provider_task(circ, result=result)
 		with self.controller.lock:
 			res = circ.info['hosts']
 			for host in res.keys():
@@ -335,8 +337,8 @@ class UTIL_QPM:
 			self.circuits.pop(cid, None)
 			self.controller.cleanup_circuit(cid)
 
-	def free_resources_and_oor(self, circ):
-		self.free_resources(circ)
+	def free_resources_and_oor(self, circ, result=None):
+		self.free_resources(circ, result=result)
 		# When resources are free, go through the queue and try
 		# to consume circuits from that queue until you run out of
 		# resources again.
@@ -425,10 +427,14 @@ class UTIL_QPM:
 			raise e
 
 	def complete_provider_submission(self, circuit, result=None):
-		self.controller.complete_scheduled_task(circuit, result=result)
+		runtime = self.controller.complete_scheduled_task(
+			circuit, result=result)
+		if result is not None and runtime is not None:
+			self.controller.publish_completion(result)
+		return runtime
 
 	def fail_provider_submission(self, circuit, error):
-		self.controller.fail_scheduled_task(
+		return self.controller.fail_scheduled_task(
 			circuit, error=error, reason="provider-submission-failed")
 
 	def _failed_submission_status(self, cid, reservation_id):
@@ -445,7 +451,12 @@ class UTIL_QPM:
 	def finalize_provider_task(self, circuit, result=None):
 		state = circuit.getState()
 		if state == CircuitStates.FAIL:
-			return self.controller.fail_scheduled_task(circuit)
+			reason = (
+				result.get("reason") if isinstance(result, dict) else None)
+			reason = reason or "provider-execution-failed"
+			return self.controller.fail_scheduled_task(
+				circuit, reason=reason,
+				publish_completion=result is None)
 		if state in (CircuitStates.EXEC_DONE, CircuitStates.RESOURCES_CONSUMED):
 			return self.controller.complete_scheduled_task(
 				circuit, result=result)
@@ -735,10 +746,24 @@ class UTIL_QPM:
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		error = self._result_selector_reservation_error(
-			cid, reservation_id)
-		if error is not None:
-			return error
+		result = self.controller.read_completion(
+			reservation_id=reservation_id, cid=cid,
+			operation="read_cq")
+		if result.get("completion_ready"):
+			self.all_results.append(result)
+		return result
+
+	def diagnostic_read_cq(self, cid=None, token=None, reason=None):
+		if not qpm_initialized:
+			raise DEFwNotReady("QPM has not initialized properly")
+
+		request = parse_execution_request({}, token=token)
+		self.require_diagnostic_bypass(
+			request, operation="diagnostic_read_cq", reason=reason)
+		return self._read_provider_cq(cid=cid)
+
+	def _read_provider_cq(self, cid=None):
+		reservation_id = None
 
 		try:
 			r = self.qrc.read_cq(cid)
@@ -765,10 +790,21 @@ class UTIL_QPM:
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
-		error = self._result_selector_reservation_error(
-			cid, reservation_id)
-		if error is not None:
-			return error
+		return self.controller.peek_completion(
+			reservation_id=reservation_id, cid=cid,
+			operation="peek_cq")
+
+	def diagnostic_peek_cq(self, cid=None, token=None, reason=None):
+		if not qpm_initialized:
+			raise DEFwNotReady("QPM has not initialized properly")
+
+		request = parse_execution_request({}, token=token)
+		self.require_diagnostic_bypass(
+			request, operation="diagnostic_peek_cq", reason=reason)
+		return self._peek_provider_cq(cid=cid)
+
+	def _peek_provider_cq(self, cid=None):
+		reservation_id = None
 
 		try:
 			r = self.qrc.peak_cq(cid)
@@ -843,6 +879,9 @@ class UTIL_QPM:
 	def _ensure_qrc_event_dispatcher(self, evtype):
 		if self.qrc is None:
 			return
+		register = getattr(self.qrc, "register_event_notification", None)
+		if register is None:
+			return
 		with self.controller.lock:
 			dispatcher = self.controller.callback_endpoints.get(
 				"completion-event-dispatcher")
@@ -857,7 +896,7 @@ class UTIL_QPM:
 				"target": "qpm-controller",
 			})
 			push_info = dict(self.controller.push_info)
-		self.qrc.register_event_notification(push_info)
+		register(push_info)
 
 	def is_ready(self):
 		if not qpm_initialized:
@@ -1101,6 +1140,7 @@ class UTIL_QPM:
 		global qpm_shutdown
 
 		qpm_shutdown = True
+		self.controller.stop_completion_purge_worker()
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None
@@ -1145,6 +1185,7 @@ class UTIL_QPM:
 		return "****UTIL QPM Test Successful****"
 
 	def shutdown_provider(self):
+		self.controller.stop_completion_purge_worker()
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None

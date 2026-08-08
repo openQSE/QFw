@@ -1,6 +1,8 @@
 import os
 import threading
 import time
+from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from .admission import (
@@ -51,6 +53,36 @@ DEVICE_ID_ENV = "QFW_QPU_DEVICE_ID"
 ADMISSION_THREADING_ENV = "QFW_QPM_ADMISSION_THREADING_MODE"
 SCHEDULER_THREADING_ENV = "QFW_QPM_SCHEDULER_THREADING_MODE"
 CONTROLLER_SERIALIZATION_ENV = "QFW_QPM_CONTROLLER_SERIALIZATION_MODE"
+SERVICE_RUNTIME_CONFIG_ENV = "QFW_SERVICE_RUNTIME_CONFIG"
+COMPLETION_RETENTION_DEFAULTS = {
+	"completion_ttl_seconds": 3600,
+	"terminal_reservation_retention_seconds": 3600,
+	"max_records_per_reservation": 1024,
+	"max_bytes_per_reservation": 67108864,
+	"purge_interval_seconds": 60,
+}
+COMPLETION_RETENTION_CONFIG_KEYS = {
+	"completion-ttl-seconds": "completion_ttl_seconds",
+	"terminal-reservation-retention-seconds": (
+		"terminal_reservation_retention_seconds"),
+	"max-records-per-reservation": "max_records_per_reservation",
+	"max-bytes-per-reservation": "max_bytes_per_reservation",
+	"purge-interval-seconds": "purge_interval_seconds",
+}
+COMPLETION_RETENTION_ENV_KEYS = {
+	"QFW_QPM_COMPLETION_TTL_SECONDS": "completion_ttl_seconds",
+	"QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS": (
+		"terminal_reservation_retention_seconds"),
+	"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS": (
+		"terminal_reservation_retention_seconds"),
+	"QFW_QPM_COMPLETION_MAX_RECORDS": "max_records_per_reservation",
+	"QFW_QPM_COMPLETION_MAX_RECORDS_PER_RESERVATION": (
+		"max_records_per_reservation"),
+	"QFW_QPM_COMPLETION_MAX_BYTES": "max_bytes_per_reservation",
+	"QFW_QPM_COMPLETION_MAX_BYTES_PER_RESERVATION": (
+		"max_bytes_per_reservation"),
+	"QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS": "purge_interval_seconds",
+}
 
 DEFAULT_ADMISSION_THREADING_MODE = QHW_ADM_THREAD_SAFE
 DEFAULT_SCHEDULER_THREADING_MODE = QHW_SCHED_THREAD_SAFE
@@ -135,6 +167,31 @@ class QPMRuntimeTask:
 	state: str = QPM_TASK_CREATED
 
 
+@dataclass
+class QPMCompletionQueue:
+	reservation_id: object
+	records: deque = field(default_factory=deque)
+	records_by_cid: dict = field(default_factory=dict)
+	records_by_qtask_id: dict = field(default_factory=dict)
+	dequeued_records: list = field(default_factory=list)
+	evicted_selectors: dict = field(default_factory=dict)
+	retained_bytes: int = 0
+	terminal_at_ns: int = None
+	last_purge_ns: int = 0
+
+
+class _CompletionEvent:
+	def __init__(self, evtype, payload):
+		self.evtype = evtype
+		self.payload = payload
+
+	def get_evtype(self):
+		return self.evtype
+
+	def get_event(self):
+		return self.payload
+
+
 class QPMTargetController:
 	def __init__(self, config, admission_context_factory=None,
 		     scheduler_context_factory=None):
@@ -170,6 +227,12 @@ class QPMTargetController:
 		self.provider_canceller = None
 		self.timeout_state = {}
 		self.result_state = {}
+		self.completion_retention = completion_retention_config()
+		self.completion_queues = {}
+		self.completion_evictions_by_reservation = {}
+		self.completion_last_purge_ns = 0
+		self.completion_purge_stop = threading.Event()
+		self.completion_purge_thread = None
 		self.terminal_tasks_by_cid = {}
 		self.terminal_tasks_by_qtask_id = {}
 		self.audit_records = []
@@ -237,6 +300,8 @@ class QPMTargetController:
 				"lifecycle_event_count": len(self.lifecycle_events),
 				"reconciliation_fault_count": len(
 					self.reconciliation_faults),
+				"completion_queue_count": len(self.completion_queues),
+				"completion_retention": dict(self.completion_retention),
 				"admission_context_available": (
 					admission_context_available(self.admission_context)),
 				"admission_context_threading": getattr(
@@ -580,6 +645,7 @@ class QPMTargetController:
 
 	def cancel_task(self, cid=None, qtask_id=None, reason=None,
 			reservation_id=None, require_reservation=False):
+		deliveries = []
 		with self.lock:
 			runtime = self._runtime_for_task_selector_locked(
 				cid=cid, qtask_id=qtask_id)
@@ -631,7 +697,10 @@ class QPMTargetController:
 			if provider_cancel is not None:
 				response["provider_cancel_status"] = (
 					provider_cancel["status"])
-			return response
+			self._append_terminal_completion_delivery_locked(
+				deliveries, runtime, response)
+		self._dispatch_completion_deliveries(deliveries)
+		return response
 
 	def task_reservation_error(self, cid=None, qtask_id=None,
 				   reservation_id=None,
@@ -663,19 +732,114 @@ class QPMTargetController:
 			}
 
 	def dispatch_completion_event(self, event):
+		return self.publish_completion_event(event)
+
+	def publish_completion_event(self, event):
 		payload = event.get_event()
 		evtype = event.get_evtype()
+		return self.publish_completion(payload, evtype=evtype, event=event)
+
+	def publish_completion(self, completion, evtype=None, event=None):
+		payload = completion if isinstance(completion, dict) else {
+			"result": completion,
+		}
+		now_ns = time.time_ns()
+		delivery = None
 		with self.lock:
-			matches = [
-				registration
-				for registrations in self.event_endpoints.values()
-				for registration in registrations
-				if self._event_registration_matches_locked(
-					registration, evtype, payload)
-			]
-		for registration in matches:
-			registration["class"].put(event)
-		return bool(matches)
+			self._purge_completion_queues_locked(now_ns)
+			runtime = self._completion_runtime_locked(payload)
+			if (runtime is None or runtime.diagnostic_bypass or
+					runtime.reservation_id is None):
+				return False
+			payload_failed = (
+				_completion_payload_failed(payload) or
+				runtime.state == QPM_TASK_FAILED)
+			if payload_failed:
+				payload.setdefault("outcome", "FAILED")
+				payload.setdefault("reason", "provider-execution-failed")
+			circuit = self.circuits.get(runtime.cid)
+			if (runtime.state not in QPM_TASK_TERMINAL_STATES and
+					circuit is not None):
+				if payload_failed:
+					self._fail_scheduled_task_locked(
+						circuit,
+						error=payload.get("error"),
+						reason=payload.get("reason"))
+				else:
+					self.complete_scheduled_task(circuit, result=payload)
+			record = self._completion_record_locked(
+				payload, runtime, now_ns)
+			queue = self._ensure_completion_queue_locked(
+				runtime.reservation_id)
+			self._enqueue_completion_record_locked(queue, record)
+			delivery = self._completion_delivery_locked(
+				evtype, record, event=event)
+		self._dispatch_completion_deliveries([delivery])
+		return True
+
+	def peek_completion(self, reservation_id=None, cid=None, qtask_id=None,
+			    operation="peek_cq"):
+		with self.lock:
+			self._purge_completion_queues_locked(time.time_ns())
+			return self._poll_completion_locked(
+				reservation_id, cid=cid, qtask_id=qtask_id,
+				consume=False, operation=operation)
+
+	def read_completion(self, reservation_id=None, cid=None, qtask_id=None,
+			    operation="read_cq"):
+		with self.lock:
+			self._purge_completion_queues_locked(time.time_ns())
+			return self._poll_completion_locked(
+				reservation_id, cid=cid, qtask_id=qtask_id,
+				consume=True, operation=operation)
+
+	def purge_completion_queues(self, now_ns=None):
+		with self.lock:
+			return self._purge_completion_queues_locked(
+				now_ns or time.time_ns(), force=True)
+
+	def start_completion_purge_worker(self):
+		with self.lock:
+			thread = self.completion_purge_thread
+			if thread is not None and thread.is_alive():
+				return {"status": "running"}
+			self.completion_purge_stop.clear()
+			thread = threading.Thread(
+				target=self._completion_purge_worker,
+				name=f"qpm-completion-purge-{self.config.target_id}")
+			thread.daemon = True
+			self.completion_purge_thread = thread
+			thread.start()
+			return {
+				"status": "started",
+				"purge_interval_seconds": self.completion_retention[
+					"purge_interval_seconds"],
+			}
+
+	def stop_completion_purge_worker(self, timeout=1):
+		with self.lock:
+			thread = self.completion_purge_thread
+			if thread is None:
+				return {"status": "stopped"}
+			self.completion_purge_stop.set()
+		if thread is not threading.current_thread():
+			thread.join(timeout=timeout)
+		with self.lock:
+			status = "running" if thread.is_alive() else "stopped"
+			if status == "stopped":
+				self.completion_purge_thread = None
+			return {"status": status}
+
+	def _completion_purge_worker(self):
+		while True:
+			interval_seconds = self.completion_retention[
+				"purge_interval_seconds"]
+			if self.completion_purge_stop.wait(interval_seconds):
+				break
+			try:
+				self.purge_completion_queues(now_ns=time.time_ns())
+			except Exception:
+				pass
 
 	def evaluate_reservation(self, request, token=None):
 		with self.lock:
@@ -687,9 +851,11 @@ class QPMTargetController:
 			admission_request = self._admission_request(request, token=token)
 			decision = reserve_request(self.admission_context, admission_request)
 			reservation_id = decision.get("reservation_id")
-			if decision.get("status") == "accepted" and reservation_id:
+			if (decision.get("status") == "accepted" and
+					reservation_id is not None):
 				self.reservation_metadata_by_id[reservation_id] = (
 					admission_request["metadata"])
+				self._ensure_completion_queue_locked(reservation_id)
 			return decision
 
 	def renew_admission(self, reservation_id, request=None, token=None):
@@ -699,20 +865,26 @@ class QPMTargetController:
 			return result
 
 	def release_admission(self, reservation_id, reason_code=0, token=None):
+		deliveries = []
 		with self.lock:
 			result = self._close_reservation(
-				reservation_id, "release", reason_code=reason_code)
+				reservation_id, "release", reason_code=reason_code,
+				deliveries=deliveries)
 			if result.get("status") == "accepted":
 				self.reservation_metadata_by_id.pop(reservation_id, None)
-			return result
+		self._dispatch_completion_deliveries(deliveries)
+		return result
 
 	def cancel_admission(self, reservation_id, reason_code=0, token=None):
+		deliveries = []
 		with self.lock:
 			result = self._close_reservation(
-				reservation_id, "cancel", reason_code=reason_code)
+				reservation_id, "cancel", reason_code=reason_code,
+				deliveries=deliveries)
 			if result.get("status") == "accepted":
 				self.reservation_metadata_by_id.pop(reservation_id, None)
-			return result
+		self._dispatch_completion_deliveries(deliveries)
+		return result
 
 	def get_admission_reservation(self, reservation_id, token=None):
 		with self.lock:
@@ -800,6 +972,9 @@ class QPMTargetController:
 
 	def submit_qtask_to_scheduler(self, circuit):
 		qtask_id = circuit.info["qtask_id"]
+		deliveries = []
+		scheduler_error = None
+		scheduler_cause = None
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
 			if runtime.scheduler_task_id is not None:
@@ -813,16 +988,25 @@ class QPMTargetController:
 					self.scheduler_context,
 					self._scheduler_task_desc(circuit, runtime))
 			except Exception as error:
-				self.fail_scheduled_task(
+				self._fail_scheduled_task_locked(
 					circuit, error=error,
-					reason="scheduler-submission-failed")
-				raise QPMSchedulerError(
+					reason="scheduler-submission-failed",
+					deliveries=deliveries)
+				scheduler_error = QPMSchedulerError(
 					"scheduler task submission failed: "
-					f"qtask_id={qtask_id} error={error}") from error
-			runtime.scheduler_task_id = scheduler_task_id
-			self.qtask_id_by_scheduler_task_id[scheduler_task_id] = qtask_id
-			runtime.state = QPM_TASK_QUEUED
-			return runtime
+					f"qtask_id={qtask_id} error={error}")
+				scheduler_cause = error
+			if scheduler_error is not None:
+				runtime_result = None
+			else:
+				runtime.scheduler_task_id = scheduler_task_id
+				self.qtask_id_by_scheduler_task_id[scheduler_task_id] = qtask_id
+				runtime.state = QPM_TASK_QUEUED
+				runtime_result = runtime
+		self._dispatch_completion_deliveries(deliveries)
+		if scheduler_error is not None:
+			raise scheduler_error from scheduler_cause
+		return runtime_result
 
 	def select_qtask_for_dispatch(self):
 		with self.lock:
@@ -974,9 +1158,13 @@ class QPMTargetController:
 		}
 
 	def close_expired_reservation(self, reservation_id, now_ns=None):
+		deliveries = []
 		with self.lock:
-			return self._close_reservation(
-				reservation_id, "expire", now_ns=now_ns or time.time_ns())
+			result = self._close_reservation(
+				reservation_id, "expire", now_ns=now_ns or time.time_ns(),
+				deliveries=deliveries)
+		self._dispatch_completion_deliveries(deliveries)
+		return result
 
 	def configure_device_profile(self, profile=None):
 		with self.lock:
@@ -1111,6 +1299,7 @@ class QPMTargetController:
 			self.runtime_by_cid[cid] = runtime
 			self.runtime_by_qtask_id[qtask_id] = runtime
 			if runtime.reservation_id is not None:
+				self._ensure_completion_queue_locked(runtime.reservation_id)
 				self.qtask_ids_by_reservation.setdefault(
 					runtime.reservation_id, set()).add(qtask_id)
 			return runtime
@@ -1241,31 +1430,47 @@ class QPMTargetController:
 			runtime.state = QPM_TASK_COMPLETED
 			return runtime
 
-	def fail_scheduled_task(self, circuit, error=None, reason=None):
-		qtask_id = circuit.info["qtask_id"]
+	def fail_scheduled_task(self, circuit, error=None, reason=None,
+				publish_completion=True):
+		deliveries = [] if publish_completion else None
 		with self.lock:
-			runtime = self.runtime_by_qtask_id.get(qtask_id)
-			if runtime is None:
-				return None
-			if runtime.state in (
-					QPM_TASK_FAILED, QPM_TASK_CANCELLED,
-					QPM_TASK_COMPLETED):
-				return runtime
-			self._reconcile_task_hold_locked(runtime, circuit)
-			if runtime.scheduler_task_id is not None:
-				mark_scheduler_task_failed(
-					self.scheduler_context, runtime.scheduler_task_id)
-			self.provider_inflight.discard(qtask_id)
-			self.selected_qtask_ids.discard(qtask_id)
-			self.timeout_state.pop(qtask_id, None)
-			runtime.state = QPM_TASK_FAILED
-			if error is not None:
-				self.result_state[qtask_id] = {
-					"reason": reason,
-					"error": str(error),
-					"error_type": type(error).__name__,
-				}
+			runtime = self._fail_scheduled_task_locked(
+				circuit, error=error, reason=reason,
+				deliveries=deliveries)
+		if deliveries is not None:
+			self._dispatch_completion_deliveries(deliveries)
+		return runtime
+
+	def _fail_scheduled_task_locked(self, circuit, error=None, reason=None,
+					deliveries=None):
+		qtask_id = circuit.info["qtask_id"]
+		runtime = self.runtime_by_qtask_id.get(qtask_id)
+		if runtime is None:
+			return None
+		if runtime.state in (
+				QPM_TASK_FAILED, QPM_TASK_CANCELLED,
+				QPM_TASK_COMPLETED):
 			return runtime
+		self._reconcile_task_hold_locked(runtime, circuit)
+		if runtime.scheduler_task_id is not None:
+			mark_scheduler_task_failed(
+				self.scheduler_context, runtime.scheduler_task_id)
+		self.provider_inflight.discard(qtask_id)
+		self.selected_qtask_ids.discard(qtask_id)
+		self.timeout_state.pop(qtask_id, None)
+		runtime.state = QPM_TASK_FAILED
+		if error is not None:
+			self.result_state[qtask_id] = {
+				"reason": reason,
+				"error": str(error),
+				"error_type": type(error).__name__,
+			}
+		if deliveries is not None:
+			self._append_terminal_completion_delivery_locked(
+				deliveries, runtime,
+				self._task_status_locked(
+					runtime, outcome="FAILED", reason=reason))
+		return runtime
 
 	def record_timeout(self, qtask_id, reason=None, message=None):
 		with self.lock:
@@ -1357,6 +1562,439 @@ class QPMTargetController:
 				reason=reason,
 				details={"operation": operation})
 		return record
+
+	def _ensure_completion_queue_locked(self, reservation_id):
+		queue = self.completion_queues.get(reservation_id)
+		if queue is None:
+			queue = QPMCompletionQueue(reservation_id=reservation_id)
+			self.completion_queues[reservation_id] = queue
+		return queue
+
+	def _mark_completion_queue_terminal_locked(self, reservation_id, now_ns):
+		queue = self._ensure_completion_queue_locked(reservation_id)
+		if queue.terminal_at_ns is None:
+			queue.terminal_at_ns = now_ns
+
+	def _completion_runtime_locked(self, payload):
+		cid = payload.get("cid") if isinstance(payload, dict) else None
+		qtask_id = (
+			payload.get("qtask_id") if isinstance(payload, dict) else None)
+		runtime = self._runtime_for_task_selector_locked(
+			cid=cid, qtask_id=qtask_id)
+		if runtime is None:
+			runtime = self._terminal_task_for_selector_locked(
+				cid=cid, qtask_id=qtask_id)
+		if runtime is None and isinstance(payload, dict):
+			provider_handle = payload.get("provider_handle")
+			if provider_handle is not None:
+				runtime = self.task_for_provider_handle(provider_handle)
+		return runtime
+
+	def _completion_record_locked(self, payload, runtime, now_ns):
+		if isinstance(payload, dict):
+			payload.setdefault("cid", runtime.cid)
+			payload.setdefault("qtask_id", runtime.qtask_id)
+			payload.setdefault("reservation_id", runtime.reservation_id)
+			payload.setdefault("scheduler_task_id", runtime.scheduler_task_id)
+			record = deepcopy(payload)
+		else:
+			record = {"result": payload}
+		record["cid"] = runtime.cid
+		record["qtask_id"] = runtime.qtask_id
+		record["reservation_id"] = runtime.reservation_id
+		if runtime.scheduler_task_id is not None:
+			record["scheduler_task_id"] = runtime.scheduler_task_id
+		record.setdefault("cq_enqueue_time", time.time())
+		record.setdefault("cq_dequeue_time", -1)
+		record["completion_ready"] = True
+		record["qpm_cq_enqueue_time_ns"] = now_ns
+		record["qpm_cq_dequeue_time_ns"] = -1
+		record["_qpm_record_size_bytes"] = (
+			_completion_record_size_bytes(record))
+		return record
+
+	def _append_terminal_completion_delivery_locked(
+			self, deliveries, runtime, payload=None, evtype=None):
+		delivery = self._terminal_completion_delivery_locked(
+			runtime, payload=payload, evtype=evtype)
+		if delivery is not None:
+			deliveries.append(delivery)
+		return delivery
+
+	def _terminal_completion_delivery_locked(
+			self, runtime, payload=None, evtype=None):
+		if (runtime is None or runtime.diagnostic_bypass or
+				runtime.reservation_id is None):
+			return None
+		now_ns = time.time_ns()
+		if payload is None:
+			payload = self._task_status_locked(runtime)
+		record = self._completion_record_locked(
+			dict(payload), runtime, now_ns)
+		queue = self._ensure_completion_queue_locked(
+			runtime.reservation_id)
+		self._enqueue_completion_record_locked(queue, record)
+		return self._completion_delivery_locked(evtype, record)
+
+	def _completion_delivery_locked(self, evtype, record, event=None):
+		event_type = evtype or self.push_info.get("evtype") or "completion"
+		matches = [
+			registration
+			for registrations in self.event_endpoints.values()
+			for registration in registrations
+			if self._event_registration_matches_locked(
+				registration, event_type, record)
+		]
+		if event is None or evtype is None:
+			event = _CompletionEvent(event_type, record)
+		return {
+			"event": event,
+			"matches": matches,
+		}
+
+	def _dispatch_completion_deliveries(self, deliveries):
+		delivered = False
+		for delivery in deliveries:
+			if delivery is None:
+				continue
+			for registration in delivery["matches"]:
+				registration["class"].put(delivery["event"])
+				delivered = True
+		return delivered
+
+	def _enqueue_completion_record_locked(self, queue, record):
+		queue.records.append(record)
+		self._completion_index_add_locked(queue, record)
+		queue.retained_bytes += record["_qpm_record_size_bytes"]
+		self._enforce_completion_retention_locked(queue, time.time_ns())
+		return record
+
+	def _poll_completion_locked(self, reservation_id, cid=None,
+				    qtask_id=None, consume=False,
+				    operation="peek_cq"):
+		queue, error = self._completion_queue_for_poll_locked(
+			reservation_id, operation, cid=cid, qtask_id=qtask_id)
+		if error is not None:
+			return error
+		record = self._completion_record_for_selector_locked(
+			queue, cid=cid, qtask_id=qtask_id)
+		selector_error = self._completion_selector_reservation_error_locked(
+			reservation_id, cid=cid, qtask_id=qtask_id,
+			record=record)
+		if selector_error is not None:
+			selector_error["poll_operation"] = operation
+			selector_error["completion_ready"] = False
+			return selector_error
+		if record is None:
+			eviction = self._completion_eviction_for_selector_locked(
+				reservation_id, cid=cid, qtask_id=qtask_id)
+			if eviction is not None:
+				return self._completion_no_longer_retained_response(
+					reservation_id, cid=cid, qtask_id=qtask_id,
+					operation=operation, eviction=eviction)
+			return self._completion_not_ready_response_locked(
+				reservation_id, cid=cid, qtask_id=qtask_id,
+				operation=operation)
+		if not consume:
+			return self._completion_public_record(record, operation)
+		self._remove_completion_record_locked(
+			queue, record, reason="read", now_ns=time.time_ns())
+		record["cq_dequeue_time"] = time.time()
+		record["qpm_cq_dequeue_time_ns"] = time.time_ns()
+		queue.dequeued_records.append({
+			"cid": record.get("cid"),
+			"qtask_id": record.get("qtask_id"),
+			"reservation_id": reservation_id,
+			"dequeue_time_ns": record["qpm_cq_dequeue_time_ns"],
+			"operation": operation,
+		})
+		if record.get("cid") is not None:
+			self.forget_terminal_task_for_cid(record["cid"])
+		self._purge_completion_queues_locked(time.time_ns())
+		return self._completion_public_record(record, operation)
+
+	def _completion_queue_for_poll_locked(self, reservation_id, operation,
+					      cid=None, qtask_id=None):
+		if reservation_id is None:
+			return None, {
+				"outcome": "INVALID_RESERVATION",
+				"lifecycle_state": "invalid-reservation",
+				"reason": "reservation-required",
+				"message": (
+					"reservation_id is required for managed "
+					"completion polling"),
+				"completion_ready": False,
+				"poll_operation": operation,
+			}
+		queue = self.completion_queues.get(reservation_id)
+		if queue is not None:
+			return queue, None
+		eviction = self._completion_eviction_for_selector_locked(
+			reservation_id, cid=cid, qtask_id=qtask_id)
+		if eviction is not None:
+			return None, self._completion_no_longer_retained_response(
+				reservation_id, cid=cid, qtask_id=qtask_id,
+				operation=operation, eviction=eviction)
+		try:
+			get_reservation(self.admission_context, reservation_id)
+		except Exception as error:
+			return None, {
+				"outcome": "MISSING_RESERVATION",
+				"lifecycle_state": "missing-reservation",
+				"reservation_id": reservation_id,
+				"reason": "missing-reservation",
+				"message": str(error),
+				"completion_ready": False,
+				"poll_operation": operation,
+			}
+		return self._ensure_completion_queue_locked(reservation_id), None
+
+	def _completion_selector_reservation_error_locked(
+			self, reservation_id, cid=None, qtask_id=None, record=None):
+		runtime = self._runtime_for_task_selector_locked(
+			cid=cid, qtask_id=qtask_id)
+		if runtime is None:
+			runtime = self._terminal_task_for_selector_locked(
+				cid=cid, qtask_id=qtask_id)
+		if runtime is None:
+			return None
+		return self._task_reservation_error_locked(
+			runtime, reservation_id, require_reservation=True)
+
+	def _completion_record_for_selector_locked(self, queue, cid=None,
+						   qtask_id=None):
+		if cid is None and qtask_id is None:
+			return queue.records[0] if queue.records else None
+		candidates = None
+		if cid is not None:
+			candidates = queue.records_by_cid.get(cid, [])
+		if qtask_id is not None:
+			qtask_candidates = queue.records_by_qtask_id.get(qtask_id, [])
+			candidates = (
+				qtask_candidates if candidates is None else
+				[
+					record for record in candidates
+					if record in qtask_candidates
+				])
+		if not candidates:
+			return None
+		return candidates[0]
+
+	def _completion_not_ready_response_locked(self, reservation_id, cid=None,
+						  qtask_id=None,
+						  operation="peek_cq"):
+		runtime = self._runtime_for_task_selector_locked(
+			cid=cid, qtask_id=qtask_id)
+		if runtime is None:
+			runtime = self._terminal_task_for_selector_locked(
+				cid=cid, qtask_id=qtask_id)
+		reason = "completion-not-ready"
+		if runtime is not None:
+			status = self._task_status_locked(runtime, reason=reason)
+		else:
+			status = {
+				"outcome": "IN_PROGRESS",
+				"lifecycle_state": "no-ready-completion",
+				"reservation_id": reservation_id,
+				"cid": cid,
+				"qtask_id": qtask_id,
+				"reason": reason,
+			}
+		status["completion_ready"] = False
+		status["poll_operation"] = operation
+		return {key: value for key, value in status.items()
+			if value is not None}
+
+	def _completion_no_longer_retained_response(
+			self, reservation_id, cid=None, qtask_id=None,
+			operation="peek_cq", eviction=None):
+		response = {
+			"outcome": "NO_LONGER_RETAINED",
+			"lifecycle_state": "no-longer-retained",
+			"reservation_id": reservation_id,
+			"cid": cid,
+			"qtask_id": qtask_id,
+			"reason": "completion-no-longer-retained",
+			"message": "completion record is no longer retained",
+			"completion_ready": False,
+			"poll_operation": operation,
+		}
+		if isinstance(eviction, dict):
+			for key in ("evicted_at_ns", "retention_reason"):
+				if key in eviction:
+					response[key] = eviction[key]
+		return {key: value for key, value in response.items()
+			if value is not None}
+
+	def _completion_eviction_for_selector_locked(
+			self, reservation_id, cid=None, qtask_id=None):
+		evictions = self.completion_evictions_by_reservation.get(
+			reservation_id, {})
+		for selector in _completion_selectors(
+				reservation_id=reservation_id, cid=cid,
+				qtask_id=qtask_id):
+			if selector in evictions:
+				return evictions[selector]
+		return evictions.get(("reservation", reservation_id))
+
+	def _completion_public_record(self, record, operation):
+		result = {
+			key: deepcopy(value)
+			for key, value in record.items()
+			if not key.startswith("_qpm_")
+		}
+		result["completion_ready"] = True
+		result["poll_operation"] = operation
+		return result
+
+	def _completion_index_add_locked(self, queue, record):
+		cid = record.get("cid")
+		if cid is not None:
+			queue.records_by_cid.setdefault(cid, []).append(record)
+		qtask_id = record.get("qtask_id")
+		if qtask_id is not None:
+			queue.records_by_qtask_id.setdefault(qtask_id, []).append(record)
+
+	def _completion_index_remove_locked(self, queue, record):
+		for key, mapping in (
+				(record.get("cid"), queue.records_by_cid),
+				(record.get("qtask_id"), queue.records_by_qtask_id)):
+			if key is None:
+				continue
+			records = mapping.get(key)
+			if records is None:
+				continue
+			if record in records:
+				records.remove(record)
+			if not records:
+				mapping.pop(key, None)
+
+	def _remove_completion_record_locked(self, queue, record, reason, now_ns):
+		try:
+			queue.records.remove(record)
+		except ValueError:
+			pass
+		self._completion_index_remove_locked(queue, record)
+		queue.retained_bytes = max(
+			0, queue.retained_bytes -
+			record.get("_qpm_record_size_bytes", 0))
+		if reason != "read":
+			self._remember_completion_eviction_locked(
+				queue, record, reason, now_ns)
+
+	def _remember_completion_eviction_locked(self, queue, record, reason,
+						 now_ns):
+		eviction = {
+			"evicted_at_ns": now_ns,
+			"retention_reason": reason,
+		}
+		evictions = self.completion_evictions_by_reservation.setdefault(
+			queue.reservation_id, {})
+		for selector in _completion_selectors(
+				reservation_id=queue.reservation_id,
+				cid=record.get("cid"),
+				qtask_id=record.get("qtask_id")):
+			queue.evicted_selectors[selector] = dict(eviction)
+			evictions[selector] = dict(eviction)
+
+	def _enforce_completion_retention_locked(self, queue, now_ns):
+		for record in list(queue.records):
+			if not self._completion_record_expired_locked(record, now_ns):
+				continue
+			self._remove_completion_record_locked(
+				queue, record, "completion-ttl-expired", now_ns)
+		max_records = self.completion_retention[
+			"max_records_per_reservation"]
+		while max_records >= 0 and len(queue.records) > max_records:
+			self._remove_completion_record_locked(
+				queue, queue.records[0], "max-records-exceeded",
+				now_ns)
+		max_bytes = self.completion_retention[
+			"max_bytes_per_reservation"]
+		while max_bytes >= 0 and queue.retained_bytes > max_bytes:
+			self._remove_completion_record_locked(
+				queue, queue.records[0], "max-bytes-exceeded",
+				now_ns)
+
+	def _completion_record_expired_locked(self, record, now_ns):
+		ttl_seconds = self.completion_retention["completion_ttl_seconds"]
+		if ttl_seconds < 0:
+			return False
+		return (
+			record.get("qpm_cq_enqueue_time_ns", 0) +
+			int(ttl_seconds * 1_000_000_000) <= now_ns)
+
+	def _purge_completion_queues_locked(self, now_ns, force=False):
+		purge_interval_ns = int(
+			self.completion_retention["purge_interval_seconds"] *
+			1_000_000_000)
+		if (not force and purge_interval_ns > 0 and
+				self.completion_last_purge_ns and
+				now_ns - self.completion_last_purge_ns < purge_interval_ns):
+			return {"purged_reservations": [], "evicted_records": 0}
+		self.completion_last_purge_ns = now_ns
+		summary = {"purged_reservations": [], "evicted_records": 0}
+		for reservation_id, queue in list(self.completion_queues.items()):
+			before = len(queue.records)
+			self._enforce_completion_retention_locked(queue, now_ns)
+			summary["evicted_records"] += before - len(queue.records)
+			if not self._completion_queue_collectable_locked(
+					queue, now_ns):
+				continue
+			self._remember_completion_queue_gc_locked(queue, now_ns)
+			self.completion_queues.pop(reservation_id, None)
+			summary["purged_reservations"].append(reservation_id)
+		return summary
+
+	def _completion_queue_collectable_locked(self, queue, now_ns):
+		if queue.terminal_at_ns is None:
+			return False
+		if self._reservation_has_active_work_locked(queue.reservation_id):
+			return False
+		terminal_retention_ns = int(
+			self.completion_retention[
+				"terminal_reservation_retention_seconds"] *
+			1_000_000_000)
+		if terminal_retention_ns >= 0:
+			deadline = queue.terminal_at_ns + terminal_retention_ns
+			if deadline <= now_ns:
+				for record in list(queue.records):
+					self._remove_completion_record_locked(
+						queue, record,
+						"terminal-reservation-retention-expired",
+						now_ns)
+		return not queue.records
+
+	def _reservation_has_active_work_locked(self, reservation_id):
+		for qtask_id in self.qtask_ids_by_reservation.get(
+				reservation_id, ()):
+			if self._qtask_has_active_work_locked(qtask_id):
+				return True
+		for qtask_id, pending in self.pending_capacity.items():
+			if (pending.get("reservation_id") == reservation_id and
+					self._qtask_has_active_work_locked(qtask_id)):
+				return True
+		for qtask_id, hold in self.capacity_holds.items():
+			if (hold.get("reservation_id") == reservation_id and
+					self._qtask_has_active_work_locked(qtask_id)):
+				return True
+		return False
+
+	def _qtask_has_active_work_locked(self, qtask_id):
+		runtime = self.runtime_by_qtask_id.get(qtask_id)
+		if runtime is None:
+			runtime = self.terminal_tasks_by_qtask_id.get(qtask_id)
+		if runtime is None:
+			return False
+		return runtime.state not in QPM_TASK_TERMINAL_STATES
+
+	def _remember_completion_queue_gc_locked(self, queue, now_ns):
+		evictions = self.completion_evictions_by_reservation.setdefault(
+			queue.reservation_id, {})
+		evictions[("reservation", queue.reservation_id)] = {
+			"evicted_at_ns": now_ns,
+			"retention_reason": "terminal-reservation-garbage-collected",
+		}
 
 	def _normalize_device_profile(self, profile):
 		device_id = profile.get("device_id", self._device_id())
@@ -2259,15 +2897,18 @@ class QPMTargetController:
 		return metadata
 
 	def _close_reservation(self, reservation_id, close_kind, reason_code=0,
-			       now_ns=None):
+			       now_ns=None, deliveries=None):
 		if close_kind == "expire":
 			return self._close_expired_reservations(
-				reservation_id, now_ns=now_ns)
+				reservation_id, now_ns=now_ns,
+				deliveries=deliveries)
 		now_ns = now_ns or time.time_ns()
 		close_state = self._reservation_close_state_locked(
 			reservation_id, close_kind, now_ns)
-		self._remove_pending_for_reservation(reservation_id, close_state)
-		self._reconcile_holds_for_reservation(reservation_id, close_state)
+		self._remove_pending_for_reservation(
+			reservation_id, close_state, deliveries=deliveries)
+		self._reconcile_holds_for_reservation(
+			reservation_id, close_state, deliveries=deliveries)
 		self._refresh_provider_cancel_pending(reservation_id, close_state)
 		if close_state["provider_cancel_pending"]:
 			close_state["status"] = "provider-cancel-pending"
@@ -2289,9 +2930,13 @@ class QPMTargetController:
 				f"unsupported reservation close kind: {close_kind}")
 		close_state["completed_at_ns"] = time.time_ns()
 		close_state["status"] = result.get("status", "accepted")
+		if close_state["status"] == "accepted":
+			self._mark_completion_queue_terminal_locked(
+				reservation_id, close_state["completed_at_ns"])
 		return result
 
-	def _close_expired_reservations(self, reservation_id, now_ns=None):
+	def _close_expired_reservations(self, reservation_id, now_ns=None,
+					deliveries=None):
 		now_ns = now_ns or time.time_ns()
 		expired_reservation_ids = self._expired_active_reservation_ids_locked(
 			reservation_id, now_ns)
@@ -2304,9 +2949,11 @@ class QPMTargetController:
 			close_states.append((expired_reservation_id, close_state))
 		for expired_reservation_id, close_state in close_states:
 			self._remove_pending_for_reservation(
-				expired_reservation_id, close_state)
+				expired_reservation_id, close_state,
+				deliveries=deliveries)
 			self._reconcile_holds_for_reservation(
-				expired_reservation_id, close_state)
+				expired_reservation_id, close_state,
+				deliveries=deliveries)
 			self._refresh_provider_cancel_pending(
 				expired_reservation_id, close_state)
 		pending_qtask_ids = []
@@ -2326,9 +2973,11 @@ class QPMTargetController:
 				"pending_qtask_ids": pending_qtask_ids,
 			}
 		expire_reservations(self.admission_context, now_ns)
-		for _, close_state in close_states:
+		for expired_reservation_id, close_state in close_states:
 			close_state["completed_at_ns"] = time.time_ns()
 			close_state["status"] = "accepted"
+			self._mark_completion_queue_terminal_locked(
+				expired_reservation_id, close_state["completed_at_ns"])
 		return {
 			"status": "accepted",
 			"reservation_id": reservation_id,
@@ -2382,18 +3031,26 @@ class QPMTargetController:
 		close_state["reason"] = close_kind
 		return close_state
 
-	def _remove_pending_for_reservation(self, reservation_id, close_state):
+	def _remove_pending_for_reservation(self, reservation_id, close_state,
+					    deliveries=None):
 		for qtask_id, pending in list(self.pending_capacity.items()):
 			if pending["reservation_id"] != reservation_id:
 				continue
 			self.pending_capacity.pop(qtask_id, None)
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
 			if runtime is not None:
-				self._cancel_runtime_for_reservation_close(
+				cancelled = self._cancel_runtime_for_reservation_close(
 					runtime, close_state)
+				if cancelled and deliveries is not None:
+					self._append_terminal_completion_delivery_locked(
+						deliveries, runtime,
+						self._task_status_locked(
+							runtime, outcome="CANCELLED",
+							reason=close_state["reason"]))
 			close_state["pending_removed"].append(qtask_id)
 
-	def _reconcile_holds_for_reservation(self, reservation_id, close_state):
+	def _reconcile_holds_for_reservation(self, reservation_id, close_state,
+					     deliveries=None):
 		for qtask_id, hold in list(self.capacity_holds.items()):
 			if hold["reservation_id"] != reservation_id:
 				continue
@@ -2411,6 +3068,12 @@ class QPMTargetController:
 				qtask_id, reservation_id, usage, runtime, circuit)
 			self.usage_events_by_qtask_id.pop(qtask_id, None)
 			close_state["held_reconciled"].append(qtask_id)
+			if runtime is not None and deliveries is not None:
+				self._append_terminal_completion_delivery_locked(
+					deliveries, runtime,
+					self._task_status_locked(
+						runtime, outcome="CANCELLED",
+						reason=close_state["reason"]))
 
 	def _cancel_runtime_for_reservation_close(self, runtime, close_state):
 		qtask_id = runtime.qtask_id
@@ -2648,7 +3311,102 @@ def find_target_controller(target_id):
 
 def clear_target_controllers():
 	with _CONTROLLERS_LOCK:
+		controllers = list(_CONTROLLERS.values())
 		_CONTROLLERS.clear()
+	for controller in controllers:
+		controller.stop_completion_purge_worker()
+
+
+def completion_retention_config():
+	retention = dict(COMPLETION_RETENTION_DEFAULTS)
+	retention.update(_completion_retention_config_file())
+	for env_name, key in COMPLETION_RETENTION_ENV_KEYS.items():
+		value = os.environ.get(env_name)
+		if value is None or str(value).strip() == "":
+			continue
+		retention[key] = _completion_retention_int(value, env_name)
+	return retention
+
+
+def _completion_retention_config_file():
+	path = os.environ.get(SERVICE_RUNTIME_CONFIG_ENV, "").strip()
+	if not path or not os.path.exists(path):
+		return {}
+	try:
+		import yaml
+		with open(path, "r", encoding="utf-8") as stream:
+			data = yaml.safe_load(stream) or {}
+	except Exception:
+		return {}
+	block = (
+		data.get("qpm", {})
+		.get("completion-queues", {})
+		.get("retention", {}))
+	if not isinstance(block, dict):
+		return {}
+	retention = {}
+	for config_key, internal_key in COMPLETION_RETENTION_CONFIG_KEYS.items():
+		if config_key not in block:
+			continue
+		retention[internal_key] = _completion_retention_int(
+			block[config_key],
+			f"qpm.completion-queues.retention.{config_key}")
+	return retention
+
+
+def _completion_retention_int(value, source):
+	if isinstance(value, bool):
+		raise ValueError(
+			f"invalid QPM completion retention value for {source}: "
+			f"{value!r}")
+	if isinstance(value, int):
+		parsed = value
+	elif isinstance(value, str):
+		try:
+			parsed = int(value.strip())
+		except ValueError:
+			raise ValueError(
+				f"invalid QPM completion retention value for "
+				f"{source}: {value!r}") from None
+	else:
+		raise ValueError(
+			f"invalid QPM completion retention value for {source}: "
+			f"{value!r}")
+	if parsed <= 0:
+		raise ValueError(
+			f"QPM completion retention value for {source} must be "
+			"positive")
+	return parsed
+
+
+def _completion_payload_failed(payload):
+	if not isinstance(payload, dict):
+		return False
+	rc = payload.get("rc")
+	if rc not in (None, 0):
+		return True
+	outcome = payload.get("outcome")
+	return outcome is not None and str(outcome).upper() == "FAILED"
+
+
+def _completion_record_size_bytes(record):
+	public = {
+		key: value
+		for key, value in record.items()
+		if not str(key).startswith("_qpm_")
+	}
+	return len(repr(public).encode("utf-8", errors="replace"))
+
+
+def _completion_selectors(reservation_id=None, cid=None, qtask_id=None):
+	selectors = []
+	if cid is not None:
+		selectors.append(("cid", cid))
+	if qtask_id is not None:
+		selectors.append(("qtask_id", qtask_id))
+	if reservation_id is not None and not selectors:
+		selectors.append(("reservation", reservation_id))
+	return selectors
 
 
 def _provider_cancel_is_terminal(status):
