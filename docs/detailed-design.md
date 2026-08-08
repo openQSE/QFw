@@ -45,15 +45,21 @@ client
 ```
 
 The target design separates these concerns. DEFw-dirsvc owns registered-service
-discovery, while QPM owns the active reservation flow and uses qhw-admission as
-the authoritative reservation store. Long-running QPM services remain
-DEFw-wrapped RPC services and register with the DEFw-dirsvc selected by their
-service configuration.
+discovery for services that choose to register, while QPM owns the active
+reservation flow and uses qhw-admission as the authoritative reservation store.
+Long-running QPM services remain DEFw-wrapped RPC services. Depending on site
+configuration, they either register with a selected DEFw-dirsvc or expose a
+configured direct DEFw endpoint that clients resolve without directory-service
+registration.
 
 Relevant implementation points:
 
-- `backends/qfw_qiskit/qfw_lookup_service.py` discovers QPM by resolving
-  binding records through DEFw-dirsvc.
+- `backends/qfw_qiskit/qfw_lookup_service.py` resolves QPM through
+  `QPMResolver`, using configured DEFw-dirsvc scopes or a configured direct
+  endpoint scope.
+- `backends/qfw_qiskit/qpm_resolver.py` resolves service records, selected API
+  bindings, and direct endpoint records, then asks DEFw to construct the
+  requested service API wrapper.
 - `DEFw/python/infra/defw.py` implements `connect_to_binding()` by connecting
   to the selected endpoint and constructing the requested service API wrapper.
 - `DEFw/python/services/svc_dirsvc/svc_dirsvc.py` implements registration,
@@ -64,13 +70,14 @@ Relevant implementation points:
   delegate hardware operations to a provider-specific QRC object.
 - QRC owns the current provider execution mechanics, including asynchronous
   Python workers, provider calls, completion records, and callback delivery.
-- `backends/qfw_qiskit/qfw_simulator.py` currently keeps only `shots`, `seed`,
-  and `seed_simulator` when constructing a `QFwJob`.
-- `backends/qfw_qiskit/qfw_job.py` currently calls `qpm.async_run(info)`
-  without reservation context.
-- `backends/qfw_qiskit/qfw_sampler.py` exposes `Options.run_options`, while
-  `backends/qfw_qiskit/qfw_estimator.py` has no equivalent backend pass-through
-  option.
+- `backends/qfw_qiskit/qfw_simulator.py` preserves simulator options plus the
+  reservation execution context options `reservation_id`, `token`, `timeout`,
+  and `cancel_on_timeout` when constructing a `QFwJob`.
+- `backends/qfw_qiskit/qfw_job.py` calls `qpm.async_run(info, **context)` and
+  can reject unreserved execution when `QFW_QPM_REQUIRE_RESERVATION` is enabled.
+- `backends/qfw_qiskit/qfw_sampler.py` and
+  `backends/qfw_qiskit/qfw_estimator.py` expose `Options.run_options` and
+  forward that dictionary to backend `run()` calls.
 
 </details>
 
@@ -845,7 +852,9 @@ the selected policy to a site-owned path such as
 launchers through `QFW_SERVICE_RUNTIME_CONFIG`.
 
 The installed service-runtime file can use the same schema as the existing
-templates:
+templates. The `qpm.completion-queues.retention` block in this same
+`service-runtime.yaml` file controls QPM completion-queue TTL and retention
+limits:
 
 ```yaml
 mpi-launch:
@@ -866,12 +875,41 @@ backends:
     wrapper: gpuwrapper.sh
   nwqsim:
     wrapper: null
+
+qpm:
+  completion-queues:
+    retention:
+      completion-ttl-seconds: 3600
+      terminal-reservation-retention-seconds: 3600
+      max-records-per-reservation: 1024
+      max-bytes-per-reservation: 67108864
+      purge-interval-seconds: 60
 ```
 
 Service-runtime files do not decide which QPM services exist. Job-local
 service inventory comes from the packaged `qfw_services.yaml` manifest when a
 local or hybrid runtime profile starts services. Production service inventory
 comes from the site service manager. Neither inventory is part of `site.yaml`.
+
+The `qpm.completion-queues.retention` block is service-side QPM policy. It is
+read by QPM services through the service-runtime file selected by
+`QFW_SERVICE_RUNTIME_CONFIG`. The policy is intentionally not part of
+client-readable `site.yaml`, because it controls service memory use and result
+retention rather than endpoint discovery.
+
+If the block is omitted, QPM uses these defaults:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `completion-ttl-seconds` | `3600` | A completed queue record may be retained for up to one hour after enqueue. |
+| `terminal-reservation-retention-seconds` | `3600` | A terminal reservation's completion queue may remain readable for up to one hour after release, cancel, or expiration. |
+| `max-records-per-reservation` | `1024` | QPM may evict the oldest completed queue records once one reservation exceeds this count. |
+| `max-bytes-per-reservation` | `67108864` | QPM may evict the oldest completed queue records once measured retained result bytes for one reservation exceed 64 MiB. When result size cannot be measured, the byte limit is skipped but TTL and record-count limits still apply. |
+| `purge-interval-seconds` | `60` | QPM should scan for expired completion records at least once per minute while the service is active. |
+
+Explicit non-positive values are invalid except where a future schema version
+defines a named value such as `unlimited`. Invalid explicit retention settings
+should fail QPM readiness rather than silently disabling queue bounds.
 
 ### Device Access Configuration
 
@@ -969,6 +1007,10 @@ Client and resolver variables:
 | `QFW_RUNTIME_PROFILE` | Optional profile name, such as `local` or `hybrid`, used when no explicit runtime path is supplied. |
 | `QFW_SITE_DIRSVC_ENDPOINTS` | Override for site directory endpoints from `site.yaml`; normally unset. |
 | `QFW_QPM_RESOLVER_SCOPE_ORDER` | Override for `resolver.scope-order` from runtime configuration. |
+| `QFW_QPM_DIRECT_ENDPOINT_FALLBACK` | Enables the configured direct-endpoint resolver scope. The name is retained for compatibility, but the scope is also used for explicit direct long-running profiles. |
+| `QFW_DIRECT_QPM_ENDPOINT` | Configured direct DEFw endpoint for an unregistered or directly selected long-running QPM. |
+| `QFW_DIRECT_QPM_SERVICE_MODULE` | Optional service module override for a direct endpoint binding. |
+| `QFW_DIRECT_QPM_SERVICE_CLASS` | Optional service class override for a direct endpoint binding. |
 
 Service-launch variables:
 
@@ -978,6 +1020,13 @@ Service-launch variables:
 | `QFW_DEVICE_ACCESS_CFG` | Privileged device-access configuration path for QPM services. |
 | `QFW_QPM_OPERATION_MODE` | QPM operation-mode override, such as `long-running` or `qfw-managed`. |
 | `QFW_QPM_REGISTER_WITH_DIRSVC` | Override controlling whether a QPM registers with a directory service. |
+| `QFW_QPM_DIRECT_ENDPOINT_FALLBACK` | Enables direct listener readiness when a service runs without directory-service registration. |
+| `QFW_DIRECT_QPM_ENDPOINT` | Stable endpoint advertised to direct clients for long-running listener mode. |
+| `QFW_QPM_COMPLETION_TTL_SECONDS` | Test or emergency override for `qpm.completion-queues.retention.completion-ttl-seconds`. |
+| `QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS` | Test or emergency override for `qpm.completion-queues.retention.terminal-reservation-retention-seconds`. |
+| `QFW_QPM_COMPLETION_MAX_RECORDS` | Test or emergency override for `qpm.completion-queues.retention.max-records-per-reservation`. |
+| `QFW_QPM_COMPLETION_MAX_BYTES` | Test or emergency override for `qpm.completion-queues.retention.max-bytes-per-reservation`. |
+| `QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS` | Test or emergency override for `qpm.completion-queues.retention.purge-interval-seconds`. |
 | `DEFW_DISABLE_DIRSVC` | Low-level DEFw listener setting written by wrappers; users should not set it directly. |
 
 Activation variables:
@@ -1975,11 +2024,13 @@ among endpoints based on load, admission estimates, scheduler state, or policy.
 That scheduler is a higher-level selection component rather than the baseline
 resolver behavior.
 
-Direct configured QPM endpoint resolution remains useful for diagnostics and
-controlled fallback. It should not be the primary long-running service model.
-The primary model is that long-running QPMs register with the production
-DEFw-dirsvc, and clients discover them through the same directory-service
-contract used for job-local services.
+Direct configured QPM endpoint resolution is the supported model for
+unregistered long-running QPM services and also remains useful for diagnostics
+and controlled fallback. It still uses DEFw RPC and the same selected QPM API
+binding model; it only bypasses directory-service registration and lookup.
+Runtime profiles decide whether clients use site directory discovery, job-local
+directory discovery, direct endpoint resolution, or an ordered combination of
+those scopes.
 
 ### QPM Override Handling
 
@@ -2152,10 +2203,101 @@ placeholder.
 | `async_run(info, reservation_id, token)` | Current circuit `info`; `reservation_id`; opaque token placeholder. | Returns QFw circuit ID, qtask ID, scheduler task ID when available, and managed lifecycle status. |
 | `cancel_task(cid, reservation_id, token, reason)` | QFw circuit or qtask ID; `reservation_id`; opaque token placeholder; optional reason. | Cancels pending, queued, selected, or provider-submitted work and updates admission accounting. |
 | `task_status(cid, reservation_id, token)` | QFw circuit or qtask ID; `reservation_id`; opaque token placeholder. | Returns pending, queued, selected, submitted, running, completed, failed, cancelled, or timed-out state. |
-| `read_cq(cid, reservation_id, token)` | Optional circuit ID; optional reservation ID for scoped reads; opaque token placeholder. | Returns and removes a completion record or a structured in-progress status. |
-| `peek_cq(cid, reservation_id, token)` | Optional circuit ID; optional reservation ID for scoped reads; opaque token placeholder. | Returns a completion record without removing it. |
+| `read_cq(cid, reservation_id, token)` | Optional circuit ID; required reservation ID for managed work; opaque token placeholder. | Returns and removes a completion record from the reservation-scoped completion queue or a structured in-progress status. |
+| `peek_cq(cid, reservation_id, token)` | Optional circuit ID; required reservation ID for managed work; opaque token placeholder. | Returns a completion record from the reservation-scoped completion queue without removing it. |
 | `register_event_notification(ep, evtype, class_id, token, reservation_id, filters)` | Event endpoint, event type, class ID, opaque token placeholder, optional reservation scope and filters. | Registers event delivery for task lifecycle events. |
 | `delete_circuit(cid, reservation_id, token)` | Circuit ID; reservation ID when reservation-scoped; opaque token placeholder. | Removes client-visible circuit state when lifecycle and retention policy allow it. |
+
+<details>
+<summary><strong>Per-Reservation Completion Queues</strong></summary>
+
+##### Per-Reservation Completion Queues
+
+QPM owns completion queues at the controller layer. Provider QRC objects may
+produce raw completion records, but they do not own reservation scoping or
+client-visible polling semantics. QPM resolves each completion through its
+runtime mapping from QFw circuit ID to qtask ID and reservation ID, then places
+the record in the matching reservation queue.
+
+QPM creates a logical completion queue when `reserve()` accepts a reservation
+and returns a `reservation_id`. QPM also lazily ensures the queue exists when it
+registers a task for a valid reservation, so recovery from older or partially
+migrated reservation records does not lose completions. The queue is keyed by
+the QPM reservation ID. Diagnostic bypass work without a reservation must use an
+explicit diagnostic result path and must not enter a managed reservation queue.
+
+`read_cq()` and `peek_cq()` require `reservation_id` for managed work. The
+`cid` selector is optional within the supplied reservation. When `cid` is
+omitted, `peek_cq()` observes the oldest ready completion in that reservation
+queue and `read_cq()` removes the oldest ready completion in that reservation
+queue. When `cid` is supplied, QPM searches only that reservation queue and
+rejects the request if the circuit belongs to a different reservation. An
+unscoped managed `read_cq()` or `peek_cq()` must return a structured invalid
+reservation or missing-reservation response instead of reading from a
+service-local provider queue.
+
+The logical queue can be implemented as an ordered per-reservation deque plus a
+`cid` or qtask index for targeted reads. `peek_cq()` must not mutate queue
+state. `read_cq()` consumes exactly one matching completion and records dequeue
+metadata. Consuming a completion may remove the retained terminal task snapshot
+for that circuit only after reservation-scope validation has succeeded.
+
+QPM publishes terminal completions in this order:
+
+1. Finalize scheduler lifecycle and qhw-admission accounting for the qtask.
+2. Enqueue the completion record in the reservation-scoped completion queue.
+3. Dispatch matching event notifications by event type, reservation ID, and
+   filters such as `cid` or `qtask_id`.
+
+Notification delivery does not consume the reservation queue. A client that
+receives an event can still call `peek_cq()` or `read_cq()` with the same
+reservation ID to inspect or retrieve the completion while the completion is
+within the configured retention window. The internal QPM completion sink
+installed in QRC should acknowledge ownership after QPM enqueues the completion,
+regardless of whether any client event registration matched. This replaces the
+current push-or-store behavior where a delivered notification can prevent the
+completion from being stored for polling.
+
+Completion queue retention is bounded. QPM should enforce a site-configured
+combination of per-completion TTL, per-reservation maximum retained records,
+per-reservation maximum retained bytes when result sizes are known, and a
+terminal-reservation retention window. This policy lives in the service-runtime
+configuration file selected by `QFW_SERVICE_RUNTIME_CONFIG`. The installed
+template path is
+`<prefix>/share/qfw/config/services/service-runtime.yaml`; a production site
+copy normally lives at `/etc/openqse/qfw/services/service-runtime.yaml`.
+
+The service-runtime YAML path is `qpm.completion-queues.retention`:
+
+```yaml
+qpm:
+  completion-queues:
+    retention:
+      completion-ttl-seconds: 3600
+      terminal-reservation-retention-seconds: 3600
+      max-records-per-reservation: 1024
+      max-bytes-per-reservation: 67108864
+      purge-interval-seconds: 60
+```
+
+If the block is omitted, QPM uses the same defaults shown above. Service-runtime
+configuration is the primary interface; `QFW_QPM_COMPLETION_*` environment
+variables are narrow overrides for tests or emergency service operation.
+
+Results that exceed retention limits may be evicted even if the client never
+calls `read_cq()`. Eviction should remove only completed queue records, preserve
+task metadata needed for audit and status where policy requires it, and return a
+structured expired or no-longer-retained response for later polling requests.
+
+Reservation close operations do not immediately delete the completion queue.
+Release, cancel, and expiration stop or reconcile reservation-scoped work, but
+completed results remain available to the owning reservation until they are
+drained, explicitly deleted, or evicted by the retention policy. A queue may be
+garbage-collected after the reservation is terminal, no active reservation-scoped
+work remains, and either no retained completion records remain or all remaining
+records have exceeded the configured retention limits.
+
+</details>
 
 #### Synchronous Execution Contract
 
@@ -2295,9 +2437,12 @@ external identifiers remain available as metadata when policy, audit, or
 operator telemetry needs the site-native value.
 
 Library-owned identifiers keep their library ownership. qhw-admission allocates
-reservation IDs. qhw-scheduler allocates scheduler task IDs when a task enters
-the scheduler. QPM stores those returned IDs in its runtime mapping rather than
-reallocating or deriving them independently.
+reservation IDs. qhw-scheduler does not allocate task IDs; the caller supplies
+the scheduler task identifier. For unsliced QPM-managed work, QPM supplies its
+canonical qtask ID as the qhw-scheduler task ID and records that one-to-one
+mapping. If a future scheduler integration introduces task splitting, the
+component that creates child task descriptors must allocate unique child task
+IDs and QPM must retain the parent/child mapping beside the original qtask ID.
 
 </details>
 
@@ -2328,10 +2473,12 @@ path and implemented inside QPM.
 ### OPM-002
 
 Long-running mode should allow a QPM service to start as a DEFw-wrapped
-service and register with the DEFw-dirsvc selected by its site configuration.
-QFw initialization should receive the permitted production directory-service
-endpoint from site infrastructure and use the same directory lookup contract as
-QFw-managed mode.
+service and either register with the DEFw-dirsvc selected by its site
+configuration or listen on a configured direct DEFw endpoint without
+registration. QFw initialization should receive the permitted production
+directory-service endpoint, configured QPM endpoint, or resolver profile from
+site infrastructure and use the same QPM reservation and release APIs after
+binding.
 
 The service still uses DEFw RPC after the client resolves the selected service
 record and API binding. This avoids turning the long-running service into a
@@ -2343,9 +2490,10 @@ Long-running mode must replace that readiness gate. A long-running QPM is ready
 when its DEFw listener is accepting RPC calls, its QRC provider path is
 initialized, its qhw-admission and qhw-scheduler contexts are constructed, the
 target device profile and policies have been loaded, and registration with the
-configured DEFw-dirsvc has completed when site discovery requires it. Direct
-endpoint readiness is a fallback/debug path and should not be the primary
-production long-running mode.
+configured DEFw-dirsvc has completed when site discovery requires it. In direct
+endpoint mode, directory-service registration is not part of readiness; the
+listener and controller readiness checks are the production readiness gate for
+that profile.
 
 </details>
 
@@ -2401,9 +2549,8 @@ endpoint. QPM reservation should be exposed only through the QPM admission API.
 ### DISC-003
 
 DEFw service startup should distinguish job-local registration,
-site-global registration, and direct fallback/debug listener mode. Registration
-settings should be explicit so accidental unregistered services are easy to
-diagnose.
+site-global registration, and direct listener mode. Registration settings should
+be explicit so accidental unregistered services are easy to diagnose.
 
 Candidate configuration fields:
 
@@ -2412,24 +2559,24 @@ Candidate configuration fields:
 | `register-with-dirsvc` | Boolean controlling whether the service registers with a DEFw-dirsvc. |
 | `listen-endpoint` | Stable endpoint or port used by long-running clients. |
 | `dirsvc-endpoint` | DEFw-dirsvc endpoint used for job-local or site-global registration. |
-| `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for direct fallback/debug endpoint mode. |
+| `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for direct endpoint mode. |
 
 The option must map to the existing DEFw startup behavior. `defwp-wrapper`
 defaults `DEFW_DISABLE_DIRSVC` to `yes`, and the C listener attempts a parent
 directory-service connection only when directory-service use is enabled and a
 parent name is configured. QFw-managed service launch sets
 `DEFW_DISABLE_DIRSVC=no` and provides parent host, port, and name. A
-long-running QPM should register with the configured production DEFw-dirsvc
-in production deployments. Direct unregistered listener mode should set
-`DEFW_DISABLE_DIRSVC=yes`, leave registration disabled, and use the
-listener/controller readiness gate only when fallback or diagnostics require it.
+long-running QPM may register with the configured production DEFw-dirsvc or run
+as a configured direct endpoint, depending on the selected runtime profile.
+Direct unregistered listener mode should set `DEFW_DISABLE_DIRSVC=yes`, leave
+registration disabled, and use the listener/controller readiness gate.
 
 Provider QPM modules that currently wait in `qpm_wait_dirsvc()` need a
 configuration-aware readiness path. In registered mode they may keep the
 existing directory-service wait after it is renamed. In direct endpoint mode
 they should call the common QPM completion routine after listener and
 controller initialization, then expose health and metadata over DEFw RPC so the
-fallback resolver can validate the service.
+direct resolver can validate the service.
 
 </details>
 
@@ -2438,11 +2585,13 @@ fallback resolver can validate the service.
 
 ### DISC-004
 
-QFw should add a QPM resolver layer between clients and QPM discovery. The
-resolver queries one or more DEFw-dirsvc instances. QFw-managed local services
+QFw should provide a QPM resolver layer between clients and QPM discovery. The
+resolver queries one or more DEFw-dirsvc instances and can also synthesize a
+binding record from a configured direct endpoint. QFw-managed local services
 register with the job-local directory service started by `qfw-setup`.
-Long-running services register with the shared directory service whose endpoint
-is recorded in the site configuration.
+Long-running services either register with the shared directory service whose
+endpoint is recorded in the site configuration or listen on a configured direct
+DEFw endpoint without registration.
 
 The resolver input is the site configuration plus client runtime profile rather
 than a list of primary QPM endpoints. `site.yaml` provides the site-global
@@ -2455,25 +2604,31 @@ directory:
     endpoint: login01:8090
 ```
 
-The selected runtime configuration provides lookup order:
+The selected runtime configuration provides lookup order. Directory scopes and
+direct endpoint scopes are explicit entries in that order:
 
 ```yaml
 resolver:
   scope-order:
     - local
     - site
+    - direct
 ```
 
 The implicit profile uses only `site`. The local profile uses only `local`.
-The hybrid profile uses `local` first and then `site`.
+The hybrid profile uses `local` first and then `site`. A direct long-running
+profile can use only `direct`, while a controlled fallback profile can place
+`direct` after the permitted directory scopes.
 
 The resolver path should:
 
-1. Read enabled directory-service endpoints and selection policy.
-2. Connect to each enabled DEFw-dirsvc or to the first directory required by
-   ordered policy.
-3. Query service records and selected API bindings.
-4. Annotate candidates with directory scope and directory identity.
+1. Read enabled directory-service endpoints, configured direct endpoints, and
+   selection policy.
+2. Connect to each enabled DEFw-dirsvc or synthesize direct endpoint records as
+   required by ordered policy.
+3. Query service records and selected API bindings, or build the selected
+   binding for a direct endpoint.
+4. Annotate candidates with resolver scope and resolver identity.
 5. Filter by service type, selector resource, selector alias, API binding,
    caller policy, and operation mode.
 6. Apply deterministic ordering and tie-breakers.
@@ -2481,9 +2636,9 @@ The resolver path should:
 8. Bind to the selected QPM service using the selected API binding.
 
 After resolution, reservation and release behavior should be identical for
-QFw-managed and long-running QPM services. The primary discovery contract is
-directory-service based in both modes. Direct configured QPM endpoints remain a
-controlled fallback or diagnostic path.
+QFw-managed and long-running QPM services. Directory-service discovery and
+configured direct endpoint resolution are both supported resolver contracts; the
+selected runtime profile determines which scopes are allowed and in what order.
 
 Load-aware selection among multiple matching QPM endpoints belongs to a later
 QFw scheduler layer. The DISC-004 resolver should only apply deterministic
@@ -3187,31 +3342,28 @@ reservation ID is always present for resource-affecting operations.
 Compatibility can be handled by an explicit transition path, but the target
 production behavior should require the reservation ID.
 
-The Qiskit adapter migrates through the same API change. The current
-`qfw_lookup_service.get_qpm()` path should become a QPM resolver wrapper. The
-resolver talks to the enabled DEFw-dirsvc instances from the selected runtime
-profile. It may use the site-global directory, the job-local directory, or both
-in the configured order. It resolves the selected service record and API
-binding, then constructs the same QPM client binding regardless of which
-configured directory returned the record.
+The Qiskit adapter uses the same reservation-scoped API path. The current
+`qfw_lookup_service.get_qpm()` path is a QPM resolver wrapper. The resolver
+talks to the enabled DEFw-dirsvc instances or configured direct endpoint scopes
+from the selected runtime profile. It may use the site-global directory, the
+job-local directory, direct endpoint resolution, or an ordered combination. It
+resolves the selected service record and API binding, then constructs the same
+QPM client binding regardless of which configured scope returned the record.
 
-`QFwBackend.run()` should accept reservation context through backend options or
-run keyword arguments, including `reservation_id`, opaque token, execution
-options, and an optional idempotency key. The method should copy those values
-into `QFwJob` options instead of dropping them as unused kwargs.
-`QFwJob._run_experiment_async()` then places those fields in the managed
-execution request and calls the reservation-scoped QPM execution API.
+`QFwBackend.run()` accepts reservation context through backend options or run
+keyword arguments, including `reservation_id`, opaque token, timeout, and
+timeout-cancellation policy. The method copies those values into `QFwJob`
+options instead of dropping them as unused kwargs.
+`QFwJob._run_experiment_async()` then passes those fields to the managed
+execution request and calls the reservation-scoped QPM execution API. If a
+future idempotency key is added to the public adapter options, it should follow
+the same option-copy and QPM-request path.
 
-The primitive wrappers need different migration steps. `QFwSamplerV2` already
-has `Options.run_options` and forwards that dictionary when it invokes the
-backend. `QFwEstimatorV2` does not. Its `Options` dataclass exposes default
-precision, grouping, and simulator seed, and `_run_pubs()` calls
-`_run_circuits()` with only shots and seed. The Estimator migration should add
-a matching `run_options` or reserved execution-context option, merge it into
-each backend call without renaming reservation fields, and preserve the same
-context for every derived measurement circuit generated from an Estimator PUB.
-Until that pass-through exists, Estimator submissions are incompatible with
-reservation-scoped production execution.
+The primitive wrappers share this pass-through model. `QFwSamplerV2` and
+`QFwEstimatorV2` expose `Options.run_options` and forward that dictionary when
+they invoke the backend. Estimator execution preserves the same run options for
+every derived measurement circuit generated from an Estimator PUB, without
+renaming reservation fields.
 
 The adapter must not treat DEFw-dirsvc service selection as a reservation.
 Reservation creation belongs to the QPM admission API and is normally performed
