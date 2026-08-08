@@ -112,8 +112,14 @@ def qfw_srun(argv):
         return 1
     env = os.environ.copy()
     env.update(state.get("environment") or {})
+    allocation = _allocation_context_from_env(env)
+    _publish_allocation_environment(env, allocation)
     defw_python = _command_path("defw-python", env=env)
-    return subprocess.run([str(defw_python), *args.application], env=env).returncode
+    command = _application_launch_command(
+        [str(defw_python), *args.application],
+        allocation,
+    )
+    return subprocess.run(command, env=env).returncode
 
 
 def qfw_teardown(argv):
@@ -369,8 +375,10 @@ def _start_job_local_services(state):
     allocation = _allocation_context_from_env(env)
     _publish_allocation_environment(env, allocation)
     _publish_allocation_environment(state["environment"], allocation)
+    _configure_allocation_local_directory(state, env, allocation)
     if env.get("QFW_DVM_URI_PATH"):
         state["environment"]["QFW_DVM_URI_PATH"] = env["QFW_DVM_URI_PATH"]
+    qfw_config.write_env_file(state)
     if qfw_config.bool_config(
             local_config.get("start-prte"),
             qfw_config.bool_config(local_config.get("start-qpm"), False)):
@@ -382,7 +390,7 @@ def _start_job_local_services(state):
         local = state["local_dirsvc"]
         pid_file = Path(state["state_dir"]) / "dirsvc.pid"
         ready_file = Path(state["state_dir"]) / "dirsvc-ready.json"
-        _run_checked([
+        command = [
             str(_command_path("qfw-dirsvc-start", env=env)),
             "--background",
             "--run-dir", state["run_dir"],
@@ -392,10 +400,13 @@ def _start_job_local_services(state):
             "--timeout", str(local_timeout),
             "--pid-file", str(pid_file),
             "--ready-file", str(ready_file),
-        ], env)
+        ]
+        _run_checked(_target_launch_command(
+            command, allocation, local["host"]), env)
         processes.append({
             "owner": "job",
             "role": "dirsvc",
+            "target": local["host"],
             "pid": int(pid_file.read_text(encoding="utf-8").strip()),
         })
         state["processes"] = processes
@@ -421,7 +432,7 @@ def _start_job_local_services(state):
                 if launch.get("assigned_hosts_env"):
                     service_env[launch["assigned_hosts_env"]] = (
                         launch["assigned_hosts"])
-            _run_checked([
+            command = [
                 str(_command_path("qfw-service-start", env=env)),
                 "--background",
                 "--run-dir", state["run_dir"],
@@ -434,7 +445,9 @@ def _start_job_local_services(state):
                 "--operation-mode", "qfw-managed",
                 "--listen-port", str(launch["listen_port"]),
                 "--telnet-port", str(launch["telnet_port"]),
-            ], service_env)
+            ]
+            _run_checked(_target_launch_command(
+                command, allocation, launch["target"]), service_env)
             processes.append({
                 "owner": "job",
                 "role": "service",
@@ -474,7 +487,8 @@ def _start_job_prte(state, env, allocation):
     if os.geteuid() == 0:
         command.append("--allow-run-as-root")
     command.append("--daemonize")
-    _run_checked(command, env)
+    _run_checked(_target_launch_command(
+        command, allocation, allocation["group1"][0]), env)
     timeout = int(
         prte_config.get(
             "startup-timeout-seconds",
@@ -495,6 +509,70 @@ def _start_job_prte(state, env, allocation):
         "force_cleanup": qfw_config.bool_config(
             prte_config.get("force-cleanup"), False),
     }
+
+
+def _configure_allocation_local_directory(state, env, allocation):
+    local = state.get("local_dirsvc") or {}
+    if not local.get("endpoint"):
+        return
+    host = str(local.get("host") or "")
+    if allocation["mode"] in {"heterogeneous", "slurm"} and (
+            host in {"", "127.0.0.1", "localhost", socket.gethostname()}):
+        host = allocation["group1"][0]
+    port = int(local["port"])
+    endpoint = f"{host}:{port}"
+    local["host"] = host
+    local["endpoint"] = endpoint
+    state["local_dirsvc"] = local
+    env["QFW_LOCAL_DIRSVC_ENDPOINT"] = endpoint
+    env["QFW_LOCAL_DIRSVC_NAME"] = local["name"]
+    env["DEFW_PARENT_HOSTNAME"] = host
+    env["DEFW_PARENT_PORT"] = str(port)
+    env["DEFW_PARENT_NAME"] = local["name"]
+    state["environment"].update({
+        "QFW_LOCAL_DIRSVC_ENDPOINT": endpoint,
+        "QFW_LOCAL_DIRSVC_NAME": local["name"],
+        "DEFW_PARENT_HOSTNAME": host,
+        "DEFW_PARENT_PORT": str(port),
+        "DEFW_PARENT_NAME": local["name"],
+    })
+    for requirement in state.get("directory_requirements") or []:
+        if requirement.get("scope") == "allocation-local":
+            requirement["endpoint"] = endpoint
+            requirement["name"] = local["name"]
+
+
+def _target_launch_command(command, allocation, target):
+    command = list(command)
+    mode = allocation["mode"]
+    if mode == "heterogeneous":
+        return [
+            "srun",
+            "--het-group=1",
+            "--nodes=1",
+            "--ntasks=1",
+            "--nodelist", str(target),
+            *command,
+        ]
+    if mode == "slurm":
+        return [
+            "srun",
+            "--nodes=1",
+            "--ntasks=1",
+            "--nodelist", str(target),
+            *command,
+        ]
+    return command
+
+
+def _application_launch_command(command, allocation):
+    command = list(command)
+    mode = allocation["mode"]
+    if mode == "heterogeneous":
+        return ["srun", "--het-group=0", *command]
+    if mode == "slurm":
+        return ["srun", *command]
+    return command
 
 
 def _prte_runtime_args(allocation):

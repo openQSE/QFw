@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sys
 
 import pytest
@@ -11,6 +12,17 @@ from qfw_runtime import commands
 def allocation():
     return {
         "mode": "local",
+        "group0": ["client-a"],
+        "group1": ["svc-a", "svc-b"],
+        "group0_nodelist": "client-a",
+        "group1_nodelist": "svc-a,svc-b",
+        "groups": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
+    }
+
+
+def hetero_allocation():
+    return {
+        "mode": "heterogeneous",
         "group0": ["client-a"],
         "group1": ["svc-a", "svc-b"],
         "group0_nodelist": "client-a",
@@ -250,6 +262,203 @@ def test_start_job_local_services_starts_prte_before_services(
         "prte-dvm",
         "service",
     ]
+
+
+def test_start_job_local_services_places_heterogeneous_stack_on_group1(
+        tmp_path, monkeypatch):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "\n".join([
+            "services:",
+            "  - name: nwqsim",
+            "    module: svc_nwqsim_qpm",
+            "    target: group1-head",
+            "    assigned-hosts: group1",
+            "    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    state_dir = tmp_path / "state"
+    run_dir = tmp_path / "run"
+    state_dir.mkdir()
+    run_dir.mkdir()
+    calls = []
+
+    def fake_command_path(name, env=None):
+        return Path(f"/usr/bin/{name}")
+
+    def fake_run_checked(argv, env):
+        calls.append((list(argv), dict(env)))
+        if "prte" in argv:
+            Path(env["QFW_DVM_URI_PATH"]).parent.mkdir(
+                parents=True, exist_ok=True)
+            Path(env["QFW_DVM_URI_PATH"]).write_text(
+                "dvm-uri\n", encoding="utf-8")
+            return
+        pid_path = Path(argv[argv.index("--pid-file") + 1])
+        pid_path.write_text(f"{1000 + len(calls)}\n", encoding="utf-8")
+        ready_path = Path(argv[argv.index("--ready-file") + 1])
+        ready_path.write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands, "_run_checked", fake_run_checked)
+
+    state = {
+        "run_id": "test",
+        "run_base_dir": str(tmp_path),
+        "run_dir": str(run_dir),
+        "state_dir": str(state_dir),
+        "site_config": str(tmp_path / "site.yaml"),
+        "local_services": {
+            "start-prte": True,
+            "start-dirsvc": True,
+            "start-qpm": True,
+        },
+        "local_dirsvc": {
+            "name": "qfw-local-dirsvc",
+            "host": "127.0.0.1",
+            "port": 8090,
+            "endpoint": "127.0.0.1:8090",
+        },
+        "environment": {
+            "QFW_DVM_URI_PATH": str(run_dir / "prte_dvm" / "dvm-uri"),
+            "QFW_ALLOCATION_MODE": "heterogeneous",
+            "QFW_GROUP_0_NODELIST": "client-a",
+            "QFW_GROUP_1_NODELIST": "svc-a,svc-b",
+            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
+        },
+        "processes": [],
+        "directory_requirements": [
+            {
+                "scope": "allocation-local",
+                "name": "qfw-local-dirsvc",
+                "endpoint": "127.0.0.1:8090",
+                "connect_timeout_seconds": 1,
+            },
+        ],
+        "service_manifest": str(manifest),
+    }
+
+    commands._start_job_local_services(state)
+
+    assert state["local_dirsvc"]["endpoint"] == "svc-a:8090"
+    assert state["environment"]["QFW_LOCAL_DIRSVC_ENDPOINT"] == "svc-a:8090"
+    assert state["directory_requirements"][0]["endpoint"] == "svc-a:8090"
+    assert calls[0][0][:6] == [
+        "srun",
+        "--het-group=1",
+        "--nodes=1",
+        "--ntasks=1",
+        "--nodelist",
+        "svc-a",
+    ]
+    assert calls[0][0][6] == "prte"
+    assert calls[1][0][:7] == [
+        "srun",
+        "--het-group=1",
+        "--nodes=1",
+        "--ntasks=1",
+        "--nodelist",
+        "svc-a",
+        "/usr/bin/qfw-dirsvc-start",
+    ]
+    assert calls[1][0][calls[1][0].index("--host") + 1] == "svc-a"
+    assert calls[2][0][:7] == [
+        "srun",
+        "--het-group=1",
+        "--nodes=1",
+        "--ntasks=1",
+        "--nodelist",
+        "svc-a",
+        "/usr/bin/qfw-service-start",
+    ]
+    assert calls[2][1]["QFW_LOCAL_DIRSVC_ENDPOINT"] == "svc-a:8090"
+    assert calls[2][1]["QFW_LOCAL_SERVICE_TARGET"] == "svc-a"
+    assert calls[2][1]["QFW_QPM_ASSIGNED_HOSTS"] == "svc-a,svc-b"
+
+
+def test_qfw_srun_uses_group0_for_heterogeneous_allocation(
+        tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    state_dir = run_dir / "state"
+    state_dir.mkdir(parents=True)
+    state = {
+        "setup_complete": True,
+        "run_dir": str(run_dir),
+        "environment": {
+            "QFW_ALLOCATION_MODE": "heterogeneous",
+            "QFW_GROUP_0_NODELIST": "client-a",
+            "QFW_GROUP_1_NODELIST": "svc-a,svc-b",
+            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
+        },
+    }
+    (state_dir / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    captured = {}
+
+    def fake_command_path(name, env=None):
+        assert name == "defw-python"
+        return Path("/usr/bin/defw-python")
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        captured["env"] = dict(env)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    rc = commands.qfw_srun([
+        "--run-dir", str(run_dir),
+        "app.py",
+        "--shots", "10",
+    ])
+
+    assert rc == 0
+    assert captured["argv"] == [
+        "srun",
+        "--het-group=0",
+        "/usr/bin/defw-python",
+        "app.py",
+        "--shots", "10",
+    ]
+    assert captured["env"]["QFW_ALLOCATION_MODE"] == "heterogeneous"
+
+
+def test_qfw_srun_runs_directly_for_local_allocation(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    state_dir = run_dir / "state"
+    state_dir.mkdir(parents=True)
+    state = {
+        "setup_complete": True,
+        "run_dir": str(run_dir),
+        "environment": {
+            "QFW_ALLOCATION_MODE": "local",
+            "QFW_GROUP_0_NODELIST": "client-a",
+            "QFW_GROUP_1_NODELIST": "client-a",
+            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=client-a",
+        },
+    }
+    (state_dir / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    captured = {}
+
+    def fake_command_path(name, env=None):
+        assert name == "defw-python"
+        return Path("/usr/bin/defw-python")
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    rc = commands.qfw_srun(["--run-dir", str(run_dir), "app.py"])
+
+    assert rc == 0
+    assert captured["argv"] == ["/usr/bin/defw-python", "app.py"]
 
 
 def test_cleanup_prte_uses_dvm_uri_without_default_pkill(tmp_path,
