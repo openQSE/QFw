@@ -94,6 +94,8 @@ cite the most specific design section names that governed the change.
 | Phase 5. Admission Control And Reservation Store Integration | [Admission And Scheduler Integration](detailed-design.md#admission-and-scheduler-integration); [Token Placeholder For Current Milestone](detailed-design.md#token-placeholder-for-current-milestone); [Admission Policy Configuration APIs](detailed-design.md#admission-policy-configuration-apis); [Admission Control APIs](detailed-design.md#admission-control-apis); [Integration Sequence](detailed-design.md#integration-sequence); [Identifier Allocation And Mapping](detailed-design.md#identifier-allocation-and-mapping) | [ADM-001](detailed-design.md#adm-001) through [ADM-007](detailed-design.md#adm-007); [ADM-016](detailed-design.md#adm-016) through [ADM-022](detailed-design.md#adm-022); [CAT-003](detailed-design.md#cat-003); [CTRL-005](detailed-design.md#ctrl-005); [CTRL-006](detailed-design.md#ctrl-006); [API-004](detailed-design.md#api-004) |
 | Phase 6. Scheduler Integration And Managed Execution | [Admission And Scheduler Integration](detailed-design.md#admission-and-scheduler-integration); [Scheduler Control APIs](detailed-design.md#scheduler-control-apis); [Execution APIs](detailed-design.md#execution-apis); [Synchronous Execution Contract](detailed-design.md#synchronous-execution-contract); [Integration Sequence](detailed-design.md#integration-sequence); [Identifier Allocation And Mapping](detailed-design.md#identifier-allocation-and-mapping) | [SCHED-001](detailed-design.md#sched-001) through [SCHED-014](detailed-design.md#sched-014); [CAT-002](detailed-design.md#cat-002); [CAT-004](detailed-design.md#cat-004); [API-001](detailed-design.md#api-001); [API-004](detailed-design.md#api-004) |
 | Phase 7. Telemetry, Reconciliation, And Hardening | [Telemetry And Discovery APIs](detailed-design.md#telemetry-and-discovery-apis); [Admission And Scheduler Integration](detailed-design.md#admission-and-scheduler-integration); [Peer Lifecycle Events](detailed-design.md#peer-lifecycle-events); [Heartbeat Policy](detailed-design.md#heartbeat-policy); [Heartbeat And Liveness Flow](detailed-design.md#heartbeat-and-liveness-flow); [Service Deregistration Flow](detailed-design.md#service-deregistration-flow); [Integration Sequence](detailed-design.md#integration-sequence) | [CAT-005](detailed-design.md#cat-005); [API-002](detailed-design.md#api-002); [API-004](detailed-design.md#api-004); [CTRL-002](detailed-design.md#ctrl-002) through [CTRL-008](detailed-design.md#ctrl-008); [STATE-004](detailed-design.md#state-004); [SCHED-013](detailed-design.md#sched-013); [SCHED-014](detailed-design.md#sched-014) |
+| Phase 8. Installation And Runtime Startup Model | [Installation And Runtime Startup Model](detailed-design.md#installation-and-runtime-startup-model); [Installation Paths](detailed-design.md#installation-paths); [Activation](detailed-design.md#activation); [DEFw Python Entry Point](detailed-design.md#defw-python-entry-point); [Runtime Roles](detailed-design.md#runtime-roles); [Deployment Modes](detailed-design.md#deployment-modes); [Site Configuration](detailed-design.md#site-configuration) | [OPM-001](detailed-design.md#opm-001); [OPM-002](detailed-design.md#opm-002); [OPM-003](detailed-design.md#opm-003); [DISC-001](detailed-design.md#disc-001); [DISC-003](detailed-design.md#disc-003); [DISC-004](detailed-design.md#disc-004); [DISC-005](detailed-design.md#disc-005); [API-003](detailed-design.md#api-003) |
+| Phase 9. Per-Reservation Completion Queues | [Execution APIs](detailed-design.md#execution-apis); [Per-Reservation Completion Queues](detailed-design.md#per-reservation-completion-queues); [Synchronous Execution Contract](detailed-design.md#synchronous-execution-contract); [Integration Sequence](detailed-design.md#integration-sequence); [Identifier Allocation And Mapping](detailed-design.md#identifier-allocation-and-mapping) | [CAT-002](detailed-design.md#cat-002); [API-001](detailed-design.md#api-001); [API-004](detailed-design.md#api-004); [ADM-021](detailed-design.md#adm-021); [SCHED-005](detailed-design.md#sched-005); [SCHED-006](detailed-design.md#sched-006); [SCHED-011](detailed-design.md#sched-011); [SCHED-012](detailed-design.md#sched-012); [STATE-001](detailed-design.md#state-001); [STATE-002](detailed-design.md#state-002); [STATE-003](detailed-design.md#state-003); [STATE-004](detailed-design.md#state-004) |
 
 ## Commit Breakdown
 
@@ -162,7 +164,7 @@ changes.
 | --- | --- | --- | --- |
 | PH5-C01 | QFw | PH5.1, PH5.2 | Construct qhw-admission contexts per target and configure device profiles, capacity models, estimators, and admission policies. |
 | PH5-C02 | QFw | PH5.3 | Implement admission workflows backed by qhw-admission without a duplicate QPM reservation database. |
-| PH5-C03 | QFw | PH5.4 | Enforce reservation validation and caller binding before resource-affecting work. |
+| PH5-C03 | QFw | PH5.4 | Enforce reservation validation and request metadata compatibility before resource-affecting work. |
 | PH5-C04 | QFw | PH5.5, PH5.6 | Add estimated usage authorization, committed holds, pending-capacity policy, and retry behavior. |
 | PH5-C05 | QFw | PH5.7 | Implement active-state reservation close ordering for release, cancel, and expiration. |
 | PH5-C06 | QFw | PH5.8 | Add admission integration tests, including concurrency and accounting reconciliation cases. |
@@ -187,6 +189,29 @@ changes.
 | PH7-C03 | QFw | PH7.4, PH7.5 | Add reconciliation, recovery, service lifecycle telemetry, and audit records. |
 | PH7-C04 | DEFw, QFw | PH7.6 | Remove DEFw four-list compatibility exports, Python view adapters, deprecated directory reservation compatibility, and unmanaged execution bypasses. |
 | PH7-C05 | QFw, DEFw | PH7.7 | Add end-to-end and operations tests across operation modes, managed execution, telemetry, reconciliation, SWIG behavior, and build outputs. |
+
+### Phase 8 Commit Sequence
+
+| Commit ID | Primary repo | Plan tasks | Scope and exit criteria |
+| --- | --- | --- | --- |
+| PH8-C01 | QFw | PH8.1 | Add CMake-backed install rules, generated launcher templates, executable command wrappers, and a non-authoritative developer install helper that delegates to CMake. |
+| PH8-C02 | QFw | PH8.2 | Define the QFw installed prefix layout through CMake install rules, including packaged configuration template destinations, examples, service modules, service API bindings, and site-package outputs. |
+| PH8-C03 | QFw, DEFw | PH8.3 | Add `qfw-activate` and `defw-python` so installed QFw preserves the user's Python environment while running applications through the DEFw executor. |
+| PH8-C04 | QFw | PH8.4 | Implement the user job lifecycle commands `qfw-setup`, `qfw-srun`, and `qfw-teardown` for production, local, and hybrid runtime profiles. |
+| PH8-C05 | QFw, DEFw | PH8.5 | Implement `qfw-dirsvc-start` and `qfw-service-start` as one-process service lifecycle commands with readiness, signal handling, and service-manager compatibility. |
+| PH8-C06 | QFw | PH8.6 | Implement site configuration and runtime profile resolution, including privileged service/device configuration locations and local-service manifest behavior. |
+| PH8-C07 | QFw, DEFw | PH8.7 | Add source-layout and installed-prefix startup tests covering activation, DEFw Python execution, runtime profiles, service commands, and teardown boundaries. |
+
+### Phase 9 Commit Sequence
+
+| Commit ID | Primary repo | Plan tasks | Scope and exit criteria |
+| --- | --- | --- | --- |
+| PH9-C01 | QFw | PH9.1 | Add controller-owned reservation completion queues, queue creation on accepted reservations, lazy queue repair for valid reservations, and diagnostic-result separation. |
+| PH9-C02 | QFw | PH9.2 | Publish terminal completions only after scheduler and admission accounting finalize, then enqueue the completion and dispatch matching notifications. |
+| PH9-C03 | QFw | PH9.3 | Implement reservation-scoped `read_cq()` and `peek_cq()` semantics, including optional `cid` selection, mismatch rejection, and non-mutating peek behavior. |
+| PH9-C04 | QFw | PH9.4 | Separate event notification delivery from completion polling and update the QRC completion sink so delivered events do not prevent later polling. |
+| PH9-C05 | QFw | PH9.5 | Add completion-queue retention configuration, purge behavior, terminal-reservation garbage collection, and structured no-longer-retained responses. |
+| PH9-C06 | QFw | PH9.6 | Add completion-queue tests for scoped polling, notification independence, retention, release/cancel/expire behavior, and recovery edge cases. |
 
 ## Phase 1. Directory And Transport Foundation
 
@@ -1050,15 +1075,227 @@ Primary requirements: `CAT-005`, `API-002`, `API-004`, `CTRL-002` through
      `CTRL-007`, `CTRL-008`, `STATE-001`, `STATE-002`, `STATE-003`,
      `STATE-004`.
 
+## Phase 8. Installation And Runtime Startup Model
+
+Phase 8 turns the installed QFw and DEFw runtime into a product surface. The
+source-tree layout remains supported for development, but installed commands,
+configuration files, runtime roles, and service startup paths become the
+deployment contract.
+
+Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-001`,
+`DISC-003`, `DISC-004`, `DISC-005`, `API-003`.
+
+1. PH8.1 Implement CMake-backed installation scripts and command wrappers.
+   - Make CMake `install()` rules the authoritative installation mechanism for
+     QFw runtime files, command wrappers, configuration templates, examples,
+     Python package outputs, service modules, and service API bindings.
+   - Support the standard flow
+     `cmake -S . -B build -DCMAKE_INSTALL_PREFIX=<prefix>`,
+     `cmake --build build`, and `cmake --install build`.
+   - Generate prefix-aware `qfw-activate` and `defw-python` scripts from
+     templates with CMake configuration, so installed deployments do not
+     depend on source-tree paths.
+   - Install thin executable wrappers for `qfw-setup`, `qfw-srun`,
+     `qfw-teardown`, `qfw-dirsvc-start`, and `qfw-service-start`.
+   - Keep runtime logic in installed Python modules or private helpers rather
+     than in large shell scripts.
+   - Allow an optional developer convenience installer only when it delegates
+     to the CMake configure, build, and install flow.
+   - Reqs: none; installation infrastructure.
+
+2. PH8.2 Define the QFw installed runtime layout.
+   - Add CMake install rules that place public commands under `<prefix>/bin`,
+     private helpers under `<prefix>/libexec/qfw`, service modules under
+     `<prefix>/lib/qfw/services`, service API bindings under
+     `<prefix>/lib/qfw/service-apis`, Python packages under site-packages, and
+     examples and templates under `<prefix>/share/qfw`.
+   - Add packaged template install rules for `site.yaml`, runtime profiles,
+     `qfw_services.yaml`, `service-runtime.yaml`, and `device-access.yaml`.
+   - Document that privileged production configuration is not installed into
+     the software prefix by default. Site deployments provide files such as
+     `/etc/openqse/qfw/site.yaml`,
+     `/etc/openqse/qfw/services/service-runtime.yaml`, and
+     `/etc/openqse/qfw/device/device-access.yaml`.
+   - Support same-prefix and split-prefix QFw/DEFw deployments through
+     generated defaults for `QFW_PREFIX` and `DEFW_PREFIX`.
+   - Reqs: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`, `API-003`.
+
+3. PH8.3 Implement activation and the DEFw Python entry point.
+   - Add `qfw-activate` as an environment bootstrap that prepares QFw, DEFw,
+     Python, configuration, and library paths without starting processes.
+   - Export the logical path variables used by role commands, including
+     `QFW_PREFIX`, `QFW_BIN_PATH`, `QFW_LIBEXEC_DIR`, `QFW_SHARE_DIR`,
+     `QFW_CONFIG_DIR`, `QFW_SITE_CONFIG`, `DEFW_PREFIX`, and
+     `DEFW_CONFIG_PATH`.
+   - Add `defw-python` as the installed entry point for applications that must
+     run inside the DEFw executor.
+   - Preserve the user's virtual environment, check the Python major and minor
+     version against `defwp --py-version`, and invoke the installed
+     `defwp-wrapper` with the original script arguments.
+   - Keep virtual-environment rewriting as an explicit legacy development
+     option rather than installed runtime behavior.
+   - Reqs: `OPM-001`, `OPM-002`, `API-003`.
+
+4. PH8.4 Implement the user job lifecycle.
+   - Implement `qfw-setup`, `qfw-srun`, and `qfw-teardown` as the stable user
+     job lifecycle for production client jobs and local simulator jobs.
+   - Have `qfw-setup` read site and runtime configuration, create job-owned
+     run and log directories, validate resolver policy, and start local
+     services only when the selected runtime profile includes `local-services`.
+   - Have `qfw-srun` execute the user application through `defw-python` in the
+     prepared QFw runtime context.
+   - Have `qfw-teardown` stop only job-owned services and clean only job-owned
+     runtime state.
+   - Reqs: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`,
+     `DISC-005`, `API-003`.
+
+5. PH8.5 Implement the service lifecycle commands.
+   - Implement `qfw-dirsvc-start` as the owner of one DEFw-dirsvc process.
+   - Implement `qfw-service-start` as the owner of one QPM or utility service
+     instance.
+   - Have both commands prepare DEFw configuration, create service run and log
+     directories, write PID or readiness state, handle shutdown signals, and
+     clean service-owned runtime state.
+   - Make QPM service startup wait for directory registration before reporting
+     readiness.
+   - Add service-manager wiring, such as systemd unit templates, that call the
+     installed lifecycle commands through `/etc/openqse/qfw/env.sh` or an
+     equivalent activation wrapper.
+   - Reqs: `OPM-001`, `OPM-002`, `DISC-001`, `DISC-003`, `DISC-005`.
+
+6. PH8.6 Implement site and runtime configuration selection.
+   - Resolve `site.yaml` in this order: `qfw-setup --site-config`,
+     `QFW_SITE_CONFIG`, then `<prefix>/share/qfw/config/site.yaml`.
+   - Keep `site.yaml` client-readable and limited to installation prefixes and
+     directory-service discovery information.
+   - Keep service-runtime policy and device-access material in separate files
+     with site-controlled permissions.
+   - Implement the implicit production profile, the local profile, and the
+     hybrid profile.
+   - Use `qfw_services.yaml` only for job-local service inventory. Production
+     long-running QPM services start through service lifecycle commands and
+     register with site-scoped DEFw-dirsvc instances.
+   - Reqs: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`,
+     `DISC-005`, `API-003`.
+
+7. PH8.7 Add source and installed runtime tests.
+   - Cover source-tree activation and installed-prefix activation.
+   - Verify command executability, logical path variables, Python package
+     imports, DEFw Python version checks, virtual-environment preservation, and
+     absence of installed-mode Python executable rewriting.
+   - Cover production, local, and hybrid runtime profile behavior.
+   - Verify that local runs start and tear down only job-owned services, while
+     production runs leave site services under service-manager ownership.
+   - Cover service lifecycle readiness, directory registration timeouts,
+     shutdown signal handling, and installed configuration precedence.
+   - Reqs: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-001`, `DISC-003`,
+     `DISC-004`, `DISC-005`, `API-003`.
+
+## Phase 9. Per-Reservation Completion Queues
+
+Phase 9 makes completion polling reservation-scoped and owned by the QPM
+controller. Provider and QRC code can produce raw completion records, but QPM
+owns queue placement, retention, polling semantics, and event notification
+ordering.
+
+Primary requirements: `CAT-002`, `API-001`, `API-004`, `ADM-021`,
+`SCHED-005`, `SCHED-006`, `SCHED-011`, `SCHED-012`, `STATE-001`,
+`STATE-002`, `STATE-003`, `STATE-004`.
+
+1. PH9.1 Add reservation-scoped completion queue state.
+   - Add controller-owned logical completion queues keyed by QPM
+     `reservation_id`.
+   - Create a queue when `reserve()` accepts a reservation.
+   - Lazily ensure the queue exists when registering a task for a valid
+     reservation, so recovery from older reservation records does not lose
+     completions.
+   - Keep diagnostic bypass work on an explicit diagnostic result path and out
+     of managed reservation queues.
+   - Implement an ordered per-reservation queue plus a `cid` or qtask index
+     for targeted reads.
+   - Reqs: `CAT-002`, `API-001`, `STATE-001`, `STATE-002`, `STATE-003`.
+
+2. PH9.2 Publish terminal completions in managed order.
+   - Resolve each provider completion through QPM runtime mappings from QFw
+     circuit ID to qtask ID and reservation ID.
+   - Preserve the already implemented managed-completion finalization before
+     exposing the completion to clients.
+   - Adjust qhw-admission usage and credits for the qtask first.
+   - Inform qhw-scheduler of the terminal lifecycle state after admission
+     accounting is reconciled.
+   - Enqueue the completion record in the reservation-scoped queue keyed by
+     `reservation_id`.
+   - Dispatch matching event notifications only after the completion is stored
+     in the reservation queue.
+   - Update the internal QPM completion sink installed in QRC so it
+     acknowledges ownership only after QPM enqueues the completion.
+   - Reqs: `ADM-021`, `SCHED-005`, `SCHED-006`, `STATE-003`.
+
+3. PH9.3 Implement scoped `read_cq()` and `peek_cq()`.
+   - Require `reservation_id` for managed completion polling.
+   - Treat `cid` as an optional selector within the supplied reservation.
+   - Have `peek_cq()` observe without mutating queue state.
+   - Have `read_cq()` consume exactly one matching completion and record
+     dequeue metadata.
+   - Reject missing-reservation polling and requests where the selected
+     circuit belongs to a different reservation.
+   - Return structured in-progress, invalid-reservation, missing-reservation,
+     or no-longer-retained responses as appropriate.
+   - Reqs: `CAT-002`, `API-001`, `API-004`, `SCHED-012`, `STATE-003`.
+
+4. PH9.4 Keep notifications independent from polling.
+   - Dispatch event notifications by event type, reservation ID, `cid`,
+     qtask ID, and registered filters.
+   - Push a completion to registered notification callbacks only after PH9.2
+     has adjusted qhw-admission usage or credits, updated scheduler state, and
+     enqueued the record in the reservation-scoped completion queue.
+   - Ensure notification delivery does not consume completion queue records.
+   - Preserve polling access for a client that receives an event and then
+     calls `peek_cq()` or `read_cq()` within the retention window.
+   - Remove the push-or-store behavior where a delivered notification can
+     prevent a completion from being stored for polling.
+   - Reqs: `CAT-002`, `API-004`, `SCHED-005`, `STATE-003`.
+
+5. PH9.5 Implement completion retention and garbage collection.
+   - Load retention policy from
+     `qpm.completion-queues.retention` in the service-runtime configuration.
+   - Provide defaults for completion TTL, terminal-reservation retention,
+     maximum retained records, maximum retained bytes, and purge interval.
+   - Keep `QFW_QPM_COMPLETION_*` environment variables as narrow test or
+     emergency service-operation overrides.
+   - Evict completed queue records that exceed retention limits while
+     preserving task metadata needed for audit and status when policy requires
+     it.
+   - Garbage-collect queues only after the reservation is terminal, active
+     reservation-scoped work is gone, and retained records have been drained or
+     exceeded retention.
+   - Reqs: `ADM-021`, `API-004`, `STATE-004`.
+
+6. PH9.6 Add completion-queue tests.
+   - Cover queue creation on accepted reservations and lazy repair for valid
+     reservation-scoped tasks.
+   - Cover oldest-ready reads, targeted reads, mismatched reservation
+     rejection, missing reservation rejection, peek idempotency, and single
+     completion consumption.
+   - Cover notification delivery that does not consume polling records.
+   - Cover QRC completion sink ownership after enqueue, including cases where
+     no event registration matches.
+   - Cover retention eviction, no-longer-retained responses, terminal
+     reservation garbage collection, release, cancel, expiration, and recovery
+     behavior.
+   - Reqs: `CAT-002`, `API-001`, `API-004`, `ADM-021`, `SCHED-005`,
+     `SCHED-006`, `SCHED-011`, `SCHED-012`, `STATE-001`, `STATE-002`,
+     `STATE-003`, `STATE-004`.
+
 ## Requirement Coverage Summary
 
 | Requirement group | Primary implementation phases |
 | --- | --- |
-| `OPM-001` through `OPM-003` | Phases 1, 2, and 7 |
-| `DISC-001` through `DISC-005` | Phases 1, 2, and 7 |
-| `ADM-001` through `ADM-022` | Phases 3, 5, 6, and 7 |
-| `SCHED-001` through `SCHED-014` | Phases 4, 5, 6, and 7 |
-| `CAT-001` through `CAT-007` | Phases 3, 4, and 7 |
-| `API-001` through `API-004` | Phases 2, 3, 6, and 7 |
+| `OPM-001` through `OPM-003` | Phases 1, 2, 7, and 8 |
+| `DISC-001` through `DISC-005` | Phases 1, 2, 7, and 8 |
+| `ADM-001` through `ADM-022` | Phases 3, 5, 6, 7, and 9 |
+| `SCHED-001` through `SCHED-014` | Phases 4, 5, 6, 7, and 9 |
+| `CAT-001` through `CAT-007` | Phases 3, 4, 7, and 9 |
+| `API-001` through `API-004` | Phases 2, 3, 6, 7, 8, and 9 |
 | `CTRL-001` through `CTRL-008` | Phases 3, 5, 6, and 7 |
-| `STATE-001` through `STATE-004` | Phases 4, 5, 6, and 7 |
+| `STATE-001` through `STATE-004` | Phases 4, 5, 6, 7, and 9 |
