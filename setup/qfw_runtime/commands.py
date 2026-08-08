@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -127,7 +128,10 @@ def qfw_teardown(argv):
         if process.get("owner") != "job":
             continue
         try:
-            _terminate_process(int(process["pid"]))
+            if process.get("role") == "prte-dvm":
+                _cleanup_prte(process)
+            elif process.get("pid") is not None:
+                _terminate_process(int(process["pid"]))
         except Exception as exc:
             errors.append(str(exc))
     qfw_config.clear_current_run(state)
@@ -272,8 +276,17 @@ def qfw_service_start(argv):
         os.environ.get("QFW_LOCAL_DIRSVC_NAME") or
         site_dir.get("name", "qfw-site-dirsvc")
     )
-    service_host = str(service.get("bind-host", service.get("host", "127.0.0.1")))
+    allocation = _allocation_context_from_env()
+    target = (
+        os.environ.get("QFW_LOCAL_SERVICE_TARGET") or
+        _resolve_node_policy(service.get("target"), allocation) or
+        ""
+    )
+    service_host = str(service.get(
+        "bind-host", service.get("host", target or "127.0.0.1")))
     service_port = int(service.get("listen-port", args.listen_port))
+    assigned_hosts = _resolve_host_policy(
+        service.get("assigned-hosts"), allocation)
     env = os.environ.copy()
     env.update({
         "DEFW_AGENT_NAME": service_id,
@@ -298,6 +311,13 @@ def qfw_service_start(argv):
             "yes" if direct_fallback else "no"),
         "QFW_STARTUP_TIMEOUT": str(startup_timeout),
     })
+    if target:
+        env["QFW_LOCAL_SERVICE_TARGET"] = target
+    if assigned_hosts:
+        env["QFW_SERVICE_ASSIGNED_HOSTS"] = assigned_hosts
+        assigned_hosts_env = service.get("assigned-hosts-env")
+        if assigned_hosts_env:
+            env[str(assigned_hosts_env)] = assigned_hosts
     if site_dir.get("endpoint"):
         env["QFW_SITE_DIRSVC_ENDPOINTS"] = site_dir["endpoint"]
     if args.service_runtime_config:
@@ -346,6 +366,18 @@ def _start_job_local_services(state):
     env.update(state["environment"])
     processes = state.get("processes") or []
     local_timeout = _directory_timeout(state, "allocation-local")
+    allocation = _allocation_context_from_env(env)
+    _publish_allocation_environment(env, allocation)
+    _publish_allocation_environment(state["environment"], allocation)
+    if env.get("QFW_DVM_URI_PATH"):
+        state["environment"]["QFW_DVM_URI_PATH"] = env["QFW_DVM_URI_PATH"]
+    if qfw_config.bool_config(
+            local_config.get("start-prte"),
+            qfw_config.bool_config(local_config.get("start-qpm"), False)):
+        prte_record = _start_job_prte(state, env, allocation)
+        processes.append(prte_record)
+        state["processes"] = processes
+        qfw_config.write_state(state)
     if qfw_config.bool_config(local_config.get("start-dirsvc"), False):
         local = state["local_dirsvc"]
         pid_file = Path(state["state_dir"]) / "dirsvc.pid"
@@ -374,13 +406,21 @@ def _start_job_local_services(state):
         services = qfw_config.load_service_manifest(manifest_path)
         selected = qfw_config.selected_service_names(local_config, services)
         launch_specs = _local_service_launch_specs(
-            local_config, services, selected)
+            local_config, services, selected, allocation)
         state["local_service_launches"] = launch_specs
         qfw_config.write_state(state)
         for launch in launch_specs:
             service_id = launch["service_id"]
             pid_file = Path(state["state_dir"]) / f"{service_id}.pid"
             ready_file = Path(state["state_dir"]) / f"{service_id}-ready.json"
+            service_env = dict(env)
+            service_env["QFW_LOCAL_SERVICE_TARGET"] = launch["target"]
+            if launch.get("assigned_hosts"):
+                service_env["QFW_SERVICE_ASSIGNED_HOSTS"] = (
+                    launch["assigned_hosts"])
+                if launch.get("assigned_hosts_env"):
+                    service_env[launch["assigned_hosts_env"]] = (
+                        launch["assigned_hosts"])
             _run_checked([
                 str(_command_path("qfw-service-start", env=env)),
                 "--background",
@@ -394,12 +434,14 @@ def _start_job_local_services(state):
                 "--operation-mode", "qfw-managed",
                 "--listen-port", str(launch["listen_port"]),
                 "--telnet-port", str(launch["telnet_port"]),
-            ], env)
+            ], service_env)
             processes.append({
                 "owner": "job",
                 "role": "service",
                 "service_id": service_id,
                 "endpoint": launch["endpoint"],
+                "target": launch["target"],
+                "assigned_hosts": launch.get("assigned_hosts", ""),
                 "listen_port": launch["listen_port"],
                 "telnet_port": launch["telnet_port"],
                 "pid": int(pid_file.read_text(encoding="utf-8").strip()),
@@ -410,7 +452,76 @@ def _start_job_local_services(state):
     qfw_config.write_state(state)
 
 
-def _local_service_launch_specs(local_config, services, selected):
+def _start_job_prte(state, env, allocation):
+    prte_config = state["local_services"].get("prte") or {}
+    uri_path = Path(env["QFW_DVM_URI_PATH"]).expanduser().resolve()
+    uri_path.parent.mkdir(parents=True, exist_ok=True)
+    host_list = ",".join(f"{host}:*" for host in allocation["group1"])
+    command = [
+        "prte",
+        "--host", host_list,
+        "--report-uri", str(uri_path),
+    ]
+    job_id = env.get("QFW_JOB_ID") or env.get("SLURM_JOB_ID")
+    if job_id and str(job_id) != "-1":
+        env["SLURM_JOB_ID"] = str(job_id)
+        env["SLURM_JOBID"] = str(job_id)
+        command.extend([
+            "-x", f"SLURM_JOB_ID={job_id}",
+            "-x", f"SLURM_JOBID={job_id}",
+        ])
+    command.extend(_prte_runtime_args(allocation))
+    if os.geteuid() == 0:
+        command.append("--allow-run-as-root")
+    command.append("--daemonize")
+    _run_checked(command, env)
+    timeout = int(
+        prte_config.get(
+            "startup-timeout-seconds",
+            _directory_timeout(state, "allocation-local"),
+        )
+    )
+    _wait_for_ready(
+        f"PRTE DVM uri {uri_path}",
+        timeout,
+        lambda: uri_path.exists(),
+    )
+    return {
+        "owner": "job",
+        "role": "prte-dvm",
+        "uri_path": str(uri_path),
+        "targets": allocation["group1"],
+        "allocation_mode": allocation["mode"],
+        "force_cleanup": qfw_config.bool_config(
+            prte_config.get("force-cleanup"), False),
+    }
+
+
+def _prte_runtime_args(allocation):
+    mode = allocation["mode"]
+    if mode == "heterogeneous":
+        return [
+            "--prtemca", "ras", "^slurm",
+            "--prtemca", "plm", "slurm",
+            "--prtemca", "plm_slurm_verbose", "100",
+            "--prtemca", "plm_base_verbose", "100",
+            "--prtemca", "ras_base_verbose", "100",
+            "--prtemca", "plm_slurm_args", "--het-group 1",
+        ]
+    if mode == "slurm":
+        return [
+            "--prtemca", "ras", "^slurm",
+            "--prtemca", "plm", "slurm",
+            "--prtemca", "plm_slurm_verbose", "100",
+            "--prtemca", "plm_base_verbose", "100",
+            "--prtemca", "ras_base_verbose", "100",
+        ]
+    return []
+
+
+def _local_service_launch_specs(local_config, services, selected,
+                                allocation=None):
+    allocation = allocation or _allocation_context_from_env()
     listen_base = _positive_int(
         local_config.get("service-listen-port-base", 8290),
         "local-services.service-listen-port-base",
@@ -429,8 +540,12 @@ def _local_service_launch_specs(local_config, services, selected):
     next_telnet = telnet_base
     for service_id in selected:
         service = qfw_config.service_by_name(services, service_id)
+        target = _resolve_node_policy(
+            service.get("target", "group1-head"), allocation)
+        assigned_hosts = _resolve_host_policy(
+            service.get("assigned-hosts"), allocation)
         service_host = str(service.get(
-            "bind-host", service.get("host", "127.0.0.1")))
+            "bind-host", service.get("host", target or "127.0.0.1")))
         listen_config = _service_port_value(service, "listen-port")
         listen_port = _reserve_service_port(
             used_ports,
@@ -460,6 +575,9 @@ def _local_service_launch_specs(local_config, services, selected):
         launch_specs.append({
             "service_id": service_id,
             "host": service_host,
+            "target": target,
+            "assigned_hosts": assigned_hosts,
+            "assigned_hosts_env": service.get("assigned-hosts-env", ""),
             "endpoint": f"{service_host}:{listen_port}",
             "listen_port": listen_port,
             "telnet_port": telnet_port,
@@ -646,7 +764,10 @@ def _cleanup_job_processes(state):
         if process.get("owner") != "job":
             continue
         try:
-            _terminate_process(int(process["pid"]))
+            if process.get("role") == "prte-dvm":
+                _cleanup_prte(process)
+            elif process.get("pid") is not None:
+                _terminate_process(int(process["pid"]))
         except Exception as exc:
             errors.append(str(exc))
     if errors:
@@ -654,6 +775,29 @@ def _cleanup_job_processes(state):
             "errors while cleaning partially started services: " +
             "; ".join(errors),
             file=sys.stderr,
+        )
+
+
+def _cleanup_prte(process):
+    uri_path = process.get("uri_path")
+    if uri_path:
+        uri = Path(uri_path)
+        if uri.exists():
+            subprocess.run(
+                ["pterm", "--dvm", f"file:{uri}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        shutil.rmtree(str(uri.parent), ignore_errors=True)
+    if not qfw_config.bool_config(process.get("force_cleanup"), False):
+        return
+    for name in ("prte", "prted"):
+        subprocess.run(
+            ["pkill", "-9", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
         )
 
 
@@ -838,6 +982,113 @@ def _resolve_service(args):
         "load-modules": args.load_modules or args.module,
         "operation-mode": args.operation_mode,
     }
+
+
+def _allocation_context_from_env(env=None):
+    env = env or os.environ
+    mode = env.get("QFW_ALLOCATION_MODE", "").strip().lower()
+    group0_value = env.get("QFW_GROUP_0_NODELIST", "")
+    group1_value = env.get("QFW_GROUP_1_NODELIST", "")
+    groups_value = env.get("QFW_GROUPS", "")
+    if not mode:
+        if any(key.startswith("SLURM_JOB_NODELIST_HET_GROUP_")
+               for key in env):
+            mode = "heterogeneous"
+        elif env.get("SLURM_JOB_NODELIST"):
+            mode = "slurm"
+        else:
+            mode = "local"
+    if mode == "heterogeneous" and (not group0_value or not group1_value):
+        group0_value = env.get("SLURM_JOB_NODELIST_HET_GROUP_0", group0_value)
+        group1_value = env.get("SLURM_JOB_NODELIST_HET_GROUP_1", group1_value)
+    elif mode == "slurm" and (not group0_value or not group1_value):
+        nodelist = env.get("SLURM_JOB_NODELIST", socket.gethostname())
+        group0_value = group0_value or nodelist
+        group1_value = group1_value or nodelist
+    elif mode == "local":
+        host = socket.gethostname()
+        group0_value = group0_value or host
+        group1_value = group1_value or host
+    group0 = _expand_host_list(group0_value)
+    group1 = _expand_host_list(group1_value)
+    if not group0 or not group1:
+        raise ValueError(
+            "local-services require allocation groups 0 and 1; "
+            f"got group0={group0_value!r} group1={group1_value!r}"
+        )
+    if not groups_value:
+        groups_value = f"GROUP_0={group0_value}:GROUP_1={group1_value}"
+    return {
+        "mode": mode,
+        "group0": group0,
+        "group1": group1,
+        "group0_nodelist": group0_value,
+        "group1_nodelist": group1_value,
+        "groups": groups_value,
+    }
+
+
+def _publish_allocation_environment(env, allocation):
+    env["QFW_ALLOCATION_MODE"] = allocation["mode"]
+    env["QFW_GROUP_0_NODELIST"] = allocation["group0_nodelist"]
+    env["QFW_GROUP_1_NODELIST"] = allocation["group1_nodelist"]
+    env["QFW_GROUPS"] = allocation["groups"]
+
+
+def _expand_host_list(value):
+    if not value:
+        return []
+    try:
+        from defw_util import expand_host_list
+
+        return list(expand_host_list(value))
+    except Exception:
+        return _expand_simple_host_list(str(value))
+
+
+def _expand_simple_host_list(value):
+    hosts = []
+    for item in str(value).split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "[" not in item or "]" not in item:
+            hosts.append(item)
+            continue
+        prefix, rest = item.split("[", 1)
+        body, suffix = rest.split("]", 1)
+        for part in body.split(","):
+            if "-" not in part:
+                hosts.append(f"{prefix}{part}{suffix}")
+                continue
+            start, end = part.split("-", 1)
+            width = max(len(start), len(end))
+            for number in range(int(start), int(end) + 1):
+                hosts.append(f"{prefix}{number:0{width}d}{suffix}")
+    return hosts
+
+
+def _resolve_node_policy(policy, allocation):
+    if not policy or policy == "group1-head":
+        return allocation["group1"][0]
+    if policy == "group0-head":
+        return allocation["group0"][0]
+    if policy == "local":
+        return socket.gethostname()
+    return str(policy)
+
+
+def _resolve_host_policy(policy, allocation):
+    if not policy:
+        return ""
+    if policy == "group1":
+        return ",".join(allocation["group1"])
+    if policy == "group0":
+        return ",".join(allocation["group0"])
+    if policy == "all":
+        return ",".join(dict.fromkeys(
+            allocation["group0"] + allocation["group1"]))
+    return str(policy)
 
 
 def _load_optional_site(site_config):

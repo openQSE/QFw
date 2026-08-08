@@ -854,6 +854,7 @@ file(WRITE "${partial_runtime}"
   scope-order:
     - local
 local-services:
+  start-prte: false
   start-dirsvc: false
   start-qpm: true
   dirsvc:

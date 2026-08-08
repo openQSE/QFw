@@ -3,6 +3,7 @@ resolver:
     - local
 
 local-services:
+  start-prte: true
   start-dirsvc: true
   start-qpm: true
   dirsvc:

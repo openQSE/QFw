@@ -60,3 +60,37 @@ def test_prepare_run_state_persists_resolver_environment_overrides(
         "override-site-a:9000",
         "override-site-b:9001",
     ]
+
+
+def test_prepare_run_state_persists_local_dvm_uri(tmp_path):
+    site_path = tmp_path / "site.yaml"
+    runtime_path = tmp_path / "runtime.yaml"
+    site = {
+        "install": {
+            "qfw-prefix": str(tmp_path / "qfw"),
+            "defw-prefix": str(tmp_path / "defw"),
+        },
+    }
+    runtime = {
+        "resolver": {
+            "scope-order": ["local"],
+        },
+        "local-services": {
+            "start-prte": True,
+            "start-dirsvc": True,
+            "start-qpm": True,
+        },
+    }
+
+    state = qfw_config.prepare_run_state(
+        site_path,
+        runtime_path,
+        site,
+        runtime,
+        run_id="local-test",
+        run_dir=tmp_path / "run",
+        dry_run=True,
+    )
+
+    assert state["environment"]["QFW_DVM_URI_PATH"] == str(
+        tmp_path / "run" / "prte_dvm" / "dvm-uri")

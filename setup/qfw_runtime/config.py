@@ -387,6 +387,8 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         environment["DEFW_PARENT_HOSTNAME"] = local_host
         environment["DEFW_PARENT_PORT"] = str(local_port)
         environment["DEFW_PARENT_NAME"] = local_name
+        environment["QFW_DVM_URI_PATH"] = str(
+            run_root / "prte_dvm" / "dvm-uri")
     if manifest_path is not None:
         environment["QFW_SERVICE_MANIFEST"] = str(manifest_path)
     if dry_run:
