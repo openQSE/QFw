@@ -2635,6 +2635,23 @@ The resolver path should:
 7. Return a structured ambiguity or policy error when no safe default exists.
 8. Bind to the selected QPM service using the selected API binding.
 
+QPM service selection should combine C-friendly enum masks with structured
+service metadata. `QPMType` remains a broad service-kind mask owned by QFw/QPM,
+such as hardware or simulator. `QPMCapability` remains a stable feature mask,
+such as state-vector simulation, tensor-network simulation, or superconducting
+device support. Provider and device identity are not encoded as type bits.
+They are service-record metadata fields such as `provider`, `device_id`,
+selector resource, and selector alias.
+
+DEFw stores these masks opaquely and performs generic bit-mask filtering only;
+it does not define provider-specific QPM semantics. QFw clients that care about
+a class of service request broad type and capability masks. Clients that need a
+specific backend may also provide metadata filters, for example
+`provider=nwqsim`, without changing the enum definitions. If multiple services
+match the requested masks and metadata, the resolver applies the configured
+deterministic policy or returns a structured ambiguity error. Scheduler-driven
+or load-aware selection is outside this resolver layer.
+
 After resolution, reservation and release behavior should be identical for
 QFw-managed and long-running QPM services. Directory-service discovery and
 configured direct endpoint resolution are both supported resolver contracts; the
