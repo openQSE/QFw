@@ -519,6 +519,114 @@ def test_qfw_srun_configures_application_defw_environment(
         run_dir / "application" / "logs")
 
 
+def test_qfw_srun_honors_slurm_application_placement(
+        tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    state_dir = run_dir / "state"
+    state_dir.mkdir(parents=True)
+    state = {
+        "setup_complete": True,
+        "run_dir": str(run_dir),
+        "environment": {
+            "QFW_ALLOCATION_MODE": "slurm",
+            "QFW_GROUP_0_NODELIST": "client-a,client-b",
+            "QFW_GROUP_1_NODELIST": "svc-a",
+            "QFW_GROUPS": "GROUP_0=client-a,client-b:GROUP_1=svc-a",
+        },
+    }
+    (state_dir / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    captured = {}
+
+    def fake_command_path(name, env=None):
+        assert name == "defw-python"
+        return Path("/usr/bin/defw-python")
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    rc = commands.qfw_srun([
+        "--run-dir", str(run_dir),
+        "--nodes", "1",
+        "--ntasks", "1",
+        "--nodelist", "client-b",
+        "app.py",
+    ])
+
+    assert rc == 0
+    assert captured["argv"] == [
+        "srun",
+        "--nodes", "1",
+        "--ntasks", "1",
+        "--nodelist", "client-b",
+        "/usr/bin/defw-python",
+        "app.py",
+    ]
+
+
+def test_qfw_srun_configures_site_directory_defw_environment(
+        tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    state_dir = run_dir / "state"
+    state_dir.mkdir(parents=True)
+    state = {
+        "setup_complete": True,
+        "run_dir": str(run_dir),
+        "environment": {
+            "QFW_ALLOCATION_MODE": "slurm",
+            "QFW_GROUP_0_NODELIST": "client-a,client-b",
+            "QFW_GROUP_1_NODELIST": "svc-a",
+            "QFW_GROUPS": "GROUP_0=client-a,client-b:GROUP_1=svc-a",
+            "QFW_SITE_DIRSVC_ENDPOINTS": "svc-a:8090",
+            "QFW_SITE_DIRSVC_NAME": "qfw-site-dirsvc",
+        },
+    }
+    (state_dir / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    captured = {}
+
+    def fake_command_path(name, env=None):
+        assert name == "defw-python"
+        return Path("/usr/bin/defw-python")
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        captured["env"] = dict(env)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands, "_free_tcp_port", lambda host: 45679)
+    monkeypatch.setattr(commands, "_resolve_host_address",
+                        lambda host: "10.0.0.3")
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    rc = commands.qfw_srun([
+        "--run-dir", str(run_dir),
+        "--nodes", "1",
+        "--ntasks", "1",
+        "--nodelist", "client-a",
+        "app.py",
+    ])
+
+    assert rc == 0
+    assert captured["argv"][:7] == [
+        "srun",
+        "--nodes", "1",
+        "--ntasks", "1",
+        "--nodelist", "client-a",
+    ]
+    assert captured["env"]["DEFW_DISABLE_DIRSVC"] == "no"
+    assert captured["env"]["DEFW_PARENT_HOSTNAME"] == "svc-a"
+    assert captured["env"]["DEFW_PARENT_PORT"] == "8090"
+    assert captured["env"]["DEFW_PARENT_NAME"] == "qfw-site-dirsvc"
+    assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.3"
+    assert captured["env"]["DEFW_LISTEN_PORT"] == "45679"
+
+
 def test_cleanup_prte_uses_dvm_uri_without_default_pkill(tmp_path,
                                                          monkeypatch):
     uri_path = tmp_path / "prte_dvm" / "dvm-uri"

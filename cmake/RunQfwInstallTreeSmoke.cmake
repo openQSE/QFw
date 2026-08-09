@@ -74,6 +74,8 @@ endif()
 foreach(example_file
 		examples/README.md
 		examples/qfw_example_common.sh
+		examples/qfw_long_running_qpm.batch
+		examples/qfw_long_running_qpm.sh
 		examples/qfw_mpi_smoke.sh
 		examples/qfw_mpi_smoke_services.yaml
 		examples/qfw_qiskit_simple.sh
@@ -196,6 +198,7 @@ signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGTERM, stop)
 
 registry = os.environ.get('QFW_FAKE_DIRSVC_REGISTRY')
+ready_file = os.environ.get('QFW_SERVICE_READY_FILE')
 service_id = (
     os.environ.get('QFW_QPM_SERVICE_ID') or
     os.environ.get('DEFW_AGENT_NAME') or
@@ -227,6 +230,10 @@ while running:
             json.dump(records, stream)
         os.replace(tmp_path, registry)
         registered = True
+        if ready_file:
+            with open(ready_file, 'w', encoding='utf-8') as stream:
+                json.dump({'ready': True, 'service_id': service_id}, stream)
+                stream.write('\\n')
     time.sleep(0.1)
 ")
 file(WRITE "${plain_tcp_script}"
@@ -273,12 +280,15 @@ if [[ \"\${1:-}\" == \"--py-version\" ]]; then
 	'${QFW_PYTHON}' -c 'import sys; print(f\"{sys.version_info[0]}.{sys.version_info[1]}.0\")'
 	exit 0
 fi
+if [[ \"\${DEFW_SHELL_TYPE:-}\" == \"daemon\" ]]; then
+	exec '${QFW_PYTHON}' '${fake_service_script}'
+fi
 exit 0
 ")
 file(WRITE "${QFW_INSTALL_PREFIX}/bin/defwp-wrapper"
 "#!/usr/bin/env bash
 set -euo pipefail
-if [[ -n \"\${DEFW_AGENT_TYPE:-}\" ]]; then
+if [[ \"\${DEFW_SHELL_TYPE:-}\" == \"daemon\" ]]; then
 	exec '${QFW_PYTHON}' '${fake_service_script}'
 fi
 if [[ -n \"\${DEFW_APP_SMOKE_OUTPUT:-}\" ]]; then

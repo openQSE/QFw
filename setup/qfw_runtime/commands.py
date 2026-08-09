@@ -98,6 +98,11 @@ def qfw_setup(argv):
 def qfw_srun(argv):
     parser = argparse.ArgumentParser(prog="qfw-srun")
     parser.add_argument("--run-dir")
+    parser.add_argument("--nodes")
+    parser.add_argument("--ntasks")
+    parser.add_argument("--nodelist")
+    parser.add_argument("--het-group")
+    parser.add_argument("--exclusive", action="store_true")
     parser.add_argument("application", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if not args.application:
@@ -119,6 +124,13 @@ def qfw_srun(argv):
     command = _application_launch_command(
         [str(defw_python), *args.application],
         allocation,
+        {
+            "nodes": args.nodes,
+            "ntasks": args.ntasks,
+            "nodelist": args.nodelist,
+            "het_group": args.het_group,
+            "exclusive": args.exclusive,
+        },
     )
     return subprocess.run(command, env=env).returncode
 
@@ -210,7 +222,7 @@ def qfw_dirsvc_start(argv):
             "endpoint": endpoint,
             "startup_timeout": startup_timeout,
         },
-        lambda: _tcp_endpoint_ready(endpoint),
+        lambda: _directory_endpoint_ready(endpoint),
     )
 
 
@@ -563,13 +575,21 @@ def _target_launch_command(command, allocation, target):
     return command
 
 
-def _application_launch_command(command, allocation):
+def _application_launch_command(command, allocation, launch_options=None):
     command = list(command)
     mode = allocation["mode"]
+    launch_options = launch_options or {}
     if mode == "heterogeneous":
-        return ["srun", "--het-group=0", *command]
+        srun = ["srun"]
+        het_group = launch_options.get("het_group")
+        if het_group is None:
+            het_group = "0"
+        if str(het_group):
+            srun.append(f"--het-group={het_group}")
+        srun.extend(_application_srun_options(launch_options))
+        return [*srun, *command]
     if mode == "slurm":
-        return ["srun", *command]
+        return ["srun", *_application_srun_options(launch_options), *command]
     return command
 
 
@@ -577,17 +597,68 @@ def _configure_application_defw_environment(env, state=None):
     if state and not env.get("DEFW_LOG_DIR"):
         env["DEFW_LOG_DIR"] = str(
             Path(state["run_dir"]) / "application" / "logs")
-    if not env.get("QFW_LOCAL_DIRSVC_ENDPOINT"):
+    parent = _application_directory_parent(env)
+    if parent is None:
         return
+    parent_host, parent_port, parent_name = parent
     env["DEFW_DISABLE_DIRSVC"] = "no"
     env.setdefault("DEFW_AGENT_TYPE", "agent")
     env.setdefault("DEFW_SHELL_TYPE", "cmdline")
+    env.setdefault("DEFW_PARENT_HOSTNAME", parent_host)
+    env.setdefault("DEFW_PARENT_PORT", str(parent_port))
+    env.setdefault("DEFW_PARENT_NAME", parent_name)
     parent_host = env.get("DEFW_PARENT_HOSTNAME", "")
     parent_addr = env.get("DEFW_PARENT_ADDR", "")
     if parent_host and parent_addr in {"", "0.0.0.0", "None"}:
         env["DEFW_PARENT_ADDR"] = _resolve_host_address(parent_host)
     if _int_value(env.get("DEFW_LISTEN_PORT"), 0) <= 0:
         env["DEFW_LISTEN_PORT"] = str(_free_tcp_port(""))
+
+
+def _application_srun_options(launch_options):
+    srun = []
+    if launch_options.get("nodes"):
+        srun.extend(["--nodes", str(launch_options["nodes"])])
+    if launch_options.get("ntasks"):
+        srun.extend(["--ntasks", str(launch_options["ntasks"])])
+    if launch_options.get("nodelist"):
+        srun.extend(["--nodelist", str(launch_options["nodelist"])])
+    if launch_options.get("exclusive"):
+        srun.append("--exclusive")
+    return srun
+
+
+def _application_directory_parent(env):
+    local_endpoint = env.get("QFW_LOCAL_DIRSVC_ENDPOINT", "")
+    if local_endpoint:
+        host, port = _split_endpoint(local_endpoint)
+        return (
+            env.get("DEFW_PARENT_HOSTNAME") or host,
+            env.get("DEFW_PARENT_PORT") or port,
+            env.get("DEFW_PARENT_NAME") or
+            env.get("QFW_LOCAL_DIRSVC_NAME", "qfw-local-dirsvc"),
+        )
+
+    site_endpoints = _split_configured_endpoints(
+        env.get("QFW_SITE_DIRSVC_ENDPOINTS", ""))
+    if not site_endpoints:
+        return None
+    host, port = _split_endpoint(site_endpoints[0])
+    return (
+        host,
+        port,
+        env.get("QFW_SITE_DIRSVC_NAME", "qfw-site-dirsvc"),
+    )
+
+
+def _split_configured_endpoints(value):
+    if not value:
+        return []
+    return [
+        item.strip()
+        for item in str(value).replace(";", ",").split(",")
+        if item.strip()
+    ]
 
 
 def _resolve_host_address(host):
@@ -844,7 +915,7 @@ def _wait_required_directories(state):
         _wait_for_ready(
             f"directory {name} at {endpoint}",
             timeout,
-            lambda endpoint=endpoint: _tcp_endpoint_ready(endpoint),
+            lambda endpoint=endpoint: _directory_endpoint_ready(endpoint),
         )
 
 

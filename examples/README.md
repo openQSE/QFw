@@ -64,6 +64,10 @@ QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
 QFW_RUN_ALL_SHIM_LIB=qrmi ./qfw_run_all.sh
 ```
 
+`qfw_run_all.sh` intentionally covers allocation-local managed examples. The
+long-running QPM example below needs a multi-node allocation and is run
+separately.
+
 ## Example Wrappers
 
 ### `qfw_init_test.sh`
@@ -208,3 +212,34 @@ application tree is present.
 Frontier-oriented batch template for submitting the SupermarQ workflow
 as a heterogeneous Slurm job. Update account, node counts, paths, and
 arguments before use.
+
+### `qfw_long_running_qpm.sh`
+
+Runs a site-scoped long-running QPM workflow. The script expects at least
+three allocated nodes by default. It starts a site DEFw-dirsvc, PRTE DVM, and
+long-running `nwqsim` QPM on one service node, then launches concurrent
+application waves on the remaining nodes. Each app uses site-scoped
+`qfw-setup`, `qfw-srun`, and `qfw-teardown`; app teardown must not stop the
+site service plane.
+
+```bash
+./qfw_long_running_qpm.sh --apps 2 --waves 2 --backend nwqsim
+```
+
+Useful overrides:
+
+```bash
+./qfw_long_running_qpm.sh --service-node c1 --app-nodes c2,c3
+QFW_LONG_RUNNING_QPM_FORCE_PRTE_CLEANUP=yes ./qfw_long_running_qpm.sh
+```
+
+Logs, generated site/runtime configs, service PID files, per-app logs, and
+`summary.jsonl` are written under
+`$QFW_RUN_BASE_DIR/long-running-qpm-<timestamp>`. If `QFW_RUN_BASE_DIR` is
+unset, the script uses `${TMPDIR:-/tmp}/qfw-runs`.
+
+### `qfw_long_running_qpm.batch`
+
+Three-node Slurm batch template for `qfw_long_running_qpm.sh`. Set
+`QFW_ACTIVATE` when the QFw install is not under
+`/opt/openqse/qfw/current/bin/qfw-activate`.
