@@ -19,6 +19,14 @@ COMMANDS = {
     "qfw-dirsvc-start",
     "qfw-service-start",
 }
+DEFW_ENDPOINT_PROBE_TIMEOUT_SECONDS = 1.0
+DEFW_ENDPOINT_READY_PROBE = r"""
+import sys
+from qfw_runtime.commands import _defw_endpoint_ready_unbounded
+
+raise SystemExit(
+    0 if _defw_endpoint_ready_unbounded(sys.argv[1]) else 1)
+"""
 
 
 def main(argv=None):
@@ -1127,6 +1135,21 @@ def _service_endpoint_ready(endpoint):
 
 
 def _defw_endpoint_ready(endpoint):
+    try:
+        result = subprocess.run(
+            [sys.executable or "python3", "-c", DEFW_ENDPOINT_READY_PROBE,
+             str(endpoint)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=DEFW_ENDPOINT_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _defw_endpoint_ready_unbounded(endpoint):
     try:
         client = _endpoint_client(endpoint)
         if hasattr(client, "is_ready"):
