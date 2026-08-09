@@ -94,3 +94,42 @@ def test_prepare_run_state_persists_local_dvm_uri(tmp_path):
 
     assert state["environment"]["QFW_DVM_URI_PATH"] == str(
         tmp_path / "run" / "prte_dvm" / "dvm-uri")
+
+
+def test_prepare_run_state_persists_user_python_environment(
+        tmp_path, monkeypatch):
+    site_path = tmp_path / "site.yaml"
+    runtime_path = tmp_path / "runtime.yaml"
+    site = {
+        "install": {
+            "qfw-prefix": str(tmp_path / "qfw"),
+            "defw-prefix": str(tmp_path / "defw"),
+        },
+    }
+    runtime = {
+        "resolver": {
+            "scope-order": ["direct"],
+        },
+    }
+    monkeypatch.setenv("PATH", "/shared/venv/bin:/usr/bin")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/shared/qfw/lib")
+    monkeypatch.setenv("PYTHONPATH", "/shared/venv/site-packages")
+    monkeypatch.setenv("VIRTUAL_ENV", "/shared/venv")
+    monkeypatch.setenv("VIRTUAL_ENV_PROMPT", "(qfw)")
+
+    state = qfw_config.prepare_run_state(
+        site_path,
+        runtime_path,
+        site,
+        runtime,
+        run_id="venv-test",
+        run_dir=tmp_path / "run",
+        dry_run=True,
+    )
+
+    assert state["environment"]["PATH"] == "/shared/venv/bin:/usr/bin"
+    assert state["environment"]["LD_LIBRARY_PATH"] == "/shared/qfw/lib"
+    assert state["environment"]["PYTHONPATH"] == (
+        "/shared/venv/site-packages")
+    assert state["environment"]["VIRTUAL_ENV"] == "/shared/venv"
+    assert state["environment"]["VIRTUAL_ENV_PROMPT"] == "(qfw)"

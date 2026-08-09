@@ -15,6 +15,16 @@ SCOPE_ALIASES = {
     "site": "site",
     "direct": "direct",
 }
+CALLER_ENVIRONMENT_KEYS = (
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONNOUSERSITE",
+    "PYTHONUSERBASE",
+    "VIRTUAL_ENV",
+    "VIRTUAL_ENV_PROMPT",
+)
 
 
 def _split_config_list(value):
@@ -25,6 +35,13 @@ def _split_config_list(value):
     else:
         items = value
     return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _persist_caller_environment(environment):
+    for name in CALLER_ENVIRONMENT_KEYS:
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
 
 
 def qfw_prefix():
@@ -419,6 +436,7 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         "QFW_LOG_DIR": str(log_dir),
         "QFW_QPM_RESOLVER_SCOPE_ORDER": ",".join(scope_order),
     }
+    _persist_caller_environment(environment)
     if service_runtime_path is not None:
         environment["QFW_SERVICE_RUNTIME_CONFIG"] = str(service_runtime_path)
     runtime_mode = (

@@ -61,6 +61,40 @@ _qfw_restore_var() {
 	unset "${old_name}" "${set_name}"
 }
 
+_qfw_active_venv_python_paths() {
+	if [[ -z "${VIRTUAL_ENV:-}" || ! -x "${VIRTUAL_ENV}/bin/python" ]]; then
+		return 0
+	fi
+
+	"${VIRTUAL_ENV}/bin/python" - <<'PY'
+import site
+import sys
+
+expected = "@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@"
+actual = f"{sys.version_info[0]}.{sys.version_info[1]}"
+if actual != expected:
+    raise SystemExit(0)
+
+paths = []
+try:
+    paths.extend(site.getsitepackages())
+except Exception:
+    pass
+try:
+    paths.append(site.getusersitepackages())
+except Exception:
+    pass
+for item in sys.path:
+    if item and ("site-packages" in item or "dist-packages" in item):
+        paths.append(item)
+seen = set()
+for item in paths:
+    if item and item not in seen:
+        seen.add(item)
+        print(item)
+PY
+}
+
 if [[ -n "${_QFW_ACTIVE:-}" ]]; then
 	return 0
 fi
@@ -137,10 +171,16 @@ fi
 _qfw_prepend_path PATH "${QFW_BIN_PATH}"
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/lib"
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/src"
+while IFS= read -r _qfw_venv_path; do
+	[[ -n "${_qfw_venv_path}" ]] || continue
+	_qfw_prepend_path PYTHONPATH "${_qfw_venv_path}"
+done < <(_qfw_active_venv_python_paths)
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/lib64/python@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@/site-packages"
 _qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/lib64/python@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@/site-packages"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
 _qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/lib/qfw/services"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/lib/qfw/service-apis"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/setup"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/backends"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/services"
@@ -175,6 +215,7 @@ qfw_deactivate() {
 	unset _qfw_var
 	unset _QFW_ACTIVE
 	unset -f qfw_deactivate
+	unset -f _qfw_active_venv_python_paths
 	unset -f _qfw_resolve_script_dir
 	unset -f _qfw_prepend_path
 	unset -f _qfw_save_var
@@ -183,3 +224,4 @@ qfw_deactivate() {
 
 unset _qfw_script_dir _qfw_script_prefix
 unset _qfw_configured_source_prefix _qfw_configured_generated_prefix
+unset _qfw_venv_path

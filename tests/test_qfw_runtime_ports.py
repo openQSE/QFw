@@ -379,6 +379,65 @@ def test_start_job_local_services_places_heterogeneous_stack_on_group1(
     assert calls[2][1]["QFW_QPM_ASSIGNED_HOSTS"] == "svc-a,svc-b"
 
 
+def test_start_defw_owned_process_uses_defw_python_wrapper(
+        tmp_path, monkeypatch):
+    pid_file = tmp_path / "svc.pid"
+    ready_file = tmp_path / "svc-ready.json"
+    log_dir = tmp_path / "logs"
+    captured = {}
+
+    class FakeProcess:
+        pid = 1234
+
+        def poll(self):
+            return None
+
+        def wait(self):
+            return 0
+
+    def fake_command_path(name, env=None):
+        assert name == "defw-python"
+        return Path("/usr/bin/defw-python")
+
+    def fake_popen(argv, env, start_new_session, stdout, stderr):
+        captured["argv"] = list(argv)
+        captured["env"] = dict(env)
+        captured["start_new_session"] = start_new_session
+        captured["stdout_name"] = stdout.name
+        captured["stderr_name"] = stderr.name
+        return FakeProcess()
+
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        commands,
+        "_wait_process_ready",
+        lambda process, timeout, name, ready_probe: None,
+    )
+
+    rc = commands._start_defw_owned_process(
+        "svc",
+        {"DEFW_LOG_DIR": str(log_dir), "VIRTUAL_ENV": "/shared/venv"},
+        pid_file,
+        ready_file,
+        5,
+        True,
+        False,
+        {"role": "service"},
+        lambda: True,
+    )
+
+    assert rc == 0
+    assert captured["argv"] == ["/usr/bin/defw-python", "-d", "-x"]
+    assert captured["env"]["VIRTUAL_ENV"] == "/shared/venv"
+    assert captured["start_new_session"] is True
+    assert Path(captured["stdout_name"]).name == "svc.stdout.log"
+    assert Path(captured["stderr_name"]).name == "svc.stderr.log"
+    assert pid_file.read_text(encoding="utf-8") == "1234\n"
+    assert json.loads(ready_file.read_text(encoding="utf-8"))["role"] == (
+        "service")
+
+
 def test_qfw_srun_uses_group0_for_heterogeneous_allocation(
         tmp_path, monkeypatch):
     run_dir = tmp_path / "run"

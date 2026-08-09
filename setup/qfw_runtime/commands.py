@@ -821,12 +821,12 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
         _write_ready(ready_file, ready_payload)
         return 0
 
-    defwp = _defwp_path(env)
+    defw_python = _command_path("defw-python", env=env)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
     try:
         process = subprocess.Popen(
-            [str(defwp), "-d", "-x"],
+            [str(defw_python), "-d", "-x"],
             env=env,
             start_new_session=True,
             stdout=stdout_log,
@@ -1434,25 +1434,6 @@ def _command_path(name, env=None):
     if found:
         return Path(found)
     raise FileNotFoundError(f"unable to find QFw command: {name}")
-
-
-def _defwp_path(env):
-    defw_prefix = Path(env.get("DEFW_PREFIX") or qfw_config.defw_prefix())
-    qfw_bin = (
-        Path(env["QFW_BIN_PATH"]).expanduser().resolve()
-        if env.get("QFW_BIN_PATH") else
-        qfw_config.qfw_bin_path()
-    )
-    for candidate in (
-            defw_prefix / "bin" / "defwp",
-            defw_prefix / "src" / "defwp",
-            qfw_bin / "defwp"):
-        if candidate.exists():
-            return candidate
-    found = shutil.which("defwp", path=env.get("PATH"))
-    if found:
-        return Path(found)
-    raise FileNotFoundError("unable to find defwp")
 
 
 def _run_checked(command, env):

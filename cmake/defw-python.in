@@ -39,17 +39,32 @@ fi
 qfw_prefix="${QFW_PREFIX:-$(cd "${script_dir}/.." && pwd)}"
 defw_prefix="${DEFW_PREFIX:-${qfw_prefix}}"
 
-defwp_bin="${defw_prefix}/bin/defwp"
-defwp_wrapper="${defw_prefix}/bin/defwp-wrapper"
-if [[ ! -x "${defwp_wrapper}" && -x "${qfw_prefix}/bin/defwp-wrapper" ]]; then
-	defwp_wrapper="${qfw_prefix}/bin/defwp-wrapper"
-fi
+defwp_bin=""
+for candidate in \
+	"${defw_prefix}/bin/defwp" \
+	"${defw_prefix}/src/defwp" \
+	"${qfw_prefix}/bin/defwp"; do
+	if [[ -x "${candidate}" ]]; then
+		defwp_bin="${candidate}"
+		break
+	fi
+done
+defwp_wrapper=""
+for candidate in \
+	"${defw_prefix}/bin/defwp-wrapper" \
+	"${defw_prefix}/src/defwp-wrapper" \
+	"${qfw_prefix}/bin/defwp-wrapper"; do
+	if [[ -x "${candidate}" ]]; then
+		defwp_wrapper="${candidate}"
+		break
+	fi
+done
 if [[ ! -x "${defwp_bin}" ]]; then
-	echo "Unable to find DEFw executable: ${defwp_bin}" >&2
+	echo "Unable to find DEFw executable under ${defw_prefix}" >&2
 	exit 127
 fi
 if [[ ! -x "${defwp_wrapper}" ]]; then
-	echo "Unable to find DEFw wrapper: ${defwp_wrapper}" >&2
+	echo "Unable to find DEFw wrapper under ${defw_prefix}" >&2
 	exit 127
 fi
 
@@ -103,4 +118,7 @@ if [[ -n "${venv_pythonpath}" ]]; then
 fi
 
 export DEFW_PATH="${DEFW_PATH:-${defw_prefix}}"
+if [[ "${DEFW_SHELL_TYPE:-}" == "daemon" || "${1:-}" == "-d" ]]; then
+	exec "${defwp_bin}" "$@"
+fi
 exec "${defwp_wrapper}" "$@"
