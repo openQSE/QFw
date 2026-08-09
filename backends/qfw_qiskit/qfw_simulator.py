@@ -13,6 +13,7 @@ from .qfw_target import QFW_NUM_QUBITS, build_qfw_target, qfw_basis_gates
 from defw_exception import DEFwDumper
 from defw import me
 from .qfw_lookup_service import get_qpm
+from .qpm_selection import qpm_selection_for_provider
 from enum import IntFlag
 from api_qpm import QPMType, QPMCapability
 from defw_event_baseapi import BaseEventAPI
@@ -83,13 +84,25 @@ class QFwBackend(BackendV2):
 	COMPLETION_TIMEOUT_SEC = 200
 
 	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
-				 num_qubits=QFW_NUM_QUBITS, lookup_timeout=None):
+				 num_qubits=QFW_NUM_QUBITS, lookup_timeout=None,
+				 provider=None, backend=None):
 		self.log_time = time.time()
+		self._provider = None
+		selector = provider if provider is not None else backend
+		if selector is not None:
+			selection = qpm_selection_for_provider(selector)
+			self._provider = selection["provider"]
+			if betype in (-1, None):
+				betype = selection["qpm_type"]
+			if capability in (-1, None):
+				capability = selection["qpm_capability"]
 		self._capability = capability
-		if lookup_timeout is None:
-			self.qpm = get_qpm(betype, capability)
-		else:
-			self.qpm = get_qpm(betype, capability, timeout=lookup_timeout)
+		lookup_kwargs = {}
+		if lookup_timeout is not None:
+			lookup_kwargs["timeout"] = lookup_timeout
+		if self._provider is not None:
+			lookup_kwargs["provider"] = self._provider
+		self.qpm = get_qpm(betype, capability, **lookup_kwargs)
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
 		self._event_endpoint = me.my_endpoint()

@@ -36,6 +36,33 @@ def test_backend_registers_event_api(monkeypatch):
 	assert backend.options._validators["seed"] is int
 
 
+def test_backend_provider_selector_uses_qpm_metadata(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+	from api_qpm import QPMCapability, QPMType
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-provider")
+	fake_runtime = FakeRuntime(endpoint="endpoint-provider")
+	calls = []
+
+	def fake_get_qpm(*args, **kwargs):
+		calls.append((args, kwargs))
+		return fake_qpm
+
+	monkeypatch.setattr(qfw_simulator, "get_qpm", fake_get_qpm)
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+
+	backend = qfw_simulator.QFwBackend(provider="nwqsim")
+
+	assert backend.qpm is fake_qpm
+	assert calls == [(
+		(QPMType.QPM_TYPE_SIMULATOR, QPMCapability.QPM_CAP_STATEVECTOR),
+		{"provider": "nwqsim"},
+	)]
+	assert backend.returns_statevector() is True
+
+
 def test_backend_run_and_shutdown_use_job_and_runtime(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
 

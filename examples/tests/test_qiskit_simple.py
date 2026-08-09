@@ -2,12 +2,10 @@ from qiskit import QuantumCircuit
 
 import sys
 
-from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_qiskit import QFwBackend
 from qfw_example_report import emit_result
 
-qfw_nwqsim_qiskit_backend = QFwBackend(
-	betype=QFwBackendType.QFW_TYPE_NWQSIM,
-	capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+qfw_nwqsim_qiskit_backend = QFwBackend(provider="nwqsim")
 
 nq = int(sys.argv[1])
 

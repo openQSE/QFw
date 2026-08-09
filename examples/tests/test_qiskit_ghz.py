@@ -5,7 +5,7 @@ import sys
 import time
 
 # ------------------ QFW backend--------------------- #
-from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_qiskit import QFwBackend
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
@@ -27,7 +27,7 @@ if sim_type == "nwqsim":
 	# ghz_nwqsim_times = []
 	for i in range(itrs):
 		start_time = time.time()
-		simulator_obj = QFwBackend(betype=QFwBackendType.QFW_TYPE_NWQSIM, capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+		simulator_obj = QFwBackend(provider="nwqsim")
 		# counts_nwqsim = qfw.execute(qc, shots=1024, backend="nwqsim") # sync
 		qfw_job = simulator_obj.run(qc, shots=1024)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
@@ -47,9 +47,7 @@ elif sim_type == "tnqvm":
 	# ghz_tnqvm_times = []
 	for i in range(itrs):
 		start_time = time.time()
-		simulator_obj = QFwBackend(
-			betype=QFwBackendType.QFW_TYPE_TNQVM,
-			capability=QFwBackendCapability.QFW_CAP_TENSORNETWORK)
+		simulator_obj = QFwBackend(provider="tnqvm")
 		qfw_job = simulator_obj.run(qc, shots=1024)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
 		counts_tnqvm = res_obj.get_counts()

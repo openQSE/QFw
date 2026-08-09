@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from defw import me
-from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_qiskit import QFwBackend
 from qfw_example_report import emit_result
 
 
@@ -22,20 +22,14 @@ def parse_args():
 
 def create_backend(case):
 	if case == "nwqsim-statevector":
-		return QFwBackend(
-			betype=QFwBackendType.QFW_TYPE_NWQSIM,
-			capability=QFwBackendCapability.QFW_CAP_STATEVECTOR,
-		)
+		return QFwBackend(provider="nwqsim")
 	if case == "tnqvm-tensor":
-		return QFwBackend(
-			betype=QFwBackendType.QFW_TYPE_TNQVM,
-			capability=QFwBackendCapability.QFW_CAP_TENSORNETWORK,
-		)
+		return QFwBackend(provider="tnqvm")
 	if case == "tnqvm-default":
-		return QFwBackend(betype=QFwBackendType.QFW_TYPE_TNQVM)
+		return QFwBackend(provider="tnqvm")
 	if case == "qb-missing":
 		return QFwBackend(
-			betype=QFwBackendType.QFW_TYPE_QB,
+			provider="qb",
 			lookup_timeout=3,
 		)
 	raise AssertionError(case)

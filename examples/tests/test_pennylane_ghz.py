@@ -2,7 +2,7 @@ import pennylane as qml
 import sys
 import time
 
-from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_qiskit import QFwBackend
 from qfw_example_report import emit_result
 
 
@@ -38,13 +38,9 @@ itrs = int(sys.argv[3])
 
 
 if sim_type == "nwqsim":
-	backend_instance = QFwBackend(
-		betype=QFwBackendType.QFW_TYPE_NWQSIM,
-		capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+	backend_instance = QFwBackend(provider="nwqsim")
 elif sim_type == "tnqvm":
-	backend_instance = QFwBackend(
-		betype=QFwBackendType.QFW_TYPE_TNQVM,
-		capability=QFwBackendCapability.QFW_CAP_TENSORNETWORK)
+	backend_instance = QFwBackend(provider="tnqvm")
 elif sim_type == "qiskit-aer":
 	backend_instance = qml.device('qiskit.aer', wires=nq)
 else:

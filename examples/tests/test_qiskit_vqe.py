@@ -13,10 +13,10 @@ from scipy.optimize import minimize
 import numpy as np
 
 # ------------------ QFW Backend -------------------- #
-from qfw_qiskit import QFwBackend, QFwBackendType, QFwBackendCapability
+from qfw_qiskit import QFwBackend
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
-backend = QFwBackend(betype=QFwBackendType.QFW_TYPE_NWQSIM, capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+backend = QFwBackend(provider="nwqsim")
 #backend = Aer.get_backend('statevector_simulator')
 
 # Initialize MPI

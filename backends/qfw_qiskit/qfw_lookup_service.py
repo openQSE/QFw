@@ -12,8 +12,9 @@ from .qpm_resolver import (
 )
 
 
-def _connect_qpm(dirsvc, qpm_type, qpm_cap, timeout=SYSTEM_UP_TIMEOUT):
-	want = os.environ.get(QPM_IMPL_ENV)
+def _connect_qpm(dirsvc, qpm_type, qpm_cap, timeout=SYSTEM_UP_TIMEOUT,
+		 provider=None):
+	want = provider or os.environ.get(QPM_IMPL_ENV)
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc, defw_module=defw)
 	request = {
 		"timeout": timeout,
@@ -49,10 +50,12 @@ def test_qpm(qpm_api):
 	logging.debug(qpm_api.test())
 
 
-def get_qpm(qpm_type=-1, qpm_cap=-1, timeout=SYSTEM_UP_TIMEOUT):
+def get_qpm(qpm_type=-1, qpm_cap=-1, timeout=SYSTEM_UP_TIMEOUT,
+	    provider=None):
 	# Grab a qpm if one exists.
 	dirsvc = _optional_directory_service()
-	qpm_api = _connect_qpm(dirsvc, qpm_type, qpm_cap, timeout=timeout)
+	qpm_api = _connect_qpm(
+		dirsvc, qpm_type, qpm_cap, timeout=timeout, provider=provider)
 
 	logging.debug(f"got the qpm {qpm_api}")
 

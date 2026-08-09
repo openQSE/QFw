@@ -167,21 +167,20 @@ def _binding_properties(binding):
 
 def reserve_shim_qpm(device_id, timeout):
 	dirsvc = defw_get_directory_service()
-	svc_type = QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE
+	svc_type = QPMType.QPM_TYPE_HARDWARE
 	svc_cap = QPMCapability.QPM_CAP_SUPERCONDUCTING
 	start = time()
 
 	while time() - start < timeout:
 		bindings = dirsvc.resolve_services(
 			service_name="QPM",
-			svc_type=svc_type,
-			svc_caps=svc_cap,
+			qpm_type=svc_type,
+			qpm_capabilities=svc_cap,
+			properties={"provider": "shim"},
 		)
 		matches = []
 		for binding in bindings:
 			props = _binding_properties(binding)
-			if props.get("provider") != "shim":
-				continue
 			if device_id and props.get("device_id") != device_id:
 				continue
 			matches.append(binding)

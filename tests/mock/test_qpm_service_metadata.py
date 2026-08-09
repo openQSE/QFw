@@ -286,7 +286,7 @@ def test_resolver_rejects_real_directory_stale_generation_before_binding():
 				_register_directory_qpm(
 					self,
 					"qpm-iqm",
-					QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE,
+					QPMType.QPM_TYPE_HARDWARE,
 					QPMCapability.QPM_CAP_SUPERCONDUCTING,
 					provider="iqm",
 					resource="IQM-20q",
@@ -307,7 +307,7 @@ def test_resolver_rejects_real_directory_stale_generation_before_binding():
 	_register_directory_qpm(
 		directory,
 		"qpm-iqm",
-		QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE,
+		QPMType.QPM_TYPE_HARDWARE,
 		QPMCapability.QPM_CAP_SUPERCONDUCTING,
 		provider="iqm",
 		resource="IQM-20q",

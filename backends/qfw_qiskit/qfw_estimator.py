@@ -26,7 +26,7 @@ from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.estimator_pub import EstimatorPub
 from qiskit.primitives.primitive_job import PrimitiveJob
 
-from .qfw_simulator import QFwBackend, QFwBackendType, QFwBackendCapability
+from .qfw_simulator import QFwBackend
 
 
 def _run_circuits(
@@ -213,8 +213,9 @@ class QFwEstimatorV2(BaseEstimatorV2):
 		self,
 		*,
 		backend: BackendV2 | None = None,
-		betype: QFwBackendType | int = -1,
-		becap: QFwBackendCapability | int = -1,
+		betype: int = -1,
+		becap: int = -1,
+		provider: str | None = None,
 		options: dict | None = None,
 	):
 		"""
@@ -225,7 +226,8 @@ class QFwEstimatorV2(BaseEstimatorV2):
 				the random seed for the simulator (``seed_simulator``).
 		"""
 		if backend is None:
-			backend = QFwBackend(betype=betype, capability=becap)
+			backend = QFwBackend(
+				betype=betype, capability=becap, provider=provider)
 		self._backend = backend
 		self._options = Options(**options) if options else Options()
 

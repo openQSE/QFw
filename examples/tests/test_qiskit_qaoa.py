@@ -10,8 +10,6 @@ from qiskit_optimization.applications.max_cut import Maxcut
 try:
     from qfw_qiskit import (
         QFwBackend,
-        QFwBackendCapability,
-        QFwBackendType,
         QFwSamplerV2,
     )
 except ImportError as exc:
@@ -47,11 +45,9 @@ plt.savefig('max_cut_graph.png')
 # --------------------------------------------------- #
 # ------------------ QFW simulator ------------------ #
 if sim_type.lower() == "nwqsim":
-    simulator_obj = QFwBackend(
-        betype=QFwBackendType.QFW_TYPE_NWQSIM,
-        capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+    simulator_obj = QFwBackend(provider="nwqsim")
 elif sim_type.lower() == "tnqvm":
-    simulator_obj = QFwBackend(betype=QFwBackendType.QFW_TYPE_TNQVM)
+    simulator_obj = QFwBackend(provider="tnqvm")
 else:
     raise ValueError(f"Unsupported simulator type: {sim_type}")
 # --------------------------------------------------- #
