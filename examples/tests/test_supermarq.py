@@ -5,6 +5,7 @@ import threading
 import select
 import traceback
 import sys
+import os
 import supermarq
 import getopt
 from defw import me
@@ -36,12 +37,16 @@ def create_ghz(start_qubits=2, itr=1):
 	return [qasm]
 
 
-def async_wait_read_cq(api, total_circ):
+def async_wait_read_cq(api, total_circ, reservation_id):
 	total_circuits_completed = 0
 	start = time()
 	while time() - start < circuit_run_timeout and total_circuits_completed != total_circ:
 		try:
-			r = api.read_cq()
+			r = api.read_cq(reservation_id=reservation_id)
+			if isinstance(r, dict) and not r.get("completion_ready", True):
+				prformat(fg.red + fg.bold, "waiting on circuit completion")
+				sleep(1)
+				continue
 			prformat(fg.green + fg.bold, f"finished {r['cid']}:")
 			prformat(fg.green + fg.bold, f"{yaml.dump(r['result'])}")
 			#prformat(fg.green+fg.bold, f"{r['result'].decode('utf-8')}")
@@ -84,23 +89,91 @@ def result_reader(total_circ, event_api, result_state):
 EVENT_TYPE_CIRC_RESULT = 1
 
 
-def async_run_circuit(api, cb, start_qubits=20, num_shots=1, itr=30, increase=True, read_cq=True):
+def build_circuit_plan(cb, start_qubits, num_shots, itr, increase):
+	circuit_plan = []
+	nqubits = start_qubits
+	for iteration in range(0, itr):
+		for qasm in cb(nqubits, 1):
+			circuit_plan.append({
+				"iteration": iteration,
+				"num_qubits": nqubits,
+				"info": {
+					"qasm": qasm,
+					"num_qubits": nqubits,
+					"num_shots": num_shots,
+					"compiler": "staq",
+				},
+			})
+		if increase:
+			nqubits += 1
+	return circuit_plan
+
+
+def configure_admission_policy(qpm):
+	result = qpm.set_admission_policy({"name": "unlimited"})
+	logging.defw_app(f"set_admission_policy: {yaml.dump(result)}")
+	return result
+
+
+def reserve_execution(qpm, circuit_plan, backend, runtype, method_name,
+		      iterations, startqbit, num_shots, increase):
+	if not circuit_plan:
+		raise DEFwError("reservation requires at least one circuit")
+
+	configure_admission_policy(qpm)
+	operation = "sync_run" if runtype == "sync" else "async_run"
+	job_id = os.environ.get("SLURM_JOB_ID", "supermarq")
+	max_qubits = max(record["num_qubits"] for record in circuit_plan)
+	request = {
+		"owner": {"user": os.environ.get("USER", "supermarq")},
+		"job_id": job_id,
+		"allocation_id": job_id,
+		"target_device_id": backend or "tnqvm",
+		"num_qubits": max_qubits,
+		"walltime_ns": max(1, circuit_run_timeout) * 1_000_000_000,
+		"ttl_ns": max(60, system_up_timeout + circuit_run_timeout + 30) *
+			1_000_000_000,
+		"workload": {
+			"example": "qfw_supermarq",
+			"operation": operation,
+			"backend": backend or "tnqvm",
+			"method": method_name,
+		},
+		"run_context": {"operation": operation},
+		"task_class": {
+			"count": len(circuit_plan),
+			"qubit_count": max_qubits,
+			"shots": num_shots,
+			"measurement_count": max_qubits,
+		},
+		"parameters": {
+			"iterations": iterations,
+			"startqbit": startqbit,
+			"increase": increase,
+		},
+	}
+	decision = qpm.reserve(request=request)
+	logging.defw_app(f"reserve: {yaml.dump(decision)}")
+	if decision.get("status") != "accepted" or not decision.get(
+			"reservation_id"):
+		raise DEFwError(f"reservation was not accepted: {decision}")
+	return decision["reservation_id"]
+
+
+def release_execution(qpm, reservation_id):
+	if reservation_id is None:
+		return None
+	result = qpm.release(reservation_id=reservation_id, reason=0)
+	logging.defw_app(f"release: {yaml.dump(result)}")
+	return result
+
+
+def async_run_circuit(api, circuit_plan, reservation_id, read_cq=True):
 	start_time = time()
 
 	logging.defw_app(f"Application start: {start_time}")
 
-	qasm = []
-	qubits = []
-
-	for x in range(0, itr):
-		circs = cb(start_qubits, 1)
-		for i in range(0, len(circs)):
-			qubits.append(start_qubits)
-		qasm += circs
-
-		if increase:
-			start_qubits += 1
-	total_circ = len(qasm)
+	total_circ = len(circuit_plan)
 
 	runner = None
 	event_api = None
@@ -110,28 +183,22 @@ def async_run_circuit(api, cb, start_qubits=20, num_shots=1, itr=30, increase=Tr
 		event_api.register_external()
 		logging.defw_app(f"Registering Event: {time()}")
 		api.register_event_notification(
-			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id())
+			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id(),
+			reservation_id=reservation_id)
 		runner = threading.Thread(
 			target=result_reader, args=(total_circ, event_api, result_state,))
 		runner.start()
 
-	i = 0
-	for q in qasm:
-		info = {}
-		info['qasm'] = q
-		info['num_qubits'] = qubits[i]
-		info['num_shots'] = num_shots
-		info['compiler'] = 'staq'
+	for record in circuit_plan:
 		try:
-			api.async_run(info)
+			api.async_run(record["info"], reservation_id=reservation_id)
 		except Exception as e:
 			logging.defw_app(f"Got an exception {e} of type: {type(e)}")
 			logging.defw_app(e)
 			raise e
-		i += 1
 
 	if read_cq:
-		completed = async_wait_read_cq(api, total_circ)
+		completed = async_wait_read_cq(api, total_circ, reservation_id)
 	else:
 		runner.join()
 		completed = result_state["completed"]
@@ -143,43 +210,36 @@ def async_run_circuit(api, cb, start_qubits=20, num_shots=1, itr=30, increase=Tr
 	logging.defw_app(f'thread joined at {time()}')
 
 	duration = time() - start_time
-	prformat(fg.orange + fg.bold, f"****{itr} {start_qubits} qubit circuits completed in {duration}")
+	max_qubits = max(record["num_qubits"] for record in circuit_plan)
+	prformat(fg.orange + fg.bold,
+		 f"****{total_circ} {max_qubits} qubit circuits completed in {duration}")
 	return {
 		"mode": "async",
-		"submitted_circuits": len(qasm),
+		"submitted_circuits": total_circ,
 		"completed_circuits": completed,
 		"duration_sec": duration,
 		"read_cq": read_cq,
 	}
 
 
-def run_circuit(api, cb, start, itr, num_shots, increase):
-	nqubits = start
+def run_circuit(api, circuit_plan, reservation_id):
 	records = []
 	start_time = time()
-	for x in range(0, itr):
-		qasm = cb(nqubits, 1)
-
-		for q in qasm:
-			info = {}
-			info['qasm'] = q
-			info['num_qubits'] = nqubits
-			info['num_shots'] = num_shots
-			info['compiler'] = 'staq'
-			try:
-				circ_result = api.sync_run(info)
-				records.append({
-					"iteration": x,
-					"num_qubits": nqubits,
-					"result": circ_result,
-				})
-				logging.debug(yaml.dump(circ_result, sort_keys=False))
-				prformat(fg.green + fg.bold, yaml.dump(circ_result, sort_keys=False))
-			except Exception as e:
-				logging.defw_app(f"Got an exception {e} of type: {type(e)}")
-				logging.defw_app(e)
-				raise e
-		nqubits += increase
+	for record in circuit_plan:
+		try:
+			circ_result = api.sync_run(
+				record["info"], reservation_id=reservation_id)
+			records.append({
+				"iteration": record["iteration"],
+				"num_qubits": record["num_qubits"],
+				"result": circ_result,
+			})
+			logging.debug(yaml.dump(circ_result, sort_keys=False))
+			prformat(fg.green + fg.bold, yaml.dump(circ_result, sort_keys=False))
+		except Exception as e:
+			logging.defw_app(f"Got an exception {e} of type: {type(e)}")
+			logging.defw_app(e)
+			raise e
 	return {
 		"mode": "sync",
 		"iterations": records,
@@ -280,17 +340,23 @@ if __name__ == "__main__":
 				raise e
 
 	try:
+		reservation_id = None
 		test_qpm(qpm)
+		method_name = getattr(op, "__name__", str(op))
+		circuit_plan = build_circuit_plan(
+			op, startqbit, num_shots, iterations, increase)
+		reservation_id = reserve_execution(
+			qpm, circuit_plan, backend or "tnqvm", runtype, method_name,
+			iterations, startqbit, num_shots, increase)
 
 		if runtype == "sync":
-			metrics = run_circuit(
-				qpm, op, startqbit, iterations, num_shots, increase)
+			metrics = run_circuit(qpm, circuit_plan, reservation_id)
 		elif runtype == "async":
 			metrics = async_run_circuit(
-				qpm, op, start_qubits=startqbit, num_shots=num_shots,
-				itr=iterations, increase=increase, read_cq=False)
+				qpm, circuit_plan, reservation_id, read_cq=False)
 		else:
 			raise ValueError(f"Unknown run type {runtype}. Expect: async, sync")
+		metrics["reservation_id"] = reservation_id
 		emit_result(
 			"supermarq",
 			parameters={
@@ -299,14 +365,19 @@ if __name__ == "__main__":
 				"startqbit": startqbit,
 				"shots": num_shots,
 				"increase": increase,
-				"method": getattr(op, "__name__", str(op)),
+				"method": method_name,
 				"backend": backend or "tnqvm",
 			},
 			metrics=metrics,
 		)
-		qpm.shutdown()
 	except Exception as e:
 		logging.defw_app(f"QTM ran into an exception {e}")
 		traceback.print_exc()
+	finally:
+		try:
+			release_execution(qpm, reservation_id)
+		except Exception as e:
+			logging.defw_app(f"QPM release failed: {e}")
+			traceback.print_exc()
 		qpm.shutdown()
 	me.exit()
