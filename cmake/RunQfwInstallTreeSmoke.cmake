@@ -53,9 +53,33 @@ if(NOT install_rc EQUAL 0)
 	message(FATAL_ERROR "QFw install-tree smoke install failed")
 endif()
 
+set(qfw_install_pythonpath
+	"${QFW_INSTALL_PREFIX}/${QFW_PYTHON_INSTALL_DIR}")
+execute_process(
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"PYTHONPATH=${qfw_install_pythonpath}"
+		"${QFW_PYTHON}" -S -c
+		"import qhw_data, qhw_iqm, qhw_admission, qhw_scheduler
+from qhw_iqm import normalize_device
+print(qhw_data.__file__)
+print(qhw_iqm.__file__)
+print(qhw_admission.__file__)
+print(qhw_scheduler.__file__)
+print(normalize_device.__name__)"
+	RESULT_VARIABLE qhw_import_rc
+	OUTPUT_VARIABLE qhw_import_out
+	ERROR_VARIABLE qhw_import_err)
+if(NOT qhw_import_rc EQUAL 0)
+	message(FATAL_ERROR
+		"installed QFw qhw runtime imports failed\n"
+		"stdout:\n${qhw_import_out}\n"
+		"stderr:\n${qhw_import_err}")
+endif()
+
 foreach(command_name
-		qfw-activate
-		defw-python
+			qfw-activate
+			defw-python
 		qfw-setup
 		qfw-srun
 		qfw-teardown

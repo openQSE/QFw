@@ -17,6 +17,7 @@ if(NOT DEFINED CMAKE_INSTALL_DATADIR)
 	set(CMAKE_INSTALL_DATADIR "share" CACHE PATH "Read-only architecture-independent data")
 endif()
 include(GNUInstallDirs)
+include(ExternalProject)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
@@ -31,9 +32,75 @@ set(QFW_PYTHON_INSTALL_DIR
 set(QFW_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(QFW_GENERATED_BIN_DIR "${QFW_GENERATED_DIR}/bin")
 set(QFW_GENERATED_LIBEXEC_DIR "${QFW_GENERATED_DIR}/libexec/qfw")
+set(QFW_EXTERNAL_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/external-build")
+set(QFW_EXTERNAL_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/external-stage")
 file(MAKE_DIRECTORY
 	"${QFW_GENERATED_BIN_DIR}"
-	"${QFW_GENERATED_LIBEXEC_DIR}")
+	"${QFW_GENERATED_LIBEXEC_DIR}"
+	"${QFW_EXTERNAL_BUILD_DIR}"
+	"${QFW_EXTERNAL_STAGE_DIR}")
+
+function(qfw_require_submodule marker description)
+	if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${marker}")
+		message(FATAL_ERROR
+			"Missing ${description} submodule content at ${marker}. "
+			"Run: git submodule update --init --recursive")
+	endif()
+endfunction()
+
+function(qfw_install_python_source_package package_name source_dir)
+	qfw_require_submodule("${source_dir}/pyproject.toml" "${package_name}")
+	qfw_require_submodule(
+		"${source_dir}/src/${package_name}/__init__.py"
+		"${package_name}")
+	install(DIRECTORY "${source_dir}/src/${package_name}/"
+		DESTINATION "${QFW_PYTHON_INSTALL_DIR}/${package_name}"
+		FILES_MATCHING
+			PATTERN "*.py"
+			PATTERN "*.json"
+			PATTERN "__pycache__" EXCLUDE)
+endfunction()
+
+function(qfw_add_external_cmake_package target_name source_dir)
+	qfw_require_submodule("${source_dir}/CMakeLists.txt" "${target_name}")
+	ExternalProject_Add("${target_name}"
+		SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${source_dir}"
+		BINARY_DIR "${QFW_EXTERNAL_BUILD_DIR}/${target_name}"
+		INSTALL_DIR "${QFW_EXTERNAL_STAGE_DIR}"
+		BUILD_ALWAYS TRUE
+		CMAKE_ARGS
+			"-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
+			"-DCMAKE_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}"
+			"-DCMAKE_INSTALL_INCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}"
+			"-DCMAKE_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+			"-DCMAKE_INSTALL_MANDIR=${CMAKE_INSTALL_MANDIR}"
+			"-DCMAKE_INSTALL_DOCDIR=${CMAKE_INSTALL_DOCDIR}"
+			"-DCMAKE_PREFIX_PATH=<INSTALL_DIR>"
+			"-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+			${ARGN})
+endfunction()
+
+qfw_install_python_source_package(qhw_data external/qhw-data)
+qfw_install_python_source_package(qhw_iqm external/qhw-iqm)
+
+qfw_add_external_cmake_package(qfw_external_qhw_admission
+	external/qhw-admission
+	"-DQHW_ADM_BUILD_TESTS=OFF"
+	"-DQHW_ADM_BUILD_PYTHON=ON"
+	"-DQHW_ADM_BUILD_SWIG=ON"
+	"-DQHW_ADM_INSTALL_PYTHON_ARTIFACTS=ON"
+	"-DQHW_ADM_PYTHON_INSTALL_DIR=<INSTALL_DIR>/${QFW_PYTHON_INSTALL_DIR}")
+qfw_add_external_cmake_package(qfw_external_qhw_scheduler
+	external/qhw-scheduler
+	"-DQHW_SCHED_BUILD_TESTS=OFF"
+	"-DQHW_SCHED_BUILD_PYTHON=ON"
+	"-DQHW_SCHED_BUILD_SWIG=ON"
+	"-DQHW_SCHED_INSTALL_PYTHON_ARTIFACTS=ON"
+	"-DQHW_SCHED_PYTHON_INSTALL_DIR=<INSTALL_DIR>/${QFW_PYTHON_INSTALL_DIR}")
+add_custom_target(qfw_external_runtime ALL
+	DEPENDS
+		qfw_external_qhw_admission
+		qfw_external_qhw_scheduler)
 
 configure_file(
 	cmake/qfw-activate.in
@@ -134,6 +201,9 @@ install(FILES
 	services/config/container.yaml
 	services/config/frontier.yaml
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/config/services/templates")
+install(DIRECTORY "${QFW_EXTERNAL_STAGE_DIR}/"
+	DESTINATION "."
+	USE_SOURCE_PERMISSIONS)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/DEFw/python/config/defw_generic.yaml")
 	install(FILES DEFw/python/config/defw_generic.yaml
