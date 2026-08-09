@@ -17,9 +17,14 @@ class QPM(UTIL_QPM):
 		from . import SERVICE_NAME, SERVICE_DESC
 		from api_qpm import QPMType, QPMCapability
 		info = self.query_helper(
-			QPMType.QPM_TYPE_TNQVM | QPMType.QPM_TYPE_SIMULATOR,
+			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_TENSORNETWORK,
-			SERVICE_NAME, SERVICE_DESC)
+			SERVICE_NAME, SERVICE_DESC,
+			properties={
+				"provider": "tnqvm",
+				"num_qubits": MAX_TNQVM_QUBITS,
+				"max_shots": MAX_TNQVM_SHOTS,
+			})
 		logging.debug(f"TNQVM {SERVICE_DESC}: {info}")
 		return info
 

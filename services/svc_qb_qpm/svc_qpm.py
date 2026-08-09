@@ -60,9 +60,13 @@ class QPM(UTIL_QPM):
 		from . import SERVICE_NAME, SERVICE_DESC
 		from api_qpm import QPMType, QPMCapability
 		info = self.query_helper(
-			QPMType.QPM_TYPE_QB | QPMType.QPM_TYPE_SIMULATOR,
+			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_STATEVECTOR,
-			SERVICE_NAME, SERVICE_DESC)
+			SERVICE_NAME, SERVICE_DESC,
+			properties={
+				"provider": "qb",
+				"num_qubits": MAX_VQPU_QUBITS,
+			})
 		logging.debug(f"QB {SERVICE_DESC}: {info}")
 		return info
 

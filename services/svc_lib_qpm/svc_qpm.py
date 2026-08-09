@@ -25,7 +25,7 @@ class QPM(UTIL_QPM):
 		if device_id:
 			properties['device_id'] = device_id
 		info = self.query_helper(
-			QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE,
+			QPMType.QPM_TYPE_HARDWARE,
 			QPMCapability.QPM_CAP_SUPERCONDUCTING,
 			SERVICE_NAME, SERVICE_DESC,
 			properties=properties)

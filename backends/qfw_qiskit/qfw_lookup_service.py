@@ -17,7 +17,7 @@ def _connect_qpm(dirsvc, qpm_type, qpm_cap, timeout=SYSTEM_UP_TIMEOUT):
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc, defw_module=defw)
 	request = {
 		"timeout": timeout,
-		"binding_name": "default",
+		"api_category": "execution",
 		"qpm_type": qpm_type,
 		"qpm_capability": qpm_cap,
 	}

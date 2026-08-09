@@ -137,8 +137,17 @@ class QPMResolutionRequest:
 	selector_alias: Optional[str] = None
 	qpm_type: Any = -1
 	qpm_capability: Any = -1
+	qpm_capabilities: Any = None
 	provider: Optional[str] = None
 	allow_simulator_fallback: bool = False
+
+	def __post_init__(self):
+		if self.qpm_capabilities is None:
+			object.__setattr__(
+				self, "qpm_capabilities", self.qpm_capability)
+		elif self.qpm_capability in (-1, None):
+			object.__setattr__(
+				self, "qpm_capability", self.qpm_capabilities)
 
 	def binding_filter(self):
 		return binding_name_for_category(self.api_category, self.binding_name)
@@ -233,6 +242,12 @@ class DirectEndpointDirectory:
 		properties = {}
 		if provider:
 			properties["provider"] = provider
+		if kwargs.get("qpm_type") not in (-1, None):
+			properties["qpm_type"] = kwargs.get("qpm_type")
+		qpm_capabilities = kwargs.get(
+			"qpm_capabilities", kwargs.get("qpm_capability"))
+		if qpm_capabilities not in (-1, None):
+			properties["qpm_capabilities"] = qpm_capabilities
 		return {
 			"directory_scope": "direct",
 			"directory_identity": "direct-endpoint",
@@ -244,6 +259,9 @@ class DirectEndpointDirectory:
 				"endpoint": self.endpoint,
 				"selector": {},
 				"properties": properties,
+				"qpm_type": properties.get("qpm_type", -1),
+				"qpm_capabilities": properties.get(
+					"qpm_capabilities", -1),
 			},
 			"selected_api_binding": {
 				"binding_name": kwargs.get("binding_name", "execution"),
@@ -410,6 +428,7 @@ class QPMResolver:
 			"api_category": request.api_category,
 			"qpm_type": request.qpm_type,
 			"qpm_capability": request.qpm_capability,
+			"qpm_capabilities": request.qpm_capabilities,
 			"svc_type": request.qpm_type,
 			"svc_caps": request.qpm_capability,
 			"legacy_type": request.qpm_type,
@@ -442,9 +461,14 @@ class QPMResolver:
 		_validate_directory_record(service, binding, record)
 		api_binding = _api_binding_from_mapping(binding, request)
 		properties = dict(service.get("properties") or {})
-		for key in ("legacy_type", "legacy_capabilities", "capability"):
+		for key in (
+				"qpm_type", "qpm_capabilities", "qpm_capability",
+				"legacy_type", "legacy_capabilities", "capability"):
 			if key in service and key not in properties:
 				properties[key] = service[key]
+		if "qpm_capabilities" not in properties and \
+				"qpm_capability" in properties:
+			properties["qpm_capabilities"] = properties["qpm_capability"]
 		selector = dict(service.get("selector") or {})
 		endpoint = service.get("endpoint") or record.get("endpoint")
 		service_id = service.get("service_id") or properties.get("service_id")
@@ -475,12 +499,16 @@ class QPMResolver:
 	def _matches_request(self, candidate, request):
 		if request.service_type and candidate.service_type != request.service_type:
 			return False
-		if not _candidate_legacy_bits_match(
-				candidate, "legacy_type", "type", request.qpm_type):
+		if not _candidate_bits_match(
+				candidate, ("qpm_type", "legacy_type"), "type",
+				request.qpm_type):
 			return False
-		if not _candidate_legacy_bits_match(
-				candidate, "legacy_capabilities", "caps",
-				request.qpm_capability):
+		if not _candidate_bits_match(
+				candidate,
+				("qpm_capabilities", "qpm_capability",
+				 "legacy_capabilities"),
+				"caps",
+				request.qpm_capabilities):
 			return False
 		if request.selector_resource:
 			resources = candidate.selector_metadata.get("resources", [])
@@ -911,14 +939,18 @@ def _simulator_fallback_allowed(request):
 	return bool(qpm_type & QPM_TYPE_SIMULATOR)
 
 
-def _candidate_legacy_bits_match(candidate, property_key, capability_key,
-				 requested_bits):
+def _candidate_bits_match(candidate, property_keys, capability_key,
+			  requested_bits):
 	if requested_bits in (-1, None):
 		return True
 	properties = candidate.properties or {}
-	record_bits = properties.get(property_key)
+	record_bits = None
+	for property_key in property_keys:
+		record_bits = properties.get(property_key)
+		if record_bits not in (-1, None):
+			break
 	capability = properties.get("capability")
-	if record_bits is None and isinstance(capability, dict):
+	if record_bits in (-1, None) and isinstance(capability, dict):
 		record_bits = capability.get(capability_key)
 	if record_bits in (-1, None):
 		return True

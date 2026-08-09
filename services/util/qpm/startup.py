@@ -385,6 +385,13 @@ def _service_info_record(defw_module, service_info):
 	service_name = service_info.get_service_name()
 	endpoint = _defw_endpoint(defw_module)
 	endpoint_record = _endpoint_record(endpoint)
+	qpm_type = properties.get("qpm_type", legacy_type)
+	qpm_capabilities = properties.get(
+		"qpm_capabilities", legacy_capabilities)
+	if qpm_type != -1:
+		properties.setdefault("qpm_type", qpm_type)
+	if qpm_capabilities != -1:
+		properties.setdefault("qpm_capabilities", qpm_capabilities)
 	service_id = properties.get("service_id") or \
 		f"{service_name}:{endpoint_record['hostname']}:{endpoint_record['node_name']}"
 	return {
@@ -406,6 +413,8 @@ def _service_info_record(defw_module, service_info):
 		"selector": properties.get("selector", {"resources": [service_name]}),
 		"properties": properties,
 		"capability": capability,
+		"qpm_type": qpm_type,
+		"qpm_capabilities": qpm_capabilities,
 		"legacy_type": legacy_type,
 		"legacy_capabilities": legacy_capabilities,
 	}
@@ -518,6 +527,8 @@ def _site_registration_context(record):
 		"selector": record.get("selector"),
 		"properties": record.get("properties"),
 		"capability": record.get("capability"),
+		"qpm_type": record.get("qpm_type"),
+		"qpm_capabilities": record.get("qpm_capabilities"),
 		"legacy_type": record.get("legacy_type"),
 		"legacy_capabilities": record.get("legacy_capabilities"),
 	}

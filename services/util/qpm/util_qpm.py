@@ -919,6 +919,8 @@ class UTIL_QPM:
 		properties.setdefault("service_type", QPM_SERVICE_TYPE)
 		properties.setdefault("service_id", _qpm_service_id(
 			svc_name, service_module, provider, properties))
+		properties.setdefault("qpm_type", int(type_bits))
+		properties.setdefault("qpm_capabilities", int(caps_bits))
 		properties.setdefault("legacy_type", int(type_bits))
 		properties.setdefault("legacy_capabilities", int(caps_bits))
 		properties.setdefault(

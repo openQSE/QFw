@@ -122,7 +122,7 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 
 	qpm = MetadataQPM.__new__(MetadataQPM)
 	info = qpm.query_helper(
-		QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE,
+		QPMType.QPM_TYPE_HARDWARE,
 		QPMCapability.QPM_CAP_SUPERCONDUCTING,
 		"QPM",
 		"Quantum Platform Manager",
@@ -171,6 +171,9 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 	assert resolved.service_id == properties["service_id"]
 	assert resolved.service_type == "qfw.qpm"
 	assert resolved.properties["provider"] == "iqm"
+	assert resolved.properties["qpm_type"] == int(QPMType.QPM_TYPE_HARDWARE)
+	assert resolved.properties["qpm_capabilities"] == int(
+		QPMCapability.QPM_CAP_SUPERCONDUCTING)
 	assert resolved.selector_metadata["resources"] == ["IQM-20q"]
 	assert resolved.api_binding.binding_name == "execution"
 	assert resolved.api_binding.client_module == "api_qpm_execution"
@@ -186,7 +189,7 @@ def test_resolver_filters_real_directory_records_by_type_and_capability():
 	_register_directory_qpm(
 		directory,
 		"qpm-nwqsim",
-		QPMType.QPM_TYPE_NWQSIM | QPMType.QPM_TYPE_SIMULATOR,
+		QPMType.QPM_TYPE_SIMULATOR,
 		QPMCapability.QPM_CAP_STATEVECTOR,
 		provider="nwqsim",
 		resource="shared-target",
@@ -194,7 +197,7 @@ def test_resolver_filters_real_directory_records_by_type_and_capability():
 	_register_directory_qpm(
 		directory,
 		"qpm-iqm",
-		QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE,
+		QPMType.QPM_TYPE_HARDWARE,
 		QPMCapability.QPM_CAP_SUPERCONDUCTING,
 		provider="iqm",
 		resource="shared-target",
@@ -210,12 +213,55 @@ def test_resolver_filters_real_directory_records_by_type_and_capability():
 		service_type="qfw.qpm",
 		selector_resource="shared-target",
 		api_category="execution",
-		qpm_type=QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE,
+		qpm_type=QPMType.QPM_TYPE_HARDWARE,
 		qpm_capability=QPMCapability.QPM_CAP_SUPERCONDUCTING,
 		timeout=1,
 	)
 
 	assert resolved.service_id == "qpm-iqm"
+
+
+def test_resolver_filters_real_directory_records_by_provider_metadata():
+	import defw_directory
+	from api_qpm import QPMCapability, QPMType
+	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
+
+	directory = defw_directory.Directory()
+	_register_directory_qpm(
+		directory,
+		"qpm-nwqsim",
+		QPMType.QPM_TYPE_SIMULATOR,
+		QPMCapability.QPM_CAP_STATEVECTOR,
+		provider="nwqsim",
+		resource="statevector-target",
+	)
+	_register_directory_qpm(
+		directory,
+		"qpm-qb",
+		QPMType.QPM_TYPE_SIMULATOR,
+		QPMCapability.QPM_CAP_STATEVECTOR,
+		provider="qb",
+		resource="statevector-target",
+	)
+	resolver = QPMResolver(
+		[DirectoryScope("site-a", "site", client=directory, priority=50)],
+		connector=None,
+		selection_order=["site"],
+		sleeper=lambda seconds: None,
+	)
+
+	resolved = resolver.resolve(
+		service_type="qfw.qpm",
+		selector_resource="statevector-target",
+		api_category="execution",
+		qpm_type=QPMType.QPM_TYPE_SIMULATOR,
+		qpm_capabilities=QPMCapability.QPM_CAP_STATEVECTOR,
+		provider="nwqsim",
+		timeout=1,
+	)
+
+	assert resolved.service_id == "qpm-nwqsim"
+	assert resolved.properties["provider"] == "nwqsim"
 
 
 def test_resolver_rejects_real_directory_stale_generation_before_binding():

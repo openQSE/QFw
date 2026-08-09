@@ -19,9 +19,14 @@ class QPM(UTIL_QPM):
 		from . import SERVICE_NAME, SERVICE_DESC
 		from api_qpm import QPMType, QPMCapability
 		info = self.query_helper(
-			QPMType.QPM_TYPE_NWQSIM | QPMType.QPM_TYPE_SIMULATOR,
+			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_STATEVECTOR,
-			SERVICE_NAME, SERVICE_DESC)
+			SERVICE_NAME, SERVICE_DESC,
+			properties={
+				"provider": "nwqsim",
+				"num_qubits": MAX_NWQSIM_QUBITS,
+				"max_shots": MAX_NWQSIM_SHOTS,
+			})
 		logging.debug(f"NWQSIM {SERVICE_DESC}: {info}")
 		return info
 

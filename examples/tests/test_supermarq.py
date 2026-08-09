@@ -11,9 +11,11 @@ import getopt
 from defw import me
 from defw_exception import DEFwInProgress, DEFwNotReady, DEFwError
 from defw_util import prformat, fg
-from defw_app_util import defw_get_directory_service, defw_bind_service_by_name
+from defw_app_util import defw_get_directory_service
 from time import sleep, time
 from defw_event_baseapi import BaseEventAPI
+from qfw_qiskit.qpm_resolver import QPMResolver
+from qfw_qiskit.qpm_selection import qpm_selection_for_provider
 from qfw_example_report import emit_result, parse_bool
 
 req_timeout = 20
@@ -167,6 +169,22 @@ def release_execution(qpm, reservation_id):
 	return result
 
 
+def resolve_qpm(backend, timeout):
+	selection = qpm_selection_for_provider(
+		backend, default_provider="tnqvm")
+	dirsvc = defw_get_directory_service()
+	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
+	qpm = resolver.connect(
+		service_type="qfw.qpm",
+		binding_name="default",
+		qpm_type=selection["qpm_type"],
+		qpm_capabilities=selection["qpm_capabilities"],
+		provider=selection["provider"],
+		timeout=timeout,
+	)
+	return selection["provider"], qpm
+
+
 def async_run_circuit(api, circuit_plan, reservation_id, read_cq=True):
 	start_time = time()
 
@@ -311,42 +329,32 @@ if __name__ == "__main__":
 				prformat(fg.red + fg.bold, f"Unknown parameters {name}:{value}")
 				me.exit()
 
-	from api_qpm import QPMType
-	# Grab a qpm if one exists
-	if not backend or backend == "tnqvm":
-		svc_type = QPMType.QPM_TYPE_TNQVM
-	elif backend == 'nwqsim':
-		svc_type = QPMType.QPM_TYPE_NWQSIM
-	elif backend == 'qb':
-		svc_type = QPMType.QPM_TYPE_QB
-	else:
-		raise DEFwError(f"Provided backend '{backend}' not supported")
-
-	dirsvc = defw_get_directory_service()
-	qpm = defw_bind_service_by_name(dirsvc, 'QPM', svc_type=svc_type)[0]
-
-	wait = 0
-	while wait < system_up_timeout:
-		try:
-			qpm.is_ready()
-			break
-		except Exception as e:
-			if isinstance(e, DEFwNotReady):
-				logging.debug("QPM not ready yet")
-				wait += 1
-				sleep(1)
-			else:
-				raise e
-
+	qpm = None
+	reservation_id = None
+	resolved_backend = backend or "tnqvm"
 	try:
 		exit_rc = 0
-		reservation_id = None
+		resolved_backend, qpm = resolve_qpm(backend, system_up_timeout)
+
+		wait = 0
+		while wait < system_up_timeout:
+			try:
+				qpm.is_ready()
+				break
+			except Exception as e:
+				if isinstance(e, DEFwNotReady):
+					logging.debug("QPM not ready yet")
+					wait += 1
+					sleep(1)
+				else:
+					raise e
+
 		test_qpm(qpm)
 		method_name = getattr(op, "__name__", str(op))
 		circuit_plan = build_circuit_plan(
 			op, startqbit, num_shots, iterations, increase)
 		reservation_id = reserve_execution(
-			qpm, circuit_plan, backend or "tnqvm", runtype, method_name,
+			qpm, circuit_plan, resolved_backend, runtype, method_name,
 			iterations, startqbit, num_shots, increase)
 
 		if runtype == "sync":
@@ -366,7 +374,7 @@ if __name__ == "__main__":
 				"shots": num_shots,
 				"increase": increase,
 				"method": method_name,
-				"backend": backend or "tnqvm",
+				"backend": resolved_backend,
 			},
 			metrics=metrics,
 		)
@@ -375,13 +383,14 @@ if __name__ == "__main__":
 		traceback.print_exc()
 		exit_rc = 1
 	finally:
-		try:
-			release_execution(qpm, reservation_id)
-		except Exception as e:
-			logging.defw_app(f"QPM release failed: {e}")
-			traceback.print_exc()
-		if parse_bool(os.environ.get("QFW_SUPERMARQ_SHUTDOWN_QPM", "yes")):
-			qpm.shutdown()
+		if qpm is not None:
+			try:
+				release_execution(qpm, reservation_id)
+			except Exception as e:
+				logging.defw_app(f"QPM release failed: {e}")
+				traceback.print_exc()
+			if parse_bool(os.environ.get("QFW_SUPERMARQ_SHUTDOWN_QPM", "yes")):
+				qpm.shutdown()
 	if exit_rc:
 		sys.exit(exit_rc)
 	me.exit()
