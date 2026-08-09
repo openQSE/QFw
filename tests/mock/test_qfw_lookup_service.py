@@ -1,4 +1,9 @@
 from tests.mock.fakes import FakeQPM
+from api_qpm import QPMCapability, QPMType
+
+
+DEFAULT_QPM_TYPE = QPMType.QPM_TYPE_HARDWARE
+DEFAULT_QPM_CAPABILITIES = QPMCapability.QPM_CAP_SUPERCONDUCTING
 
 
 def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
@@ -18,8 +23,8 @@ def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
 			},
 			"properties": {
 				"provider": provider,
-				"legacy_type": 4,
-				"legacy_capabilities": 2,
+				"qpm_type": int(DEFAULT_QPM_TYPE),
+				"qpm_capabilities": int(DEFAULT_QPM_CAPABILITIES),
 			},
 		},
 		"selected_binding": {
@@ -74,15 +79,21 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 		lookup_service, "defw_get_directory_service", lambda: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
-	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
+	result = lookup_service.get_qpm(
+		qpm_type=DEFAULT_QPM_TYPE,
+		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+	)
 
 	assert result is fake_qpm
 	assert len(dirsvc.queries) == 1
 	assert dirsvc.queries[0]["service_name"] == "QPM"
 	assert dirsvc.queries[0]["service_type"] == "qfw.qpm"
 	assert dirsvc.queries[0]["binding_name"] == "execution"
-	assert dirsvc.queries[0]["svc_type"] == 4
-	assert dirsvc.queries[0]["svc_caps"] == 2
+	assert dirsvc.queries[0]["qpm_type"] == DEFAULT_QPM_TYPE
+	assert dirsvc.queries[0]["qpm_capability"] == DEFAULT_QPM_CAPABILITIES
+	assert dirsvc.queries[0]["qpm_capabilities"] == DEFAULT_QPM_CAPABILITIES
+	assert "svc_type" not in dirsvc.queries[0]
+	assert "svc_caps" not in dirsvc.queries[0]
 	assert len(fake_defw.binding_connections) == 1
 	binding = fake_defw.binding_connections[0]
 	assert binding["service_record"]["service_id"] == "qpm-iqm"
@@ -102,7 +113,10 @@ def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
 		lookup_service, "defw_get_directory_service", lambda: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
-	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
+	result = lookup_service.get_qpm(
+		qpm_type=DEFAULT_QPM_TYPE,
+		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+	)
 
 	assert result is fake_qpm
 	assert fake_qpm.shutdown_called is True
@@ -122,7 +136,10 @@ def test_get_qpm_propagates_directory_failures(monkeypatch):
 	)
 
 	try:
-		lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
+		lookup_service.get_qpm(
+			qpm_type=DEFAULT_QPM_TYPE,
+			qpm_cap=DEFAULT_QPM_CAPABILITIES,
+		)
 	except RuntimeError as exc:
 		assert str(exc) == "directory lookup failed"
 	else:
@@ -148,7 +165,10 @@ def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
 		unavailable_directory_service)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
-	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
+	result = lookup_service.get_qpm(
+		qpm_type=DEFAULT_QPM_TYPE,
+		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+	)
 
 	assert result is fake_qpm
 	assert len(fake_defw.binding_connections) == 1
@@ -173,7 +193,10 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 		lookup_service, "defw_get_directory_service", lambda: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
-	result = lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
+	result = lookup_service.get_qpm(
+		qpm_type=DEFAULT_QPM_TYPE,
+		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+	)
 
 	assert result is shim_qpm
 	assert [
@@ -196,7 +219,10 @@ def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	try:
-		lookup_service.get_qpm(qpm_type=4, qpm_cap=2)
+		lookup_service.get_qpm(
+			qpm_type=DEFAULT_QPM_TYPE,
+			qpm_cap=DEFAULT_QPM_CAPABILITIES,
+		)
 	except QPMProviderPolicyError as exc:
 		assert "provider 'iqm'" in str(exc)
 	else:

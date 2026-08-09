@@ -14,8 +14,7 @@ from defw_exception import DEFwDumper
 from defw import me
 from .qfw_lookup_service import get_qpm
 from .qpm_selection import qpm_selection_for_provider
-from enum import IntFlag
-from api_qpm import QPMType, QPMCapability
+from api_qpm import QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 
@@ -25,15 +24,6 @@ QFW_RUN_CONTEXT_OPTIONS = (
 	"timeout",
 	"cancel_on_timeout",
 )
-
-# This is a mirror of QPMType and QPMCapability. And they always need to
-# match. The point here is not to expose QPM specific information to the
-# application as they should always be abstracted away by the backend.
-_qfw_type_names = {name.replace("QPM_", "QFW_"): m for name, m in QPMType.__members__.items()}
-QFwBackendType = IntFlag('QFwBackendType', _qfw_type_names)
-_qfw_cap_names = {name.replace("QPM_", "QFW_"): m for name, m in QPMCapability.__members__.items()}
-QFwBackendCapability = IntFlag('QFwBackendCapability', _qfw_cap_names)
-
 
 class CircuitMetrics:
 	def __init__(self, window_size=4096):
@@ -129,7 +119,8 @@ class QFwBackend(BackendV2):
 	def returns_statevector(self):
 		if self._capability == -1:
 			return False
-		return bool(self._capability & QFwBackendCapability.QFW_CAP_STATEVECTOR)
+		return bool(int(self._capability) & int(
+			QPMCapability.QPM_CAP_STATEVECTOR))
 
 	def set_qubit_mapping(self, circuit, mapping):
 		return set_qubit_mapping(circuit, mapping)

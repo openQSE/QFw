@@ -109,22 +109,6 @@ def _qpm_selector(properties, svc_name, provider):
 	return selector
 
 
-def _qpm_provider_from_type_bits(type_bits, qpm_type):
-	bits = _int_bits(type_bits)
-	if bits is None:
-		return None
-	for member_name, provider in (
-			("QPM_TYPE_IQM", "iqm"),
-			("QPM_TYPE_NWQSIM", "nwqsim"),
-			("QPM_TYPE_TNQVM", "tnqvm"),
-			("QPM_TYPE_QB", "qb"),
-	):
-		member = getattr(qpm_type, member_name, None)
-		if member is not None and bits & int(member):
-			return provider
-	return None
-
-
 def _qpm_type_bit_enabled(type_bits, bit):
 	bits = _int_bits(type_bits)
 	if bits is None:
@@ -912,17 +896,11 @@ class UTIL_QPM:
 		service_module = self.__class__.__module__
 		service_class = self.__class__.__name__
 		provider = properties.get("provider")
-		if provider is None:
-			provider = _qpm_provider_from_type_bits(type_bits, QPMType)
-			if provider is not None:
-				properties["provider"] = provider
 		properties.setdefault("service_type", QPM_SERVICE_TYPE)
 		properties.setdefault("service_id", _qpm_service_id(
 			svc_name, service_module, provider, properties))
 		properties.setdefault("qpm_type", int(type_bits))
 		properties.setdefault("qpm_capabilities", int(caps_bits))
-		properties.setdefault("legacy_type", int(type_bits))
-		properties.setdefault("legacy_capabilities", int(caps_bits))
 		properties.setdefault(
 			"simulator",
 			_qpm_type_bit_enabled(type_bits, QPMType.QPM_TYPE_SIMULATOR))

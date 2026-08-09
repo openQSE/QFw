@@ -103,8 +103,8 @@ def _register_directory_qpm(directory, service_id, type_bits, caps_bits, *,
 			"type": int(type_bits),
 			"caps": int(caps_bits),
 		},
-		"legacy_type": int(type_bits),
-		"legacy_capabilities": int(caps_bits),
+		"qpm_type": int(type_bits),
+		"qpm_capabilities": int(caps_bits),
 	})
 
 
@@ -151,8 +151,8 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 		"selector": properties["selector"],
 		"properties": properties,
 		"capability": capability.get_capability_dict(),
-		"legacy_type": capability.get_cap_type(),
-		"legacy_capabilities": capability.get_caps(),
+		"qpm_type": capability.get_cap_type(),
+		"qpm_capabilities": capability.get_caps(),
 	})
 	resolver = QPMResolver(
 		[DirectoryScope("site-a", "site", client=directory, priority=50)],

@@ -27,9 +27,11 @@ def site_qpm_record():
 		},
 		"properties": {
 			"provider": "iqm",
+			"qpm_type": 1,
+			"qpm_capabilities": 4,
 		},
-		"legacy_type": 4,
-		"legacy_capabilities": 2,
+		"qpm_type": 1,
+		"qpm_capabilities": 4,
 	}
 
 
@@ -367,7 +369,7 @@ def test_qpm_startup_records_real_defw_directory_lifecycle(monkeypatch):
 	record = site_qpm_record()
 	record["properties"]["controller"] = {"target_id": "directory-target"}
 	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
-	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
+	monkeypatch.setenv("QFW_QPM_REGISTER_WITH_DIRSVC", "no")
 	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
 
 	state = startup.initialize_qpm_service(

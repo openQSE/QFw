@@ -429,10 +429,6 @@ class QPMResolver:
 			"qpm_type": request.qpm_type,
 			"qpm_capability": request.qpm_capability,
 			"qpm_capabilities": request.qpm_capabilities,
-			"svc_type": request.qpm_type,
-			"svc_caps": request.qpm_capability,
-			"legacy_type": request.qpm_type,
-			"legacy_capabilities": request.qpm_capability,
 			"provider": request.provider,
 		}
 
@@ -463,7 +459,7 @@ class QPMResolver:
 		properties = dict(service.get("properties") or {})
 		for key in (
 				"qpm_type", "qpm_capabilities", "qpm_capability",
-				"legacy_type", "legacy_capabilities", "capability"):
+				"capability"):
 			if key in service and key not in properties:
 				properties[key] = service[key]
 		if "qpm_capabilities" not in properties and \
@@ -500,13 +496,12 @@ class QPMResolver:
 		if request.service_type and candidate.service_type != request.service_type:
 			return False
 		if not _candidate_bits_match(
-				candidate, ("qpm_type", "legacy_type"), "type",
+				candidate, ("qpm_type",), "type",
 				request.qpm_type):
 			return False
 		if not _candidate_bits_match(
 				candidate,
-				("qpm_capabilities", "qpm_capability",
-				 "legacy_capabilities"),
+				("qpm_capabilities", "qpm_capability"),
 				"caps",
 				request.qpm_capabilities):
 			return False
@@ -978,12 +973,12 @@ def _candidate_is_simulator(candidate):
 	if _provider_is_simulator(properties.get("provider")):
 		return True
 	try:
-		legacy_type = int(properties.get("legacy_type", -1))
+		qpm_type = int(properties.get("qpm_type", -1))
 	except (TypeError, ValueError):
 		return False
 	return (
-		legacy_type not in (-1, 0) and
-		bool(legacy_type & QPM_TYPE_SIMULATOR)
+		qpm_type not in (-1, 0) and
+		bool(qpm_type & QPM_TYPE_SIMULATOR)
 	)
 
 
