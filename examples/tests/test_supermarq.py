@@ -338,50 +338,50 @@ if __name__ == "__main__":
 			else:
 				raise e
 
-		try:
-			exit_rc = 0
-			reservation_id = None
-			test_qpm(qpm)
-			method_name = getattr(op, "__name__", str(op))
-			circuit_plan = build_circuit_plan(
-				op, startqbit, num_shots, iterations, increase)
-			reservation_id = reserve_execution(
-				qpm, circuit_plan, backend or "tnqvm", runtype, method_name,
-				iterations, startqbit, num_shots, increase)
+	try:
+		exit_rc = 0
+		reservation_id = None
+		test_qpm(qpm)
+		method_name = getattr(op, "__name__", str(op))
+		circuit_plan = build_circuit_plan(
+			op, startqbit, num_shots, iterations, increase)
+		reservation_id = reserve_execution(
+			qpm, circuit_plan, backend or "tnqvm", runtype, method_name,
+			iterations, startqbit, num_shots, increase)
 
-			if runtype == "sync":
-				metrics = run_circuit(qpm, circuit_plan, reservation_id)
-			elif runtype == "async":
-				metrics = async_run_circuit(
-					qpm, circuit_plan, reservation_id, read_cq=False)
-			else:
-				raise ValueError(f"Unknown run type {runtype}. Expect: async, sync")
-			metrics["reservation_id"] = reservation_id
-			emit_result(
-				"supermarq",
-				parameters={
-					"run": runtype,
-					"iterations": iterations,
-					"startqbit": startqbit,
-					"shots": num_shots,
-					"increase": increase,
-					"method": method_name,
-					"backend": backend or "tnqvm",
-				},
-				metrics=metrics,
-			)
+		if runtype == "sync":
+			metrics = run_circuit(qpm, circuit_plan, reservation_id)
+		elif runtype == "async":
+			metrics = async_run_circuit(
+				qpm, circuit_plan, reservation_id, read_cq=False)
+		else:
+			raise ValueError(f"Unknown run type {runtype}. Expect: async, sync")
+		metrics["reservation_id"] = reservation_id
+		emit_result(
+			"supermarq",
+			parameters={
+				"run": runtype,
+				"iterations": iterations,
+				"startqbit": startqbit,
+				"shots": num_shots,
+				"increase": increase,
+				"method": method_name,
+				"backend": backend or "tnqvm",
+			},
+			metrics=metrics,
+		)
+	except Exception as e:
+		logging.defw_app(f"QTM ran into an exception {e}")
+		traceback.print_exc()
+		exit_rc = 1
+	finally:
+		try:
+			release_execution(qpm, reservation_id)
 		except Exception as e:
-			logging.defw_app(f"QTM ran into an exception {e}")
+			logging.defw_app(f"QPM release failed: {e}")
 			traceback.print_exc()
-			exit_rc = 1
-		finally:
-			try:
-				release_execution(qpm, reservation_id)
-			except Exception as e:
-				logging.defw_app(f"QPM release failed: {e}")
-				traceback.print_exc()
-			if parse_bool(os.environ.get("QFW_SUPERMARQ_SHUTDOWN_QPM", "yes")):
-				qpm.shutdown()
-		if exit_rc:
-			sys.exit(exit_rc)
-		me.exit()
+		if parse_bool(os.environ.get("QFW_SUPERMARQ_SHUTDOWN_QPM", "yes")):
+			qpm.shutdown()
+	if exit_rc:
+		sys.exit(exit_rc)
+	me.exit()
