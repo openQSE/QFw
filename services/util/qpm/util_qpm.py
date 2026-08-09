@@ -225,11 +225,12 @@ class UTIL_QPM:
 		else:
 			request_context = request.context
 			request_payload = prepared_info
-		runtime = self.controller.register_circuit(
-			cid, request_context, request_payload)
-		self.circuits[cid] = Circuit(
-			cid, request_payload, self.free_resources_and_oor)
-		self.circuits[cid].set_ready()
+		with self.controller.lock:
+			runtime = self.controller.register_circuit(
+				cid, request_context, request_payload)
+			self.circuits[cid] = Circuit(
+				cid, request_payload, self.free_resources_and_oor)
+			self.circuits[cid].set_ready()
 		logging.debug(
 			f"{cid} qtask {runtime.qtask_id} added to circuit database "
 			f"in {time.time() - start}")
@@ -345,8 +346,12 @@ class UTIL_QPM:
 		self.process_oor_queue()
 
 	def _prepare_run_circuit(self, cid, require_selected_cid=False):
-		circuit = self.circuits[cid]
-		runtime = self.controller.task_for_cid(cid)
+		with self.controller.lock:
+			circuit = self.circuits.get(cid)
+			runtime = self.controller.task_for_cid(cid)
+		if circuit is None:
+			raise DEFwExecutionError(
+				f"qtask circuit record is no longer active: cid={cid}")
 		diagnostic_bypass = (
 			runtime.diagnostic_bypass if runtime is not None else False)
 		if not diagnostic_bypass:
@@ -589,11 +594,6 @@ class UTIL_QPM:
 				if deadline is not None and _sync_timed_out(deadline):
 					return self._sync_timeout_response(
 						cid, request, str(error))
-				try:
-					self.dispatch_ready_qtask()
-				except DEFwOutOfResources:
-					pass
-				self.process_oor_queue()
 				_sleep_until_retry(deadline)
 			except Exception as e:
 				if circuit is not None:

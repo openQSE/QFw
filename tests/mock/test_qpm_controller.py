@@ -1,5 +1,5 @@
 import util.qpm.util_qpm as util_qpm
-from defw_exception import DEFwExecutionError
+from defw_exception import DEFwExecutionError, DEFwOutOfResources
 from fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
@@ -106,6 +106,25 @@ class HookQPM(UTIL_QPM):
 		circuit.info["lock_held_during_hook"] = lock_held
 		circuit.info["lock_held_during_qrc"] = lock_held
 		return circuit
+
+
+class RetryOnceQPM(HookQPM):
+	def __init__(self):
+		self.prepare_attempts = 0
+		super().__init__()
+
+	def _prepare_run_circuit(self, cid, require_selected_cid=False):
+		self.prepare_attempts += 1
+		if self.prepare_attempts == 1:
+			raise DEFwOutOfResources("capacity not ready")
+		return super()._prepare_run_circuit(
+			cid, require_selected_cid=require_selected_cid)
+
+	def dispatch_ready_qtask(self):
+		raise AssertionError("sync retry must not dispatch queued work")
+
+	def process_oor_queue(self):
+		raise AssertionError("sync retry must not process async retry queue")
 
 
 def _setup_qpm(monkeypatch):
@@ -238,6 +257,22 @@ def test_provider_hooks_run_outside_controller_lock(monkeypatch):
 	assert qpm.hooks == ["prepare_circuit", "prepare_provider_submission"]
 	assert qpm.qrc.sync_circuits[0].info["lock_held_during_hook"] is False
 	assert qpm.controller.task_for_cid(result["cid"]) is None
+
+
+def test_sync_retry_does_not_dispatch_async_work(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = RetryOnceQPM()
+
+	result = qpm.sync_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	})
+
+	assert result["qtask_id"] == 1
+	assert qpm.prepare_attempts == 2
+	assert qpm.qrc.async_circuits == []
+	assert qpm.qrc.sync_circuits[0].get_cid() == result["cid"]
 
 
 def test_cancellation_lookup_and_cleanup(monkeypatch):
