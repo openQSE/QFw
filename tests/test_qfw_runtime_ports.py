@@ -344,6 +344,7 @@ def test_start_job_local_services_places_heterogeneous_stack_on_group1(
 
     assert state["local_dirsvc"]["endpoint"] == "svc-a:8090"
     assert state["environment"]["QFW_LOCAL_DIRSVC_ENDPOINT"] == "svc-a:8090"
+    assert state["environment"]["DEFW_DISABLE_DIRSVC"] == "no"
     assert state["directory_requirements"][0]["endpoint"] == "svc-a:8090"
     assert calls[0][0][:6] == [
         "srun",
@@ -461,6 +462,63 @@ def test_qfw_srun_runs_directly_for_local_allocation(tmp_path, monkeypatch):
     assert captured["argv"] == ["/usr/bin/defw-python", "app.py"]
 
 
+def test_qfw_srun_configures_application_defw_environment(
+        tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    state_dir = run_dir / "state"
+    state_dir.mkdir(parents=True)
+    state = {
+        "setup_complete": True,
+        "run_dir": str(run_dir),
+        "environment": {
+            "QFW_ALLOCATION_MODE": "heterogeneous",
+            "QFW_GROUP_0_NODELIST": "client-a",
+            "QFW_GROUP_1_NODELIST": "svc-a",
+            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a",
+            "QFW_LOCAL_DIRSVC_ENDPOINT": "svc-a:8090",
+            "QFW_LOCAL_DIRSVC_NAME": "qfw-local-dirsvc",
+            "DEFW_PARENT_HOSTNAME": "svc-a",
+            "DEFW_PARENT_PORT": "8090",
+            "DEFW_PARENT_NAME": "qfw-local-dirsvc",
+        },
+    }
+    (state_dir / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    captured = {}
+
+    def fake_command_path(name, env=None):
+        assert name == "defw-python"
+        return Path("/usr/bin/defw-python")
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        captured["env"] = dict(env)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands, "_free_tcp_port", lambda host: 45678)
+    monkeypatch.setattr(commands, "_resolve_host_address",
+                        lambda host: "10.0.0.2")
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    rc = commands.qfw_srun(["--run-dir", str(run_dir), "app.py"])
+
+    assert rc == 0
+    assert captured["argv"] == [
+        "srun",
+        "--het-group=0",
+        "/usr/bin/defw-python",
+        "app.py",
+    ]
+    assert captured["env"]["DEFW_DISABLE_DIRSVC"] == "no"
+    assert captured["env"]["DEFW_AGENT_TYPE"] == "agent"
+    assert captured["env"]["DEFW_SHELL_TYPE"] == "cmdline"
+    assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.2"
+    assert captured["env"]["DEFW_LISTEN_PORT"] == "45678"
+    assert captured["env"]["DEFW_LOG_DIR"] == str(
+        run_dir / "application" / "logs")
+
+
 def test_cleanup_prte_uses_dvm_uri_without_default_pkill(tmp_path,
                                                          monkeypatch):
     uri_path = tmp_path / "prte_dvm" / "dvm-uri"
@@ -468,7 +526,7 @@ def test_cleanup_prte_uses_dvm_uri_without_default_pkill(tmp_path,
     uri_path.write_text("dvm-uri\n", encoding="utf-8")
     calls = []
 
-    def fake_run(argv, stdout=None, stderr=None, check=None):
+    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
         calls.append(list(argv))
         return commands.subprocess.CompletedProcess(argv, 0)
 
@@ -483,7 +541,7 @@ def test_cleanup_prte_uses_dvm_uri_without_default_pkill(tmp_path,
 def test_cleanup_prte_can_force_legacy_pkill(monkeypatch):
     calls = []
 
-    def fake_run(argv, stdout=None, stderr=None, check=None):
+    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
         calls.append(list(argv))
         return commands.subprocess.CompletedProcess(argv, 0)
 
@@ -495,3 +553,91 @@ def test_cleanup_prte_can_force_legacy_pkill(monkeypatch):
         ["pkill", "-9", "prte"],
         ["pkill", "-9", "prted"],
     ]
+
+
+def test_cleanup_job_processes_terminates_heterogeneous_pid_on_target(
+        monkeypatch):
+    calls = []
+
+    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
+        calls.append((list(argv), dict(env)))
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    state = {
+        "environment": {
+            "QFW_ALLOCATION_MODE": "heterogeneous",
+            "QFW_GROUP_0_NODELIST": "client-a",
+            "QFW_GROUP_1_NODELIST": "svc-a,svc-b",
+            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
+        },
+        "processes": [
+            {
+                "owner": "job",
+                "role": "service",
+                "target": "svc-a",
+                "pid": 1234,
+            },
+        ],
+    }
+
+    errors = commands._cleanup_job_processes(state, report_errors=False)
+
+    assert errors == []
+    assert calls[0][0][:6] == [
+        "srun",
+        "--het-group=1",
+        "--nodes=1",
+        "--ntasks=1",
+        "--nodelist",
+        "svc-a",
+    ]
+    assert calls[0][0][6:9] == [
+        sys.executable,
+        "-c",
+        commands._REMOTE_TERMINATE_PROCESS,
+    ]
+    assert calls[0][0][-1] == "1234"
+
+
+def test_cleanup_prte_uses_target_for_heterogeneous_dvm(tmp_path,
+                                                        monkeypatch):
+    uri_path = tmp_path / "prte_dvm" / "dvm-uri"
+    uri_path.parent.mkdir()
+    uri_path.write_text("dvm-uri\n", encoding="utf-8")
+    calls = []
+
+    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
+        calls.append(list(argv))
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    commands._cleanup_prte(
+        {
+            "uri_path": str(uri_path),
+            "targets": ["svc-a"],
+            "allocation_mode": "heterogeneous",
+        },
+        env={},
+        allocation=hetero_allocation(),
+    )
+
+    assert calls[0][:6] == [
+        "srun",
+        "--het-group=1",
+        "--nodes=1",
+        "--ntasks=1",
+        "--nodelist",
+        "svc-a",
+    ]
+    assert calls[0][6:] == ["pterm", "--dvm", f"file:{uri_path}"]
+    assert calls[1][:6] == calls[0][:6]
+    assert calls[1][6:9] == [
+        sys.executable,
+        "-c",
+        commands._REMOTE_TERMINATE_PRTE_BY_URI,
+    ]
+    assert calls[1][-1] == str(uri_path)
+    assert not uri_path.parent.exists()

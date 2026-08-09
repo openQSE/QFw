@@ -36,6 +36,7 @@ class QFwJob(Job):
 		self._backend = backend
 		self._qobj = qobj
 		self._options = options
+		self._owned_reservation_id = None
 
 		self._result_time = 0
 		self._submission_time = 0
@@ -92,6 +93,67 @@ class QFwJob(Job):
 			self._options,
 		)
 
+	def _reserve_if_needed(self, circuits):
+		if self._options.get("reservation_id") is not None:
+			return
+		reserve = getattr(self._qpm, "reserve", None)
+		if reserve is None:
+			return
+		decision = reserve(request=self._reservation_request(circuits))
+		if decision.get("status") != "accepted" or not decision.get(
+				"reservation_id"):
+			raise DEFwError(f"reservation was not accepted: {decision}")
+		self._owned_reservation_id = decision["reservation_id"]
+		self._options["reservation_id"] = self._owned_reservation_id
+
+	def _reservation_request(self, circuits):
+		shots = self.options()["shots"]
+		max_qubits = max(circuit.num_qubits for circuit in circuits)
+		max_clbits = max(circuit.num_clbits for circuit in circuits)
+		job_id = os.environ.get("SLURM_JOB_ID", self._job_id)
+		return {
+			"owner": {"user": os.environ.get("USER", "qfw-qiskit")},
+			"job_id": job_id,
+			"allocation_id": job_id,
+			"num_qubits": max_qubits,
+			"walltime_ns": self._backend.COMPLETION_TIMEOUT_SEC *
+				1_000_000_000,
+			"ttl_ns": max(60, self._backend.COMPLETION_TIMEOUT_SEC + 60) *
+				1_000_000_000,
+			"workload": {
+				"frontend": "qiskit",
+				"backend": self._backend.my_name(),
+				"operation": "async_run",
+			},
+			"run_context": {"operation": "async_run"},
+			"task_class": {
+				"count": len(circuits),
+				"qubit_count": max_qubits,
+				"shots": shots,
+				"measurement_count": max_clbits,
+			},
+		}
+
+	def _release_owned_reservation(self):
+		if self._owned_reservation_id is None:
+			return
+		release = getattr(self._qpm, "release", None)
+		if release is None:
+			self._owned_reservation_id = None
+			return
+		reservation_id = self._owned_reservation_id
+		self._owned_reservation_id = None
+		try:
+			release(
+				reservation_id=reservation_id,
+				reason=0,
+			)
+		except Exception:
+			logging.exception(
+				"failed to release QFwBackend reservation %s",
+				reservation_id,
+			)
+
 	def submit(self):
 		if isinstance(self._qobj, QuantumCircuit):
 			circuits = [self._qobj]
@@ -99,9 +161,14 @@ class QFwJob(Job):
 			circuits = self._qobj
 
 		start = time.time()
-		for circuit in circuits:
-			cid = self._run_experiment_async(circuit)
-			self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
+		try:
+			self._reserve_if_needed(circuits)
+			for circuit in circuits:
+				cid = self._run_experiment_async(circuit)
+				self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
+		except Exception:
+			self._release_owned_reservation()
+			raise
 		self._submission_time = time.time() - start
 		return
 
@@ -206,67 +273,77 @@ class QFwJob(Job):
 	def result(self):
 		result_list = []
 
-		res_wait_start = time.time()
-		qpm_results = self._result_reader(self._cid_list)
-		self._result_wait_time = time.time() - res_wait_start
+		try:
+			res_wait_start = time.time()
+			qpm_results = self._result_reader(self._cid_list)
+			self._result_wait_time = time.time() - res_wait_start
+			if not qpm_results:
+				raise DEFwError("no QPM circuit results were received")
 
-		for qr in qpm_results:
-			res = qr['res']
-			self._backend.log_statistics(res)
-			output = res.get("result", {})
-			counts, statevector, metadata = self._split_result_payload(output)
+			for qr in qpm_results:
+				res = qr['res']
+				self._backend.log_statistics(res)
+				output = res.get("result", {})
+				counts, statevector, metadata = self._split_result_payload(output)
 
-			out = {
-				"counts": counts,
-				"statevector": statevector,
-				"metadata": metadata,
-				"memory": self._get_memory_from_counts(counts),
-				"time_taken": res['completion_time'] - res['exec_time']
-			}
+				out = {
+					"counts": counts,
+					"statevector": statevector,
+					"metadata": metadata,
+					"memory": self._get_memory_from_counts(counts),
+					"time_taken": res['completion_time'] - res['exec_time']
+				}
 
-			circuit = qr['exp']
-			# Extract metadata directly from circuit
-			creg_sizes = [[creg.name, creg.size] for creg in circuit.cregs]
-			result_dict = {
-				"header": {
-					"name": circuit.name if circuit.name else "circuit",
-					"memory_slots": circuit.num_clbits,
-					"creg_sizes": creg_sizes,
-				},
-				"status": "DONE",
-				"time_taken": out["time_taken"],
-				"seed": self.options()["seed_simulator"],
-				"shots": self.options()["shots"],
-				"data": {
-					"counts": out["counts"],
-					"statevector": out["statevector"],
-					"metadata": out["metadata"],
-					"memory": out["memory"]
-				},
+				circuit = qr['exp']
+				# Extract metadata directly from circuit
+				creg_sizes = [
+					[creg.name, creg.size] for creg in circuit.cregs]
+				result_dict = {
+					"header": {
+						"name": circuit.name if circuit.name else "circuit",
+						"memory_slots": circuit.num_clbits,
+						"creg_sizes": creg_sizes,
+					},
+					"status": "DONE",
+					"time_taken": out["time_taken"],
+					"seed": self.options()["seed_simulator"],
+					"shots": self.options()["shots"],
+					"data": {
+						"counts": out["counts"],
+						"statevector": out["statevector"],
+						"metadata": out["metadata"],
+						"memory": out["memory"]
+					},
+					"success": True,
+					"memory": True,
+				}
+				result_list.append(result_dict)
+
+			result = {
+				"backend_name": self._backend.my_name(),
+				"backend_version": self._backend.my_version(),
+				"qobj_id": str(uuid.uuid4()),
+				"job_id": self._job_id,
+				"results": result_list,
+				"status": "COMPLETED",
 				"success": True,
+				"overall_time_taken": (
+					self._submission_time + self._result_wait_time),
+				"time_taken": out["time_taken"],
 				"memory": True,
 			}
-			result_list.append(result_dict)
 
-		result = {
-			"backend_name": self._backend.my_name(),
-			"backend_version": self._backend.my_version(),
-			"qobj_id": str(uuid.uuid4()),
-			"job_id": self._job_id,
-			"results": result_list,
-			"status": "COMPLETED",
-			"success": True,
-			"overall_time_taken": (self._submission_time + self._result_wait_time),
-			"time_taken": out["time_taken"],
-			"memory": True,
-		}
+			logging.defw_app(
+				f"INDIVIDUAL CIRCUIT Time Taken by QFwBackend = "
+				f"{out['time_taken']}")
+			logging.defw_app(
+				f"overall_time_taken: {self._submission_time}+"
+				f"{self._result_wait_time}")
 
-		logging.defw_app(f"INDIVIDUAL CIRCUIT Time Taken by QFwBackend = {out['time_taken']}")
-		logging.defw_app(f"overall_time_taken: {self._submission_time}+{self._result_wait_time}")
-
-		self._backend.dump_statistics()
-
-		return Result.from_dict(result)
+			self._backend.dump_statistics()
+			return Result.from_dict(result)
+		finally:
+			self._release_owned_reservation()
 
 	def status(self):
 		# TODO: Add a new API in the qpm which takes a list of CIDs and

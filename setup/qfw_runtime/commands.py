@@ -114,6 +114,7 @@ def qfw_srun(argv):
     env.update(state.get("environment") or {})
     allocation = _allocation_context_from_env(env)
     _publish_allocation_environment(env, allocation)
+    _configure_application_defw_environment(env, state)
     defw_python = _command_path("defw-python", env=env)
     command = _application_launch_command(
         [str(defw_python), *args.application],
@@ -129,17 +130,7 @@ def qfw_teardown(argv):
     args = parser.parse_args(argv)
 
     state = qfw_config.read_state(args.run_dir)
-    errors = []
-    for process in reversed(state.get("processes") or []):
-        if process.get("owner") != "job":
-            continue
-        try:
-            if process.get("role") == "prte-dvm":
-                _cleanup_prte(process)
-            elif process.get("pid") is not None:
-                _terminate_process(int(process["pid"]))
-        except Exception as exc:
-            errors.append(str(exc))
+    errors = _cleanup_job_processes(state, report_errors=False)
     qfw_config.clear_current_run(state)
     if not args.keep_run_dir:
         shutil.rmtree(state["run_dir"], ignore_errors=True)
@@ -219,7 +210,7 @@ def qfw_dirsvc_start(argv):
             "endpoint": endpoint,
             "startup_timeout": startup_timeout,
         },
-        lambda: _directory_endpoint_ready(endpoint),
+        lambda: _tcp_endpoint_ready(endpoint),
     )
 
 
@@ -247,8 +238,10 @@ def qfw_service_start(argv):
     service_id = args.service_id
     run_dir = _service_run_dir(args.run_dir, service_id)
     log_dir = run_dir / "logs"
+    service_ready_file = run_dir / "service-ready.json"
     run_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
+    service_ready_file.unlink(missing_ok=True)
     pid_file = Path(args.pid_file) if args.pid_file else run_dir / "pid"
     ready_file = (
         Path(args.ready_file) if args.ready_file else run_dir / "ready.json")
@@ -316,6 +309,7 @@ def qfw_service_start(argv):
         "QFW_QPM_DIRECT_ENDPOINT_FALLBACK": (
             "yes" if direct_fallback else "no"),
         "QFW_STARTUP_TIMEOUT": str(startup_timeout),
+        "QFW_SERVICE_READY_FILE": str(service_ready_file),
     })
     if target:
         env["QFW_LOCAL_SERVICE_TARGET"] = target
@@ -356,12 +350,14 @@ def qfw_service_start(argv):
             "dirsvc_endpoint": dirsvc_endpoint,
             "startup_timeout": startup_timeout,
             "register_with_dirsvc": register,
+            "service_ready_file": str(service_ready_file),
         },
         lambda: _service_ready(
             service_id,
             f"{service_host}:{service_port}",
             register,
             dirsvc_endpoint,
+            service_ready_file,
         ),
     )
 
@@ -529,12 +525,14 @@ def _configure_allocation_local_directory(state, env, allocation):
     env["DEFW_PARENT_HOSTNAME"] = host
     env["DEFW_PARENT_PORT"] = str(port)
     env["DEFW_PARENT_NAME"] = local["name"]
+    env["DEFW_DISABLE_DIRSVC"] = "no"
     state["environment"].update({
         "QFW_LOCAL_DIRSVC_ENDPOINT": endpoint,
         "QFW_LOCAL_DIRSVC_NAME": local["name"],
         "DEFW_PARENT_HOSTNAME": host,
         "DEFW_PARENT_PORT": str(port),
         "DEFW_PARENT_NAME": local["name"],
+        "DEFW_DISABLE_DIRSVC": "no",
     })
     for requirement in state.get("directory_requirements") or []:
         if requirement.get("scope") == "allocation-local":
@@ -573,6 +571,43 @@ def _application_launch_command(command, allocation):
     if mode == "slurm":
         return ["srun", *command]
     return command
+
+
+def _configure_application_defw_environment(env, state=None):
+    if state and not env.get("DEFW_LOG_DIR"):
+        env["DEFW_LOG_DIR"] = str(
+            Path(state["run_dir"]) / "application" / "logs")
+    if not env.get("QFW_LOCAL_DIRSVC_ENDPOINT"):
+        return
+    env["DEFW_DISABLE_DIRSVC"] = "no"
+    env.setdefault("DEFW_AGENT_TYPE", "agent")
+    env.setdefault("DEFW_SHELL_TYPE", "cmdline")
+    parent_host = env.get("DEFW_PARENT_HOSTNAME", "")
+    parent_addr = env.get("DEFW_PARENT_ADDR", "")
+    if parent_host and parent_addr in {"", "0.0.0.0", "None"}:
+        env["DEFW_PARENT_ADDR"] = _resolve_host_address(parent_host)
+    if _int_value(env.get("DEFW_LISTEN_PORT"), 0) <= 0:
+        env["DEFW_LISTEN_PORT"] = str(_free_tcp_port(""))
+
+
+def _resolve_host_address(host):
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        return host
+
+
+def _free_tcp_port(host):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+def _int_value(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _prte_runtime_args(allocation):
@@ -707,12 +742,12 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
         _write_ready(ready_file, ready_payload)
         return 0
 
-    wrapper = _defwp_wrapper_path(env)
+    defwp = _defwp_path(env)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
     try:
         process = subprocess.Popen(
-            [str(wrapper), "-d"],
+            [str(defwp), "-d", "-x"],
             env=env,
             start_new_session=True,
             stdout=stdout_log,
@@ -809,7 +844,7 @@ def _wait_required_directories(state):
         _wait_for_ready(
             f"directory {name} at {endpoint}",
             timeout,
-            lambda endpoint=endpoint: _directory_endpoint_ready(endpoint),
+            lambda endpoint=endpoint: _tcp_endpoint_ready(endpoint),
         )
 
 
@@ -836,57 +871,124 @@ def _directory_timeout(state, scope):
     return 300
 
 
-def _cleanup_job_processes(state):
+def _cleanup_job_processes(state, env=None, allocation=None,
+                           report_errors=True):
     errors = []
+    try:
+        env, allocation = _cleanup_context_from_state(
+            state, env=env, allocation=allocation)
+    except Exception as exc:
+        errors.append(str(exc))
+        if report_errors:
+            print(
+                "errors while cleaning partially started services: " +
+                "; ".join(errors),
+                file=sys.stderr,
+            )
+        return errors
     for process in reversed(state.get("processes") or []):
         if process.get("owner") != "job":
             continue
         try:
             if process.get("role") == "prte-dvm":
-                _cleanup_prte(process)
+                _cleanup_prte(process, env=env, allocation=allocation)
             elif process.get("pid") is not None:
-                _terminate_process(int(process["pid"]))
+                _cleanup_recorded_process(process, env, allocation)
         except Exception as exc:
             errors.append(str(exc))
-    if errors:
+    if errors and report_errors:
         print(
             "errors while cleaning partially started services: " +
             "; ".join(errors),
             file=sys.stderr,
         )
+    return errors
 
 
-def _cleanup_prte(process):
+def _cleanup_context_from_state(state, env=None, allocation=None):
+    cleanup_env = os.environ.copy()
+    if env:
+        cleanup_env.update(env)
+    cleanup_env.update(state.get("environment") or {})
+    if allocation is None:
+        allocation = _allocation_context_from_env(cleanup_env)
+    _publish_allocation_environment(cleanup_env, allocation)
+    return cleanup_env, allocation
+
+
+def _cleanup_recorded_process(process, env, allocation):
+    pid = int(process["pid"])
+    target = process.get("target")
+    if _should_launch_on_target(allocation, target):
+        _terminate_process_on_target(pid, target, env, allocation)
+        return
+    _terminate_process(pid)
+
+
+def _cleanup_prte(process, env=None, allocation=None):
+    env = env or os.environ.copy()
+    allocation = allocation or {
+        "mode": process.get("allocation_mode", "local"),
+    }
+    targets = _process_targets(process, allocation)
+    launch_target = targets[0] if targets else None
     uri_path = process.get("uri_path")
     if uri_path:
         uri = Path(uri_path)
         if uri.exists():
-            subprocess.run(
+            _run_cleanup_command(
                 ["pterm", "--dvm", f"file:{uri}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
+                env,
+                allocation,
+                launch_target,
             )
+        if _should_launch_on_any_target(allocation, targets):
+            for target in targets:
+                _terminate_prte_by_uri(uri, target, env, allocation)
         shutil.rmtree(str(uri.parent), ignore_errors=True)
     if not qfw_config.bool_config(process.get("force_cleanup"), False):
         return
+    cleanup_targets = targets or [None]
+    if _should_launch_on_any_target(allocation, targets):
+        for target in cleanup_targets:
+            for name in ("prte", "prted"):
+                _run_cleanup_command(
+                    ["pkill", "-9", name],
+                    env,
+                    allocation,
+                    target,
+                )
+        return
     for name in ("prte", "prted"):
-        subprocess.run(
+        _run_cleanup_command(
             ["pkill", "-9", name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
+            env,
+            allocation,
+            None,
         )
 
 
-def _service_ready(service_id, service_endpoint, register, dirsvc_endpoint):
-    if not _service_endpoint_ready(service_endpoint):
-        return False
-    if not register:
+def _service_ready(service_id, service_endpoint, register, dirsvc_endpoint,
+                   service_ready_file=None):
+    if _ready_file_ready(service_ready_file):
         return True
-    if not dirsvc_endpoint:
+    if not register:
+        return _service_endpoint_ready(service_endpoint)
+    return False
+
+
+def _ready_file_ready(path):
+    if not path:
         return False
-    return _directory_service_registered(dirsvc_endpoint, service_id)
+    ready_path = Path(path)
+    if not ready_path.exists():
+        return False
+    try:
+        with ready_path.open("r", encoding="utf-8") as stream:
+            data = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(data.get("ready"))
 
 
 def _directory_endpoint_ready(endpoint):
@@ -894,6 +996,17 @@ def _directory_endpoint_ready(endpoint):
     if records is not None:
         return True
     return False
+
+
+def _tcp_endpoint_ready(endpoint):
+    host, port = _split_endpoint(endpoint)
+    if not port:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 def _directory_service_registered(endpoint, service_id):
@@ -1229,7 +1342,7 @@ def _command_path(name, env=None):
     raise FileNotFoundError(f"unable to find QFw command: {name}")
 
 
-def _defwp_wrapper_path(env):
+def _defwp_path(env):
     defw_prefix = Path(env.get("DEFW_PREFIX") or qfw_config.defw_prefix())
     qfw_bin = (
         Path(env["QFW_BIN_PATH"]).expanduser().resolve()
@@ -1237,14 +1350,15 @@ def _defwp_wrapper_path(env):
         qfw_config.qfw_bin_path()
     )
     for candidate in (
-            defw_prefix / "bin" / "defwp-wrapper",
-            qfw_bin / "defwp-wrapper"):
+            defw_prefix / "bin" / "defwp",
+            defw_prefix / "src" / "defwp",
+            qfw_bin / "defwp"):
         if candidate.exists():
             return candidate
-    found = shutil.which("defwp-wrapper", path=env.get("PATH"))
+    found = shutil.which("defwp", path=env.get("PATH"))
     if found:
         return Path(found)
-    raise FileNotFoundError("unable to find defwp-wrapper")
+    raise FileNotFoundError("unable to find defwp")
 
 
 def _run_checked(command, env):
@@ -1252,6 +1366,190 @@ def _run_checked(command, env):
     if result.returncode:
         raise RuntimeError(
             f"command failed with {result.returncode}: {' '.join(command)}")
+
+
+_REMOTE_TERMINATE_PROCESS = r"""
+import os
+import signal
+import sys
+import time
+
+pid = int(sys.argv[1])
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+def signal_process(sig):
+    delivered = False
+    try:
+        os.killpg(pid, sig)
+        delivered = True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        pass
+    try:
+        os.kill(pid, sig)
+        delivered = True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        pass
+    return delivered
+
+if not signal_process(signal.SIGTERM):
+    sys.exit(0)
+
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
+    if not alive(pid):
+        sys.exit(0)
+    time.sleep(0.1)
+
+signal_process(signal.SIGKILL)
+deadline = time.monotonic() + 2
+while time.monotonic() < deadline:
+    if not alive(pid):
+        sys.exit(0)
+    time.sleep(0.1)
+
+sys.exit(1 if alive(pid) else 0)
+"""
+
+
+_REMOTE_TERMINATE_PRTE_BY_URI = r"""
+import os
+import signal
+import sys
+import time
+
+needle = sys.argv[1]
+
+def proc_cmdline(pid):
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as stream:
+            return stream.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+def is_prte(pid, cmdline):
+    if pid == os.getpid() or not cmdline:
+        return False
+    argv0 = cmdline.split("\0", 1)[0]
+    name = os.path.basename(argv0)
+    if name not in ("prte", "prted"):
+        return False
+    return needle in cmdline.replace("\0", " ")
+
+def collect():
+    pids = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if is_prte(pid, proc_cmdline(pid)):
+            pids.append(pid)
+    return pids
+
+def signal_pid(pid, sig):
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, OSError):
+        pass
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, OSError):
+        pass
+
+pids = collect()
+for pid in pids:
+    signal_pid(pid, signal.SIGTERM)
+
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
+    if not collect():
+        sys.exit(0)
+    time.sleep(0.1)
+
+for pid in collect():
+    signal_pid(pid, signal.SIGKILL)
+
+deadline = time.monotonic() + 2
+while time.monotonic() < deadline:
+    if not collect():
+        sys.exit(0)
+    time.sleep(0.1)
+
+sys.exit(1 if collect() else 0)
+"""
+
+
+def _process_targets(process, allocation):
+    targets = list(process.get("targets") or [])
+    if not targets and process.get("target"):
+        targets.append(process["target"])
+    if not targets and allocation.get("mode") in {"heterogeneous", "slurm"}:
+        group1 = allocation.get("group1") or []
+        if group1:
+            targets.append(group1[0])
+    return targets
+
+
+def _should_launch_on_target(allocation, target):
+    return bool(
+        target and allocation.get("mode") in {"heterogeneous", "slurm"})
+
+
+def _should_launch_on_any_target(allocation, targets):
+    return bool(
+        targets and allocation.get("mode") in {"heterogeneous", "slurm"})
+
+
+def _run_cleanup_command(command, env, allocation, target):
+    command = list(command)
+    if _should_launch_on_target(allocation, target):
+        command = _target_launch_command(command, allocation, target)
+    return subprocess.run(
+        command,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def _terminate_process_on_target(pid, target, env, allocation):
+    result = _run_cleanup_command(
+        [sys.executable or "python3", "-c", _REMOTE_TERMINATE_PROCESS,
+         str(pid)],
+        env,
+        allocation,
+        target,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            f"failed to terminate pid {pid} on {target}: "
+            f"status {result.returncode}")
+
+
+def _terminate_prte_by_uri(uri, target, env, allocation):
+    result = _run_cleanup_command(
+        [sys.executable or "python3", "-c", _REMOTE_TERMINATE_PRTE_BY_URI,
+         str(uri)],
+        env,
+        allocation,
+        target,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            f"failed to terminate PRTE processes for {uri} on {target}: "
+            f"status {result.returncode}")
 
 
 def _terminate_process(pid):

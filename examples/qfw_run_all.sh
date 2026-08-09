@@ -15,7 +15,7 @@ Environment overrides:
   QFW_RUN_ALL_ITERS=<n>               Iterations for GHZ tests
   QFW_RUN_ALL_SHOTS=<n>               Shots for SupermarQ
   QFW_RUN_ALL_VQE_ITERS=<n>           Optimizer iterations for VQE
-  QFW_RUN_ALL_SHIM_LIB=<qdmi|qrmi>    Shim library for shim smoke test
+  QFW_RUN_ALL_SHIM_LIB=<qrmi|qdmi>    Shim library for shim smoke test
   QFW_RUN_ALL_CHEM_APP=<script.py>    Optional chemistry app script
 EOF
 }
@@ -41,7 +41,7 @@ qubits="${QFW_RUN_ALL_QUBITS:-4}"
 iterations="${QFW_RUN_ALL_ITERS:-1}"
 shots="${QFW_RUN_ALL_SHOTS:-128}"
 vqe_iterations="${QFW_RUN_ALL_VQE_ITERS:-1}"
-shim_lib="${QFW_RUN_ALL_SHIM_LIB:-qdmi}"
+shim_lib="${QFW_RUN_ALL_SHIM_LIB:-qrmi}"
 timestamp="$(date +%Y%m%d-%H%M%S)"
 log_root="${QFW_RUN_BASE_DIR:-${TMPDIR:-/tmp}}/examples-run-${timestamp}"
 

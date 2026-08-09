@@ -1,9 +1,11 @@
 import inspect
+import json
 import logging
 import os
 import threading
 import uuid
-from time import monotonic, sleep
+from pathlib import Path
+from time import monotonic, sleep, time_ns
 
 import util.qpm.util_qpm as uq
 from .controller import find_target_controller
@@ -15,12 +17,15 @@ DIRECT_ENDPOINT_FALLBACK_ENV = "QFW_QPM_DIRECT_ENDPOINT_FALLBACK"
 DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
 SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 STARTUP_TIMEOUT_ENV = "QFW_STARTUP_TIMEOUT"
+LOCAL_DIRSVC_ENDPOINT_ENV = "QFW_LOCAL_DIRSVC_ENDPOINT"
+SERVICE_READY_FILE_ENV = "QFW_SERVICE_READY_FILE"
 
 DEFAULT_OPERATION_MODE = "qfw-managed"
 LONG_RUNNING_OPERATION_MODE = "long-running"
 DEFAULT_STARTUP_TIMEOUT = 40
 ZERO_UUID = str(uuid.UUID(int=0))
 SITE_REGISTRATION_STATE_ATTR = "_qfw_site_dirsvc_registrations"
+LOCAL_REGISTRATION_STATE_ATTR = "_qfw_local_dirsvc_registrations"
 
 FALSE_VALUES = {"0", "false", "no", "off", "n"}
 TRUE_VALUES = {"1", "true", "yes", "on", "y"}
@@ -94,6 +99,8 @@ def startup_status(defw_module):
 		"listener_ready": listener_ready(defw_module),
 		"controller_ready": controller_ready(defw_module),
 		"site_dirsvc_ready": _site_dirsvc_ready(defw_module),
+		"local_registration_required": _local_registration_required(),
+		"local_registration_ready": _local_registration_complete(defw_module),
 		"site_registration_required": _site_registration_required(),
 		"site_registration_ready": _site_registration_complete(defw_module),
 	})
@@ -144,6 +151,9 @@ def _startup_wait_reason(defw_module):
 		return "controller"
 	if should_wait_for_dirsvc(defw_module):
 		return "dirsvc"
+	if _local_registration_required() and \
+	   not _local_registration_ready(defw_module):
+		return "dirsvc-registration"
 	if _site_registration_required() and \
 	   not _site_registration_ready(defw_module):
 		return "dirsvc"
@@ -191,6 +201,70 @@ def _site_registration_required():
 		register_with_dirsvc() and
 		site_dirsvc_endpoints_configured()
 	)
+
+
+def _local_registration_required():
+	return register_with_dirsvc() and not long_running_mode_enabled()
+
+
+def _local_registration_ready(defw_module):
+	if not _local_registration_required():
+		return True
+	if not _listener_and_controller_ready(defw_module):
+		return False
+	if not _dirsvc_ready(defw_module):
+		return False
+	return _ensure_local_registration(defw_module)
+
+
+def _local_registration_complete(defw_module):
+	if not _local_registration_required():
+		return True
+	endpoint = _local_dirsvc_endpoint()
+	state = getattr(defw_module, LOCAL_REGISTRATION_STATE_ATTR, {})
+	if not isinstance(state, dict):
+		return False
+	return endpoint in state
+
+
+def _ensure_local_registration(defw_module):
+	records = _site_registration_records(defw_module)
+	if not records:
+		logging.error("no QPM service records available for local registration")
+		return False
+
+	endpoint = _local_dirsvc_endpoint()
+	state = getattr(defw_module, LOCAL_REGISTRATION_STATE_ATTR, None)
+	if not isinstance(state, dict):
+		state = {}
+		setattr(defw_module, LOCAL_REGISTRATION_STATE_ATTR, state)
+	if endpoint in state:
+		return True
+
+	client = getattr(defw_module, "dirsvc", None)
+	if client is None:
+		return False
+	peer = _site_registration_peer(defw_module)
+	registered = []
+	for record in records:
+		try:
+			registered_record = _register_site_record(
+				client, record, peer, defw_module)
+			registered_records = _as_list(registered_record)
+			registered.extend(registered_records)
+			for lifecycle_record in registered_records or [record]:
+				_record_site_registration_lifecycle(
+					record, lifecycle_record, peer, endpoint)
+		except Exception:
+			logging.exception(
+				"failed to register QPM service with local dirsvc")
+			return False
+	state[endpoint] = registered
+	return True
+
+
+def _local_dirsvc_endpoint():
+	return os.environ.get(LOCAL_DIRSVC_ENDPOINT_ENV, "allocation-local")
 
 
 def _site_registration_ready(defw_module):
@@ -657,7 +731,26 @@ def _site_dirsvc_endpoints():
 
 def complete_qpm_initialization(message):
 	uq.qpm_initialized = True
+	_write_service_ready(message)
 	logging.debug(message)
+
+
+def _write_service_ready(message):
+	path = os.environ.get(SERVICE_READY_FILE_ENV)
+	if not path:
+		return
+	ready_file = Path(path)
+	try:
+		ready_file.parent.mkdir(parents=True, exist_ok=True)
+		with ready_file.open("w", encoding="utf-8") as stream:
+			json.dump({
+				"ready": True,
+				"message": message,
+				"timestamp_ns": time_ns(),
+			}, stream, sort_keys=True)
+			stream.write("\n")
+	except OSError:
+		logging.exception("failed to write QPM service readiness file")
 
 
 def wait_for_dirsvc(defw_module, message, timeout=None):

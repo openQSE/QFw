@@ -83,10 +83,13 @@ class QFwBackend(BackendV2):
 	COMPLETION_TIMEOUT_SEC = 200
 
 	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
-				 num_qubits=QFW_NUM_QUBITS):
+				 num_qubits=QFW_NUM_QUBITS, lookup_timeout=None):
 		self.log_time = time.time()
 		self._capability = capability
-		self.qpm = get_qpm(betype, capability)
+		if lookup_timeout is None:
+			self.qpm = get_qpm(betype, capability)
+		else:
+			self.qpm = get_qpm(betype, capability, timeout=lookup_timeout)
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
 		self._event_endpoint = me.my_endpoint()

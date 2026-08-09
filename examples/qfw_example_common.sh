@@ -111,6 +111,45 @@ qfw_example_setup_local_services() {
 	qfw_example_setup --runtime-config "${runtime_config}"
 }
 
+qfw_example_default_service_manifest() {
+	if [[ -n "${QFW_EXAMPLE_SERVICE_MANIFEST:-}" ]]; then
+		printf "%s\n" "${QFW_EXAMPLE_SERVICE_MANIFEST}"
+	elif [[ -n "${QFW_SHARE_DIR:-}" &&
+	        -r "${QFW_SHARE_DIR%/}/config/services/qfw_services.yaml" ]]; then
+		printf "%s\n" "${QFW_SHARE_DIR%/}/config/services/qfw_services.yaml"
+	else
+		qfw_example_path "../setup/qfw_services.yaml"
+	fi
+}
+
+qfw_example_service_for_backend() {
+	local backend="${1:-}"
+	case "${backend}" in
+		""|"tnqvm") printf "%s\n" "tnqvm" ;;
+		"nwqsim")  printf "%s\n" "nwqsim" ;;
+		*)
+			echo "ERROR: no local QPM service mapping for backend '${backend}'" >&2
+			return 1
+			;;
+	esac
+}
+
+qfw_example_setup_qpm_services() {
+	local manifest_path
+	manifest_path="$(qfw_example_default_service_manifest)"
+	qfw_example_setup_local_services "${manifest_path}" "$@"
+}
+
+qfw_example_setup_backend_service() {
+	if [[ $# -lt 1 ]]; then
+		echo "ERROR: qfw_example_setup_backend_service requires a backend" >&2
+		return 2
+	fi
+	local service_name
+	service_name="$(qfw_example_service_for_backend "$1")"
+	qfw_example_setup_qpm_services "${service_name}"
+}
+
 qfw_example_srun() {
 	qfw-srun "$@"
 }

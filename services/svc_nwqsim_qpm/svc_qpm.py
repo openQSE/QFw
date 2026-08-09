@@ -4,13 +4,16 @@ from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
 
 MAX_NWQSIM_QUBITS = 32
+MAX_NWQSIM_SHOTS = 1_000_000
 
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), start=start)
 		set_max_qubits_pp(MAX_NWQSIM_QUBITS)
-		self.configure_device_profile(max_qubits=MAX_NWQSIM_QUBITS)
+		self.configure_device_profile(
+			max_qubits=MAX_NWQSIM_QUBITS,
+			max_shots=MAX_NWQSIM_SHOTS)
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC

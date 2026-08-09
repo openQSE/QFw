@@ -17,6 +17,7 @@ def _connect_qpm(dirsvc, qpm_type, qpm_cap, timeout=SYSTEM_UP_TIMEOUT):
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc, defw_module=defw)
 	request = {
 		"timeout": timeout,
+		"binding_name": "default",
 		"qpm_type": qpm_type,
 		"qpm_capability": qpm_cap,
 	}
@@ -48,10 +49,10 @@ def test_qpm(qpm_api):
 	logging.debug(qpm_api.test())
 
 
-def get_qpm(qpm_type=-1, qpm_cap=-1):
+def get_qpm(qpm_type=-1, qpm_cap=-1, timeout=SYSTEM_UP_TIMEOUT):
 	# Grab a qpm if one exists.
 	dirsvc = _optional_directory_service()
-	qpm_api = _connect_qpm(dirsvc, qpm_type, qpm_cap)
+	qpm_api = _connect_qpm(dirsvc, qpm_type, qpm_cap, timeout=timeout)
 
 	logging.debug(f"got the qpm {qpm_api}")
 
@@ -59,6 +60,8 @@ def get_qpm(qpm_type=-1, qpm_cap=-1):
 		test_qpm(qpm_api)
 	except Exception as e:
 		logging.debug(f"QPM ran into an exception {e}")
-		qpm_api.shutdown()
+		shutdown = getattr(qpm_api, "shutdown", None)
+		if shutdown:
+			shutdown()
 
 	return qpm_api

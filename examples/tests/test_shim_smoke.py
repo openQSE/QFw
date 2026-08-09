@@ -224,6 +224,10 @@ def call_api(label, func, failures, **kwargs):
 		dump_result(label, result)
 		return result
 	except Exception as exc:
+		if can_skip_qrmi_device_access(kwargs.get("lib"), exc):
+			print(f"[shim-smoke] {label}: SKIPPED "
+			      "(QRMI device access is not configured)")
+			return None
 		failures.append((label, exc))
 		prformat(fg.red + fg.bold, f"[shim-smoke] {label}: FAILED: {exc}")
 		traceback.print_exc()
@@ -280,6 +284,22 @@ def live_qrmi_token_present():
 	return False
 
 
+def missing_device_access_error(exc):
+	text = str(exc)
+	return (
+		"QPU credential DB was not found" in text or
+		"QRMI driver could not resolve IQM device access" in text or
+		"set QFW_QC_URL/QFW_API_KEY" in text)
+
+
+def can_skip_qrmi_device_access(lib, exc):
+	if require_provider_completion() or live_qrmi_token_present():
+		return False
+	if lib not in (None, "qrmi"):
+		return False
+	return missing_device_access_error(exc)
+
+
 def can_skip_qrmi_provider_completion(qpm, lib):
 	if require_provider_completion() or live_qrmi_token_present():
 		return False
@@ -288,6 +308,10 @@ def can_skip_qrmi_provider_completion(qpm, lib):
 	try:
 		backend_info = qpm.get_backend_info(lib="qrmi")
 	except Exception as exc:
+		if can_skip_qrmi_device_access("qrmi", exc):
+			print("[shim-smoke] run_circuit: SKIPPED provider completion "
+			      "(QRMI device access is not configured)")
+			return True
 		prformat(
 			fg.red + fg.bold,
 			f"[shim-smoke] QRMI provider preflight unavailable: {exc}")
@@ -410,6 +434,7 @@ def run_named_call(call, qpm, libs, cap_map, failures, args,
 			"get_last_job_metadata", qpm.get_last_job_metadata,
 			failures, cid=cid, **kwargs)
 		return cid
+
 	if call == "async_run":
 		try:
 			cid, _, completed = run_circuit(
@@ -418,6 +443,10 @@ def run_named_call(call, qpm, libs, cap_map, failures, args,
 			if not completed:
 				cid = None
 		except Exception as exc:
+			if can_skip_qrmi_device_access(requested_lib(args), exc):
+				print("[shim-smoke] async_run: SKIPPED "
+				      "(QRMI device access is not configured)")
+				return None
 			failures.append(("async_run", exc))
 			prformat(
 				fg.red + fg.bold,

@@ -962,7 +962,13 @@ class UTIL_QPM:
 		if device_id is not None:
 			device_profile["device_id"] = device_id
 		device_profile.update(overrides)
-		return self.controller.configure_device_profile(device_profile)
+		result = self.controller.configure_device_profile(device_profile)
+		self.configure_default_admission_policy()
+		return result
+
+	def configure_default_admission_policy(self):
+		policy = dict(self.controller.admission_policy or {"name": "unlimited"})
+		return self.controller.set_admission_policy(policy)
 
 	def get_device_profile(self, token=None, device_id=None):
 		return self.controller.get_device_profile()
