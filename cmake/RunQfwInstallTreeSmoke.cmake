@@ -18,9 +18,30 @@ function(qfw_free_port out_var)
 	if(NOT next_port)
 		set(next_port 19000)
 	endif()
-	math(EXPR selected_port "${next_port} + 1")
-	set_property(GLOBAL PROPERTY QFW_NEXT_FAKE_PORT "${selected_port}")
-	set(${out_var} "${selected_port}" PARENT_SCOPE)
+	foreach(_attempt RANGE 1 200)
+		math(EXPR selected_port "${next_port} + 1")
+		execute_process(
+			COMMAND "${QFW_PYTHON}" -c
+				"import socket, sys
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind(('127.0.0.1', int(sys.argv[1])))
+finally:
+    sock.close()
+" "${selected_port}"
+			RESULT_VARIABLE port_rc
+			OUTPUT_QUIET
+			ERROR_QUIET)
+		set(next_port "${selected_port}")
+		if(port_rc EQUAL 0)
+			set_property(GLOBAL PROPERTY QFW_NEXT_FAKE_PORT
+				"${selected_port}")
+			set(${out_var} "${selected_port}" PARENT_SCOPE)
+			return()
+		endif()
+	endforeach()
+	message(FATAL_ERROR "Unable to allocate a free QFw smoke-test port")
 endfunction()
 
 file(REMOVE_RECURSE "${QFW_INSTALL_PREFIX}")
@@ -184,6 +205,7 @@ file(WRITE "${fake_service_script}"
 "import json
 import os
 import signal
+import socket
 import time
 
 running = True
@@ -196,6 +218,16 @@ def stop(_signum, _frame):
 
 signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGTERM, stop)
+
+listen_socket = None
+listen_port = int(os.environ.get('DEFW_LISTEN_PORT') or '0')
+if listen_port > 0 and os.environ.get('QFW_FAKE_NO_LISTEN') != '1':
+    listen_host = os.environ.get('DEFW_PARENT_HOSTNAME') or '127.0.0.1'
+    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listen_socket.bind((listen_host, listen_port))
+    listen_socket.listen(1)
+    listen_socket.settimeout(0.1)
 
 registry = os.environ.get('QFW_FAKE_DIRSVC_REGISTRY')
 ready_file = os.environ.get('QFW_SERVICE_READY_FILE')
@@ -234,7 +266,15 @@ while running:
             with open(ready_file, 'w', encoding='utf-8') as stream:
                 json.dump({'ready': True, 'service_id': service_id}, stream)
                 stream.write('\\n')
+    if listen_socket is not None:
+        try:
+            conn, _addr = listen_socket.accept()
+            conn.close()
+        except socket.timeout:
+            pass
     time.sleep(0.1)
+if listen_socket is not None:
+    listen_socket.close()
 ")
 file(WRITE "${plain_tcp_script}"
 "import os

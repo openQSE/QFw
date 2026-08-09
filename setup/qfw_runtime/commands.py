@@ -222,7 +222,7 @@ def qfw_dirsvc_start(argv):
             "endpoint": endpoint,
             "startup_timeout": startup_timeout,
         },
-        lambda: _directory_endpoint_ready(endpoint),
+        lambda: _tcp_endpoint_ready(endpoint),
     )
 
 
