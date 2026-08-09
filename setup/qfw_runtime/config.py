@@ -248,6 +248,47 @@ def local_services(runtime_config):
     return value
 
 
+def service_runtime_config(runtime_config, local_config=None,
+                           qfw_prefix_value=None):
+    qfw_value = Path(qfw_prefix_value).expanduser().resolve() \
+        if qfw_prefix_value is not None else qfw_prefix()
+    value = (
+        runtime_config.get("service-runtime-config") or
+        runtime_config.get("service_runtime_config")
+    )
+    if value:
+        return resolve_path(value, qfw_prefix_value=qfw_value)
+
+    runtime_mode = (
+        runtime_config.get("runtime-mode") or
+        runtime_config.get("runtime_mode")
+    )
+    if runtime_mode:
+        candidate = _service_runtime_mode_config(qfw_value, runtime_mode)
+        if candidate is not None:
+            return candidate
+
+    local_config = local_config if local_config is not None else local_services(
+        runtime_config)
+    if local_config:
+        candidate = _service_runtime_mode_config(qfw_value, "container")
+        if candidate is not None:
+            return candidate
+
+    return None
+
+
+def _service_runtime_mode_config(qfw_prefix_value, runtime_mode):
+    name = f"{str(runtime_mode).strip().lower()}.yaml"
+    for base in (
+            qfw_prefix_value / "lib" / "qfw" / "services" / "config",
+            qfw_prefix_value / "services" / "config"):
+        candidate = base / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def bool_config(value, default=False):
     if value is None:
         return default
@@ -354,6 +395,11 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
             qfw_prefix_value=qfw_install_prefix,
             defw_prefix_value=defw_install_prefix,
         )
+    service_runtime_path = service_runtime_config(
+        runtime_config,
+        local_config=local_config,
+        qfw_prefix_value=qfw_install_prefix,
+    )
 
     environment = {
         "QFW_PREFIX": str(qfw_install_prefix),
@@ -373,6 +419,14 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         "QFW_LOG_DIR": str(log_dir),
         "QFW_QPM_RESOLVER_SCOPE_ORDER": ",".join(scope_order),
     }
+    if service_runtime_path is not None:
+        environment["QFW_SERVICE_RUNTIME_CONFIG"] = str(service_runtime_path)
+    runtime_mode = (
+        runtime_config.get("runtime-mode") or
+        runtime_config.get("runtime_mode")
+    )
+    if runtime_mode:
+        environment["QFW_RUNTIME_MODE"] = str(runtime_mode).strip().lower()
     if profile:
         environment["QFW_RUNTIME_PROFILE"] = profile
     if site_dir:
