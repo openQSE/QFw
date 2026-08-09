@@ -592,8 +592,11 @@ execute_process(
 		wait \${listener_pid} 2>/dev/null
 		exit \${setup_rc}"
 	RESULT_VARIABLE tcp_listener_setup_rc)
-if(tcp_listener_setup_rc EQUAL 0)
-	message(FATAL_ERROR "QFw setup accepted a non-DEFw TCP listener")
+if(NOT tcp_listener_setup_rc EQUAL 0)
+	message(FATAL_ERROR "QFw setup rejected a reachable directory listener")
+endif()
+if(NOT EXISTS "${tcp_run_dir}/state/runtime-state.json")
+	message(FATAL_ERROR "QFw setup did not write TCP listener runtime state")
 endif()
 
 qfw_free_port(dirsvc_port)

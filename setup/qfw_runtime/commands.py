@@ -915,7 +915,7 @@ def _wait_required_directories(state):
         _wait_for_ready(
             f"directory {name} at {endpoint}",
             timeout,
-            lambda endpoint=endpoint: _directory_endpoint_ready(endpoint),
+            lambda endpoint=endpoint: _tcp_endpoint_ready(endpoint),
         )
 
 
