@@ -1169,6 +1169,12 @@ class QPMTargetController:
 	def configure_device_profile(self, profile=None):
 		with self.lock:
 			normalized = self._normalize_device_profile(profile or {})
+			if self.device_profile == normalized:
+				return {
+					"status": "unchanged",
+					"version": self.admission_config_versions["device_profile"],
+					"device_profile": dict(self.device_profile),
+				}
 			register_device_profile(self.admission_context, normalized)
 			self.device_profile = normalized
 			version = self._bump_admission_config_version("device_profile")
@@ -1223,8 +1229,16 @@ class QPMTargetController:
 
 	def set_admission_policy(self, policy):
 		with self.lock:
-			self.admission_policy = dict(policy or {})
-			device_id = self.admission_policy.get("device_id")
+			requested_policy = dict(policy or {})
+			if self.admission_policy == requested_policy:
+				return {
+					"status": "unchanged",
+					"version": self.admission_config_versions[
+						"admission_policy"],
+					"admission_policy": dict(self.admission_policy),
+				}
+			self.admission_policy = requested_policy
+			device_id = requested_policy.get("device_id")
 			if device_id is None:
 				device_id = self._device_id()
 			set_policy(

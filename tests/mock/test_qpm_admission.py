@@ -413,12 +413,51 @@ def test_policy_configuration_reaches_admission_context(monkeypatch):
 
 	assert result["status"] == "accepted"
 	assert qpm.controller.admission_context.policies == [
+		(77, "unlimited", {}),
 		(77, "credit", {"total_credits": 16})]
 	assert qpm.controller.admission_context.estimators == [
 		(77, "baseline", {"minimum_ns": 25})]
 	assert result["admission_policy"]["policy_name"] == "credit"
 	assert result["estimator_policy"]["estimator_policy"][
 		"estimator_name"] == "baseline"
+
+
+def test_repeated_device_profile_configuration_is_idempotent(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	first = qpm.configure_device_profile(
+		device_id=77, profile={"max_qubits": 8})
+	second = qpm.configure_device_profile(
+		device_id=77, profile={"max_qubits": 8})
+
+	assert first["status"] == "accepted"
+	assert second["status"] == "unchanged"
+	assert second["version"] == first["version"]
+	assert len(qpm.controller.admission_context.registered_profiles) == 1
+	assert qpm.controller.admission_context.policies == [
+		(77, "unlimited", {})]
+
+
+def test_repeated_admission_policy_configuration_is_idempotent(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	first = qpm.set_admission_policy(
+		{"name": "credit", "options": {"total_credits": 16}},
+		device_id=77)
+	second = qpm.set_admission_policy(
+		{"name": "credit", "options": {"total_credits": 16}},
+		device_id=77)
+
+	assert first["status"] == "accepted"
+	assert second["status"] == "unchanged"
+	assert second["version"] == first["version"]
+	assert qpm.controller.admission_context.policies == [
+		(77, "unlimited", {}),
+		(77, "credit", {"total_credits": 16}),
+	]
 
 
 def test_policy_options_reach_native_fallback_config(monkeypatch):

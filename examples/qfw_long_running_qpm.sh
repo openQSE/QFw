@@ -436,6 +436,27 @@ while time.monotonic() < deadline:
 	time.sleep(0.1)
 
 sys.exit(1 if alive() else 0)
+	PY
+}
+
+qfw_lrq_result_ok() {
+	local result_file="$1"
+	if [[ ! -s "${result_file}" ]]; then
+		echo "ERROR: missing app result file: ${result_file}" >&2
+		return 1
+	fi
+	python3 - "${result_file}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+	records = [json.loads(line) for line in handle if line.strip()]
+if any(record.get("kind") == "example" and record.get("status") == "ok"
+	   for record in records):
+	sys.exit(0)
+print(f"ERROR: no successful example result in {path}", file=sys.stderr)
+sys.exit(1)
 PY
 }
 
@@ -503,19 +524,20 @@ qfw_lrq_run_app() {
 
 		set +e
 		QFW_EXAMPLE_RESULT_FILE="${app_result}" \
+			QFW_SUPERMARQ_SHUTDOWN_QPM=no \
 			qfw-srun \
 				--run-dir "${app_run_dir}" \
 				--nodes 1 \
 				--ntasks 1 \
 				--nodelist "${app_node}" \
 				"$(qfw_example_path tests/test_supermarq.py)" \
-					--run "${run_mode}" \
-					--iterations "${supermarq_iterations}" \
-					--startqbit "${startqbit}" \
-					--shots "${shots}" \
-					--increase "${increase}" \
-					--method "${method}" \
-					--backend "${backend}"
+				--run "${run_mode}" \
+				--iterations "${supermarq_iterations}" \
+				--startqbit "${startqbit}" \
+				--shots "${shots}" \
+				--increase "${increase}" \
+				--method "${method}" \
+				--backend "${backend}"
 		app_rc=$?
 		qfw-teardown --run-dir "${app_run_dir}"
 		teardown_rc=$?
@@ -525,7 +547,10 @@ qfw_lrq_run_app() {
 		if [[ "${app_rc}" -ne 0 ]]; then
 			return "${app_rc}"
 		fi
-		return "${teardown_rc}"
+		if [[ "${teardown_rc}" -ne 0 ]]; then
+			return "${teardown_rc}"
+		fi
+		qfw_lrq_result_ok "${app_result}"
 	} >"${app_log}" 2>&1
 }
 
