@@ -1,13 +1,37 @@
+import copy
+
 from tests.mock.fakes import FakeQPM
 from api_qpm import QPMCapability, QPMType
 
 
 DEFAULT_QPM_TYPE = QPMType.QPM_TYPE_HARDWARE
 DEFAULT_QPM_CAPABILITIES = QPMCapability.QPM_CAP_SUPERCONDUCTING
+QPM_BINDINGS = (
+	{
+		"binding_name": "default",
+		"client_module": "api_qpm",
+		"client_class": "QPM",
+		"service_module": "svc_iqm_qpm.svc_qpm",
+		"service_class": "QPM",
+		"version": 1,
+	},
+	{
+		"binding_name": "execution",
+		"client_module": "api_qpm_execution",
+		"client_class": "QPMExecution",
+		"service_module": "svc_iqm_qpm.svc_qpm",
+		"service_class": "QPM",
+		"version": 1,
+	},
+)
 
 
 def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
 			 endpoint=None):
+	bindings = [
+		{**binding, "service_module": f"svc_{provider}_qpm.svc_qpm"}
+		for binding in QPM_BINDINGS
+	]
 	return {
 		"fake_qpm": fake_qpm,
 		"service_record": {
@@ -26,15 +50,9 @@ def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
 				"qpm_type": int(DEFAULT_QPM_TYPE),
 				"qpm_capabilities": int(DEFAULT_QPM_CAPABILITIES),
 			},
+			"api_bindings": bindings,
 		},
-		"selected_binding": {
-			"binding_name": "execution",
-			"client_module": "api_qpm_execution",
-			"client_class": "QPMExecution",
-			"service_module": f"svc_{provider}_qpm.svc_qpm",
-			"service_class": "QPM",
-			"version": 1,
-		},
+		"selected_binding": bindings[1],
 	}
 
 
@@ -45,11 +63,22 @@ class FakeDirectoryService:
 
 	def resolve_services(self, **kwargs):
 		self.queries.append(kwargs)
-		return [
-			{key: value for key, value in record.items()
-			 if key != "fake_qpm"}
-			for record in self.records
-		]
+		results = []
+		for record in self.records:
+			result = {
+				key: copy.deepcopy(value)
+				for key, value in record.items()
+				if key != "fake_qpm"
+			}
+			binding_name = kwargs.get("binding_name")
+			if binding_name:
+				for binding in result["service_record"].get(
+						"api_bindings", []):
+					if binding.get("binding_name") == binding_name:
+						result["selected_binding"] = binding
+						break
+			results.append(result)
+		return results
 
 
 class BindingDefwModule:
@@ -88,7 +117,7 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	assert len(dirsvc.queries) == 1
 	assert dirsvc.queries[0]["service_name"] == "QPM"
 	assert dirsvc.queries[0]["service_type"] == "qfw.qpm"
-	assert dirsvc.queries[0]["binding_name"] == "execution"
+	assert dirsvc.queries[0]["binding_name"] == "default"
 	assert dirsvc.queries[0]["qpm_type"] == DEFAULT_QPM_TYPE
 	assert dirsvc.queries[0]["qpm_capability"] == DEFAULT_QPM_CAPABILITIES
 	assert dirsvc.queries[0]["qpm_capabilities"] == DEFAULT_QPM_CAPABILITIES
@@ -97,7 +126,7 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	assert len(fake_defw.binding_connections) == 1
 	binding = fake_defw.binding_connections[0]
 	assert binding["service_record"]["service_id"] == "qpm-iqm"
-	assert binding["selected_binding"]["binding_name"] == "execution"
+	assert binding["selected_binding"]["binding_name"] == "default"
 	assert fake_qpm.shutdown_called is False
 
 
@@ -175,7 +204,7 @@ def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
 	binding = fake_defw.binding_connections[0]
 	assert binding["service_record"]["endpoint"]["address"] == "qpm-direct"
 	assert binding["service_record"]["endpoint"]["listen_port"] == 9000
-	assert binding["selected_binding"]["binding_name"] == "execution"
+	assert binding["selected_binding"]["binding_name"] == "default"
 
 
 def test_get_qpm_selects_requested_provider(monkeypatch):
