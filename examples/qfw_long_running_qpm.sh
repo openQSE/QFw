@@ -436,7 +436,7 @@ while time.monotonic() < deadline:
 	time.sleep(0.1)
 
 sys.exit(1 if alive() else 0)
-	PY
+PY
 }
 
 qfw_lrq_result_ok() {
