@@ -50,57 +50,78 @@ service_node_override="${QFW_LONG_RUNNING_QPM_SERVICE_NODE:-}"
 app_nodes_override="${QFW_LONG_RUNNING_QPM_APP_NODES:-}"
 allow_node_reuse="${QFW_LONG_RUNNING_QPM_ALLOW_NODE_REUSE:-no}"
 
+qfw_lrq_need_value() {
+	local option="${1:-option}"
+	if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == --* ]]; then
+		echo "ERROR: ${option} requires a value" >&2
+		exit 2
+	fi
+}
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--apps)
+			qfw_lrq_need_value "$@"
 			apps="$2"
 			shift 2
 			;;
 		--waves)
+			qfw_lrq_need_value "$@"
 			waves="$2"
 			shift 2
 			;;
 		--backend)
+			qfw_lrq_need_value "$@"
 			backend="$2"
 			shift 2
 			;;
 		--run)
+			qfw_lrq_need_value "$@"
 			run_mode="$2"
 			shift 2
 			;;
 		--startqbit)
+			qfw_lrq_need_value "$@"
 			startqbit="$2"
 			shift 2
 			;;
 		--shots)
+			qfw_lrq_need_value "$@"
 			shots="$2"
 			shift 2
 			;;
 		--increase)
+			qfw_lrq_need_value "$@"
 			increase="$2"
 			shift 2
 			;;
 		--method)
+			qfw_lrq_need_value "$@"
 			method="$2"
 			shift 2
 			;;
 		--iterations)
+			qfw_lrq_need_value "$@"
 			supermarq_iterations="$2"
 			shift 2
 			;;
 		--timeout)
+			qfw_lrq_need_value "$@"
 			startup_timeout="$2"
 			shift 2
 			;;
 		--run-dir)
+			qfw_lrq_need_value "$@"
 			run_dir="$2"
 			shift 2
 			;;
 		--service-node)
+			qfw_lrq_need_value "$@"
 			service_node_override="$2"
 			shift 2
 			;;
 		--app-nodes)
+			qfw_lrq_need_value "$@"
 			app_nodes_override="$2"
 			shift 2
 			;;
