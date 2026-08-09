@@ -137,6 +137,8 @@ fi
 _qfw_prepend_path PATH "${QFW_BIN_PATH}"
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/lib"
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/src"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/lib64/python@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@/site-packages"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/lib64/python@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@/site-packages"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
 _qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/setup"

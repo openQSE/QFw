@@ -1,4 +1,5 @@
 import inspect
+import os
 
 
 QHW_ADM_THREAD_SAFE = "QHW_ADM_THREAD_SAFE"
@@ -7,6 +8,43 @@ DEFAULT_WORKLOAD_KIND = "QHW_ADM_WORKLOAD_QUANTUM_JOB"
 DECISION_ACCEPTED = "accepted"
 DECISION_DELAYED = "delayed"
 DECISION_REJECTED = "rejected"
+POLICY_PATH_ENV = "QFW_QPM_ADMISSION_POLICY_PATH"
+
+
+def _path_values(value):
+	if value is None:
+		return []
+	if isinstance(value, (list, tuple)):
+		return [str(item) for item in value if item]
+	return [item for item in str(value).split(os.pathsep) if item]
+
+
+def _default_policy_paths():
+	paths = []
+	paths.extend(_path_values(os.environ.get(POLICY_PATH_ENV)))
+
+	qfw_prefix = os.environ.get("QFW_PREFIX")
+	if qfw_prefix:
+		for libdir in ("lib64", "lib"):
+			policy_dir = os.path.join(
+				qfw_prefix, libdir, "qhw_admission", "policies")
+			if os.path.isdir(policy_dir):
+				paths.append(policy_dir)
+	return paths
+
+
+def _add_policy_paths(context, policy):
+	paths = []
+	paths.extend(_path_values(policy.get("path")))
+	paths.extend(_path_values(policy.get("paths")))
+	paths.extend(_default_policy_paths())
+
+	seen = set()
+	for path in paths:
+		if path in seen:
+			continue
+		seen.add(path)
+		context.add_policy_path(path)
 
 
 class QPMAdmissionUnavailable(RuntimeError):
@@ -105,9 +143,7 @@ def set_policy(context, device_id, policy, estimator=None,
 	if handler is not None:
 		return handler(device_id, dict(policy))
 
-	policy_path = policy.get("path")
-	if policy_path:
-		context.add_policy_path(policy_path)
+	_add_policy_paths(context, policy)
 	policy_name = (
 		policy.get("name") or
 		policy.get("policy") or

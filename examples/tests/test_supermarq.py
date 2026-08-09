@@ -128,7 +128,6 @@ def reserve_execution(qpm, circuit_plan, backend, runtype, method_name,
 		"owner": {"user": os.environ.get("USER", "supermarq")},
 		"job_id": job_id,
 		"allocation_id": job_id,
-		"target_device_id": backend or "tnqvm",
 		"num_qubits": max_qubits,
 		"walltime_ns": max(1, circuit_run_timeout) * 1_000_000_000,
 		"ttl_ns": max(60, system_up_timeout + circuit_run_timeout + 30) *
