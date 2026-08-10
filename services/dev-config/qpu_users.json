@@ -2,6 +2,9 @@
   "users": {
     "dummy-user": {
       "devices": {
+        "fake-iqm-20q": {
+          "api_key": "dummy-fake-iqm-api-key"
+        },
         "ornl-iqm-20q": {
           "api_key": "dummy-api-key"
         }
@@ -9,6 +12,9 @@
     },
     "root": {
       "devices": {
+        "fake-iqm-20q": {
+          "api_key": "root-fake-iqm-api-key"
+        },
         "ornl-iqm-20q": {
           "api_key": "dummy-api-key"
         }

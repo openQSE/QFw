@@ -15,7 +15,9 @@ concurrent application waves against that same service plane.
 Options:
   --apps N                 Concurrent application count per wave (default: 2)
   --waves N                Number of concurrent application waves (default: 2)
-  --backend NAME           Backend to use (default: nwqsim)
+  --backend NAME           Backend to use: nwqsim or fake-iqm (default: nwqsim)
+  --target-device ID       Target device/resource id for reservations
+  --owner USER             Trusted launcher user for reservations
   --run MODE               SupermarQ run mode: sync or async (default: sync)
   --startqbit N            Starting qubit count (default: 4)
   --shots N                Shot count (default: 128)
@@ -38,6 +40,8 @@ EOF
 apps=2
 waves=2
 backend="nwqsim"
+target_device_override="${QFW_LONG_RUNNING_QPM_TARGET_DEVICE:-}"
+owner_override="${QFW_LONG_RUNNING_QPM_OWNER:-}"
 run_mode="sync"
 startqbit=4
 shots=128
@@ -73,6 +77,16 @@ while [[ $# -gt 0 ]]; do
 		--backend)
 			qfw_lrq_need_value "$@"
 			backend="$2"
+			shift 2
+			;;
+		--target-device)
+			qfw_lrq_need_value "$@"
+			target_device_override="$2"
+			shift 2
+			;;
+		--owner)
+			qfw_lrq_need_value "$@"
+			owner_override="$2"
 			shift 2
 			;;
 		--run)
@@ -260,6 +274,31 @@ qfw_lrq_service_runtime_config() {
 	return 1
 }
 
+qfw_lrq_backend_module() {
+	local value="$1"
+	case "${value}" in
+		nwqsim) printf "%s\n" "svc_nwqsim_qpm" ;;
+		fake-iqm) printf "%s\n" "svc_fake_iqm_qpm" ;;
+		*)
+			echo "ERROR: unsupported long-running QPM backend: ${value}" >&2
+			return 1
+			;;
+	esac
+}
+
+qfw_lrq_backend_agent_prefix() {
+	local value="$1"
+	printf "qpm_%s\n" "${value//-/_}"
+}
+
+qfw_lrq_backend_default_target_device() {
+	local value="$1"
+	case "${value}" in
+		fake-iqm) printf "%s\n" "fake-iqm-20q" ;;
+		*) printf "%s\n" "" ;;
+	esac
+}
+
 qfw_lrq_on_node() {
 	local node="$1"
 	shift
@@ -317,9 +356,9 @@ EOF
 	cat >"${service_manifest}" <<EOF
 services:
   - name: ${backend}
-    module: svc_${backend}_qpm
-    load-modules: svc_${backend}_qpm,api_launcher
-    agent-prefix: qpm_${backend}
+    module: ${backend_module}
+    load-modules: ${backend_module},api_launcher
+    agent-prefix: ${backend_agent_prefix}
     target: ${service_node}
     assigned-hosts: ${service_node}
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
@@ -569,6 +608,7 @@ qfw_lrq_run_app() {
 	local app_result="${app_dir}/result.jsonl"
 	local driver_result="${app_dir}/driver.jsonl"
 	local setup_rc app_rc teardown_rc
+	local driver_command driver_args
 
 	mkdir -p "${app_dir}"
 	{
@@ -591,32 +631,45 @@ qfw_lrq_run_app() {
 			return 1
 		fi
 
+		driver_args=(
+			--run-dir "${app_run_dir}"
+			--nodes 1
+			--ntasks 1
+			--nodelist "${app_node}"
+			--backend "${backend}"
+			--example "long-running-${backend}-supermarq"
+			--qubits "$(qfw_lrq_supermarq_reservation_qubits)"
+			--shots "${shots}"
+			--count "${supermarq_iterations}"
+			--operation "$(qfw_lrq_supermarq_operation)"
+			--parameters-json "$(qfw_lrq_supermarq_json)"
+			--workload-json "{\"method\":\"${method}\"}"
+		)
+		if [[ -n "${target_device}" ]]; then
+			driver_args+=(--target-device "${target_device}")
+		fi
+		if [[ -n "${owner_override}" ]]; then
+			driver_args+=(--owner "${owner_override}")
+		fi
+		driver_command=(
+			"$(qfw_example_path qfw_slurm_driver.sh)"
+			"${driver_args[@]}"
+			--
+			"$(qfw_example_path tests/test_supermarq.py)"
+			--run "${run_mode}"
+			--iterations "${supermarq_iterations}"
+			--startqbit "${startqbit}"
+			--shots "${shots}"
+			--increase "${increase}"
+			--method "${method}"
+			--backend "${backend}"
+		)
+
 		set +e
 		QFW_EXAMPLE_RESULT_FILE="${app_result}" \
 			QFW_SLURM_DRIVER_RESULT_FILE="${driver_result}" \
 			QFW_SUPERMARQ_SHUTDOWN_QPM=no \
-			"$(qfw_example_path qfw_slurm_driver.sh)" \
-				--run-dir "${app_run_dir}" \
-				--nodes 1 \
-				--ntasks 1 \
-				--nodelist "${app_node}" \
-				--backend "${backend}" \
-				--example long-running-supermarq \
-				--qubits "$(qfw_lrq_supermarq_reservation_qubits)" \
-				--shots "${shots}" \
-				--count "${supermarq_iterations}" \
-				--operation "$(qfw_lrq_supermarq_operation)" \
-				--parameters-json "$(qfw_lrq_supermarq_json)" \
-				--workload-json "{\"method\":\"${method}\"}" \
-				-- \
-				"$(qfw_example_path tests/test_supermarq.py)" \
-				--run "${run_mode}" \
-				--iterations "${supermarq_iterations}" \
-				--startqbit "${startqbit}" \
-				--shots "${shots}" \
-				--increase "${increase}" \
-				--method "${method}" \
-				--backend "${backend}"
+			"${driver_command[@]}"
 		app_rc=$?
 		qfw-teardown --run-dir "${app_run_dir}"
 		teardown_rc=$?
@@ -666,11 +719,9 @@ qfw_lrq_require_positive_int "--apps" "${apps}"
 qfw_lrq_require_positive_int "--waves" "${waves}"
 qfw_lrq_require_positive_int "--timeout" "${startup_timeout}"
 qfw_lrq_require_runtime
-
-if [[ "${backend}" != "nwqsim" ]]; then
-	echo "ERROR: this long-running example currently supports nwqsim only" >&2
-	exit 2
-fi
+backend_module="$(qfw_lrq_backend_module "${backend}")"
+backend_agent_prefix="$(qfw_lrq_backend_agent_prefix "${backend}")"
+target_device="${target_device_override:-$(qfw_lrq_backend_default_target_device "${backend}")}"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 if [[ -z "${run_dir}" ]]; then
@@ -741,6 +792,10 @@ echo "Service node: ${service_node}"
 echo "Application nodes: ${app_nodes[*]}"
 echo "Site directory: ${service_node}:${dirsvc_port}"
 echo "Service runtime config: ${service_runtime_config}"
+echo "Backend module: ${backend_module}"
+if [[ -n "${target_device}" ]]; then
+	echo "Target device: ${target_device}"
+fi
 
 qfw_lrq_start_dirsvc
 qfw_lrq_start_dvm

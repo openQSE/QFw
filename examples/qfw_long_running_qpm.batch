@@ -20,16 +20,26 @@ source "${QFW_ACTIVATE}"
 
 cd "${QFW_SHARE_DIR}/examples"
 
-./qfw_long_running_qpm.sh \
+long_running_args=(
 	--apps "${QFW_LONG_RUNNING_QPM_APPS:-2}" \
 	--waves "${QFW_LONG_RUNNING_QPM_WAVES:-2}" \
-	--backend nwqsim \
+	--backend "${QFW_LONG_RUNNING_QPM_BACKEND:-nwqsim}" \
 	--run "${QFW_LONG_RUNNING_QPM_RUN_MODE:-sync}" \
 	--iterations "${QFW_LONG_RUNNING_QPM_SUPERMARQ_ITERATIONS:-1}" \
 	--startqbit "${QFW_LONG_RUNNING_QPM_STARTQBIT:-4}" \
 	--shots "${QFW_LONG_RUNNING_QPM_SHOTS:-128}" \
 	--increase "${QFW_LONG_RUNNING_QPM_INCREASE:-false}" \
 	--method "${QFW_LONG_RUNNING_QPM_METHOD:-ghz}"
+)
+if [[ -n "${QFW_LONG_RUNNING_QPM_TARGET_DEVICE:-}" ]]; then
+	long_running_args+=(
+		--target-device "${QFW_LONG_RUNNING_QPM_TARGET_DEVICE}")
+fi
+if [[ -n "${QFW_LONG_RUNNING_QPM_OWNER:-}" ]]; then
+	long_running_args+=(--owner "${QFW_LONG_RUNNING_QPM_OWNER}")
+fi
+
+./qfw_long_running_qpm.sh "${long_running_args[@]}"
 
 qfw_deactivate
 

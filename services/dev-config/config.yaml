@@ -1,4 +1,10 @@
 qpus:
+  fake-iqm-20q:
+    provider: fake-iqm
+    provider-device-id: fake-iqm-20q
+    url: fake://fake-iqm-20q
+    credential-db: qpu_users.json
+
   ornl-iqm-20q:
     provider: iqm
     provider-device-id: default
