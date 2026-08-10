@@ -36,6 +36,38 @@ class FakeQPM:
 		return "ok"
 
 
+class FakeSlurmDriver:
+	def __init__(
+			self,
+			reservation_id="reservation-test",
+			token=None,
+			allocation_id="allocation-test",
+			user="test-user"):
+		self.reservation_id = reservation_id
+		self.token = token
+		self.allocation_id = allocation_id
+		self.user = user
+		self.requests = []
+
+	def reserve(self, request=None):
+		request = dict(request or {})
+		request.setdefault("allocation_id", self.allocation_id)
+		request.setdefault("owner", {"user": self.user})
+		self.requests.append(request)
+		return {
+			"status": "accepted",
+			"reservation_id": self.reservation_id,
+			"allocation_id": self.allocation_id,
+		}
+
+	def execution_options(self, **options):
+		merged = dict(options)
+		merged.setdefault("reservation_id", self.reservation_id)
+		if self.token is not None:
+			merged.setdefault("token", self.token)
+		return merged
+
+
 class FakeSchedulerContext:
 	available = True
 

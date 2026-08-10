@@ -14,6 +14,7 @@ try:
     )
 except ImportError as exc:
     raise RuntimeError("test_qiskit_qaoa.py only runs against Qiskit V2 primitives") from exc
+from qfw_example_context import qfw_reservation_options
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
@@ -52,10 +53,12 @@ else:
     raise ValueError(f"Unsupported simulator type: {sim_type}")
 # --------------------------------------------------- #
 
-
 backend_sampler = QFwSamplerV2(
     backend=simulator_obj,
-    options={"default_shots": 1024}
+    options={
+        "default_shots": 1024,
+        "run_options": qfw_reservation_options(),
+    }
 )
 
 # Define QAOA

@@ -3,6 +3,7 @@ from qiskit import QuantumCircuit
 import sys
 
 from qfw_qiskit import QFwBackend
+from qfw_example_context import qfw_reservation_options
 from qfw_example_report import emit_result
 
 qfw_nwqsim_qiskit_backend = QFwBackend(provider="nwqsim")
@@ -16,7 +17,8 @@ for i in range(nq - 1):
 qc.measure_all()
 
 print("Default number of shots: 1024")
-job = qfw_nwqsim_qiskit_backend.run(qc)
+run_options = qfw_reservation_options()
+job = qfw_nwqsim_qiskit_backend.run(qc, **run_options)
 result = job.result()
 counts = result.get_counts(qc)
 

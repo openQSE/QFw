@@ -1,6 +1,11 @@
 import pytest
 
-from tests.mock.fakes import FakeEventAPI, FakeQPM, make_result_event
+from tests.mock.fakes import (
+	FakeEventAPI,
+	FakeQPM,
+	FakeSlurmDriver,
+	make_result_event,
+)
 
 
 class FakeBackend:
@@ -26,6 +31,10 @@ class FakeBackend:
 		return False
 
 
+def _driver_options(**options):
+	return FakeSlurmDriver().execution_options(**options)
+
+
 def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 
@@ -33,7 +42,7 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 	fake_event_api = FakeEventAPI()
 	backend = FakeBackend()
 	circuit = qfw_job.QuantumCircuit(3, name="payload-circuit")
-	options = {"shots": 17, "seed": 5, "seed_simulator": 11}
+	options = _driver_options(shots=17, seed=5, seed_simulator=11)
 
 	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
 
@@ -46,6 +55,7 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 		"num_qubits": 3,
 		"num_shots": 17,
 		"compiler": "staq",
+		"reservation_id": "reservation-test",
 	}
 	assert len(job._cid_list) == 1
 	assert list(job._cid_list[0].keys()) == ["cid-101"]
@@ -60,7 +70,7 @@ def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 	circuit = qfw_job.QuantumCircuit(2, name="bell")
 	backend = FakeBackend()
 	event_api = FakeEventAPI(events=[make_result_event("cid-1", {"00": 2, "11": 1})], fd=42)
-	options = {"shots": 3, "seed": 7, "seed_simulator": 13}
+	options = _driver_options(shots=3, seed=7, seed_simulator=13)
 
 	def fake_select(readable, writable, exceptional, timeout):
 		return (readable, [], [])
@@ -93,7 +103,7 @@ def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
 		make_result_event("other-cid", {"00": 1}),
 		make_result_event("cid-1", {"11": 2}),
 	], fd=43)
-	options = {"shots": 2, "seed": 7, "seed_simulator": 13}
+	options = _driver_options(shots=2, seed=7, seed_simulator=13)
 
 	def fake_select(readable, writable, exceptional, timeout):
 		return (readable, [], [])
@@ -163,7 +173,7 @@ def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):
 	fake_qpm = FakeQPM(async_error=RuntimeError("qpm submit failed"))
 	event_api = FakeEventAPI()
 	circuit = qfw_job.QuantumCircuit(1, name="error-path")
-	options = {"shots": 2, "seed": 1, "seed_simulator": 1}
+	options = _driver_options(shots=2, seed=1, seed_simulator=1)
 
 	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
 
@@ -175,3 +185,22 @@ def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):
 		assert str(exc) == "qpm submit failed"
 	else:
 		raise AssertionError("expected async_run failure to propagate")
+
+
+def test_qfw_job_submit_requires_driver_reservation(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	fake_qpm = FakeQPM(cids=["cid-unreserved"])
+	event_api = FakeEventAPI()
+	backend = FakeBackend()
+	circuit = qfw_job.QuantumCircuit(1, name="unreserved")
+	options = {"shots": 2, "seed": 1, "seed_simulator": 1}
+
+	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
+
+	with pytest.raises(qfw_job.DEFwError, match="reservation_id is required"):
+		job.submit()
+
+	assert fake_qpm.submitted_payloads == []

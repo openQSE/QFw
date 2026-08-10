@@ -14,9 +14,11 @@ import numpy as np
 
 # ------------------ QFW Backend -------------------- #
 from qfw_qiskit import QFwBackend
+from qfw_example_context import qfw_reservation_options
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
 backend = QFwBackend(provider="nwqsim")
+run_options = qfw_reservation_options()
 #backend = Aer.get_backend('statevector_simulator')
 
 # Initialize MPI
@@ -73,7 +75,7 @@ def run_vqe(params):
 	transpiled_circuit = transpile(circuit, backend)
 	total_itr += 1
 	# run the transpiled circuit
-	job = backend.run(transpiled_circuit)
+	job = backend.run(transpiled_circuit, **run_options)
 	result = job.result()
 	# get the statevector and try compute expectation value
 	statevector = result.get_statevector(transpiled_circuit)

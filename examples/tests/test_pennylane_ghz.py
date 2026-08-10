@@ -3,6 +3,7 @@ import sys
 import time
 
 from qfw_qiskit import QFwBackend
+from qfw_example_context import apply_qfw_reservation_to_backend
 from qfw_example_report import emit_result
 
 
@@ -38,9 +39,11 @@ itrs = int(sys.argv[3])
 
 
 if sim_type == "nwqsim":
-	backend_instance = QFwBackend(provider="nwqsim")
+	backend_instance = apply_qfw_reservation_to_backend(
+		QFwBackend(provider="nwqsim"))
 elif sim_type == "tnqvm":
-	backend_instance = QFwBackend(provider="tnqvm")
+	backend_instance = apply_qfw_reservation_to_backend(
+		QFwBackend(provider="tnqvm"))
 elif sim_type == "qiskit-aer":
 	backend_instance = qml.device('qiskit.aer', wires=nq)
 else:

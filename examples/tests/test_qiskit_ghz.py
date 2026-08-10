@@ -6,6 +6,7 @@ import time
 
 # ------------------ QFW backend--------------------- #
 from qfw_qiskit import QFwBackend
+from qfw_example_context import qfw_reservation_options
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
@@ -13,6 +14,10 @@ nq = int(sys.argv[1])
 sim_type = sys.argv[2]
 itrs = int(sys.argv[3])
 records = []
+qfw_run_options = (
+	qfw_reservation_options()
+	if sim_type in ("nwqsim", "tnqvm") else {}
+)
 
 qc = QuantumCircuit(nq)
 qc.h(0)
@@ -29,7 +34,7 @@ if sim_type == "nwqsim":
 		start_time = time.time()
 		simulator_obj = QFwBackend(provider="nwqsim")
 		# counts_nwqsim = qfw.execute(qc, shots=1024, backend="nwqsim") # sync
-		qfw_job = simulator_obj.run(qc, shots=1024)  # async job, but will poll and get result
+		qfw_job = simulator_obj.run(qc, shots=1024, **qfw_run_options)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
 		counts_nwqsim = res_obj.get_counts()
 		end_time = time.time()
@@ -48,7 +53,7 @@ elif sim_type == "tnqvm":
 	for i in range(itrs):
 		start_time = time.time()
 		simulator_obj = QFwBackend(provider="tnqvm")
-		qfw_job = simulator_obj.run(qc, shots=1024)  # async job, but will poll and get result
+		qfw_job = simulator_obj.run(qc, shots=1024, **qfw_run_options)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
 		counts_tnqvm = res_obj.get_counts()
 		end_time = time.time()

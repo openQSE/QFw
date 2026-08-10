@@ -360,11 +360,11 @@ path under `QFw-SLURM-Cluster-doug/shared-dir/chemistry_example_aim2`.
 
 A passing simulator smoke proves that the wrapper activates QFw, uses
 `qfw-setup`, `qfw-srun`, and `qfw-teardown`, starts only job-owned simulator
-services, creates or receives a reservation ID, submits estimator circuits
-through QFw, releases the reservation, and cleans job-owned runtime state. The
-wrapper must emit a final `QFW_EXAMPLE_RESULT` record with `status: ok`, app
-return code zero, teardown return code zero, the backend provider, run
-directory, reservation ID, and release result.
+services, receives a reservation ID from the launcher or driver, submits
+estimator circuits through QFw, releases the reservation, and cleans job-owned
+runtime state. The wrapper must emit a final `QFW_EXAMPLE_RESULT` record with
+`status: ok`, app return code zero, teardown return code zero, the backend
+provider, run directory, reservation ID, and release result.
 
 A passing ORNL IQM smoke uses site mode even when the services are launched
 inside Docker. It proves that the application can discover a long-running IQM
@@ -561,15 +561,17 @@ pattern used by the admission and scheduler fixture:
 | ST-021 | Service lifecycle commands. Start site directory and QPM services through `qfw-dirsvc-start` and `qfw-service-start`, verify service run directories, PID or readiness state, signal handling, directory registration before readiness, service-manager environment compatibility, and nonzero startup on registration timeout. | `OPM-001`, `OPM-002`, `DISC-001`, `DISC-003`, `DISC-005` |
 | ST-022 | Reservation-scoped completion queues. Create reservation queues on accepted reservations, complete multiple tasks under multiple reservations, verify oldest-ready and targeted `peek_cq()` and `read_cq()` behavior, missing-reservation and mismatched-reservation rejection, peek idempotency, single completion consumption, and diagnostic-result separation. | `CAT-002`, `API-001`, `API-004`, `SCHED-012`, `STATE-001` through `STATE-003` |
 | ST-023 | Completion notifications and retention. Verify terminal completions are enqueued after admission and scheduler finalization and before event dispatch, notifications do not consume polling records, QRC completion sink ownership is acknowledged only after enqueue, retention settings evict records deterministically, no-longer-retained responses are structured, and terminal reservation queues are garbage-collected only after active work and retention conditions are satisfied. | `ADM-021`, `SCHED-005`, `SCHED-006`, `SCHED-011`, `STATE-003`, `STATE-004` |
-| ST-024 | Long-running QPM concurrent app waves. Allocate at least three nodes, start a site DEFw-dirsvc, PRTE DVM, and long-running `nwqsim` QPM on one service node, then launch two or more application instances concurrently on separate app nodes through site-scoped `qfw-setup`, `qfw-srun`, and `qfw-teardown`. Repeat a second concurrent wave against the same QPM without restarting the service plane. Verify each app resolves the site QPM, reserves capacity, submits work, receives completion, releases the reservation, deregisters or disconnects cleanly, and that app teardown does not stop the site directory, DVM, or QPM. | `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003`, `CAT-002`, `ADM-001`, `ADM-003`, `SCHED-008`, `STATE-003` |
+| ST-024 | Long-running QPM concurrent app waves. Allocate at least three nodes, start a site DEFw-dirsvc, PRTE DVM, and long-running `nwqsim` QPM on one service node, then have a Slurm-style driver create reservations and launch two or more application instances concurrently on separate app nodes through site-scoped `qfw-setup`, `qfw-srun`, and `qfw-teardown`. Repeat a second concurrent wave against the same QPM without restarting the service plane. Verify each app resolves the site QPM, uses only the driver-returned reservation context, submits work, receives completion, releases the reservation, deregisters or disconnects cleanly, and that app teardown does not stop the site directory, DVM, or QPM. | `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003`, `CAT-002`, `ADM-001`, `ADM-003`, `SCHED-008`, `STATE-003` |
 | ST-025 | qhw-admission and qhw-scheduler stress with a fake IQM-like backend. Start a deterministic fake `fake-iqm-20q` QPM service, configure its qhw-admission device profile, selected estimator, and fake provider timing model from the same profile, and run a Slurm-like admission driver plus concurrent SuperMarQ-like workload workers that submit real circuit payloads. Use one `unlimited` startup sanity case, then focus smoke and stress coverage on `credit` and `rate` admission across `fifo`, `priority`, `round_robin`, `ordered_sjf`, `ordered_ljf`, and `ordered` scheduler policies. Cover representative `short_only`, `long_only`, `mixed_short_long`, `mixed_job_types`, and `standalone` workloads plus `sequential_pre`, `sequential_post`, and `parallel` classical emulation modes without running the full Cartesian product by default. Verify finite capacity is honored, pending-capacity work stays out of qhw-scheduler, scheduler-selected order matches policy expectations, fake provider sleep follows the qhw-admission estimator output, walltime remains within the reservation and harness limits, terminal completions are visible only after admission and scheduler accounting, and final cleanup leaves no active reservations, held capacity, pending qtasks, scheduler tasks, provider inflight work, or leaked completion queues. | `ADM-001` through `ADM-007`, `ADM-016` through `ADM-022`, `SCHED-001` through `SCHED-014`, `CAT-002` through `CAT-005`, `CTRL-001`, `CTRL-002`, `CTRL-004` through `CTRL-008`, `STATE-001` through `STATE-004` |
 
 ## Workflow Checks
 
-- For each operation mode, perform a full happy-path workflow: resolve QPM,
-  configure admission and scheduler policy, create a reservation, submit async
-  work, observe queued and running state, receive completion, inspect usage,
-  release the reservation, and inspect final telemetry.
+- For each operation mode, perform a full happy-path workflow: configure
+  admission and scheduler policy, have the Slurm-style driver create a
+  reservation, launch the application with the returned reservation context,
+  resolve QPM, submit async work, observe queued and running state, receive
+  completion, inspect usage, release the reservation, and inspect final
+  telemetry.
 - Run the normal user lifecycle in each runtime profile: source or activate
   QFw, run `qfw-setup`, launch a trivial application with `qfw-srun`, and run
   `qfw-teardown`.

@@ -1,4 +1,14 @@
-from tests.mock.fakes import FakeCircuit, FakeEventAPI, FakeQPM, FakeRuntime
+from tests.mock.fakes import (
+	FakeCircuit,
+	FakeEventAPI,
+	FakeQPM,
+	FakeRuntime,
+	FakeSlurmDriver,
+)
+
+
+def _driver_options(**options):
+	return FakeSlurmDriver().execution_options(**options)
 
 
 class FakeJob:
@@ -261,21 +271,22 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 		fake_qpm,
 		FakeEventAPI(),
 		circuit,
-		{"seed_simulator": 34, "shots": 12, "seed": 21},
+		_driver_options(seed_simulator=34, shots=12, seed=21),
 	)
 
 	cid = job._run_experiment_async(circuit)
 
 	assert cid == "cid-mapped"
 	assert fake_qpm.submitted_payloads == [
-		{
-			"qasm": "OPENQASM 2.0; // mapped",
-			"num_qubits": 1,
-			"num_shots": 12,
-			"compiler": "staq",
-			"qubit_mapping": {"0": "QB7"},
-		}
-	]
+			{
+				"qasm": "OPENQASM 2.0; // mapped",
+				"num_qubits": 1,
+				"num_shots": 12,
+				"compiler": "staq",
+				"qubit_mapping": {"0": "QB7"},
+				"reservation_id": "reservation-test",
+			}
+		]
 
 
 def test_qfw_job_forwards_reservation_context_to_qpm():
@@ -310,7 +321,7 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 	assert fake_qpm.submitted_payloads[0]["token"] == "opaque-token"
 
 
-def test_qfw_job_can_require_reservation_id(monkeypatch):
+def test_qfw_job_requires_reservation_id():
 	import qfw_qiskit.qfw_job as qfw_job
 	from qfw_qiskit.qfw_job import QFwJob
 
@@ -320,7 +331,6 @@ def test_qfw_job_can_require_reservation_id(monkeypatch):
 		def returns_statevector(self):
 			return False
 
-	monkeypatch.setenv("QFW_QPM_REQUIRE_RESERVATION", "yes")
 	job = QFwJob(
 		FakeBackend(),
 		FakeQPM(cids=["cid-context"]),

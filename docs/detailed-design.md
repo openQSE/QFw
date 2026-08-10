@@ -74,7 +74,8 @@ Relevant implementation points:
   reservation execution context options `reservation_id`, `token`, `timeout`,
   and `cancel_on_timeout` when constructing a `QFwJob`.
 - `backends/qfw_qiskit/qfw_job.py` calls `qpm.async_run(info, **context)` and
-  can reject unreserved execution when `QFW_QPM_REQUIRE_RESERVATION` is enabled.
+  rejects unreserved execution when the launcher did not provide
+  `reservation_id`.
 - `backends/qfw_qiskit/qfw_sampler.py` and
   `backends/qfw_qiskit/qfw_estimator.py` expose `Options.run_options` and
   forward that dictionary to backend `run()` calls.
@@ -983,6 +984,86 @@ users:
         api-key: iqm-token-reference-or-secret
 ```
 
+### Reservation-Scoped Provider Credentials
+
+A long-running QPM that serves more than one user resolves provider credentials
+at reservation scope. The service process identity is not treated as the
+hardware caller. It is only the identity that is allowed to run the QPM and to
+access privileged credential-provider configuration.
+
+The QPM starts with credential-provider configuration from the device-access
+file. The configured provider may be a site plugin, a protected secret store, a
+SLURM-owned helper, or a development file-backed provider. QPM execution code
+calls the provider through a common interface and does not depend on the backing
+store format. A development provider may read the `qpu_users.json` file named by
+the device-access YAML, while a production provider may return an opaque handle
+or short-lived credential from a site-managed service.
+
+Directory service registration never carries provider API keys. The directory
+record advertises the QPM service, API bindings, provider, device identity, and
+selector metadata. Privileged credential exchange happens through the trusted
+reservation path, not through service discovery.
+
+The SLURM plugin or site driver initiates a reservation using trusted launcher
+context. The request binds a user identity, allocation or job identity, target
+device, requested scope, and policy metadata. It may also carry either a
+provider credential handle or a credential-provider hint. When the QPM accepts
+the reservation, it asks the configured provider to bind a provider credential
+to that reservation. If the driver supplies a credential handle, QPM validates
+the handle with the provider before storing it.
+
+The credential cache is internal to the QPM process. Entries are keyed by the
+normalized reservation id, user identity, device id, provider, and credential
+scope. The cached value may be raw provider credential material when the
+deployment policy allows that, or an opaque handle that the lower adapter can
+exchange for a provider session. Raw values are never placed in directory
+records, application environments, normal logs, qhw-admission records, or
+qhw-scheduler records.
+
+Applications receive a reservation id and a QFw execution credential or trusted
+launcher context. They do not receive the provider API key. On `sync_run`,
+`async_run`, status, cancel, or result retrieval, QPM validates the caller
+against the reservation binding before touching the provider credential cache.
+After validation, QPM selects the cache entry for the reservation and caller
+scope, creates or reuses a provider client for that credential, and passes the
+credential to the lower adapter submission path. For IQM this means the selected
+credential is passed to the IQM client used for run creation, submission, job
+status, cancellation, and result retrieval.
+
+Credential lifetime follows reservation and provider policy. Release, cancel,
+reservation expiration, user disconnect, provider refresh failure, or explicit
+revocation removes the cached entry and any provider client derived from it. A
+resource-affecting operation with no valid reservation-scoped credential fails
+before provider submission.
+
+The expected long-running QPM flow is:
+
+```mermaid
+sequenceDiagram
+    participant Driver as SLURM driver
+    participant QPM as Long-running QPM
+    participant Cred as Credential provider
+    participant Admission as qhw-admission
+    participant App as Application
+    participant Provider as IQM/provider adapter
+
+    Driver->>QPM: reserve(user, allocation, device, scope, credential hint)
+    QPM->>Admission: evaluate and reserve request
+    Admission-->>QPM: reservation_id
+    QPM->>Cred: bind(user, reservation_id, device, scope, hint)
+    Cred-->>QPM: provider credential or handle
+    QPM-->>Driver: reservation_id and QFw execution credential
+    Driver-->>App: reservation_id and execution credential
+    App->>QPM: sync_run(info, reservation_id)
+    QPM->>QPM: validate caller and reservation binding
+    QPM->>QPM: select cached provider credential
+    QPM->>Provider: submit with selected credential
+    Provider-->>QPM: job status and result
+    QPM-->>App: reservation-scoped result
+    App->>QPM: release(reservation_id)
+    QPM->>Cred: revoke or release credential binding
+```
+
 QPM services register with directory services. Clients only resolve services
 and bind to the selected endpoint. A long-running QPM reads the site
 configuration at startup to locate the site DEFw-dirsvc. It reads
@@ -1595,11 +1676,14 @@ The control flow should use these steps:
    API bindings, service type, and selector metadata.
 4. The Python directory creates or updates the service record, assigns a
    generation, and marks the service `UP`.
-5. A client resolves a QPM endpoint and concrete API binding from the
+5. A SLURM plugin, workflow manager, load manager, launcher integration, or
+   site service creates the reservation through the QPM admission API.
+6. The application receives the reservation ID and execution credential through
+   trusted launcher context.
+7. The application resolves a QPM endpoint and concrete API binding from the
    directory using service and selector filters.
-6. The client binds to the selected endpoint through the DEFw transport.
-7. The client calls the QPM admission API to evaluate or create a reservation.
-8. Task lifecycle calls use the QPM service directly after reservation
+8. The application binds to the selected endpoint through the DEFw transport.
+9. Task lifecycle calls use the QPM service directly after reservation
    authorization. DEFw-dirsvc does not perform QPM capacity accounting.
 
 #### Connection Establishment Flow
@@ -1609,12 +1693,16 @@ service and does not reserve QPM capacity.
 
 ```mermaid
 sequenceDiagram
-    participant Client
+    participant Driver as SLURM/site driver
+    participant Client as Application
     participant Dir as Python directory
     participant CT as Client C transport
     participant ST as Service C transport
     participant QPM as QPM service
 
+    Driver->>QPM: reserve(user, allocation, device, scope)
+    QPM-->>Driver: reservation_id and execution credential
+    Driver-->>Client: reservation_id and execution credential
     Client->>Dir: resolve_service(filters, api_category)
     Dir->>Dir: select authorized UP record
     Dir-->>Client: service record, API binding, endpoint, identity
@@ -1622,7 +1710,7 @@ sequenceDiagram
     CT->>ST: transport handshake and identity exchange
     ST-->>CT: peer ready for RPC
     CT-->>Client: bound QPM client handle
-    Client->>QPM: reserve(), evaluate(), or task lifecycle API
+    Client->>QPM: reservation-scoped task lifecycle API
 ```
 
 The resolve response carries enough identity for the client side to reject
@@ -3383,12 +3471,13 @@ every derived measurement circuit generated from an Estimator PUB, without
 renaming reservation fields.
 
 The adapter must not treat DEFw-dirsvc service selection as a reservation.
-Reservation creation belongs to the QPM admission API and is normally performed
-by a workflow manager, load manager, prolog, or site service before the
-application runs. A compatibility helper may request a reservation for
-single-process examples. This milestone should reject resource-affecting runs
-that lack a reservation ID. Token validation is added by the separate
-authentication feature.
+Reservation creation belongs to the QPM admission API and is performed by a
+SLURM plugin, workflow manager, load manager, launcher integration, or site
+service before the application runs. Application backends, Qiskit adapters, and
+primitive wrappers only forward reservation context that they received through
+the launcher or caller options. They do not create hidden reservations.
+Resource-affecting runs that lack a reservation ID fail before QPM submission.
+Token validation is added by the separate authentication feature.
 
 </details>
 

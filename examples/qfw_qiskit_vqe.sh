@@ -10,4 +10,7 @@ qfw_example_begin "qiskit-vqe" "$@"
 qfw_example_setup_backend_service nwqsim
 
 # takes the number of VQE iterations
-qfw_example_srun "$(qfw_example_path tests/test_qiskit_vqe.py)" "$1"
+max_iter="${1:-50}"
+qfw_example_srun_with_backend_reservation \
+	nwqsim qiskit-vqe 4 1024 "${max_iter}" async_run \
+	"$(qfw_example_path tests/test_qiskit_vqe.py)" "${max_iter}"

@@ -96,6 +96,7 @@ cite the most specific design section names that governed the change.
 | Phase 7. Telemetry, Reconciliation, And Hardening | [Telemetry And Discovery APIs](detailed-design.md#telemetry-and-discovery-apis); [Admission And Scheduler Integration](detailed-design.md#admission-and-scheduler-integration); [Peer Lifecycle Events](detailed-design.md#peer-lifecycle-events); [Heartbeat Policy](detailed-design.md#heartbeat-policy); [Heartbeat And Liveness Flow](detailed-design.md#heartbeat-and-liveness-flow); [Service Deregistration Flow](detailed-design.md#service-deregistration-flow); [Integration Sequence](detailed-design.md#integration-sequence) | [CAT-005](detailed-design.md#cat-005); [API-002](detailed-design.md#api-002); [API-004](detailed-design.md#api-004); [CTRL-002](detailed-design.md#ctrl-002) through [CTRL-008](detailed-design.md#ctrl-008); [STATE-004](detailed-design.md#state-004); [SCHED-013](detailed-design.md#sched-013); [SCHED-014](detailed-design.md#sched-014) |
 | Phase 8. Installation And Runtime Startup Model | [Installation And Runtime Startup Model](detailed-design.md#installation-and-runtime-startup-model); [Installation Paths](detailed-design.md#installation-paths); [Activation](detailed-design.md#activation); [DEFw Python Entry Point](detailed-design.md#defw-python-entry-point); [Runtime Roles](detailed-design.md#runtime-roles); [Deployment Modes](detailed-design.md#deployment-modes); [Site Configuration](detailed-design.md#site-configuration) | [OPM-001](detailed-design.md#opm-001); [OPM-002](detailed-design.md#opm-002); [OPM-003](detailed-design.md#opm-003); [DISC-001](detailed-design.md#disc-001); [DISC-003](detailed-design.md#disc-003); [DISC-004](detailed-design.md#disc-004); [DISC-005](detailed-design.md#disc-005); [API-003](detailed-design.md#api-003) |
 | Phase 9. Per-Reservation Completion Queues | [Execution APIs](detailed-design.md#execution-apis); [Per-Reservation Completion Queues](detailed-design.md#per-reservation-completion-queues); [Synchronous Execution Contract](detailed-design.md#synchronous-execution-contract); [Integration Sequence](detailed-design.md#integration-sequence); [Identifier Allocation And Mapping](detailed-design.md#identifier-allocation-and-mapping) | [CAT-002](detailed-design.md#cat-002); [API-001](detailed-design.md#api-001); [API-004](detailed-design.md#api-004); [ADM-021](detailed-design.md#adm-021); [SCHED-005](detailed-design.md#sched-005); [SCHED-006](detailed-design.md#sched-006); [SCHED-011](detailed-design.md#sched-011); [SCHED-012](detailed-design.md#sched-012); [STATE-001](detailed-design.md#state-001); [STATE-002](detailed-design.md#state-002); [STATE-003](detailed-design.md#state-003); [STATE-004](detailed-design.md#state-004) |
+| Phase 10. Reservation-Scoped Provider Credentials | [Device Access Configuration](detailed-design.md#device-access-configuration); [Reservation-Scoped Provider Credentials](detailed-design.md#reservation-scoped-provider-credentials); [Admission Control APIs](detailed-design.md#admission-control-apis); [Execution APIs](detailed-design.md#execution-apis); [Synchronous Execution Contract](detailed-design.md#synchronous-execution-contract); [Telemetry And Discovery APIs](detailed-design.md#telemetry-and-discovery-apis); [Integration Sequence](detailed-design.md#integration-sequence) | [ADM-001](detailed-design.md#adm-001); [ADM-002](detailed-design.md#adm-002); [ADM-003](detailed-design.md#adm-003); [ADM-004](detailed-design.md#adm-004); [ADM-005](detailed-design.md#adm-005); [ADM-021](detailed-design.md#adm-021); [CAT-003](detailed-design.md#cat-003); [CAT-005](detailed-design.md#cat-005); [API-001](detailed-design.md#api-001); [API-002](detailed-design.md#api-002); [API-003](detailed-design.md#api-003); [API-004](detailed-design.md#api-004) |
 
 ## Commit Breakdown
 
@@ -212,6 +213,18 @@ changes.
 | PH9-C04 | QFw | PH9.4 | Separate event notification delivery from completion polling and update the QRC completion sink so delivered events do not prevent later polling. |
 | PH9-C05 | QFw | PH9.5 | Add completion-queue retention configuration, purge behavior, terminal-reservation garbage collection, and structured no-longer-retained responses. |
 | PH9-C06 | QFw | PH9.6 | Add completion-queue tests for scoped polling, notification independence, retention, release/cancel/expire behavior, and recovery edge cases. |
+
+### Phase 10 Commit Sequence
+
+| Commit ID | Primary repo | Plan tasks | Scope and exit criteria |
+| --- | --- | --- | --- |
+| PH10-C01 | QFw | PH10.1, PH10.2 | Add the credential-provider interface, device-access provider schema, file-backed development provider, and provider load/configuration tests. |
+| PH10-C02 | QFw | PH10.3 | Bind provider credentials or handles during trusted reservation creation and persist only non-secret binding metadata with the reservation. |
+| PH10-C03 | QFw | PH10.4, PH10.5 | Add the reservation-scoped credential cache and lifecycle cleanup for release, cancel, expiration, disconnect, refresh failure, and revocation. |
+| PH10-C04 | QFw | PH10.6 | Route `sync_run()`, `async_run()`, cancel, status, and result paths through credential selection before provider submission or provider job operations. |
+| PH10-C05 | QFw | PH10.7 | Refactor IQM, QRMI, and QDMI provider-client construction so provider clients are scoped by selected reservation credential or handle. |
+| PH10-C06 | QFw | PH10.8, PH10.9 | Extend site-driver and Docker fixture support for trusted reservation context, redacted logging, structured errors, and telemetry that exposes binding state without secrets. |
+| PH10-C07 | QFw | PH10.10 | Add multi-user, multi-reservation, lifecycle cleanup, redaction, and ORNL-IQM-shaped smoke tests using the file-backed development provider. |
 
 ## Phase 1. Directory And Transport Foundation
 
@@ -711,6 +724,8 @@ Primary requirements: `CAT-001` through `CAT-007`, `API-001` through
      execution requests.
    - Preserve `QFwSamplerV2` `run_options` and add matching Estimator
      pass-through for reservation context across derived circuits.
+   - Remove backend-side auto-reservation from Qiskit job execution. Backends
+     should never call `reserve()` to create a hidden reservation.
    - Reject production execution submissions that lack required reservation
      context.
    - Reqs: `API-001`, `API-003`, `CAT-002`.
@@ -1287,15 +1302,154 @@ Primary requirements: `CAT-002`, `API-001`, `API-004`, `ADM-021`,
      `SCHED-006`, `SCHED-011`, `SCHED-012`, `STATE-001`, `STATE-002`,
      `STATE-003`, `STATE-004`.
 
+## Phase 10. Reservation-Scoped Provider Credentials
+
+Phase 10 moves provider API-key use from service-process identity to
+reservation scope. A long-running QPM can serve multiple users through one
+service instance while selecting the correct provider credential for each
+reservation. This phase implements provider-credential binding and injection.
+Caller-token validation remains in
+`docs/implementation-plan-authentication.md`.
+
+Primary requirements: `ADM-001`, `ADM-002`, `ADM-003`, `ADM-004`,
+`ADM-005`, `ADM-021`, `CAT-003`, `CAT-005`, `API-001`, `API-002`,
+`API-003`, `API-004`.
+
+1. PH10.1 Define the QPM credential-provider interface.
+   - Add a service-side provider interface that accepts normalized user,
+     reservation, device, provider, scope, operation, and trusted launcher
+     context.
+   - Support provider responses that return either raw credential material or an
+     opaque provider handle.
+   - Define result metadata that QPM may retain for audit and diagnostics, such
+     as provider name, credential scope, handle ID, expiration, and refresh
+     policy.
+   - Keep raw provider secrets out of public API payloads, directory records,
+     qhw-admission records, qhw-scheduler records, and normal logs.
+   - Reqs: `ADM-001`, `ADM-002`, `CAT-003`, `API-004`.
+
+2. PH10.2 Extend device-access configuration for credential providers.
+   - Load credential-provider definitions from the privileged device-access
+     configuration selected by `QFW_DEVICE_ACCESS_CFG`.
+   - Resolve provider configuration from the target device entry, including
+     provider type, plugin module, protected file path, or site-helper command.
+   - Implement the file-backed development provider that reads the configured
+     user credential database.
+   - Keep the provider interface independent of the file-backed provider's JSON
+     layout.
+   - Fail QPM readiness when a target device references an unavailable or
+     invalid credential provider.
+   - Reqs: `ADM-002`, `API-003`, `API-004`.
+
+3. PH10.3 Bind credentials during trusted reservation creation.
+   - Extend the admission-control `reserve()` path so a trusted SLURM driver or
+     site driver can supply launcher context, user identity, allocation or job
+     identity, device identity, credential hint, or credential handle.
+   - Normalize the reservation binding before calling the credential provider.
+   - Ask the provider to bind a credential or handle after qhw-admission accepts
+     the reservation.
+   - Persist only non-secret binding metadata with the reservation metadata that
+     QPM exposes for inspection.
+   - Return structured failure if credential binding fails after admission
+     acceptance, and release or cancel the reservation according to the close
+     protocol selected for that error.
+   - Reqs: `ADM-001`, `ADM-002`, `ADM-003`, `CAT-003`, `API-004`.
+
+4. PH10.4 Add a reservation-scoped credential cache.
+   - Store credential bindings inside QPM process state keyed by normalized
+     reservation id, user identity, device id, provider, and credential scope.
+   - Track expiration, refresh policy, provider handle, source provider, and
+     redacted audit metadata.
+   - Provide lookup helpers that require a validated reservation context before
+     returning a provider credential or handle.
+   - Keep credential cache state out of qhw-admission and qhw-scheduler.
+   - Reqs: `ADM-001`, `ADM-004`, `ADM-005`, `API-004`.
+
+5. PH10.5 Clean up credential bindings with reservation lifecycle.
+   - Remove cached provider credentials on release, cancel, expiration,
+     provider revocation, provider refresh failure, and QPM shutdown.
+   - Invalidate derived provider clients when their credential binding is
+     removed or refreshed.
+   - Ensure terminal completion queues remain readable within retention policy
+     without preserving provider secrets.
+   - Add bounded cleanup for stale credentials if a reservation close sequence
+     is interrupted.
+   - Reqs: `ADM-003`, `ADM-005`, `ADM-021`, `API-004`.
+
+6. PH10.6 Select provider credentials during managed execution.
+   - After `sync_run()` or `async_run()` validates the reservation, resolve the
+     provider credential binding for the reservation and caller scope.
+   - Reject resource-affecting execution before provider submission when no
+     valid credential binding exists.
+   - Apply the same lookup rule to provider job operations that require provider
+     authority, including cancel, status, and result retrieval where the
+     provider backend requires a credential.
+   - Preserve admission and scheduler ordering so credential lookup happens
+     after reservation validation and before provider submission.
+   - Reqs: `ADM-005`, `CAT-003`, `API-001`, `API-003`, `API-004`.
+
+7. PH10.7 Scope provider clients by selected credential.
+   - Replace service-wide IQM client ownership with a provider-client factory
+     that accepts the selected credential or handle.
+   - Cache derived provider clients only within the credential binding lifetime.
+   - Update IQM native, QRMI, and QDMI paths so endpoint and token selection come
+     from the reservation binding, while read-only discovery may use configured
+     service credentials when site policy allows it.
+   - Keep simulator QPMs on a no-secret provider path that still exercises the
+     same credential-selection boundary in tests.
+   - Reqs: `ADM-005`, `API-001`, `API-002`, `API-003`, `API-004`.
+
+8. PH10.8 Extend site-driver and Docker fixture support.
+   - Extend the existing Docker IQM site-service and chemistry fixtures with a
+     SLURM-style driver path that creates reservations with trusted user,
+     allocation, target-device, credential-hint, and workload metadata before
+     launching application workers.
+   - Let Docker tests use the file-backed development provider with protected
+     test credentials and multiple fake users.
+   - Keep application environments limited to reservation id, QFw execution
+     credential or trusted launcher context, and normal runtime configuration.
+   - Provide operator-facing setup checks that confirm provider configuration is
+     loaded without printing raw credential values.
+   - Reqs: `ADM-002`, `CAT-003`, `API-003`, `API-004`.
+
+9. PH10.9 Add redaction, structured errors, and telemetry.
+   - Redact raw credentials, provider tokens, and file-backed credential values
+     from logs, exceptions, telemetry, and test output.
+   - Add machine-readable failures for missing credential binding, expired
+     binding, provider lookup failure, provider refresh failure, and
+     reservation-binding mismatch.
+   - Expose non-secret telemetry for credential binding state, such as provider
+     type, credential scope, expiration, and active binding count.
+   - Keep telemetry access classification aligned with the existing discovery,
+     caller-owned, manager aggregate, and operator categories.
+   - Reqs: `CAT-005`, `API-002`, `API-004`.
+
+10. PH10.10 Add credential-scope tests.
+    - Cover two users with independent reservations against one long-running QPM.
+    - Cover repeated submissions under one reservation reusing the correct
+      provider binding.
+    - Cover concurrent reservations for the same target device using different
+      credentials.
+    - Cover Qiskit backend, Sampler, Estimator, and chemistry paths to ensure
+      they require an existing reservation and never create hidden reservations.
+    - Cover missing credential, wrong user, wrong reservation, expired binding,
+      provider refresh failure, release, cancel, expiration, and shutdown
+      cleanup.
+    - Cover IQM-shaped execution through a fake provider client and a narrow
+      Docker smoke path that verifies ORNL-IQM configuration without exposing
+      secrets.
+    - Reqs: `ADM-001`, `ADM-002`, `ADM-003`, `ADM-005`, `ADM-021`,
+      `CAT-003`, `CAT-005`, `API-001`, `API-002`, `API-003`, `API-004`.
+
 ## Requirement Coverage Summary
 
 | Requirement group | Primary implementation phases |
 | --- | --- |
 | `OPM-001` through `OPM-003` | Phases 1, 2, 7, and 8 |
 | `DISC-001` through `DISC-005` | Phases 1, 2, 7, and 8 |
-| `ADM-001` through `ADM-022` | Phases 3, 5, 6, 7, and 9 |
+| `ADM-001` through `ADM-022` | Phases 3, 5, 6, 7, 9, and 10 |
 | `SCHED-001` through `SCHED-014` | Phases 4, 5, 6, 7, and 9 |
-| `CAT-001` through `CAT-007` | Phases 3, 4, 7, and 9 |
-| `API-001` through `API-004` | Phases 2, 3, 6, 7, 8, and 9 |
+| `CAT-001` through `CAT-007` | Phases 3, 4, 7, 9, and 10 |
+| `API-001` through `API-004` | Phases 2, 3, 6, 7, 8, 9, and 10 |
 | `CTRL-001` through `CTRL-008` | Phases 3, 5, 6, and 7 |
 | `STATE-001` through `STATE-004` | Phases 4, 5, 6, 7, and 9 |
