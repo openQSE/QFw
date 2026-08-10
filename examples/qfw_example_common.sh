@@ -190,6 +190,8 @@ qfw_example_reserve_backend_execution() {
 
 	output="$(
 		qfw_example_srun \
+			--nodes 1 \
+			--ntasks 1 \
 			"$(qfw_example_path tests/qfw_example_reservation_driver.py)" \
 			reserve \
 			--backend "${backend}" \
@@ -219,6 +221,8 @@ qfw_example_release_backend_execution() {
 
 	output="$(
 		qfw_example_srun \
+			--nodes 1 \
+			--ntasks 1 \
 			"$(qfw_example_path tests/qfw_example_reservation_driver.py)" \
 			release \
 			--backend "${backend}" \

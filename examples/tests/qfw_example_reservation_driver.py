@@ -10,6 +10,14 @@ from qfw_qiskit.qpm_resolver import QPMResolver
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
 
 
+def normalize_reservation_id(value):
+	if isinstance(value, str):
+		value = value.strip()
+		if value.isdecimal():
+			return int(value)
+	return value
+
+
 def resolve_qpm(provider, timeout):
 	selection = qpm_selection_for_provider(provider, default_provider=provider)
 	dirsvc = defw_get_directory_service()
@@ -76,11 +84,12 @@ def reserve(args):
 
 def release(args):
 	qpm = resolve_qpm(args.backend, args.timeout)
-	result = qpm.release(reservation_id=args.reservation_id, reason=args.reason)
+	reservation_id = normalize_reservation_id(args.reservation_id)
+	result = qpm.release(reservation_id=reservation_id, reason=args.reason)
 	emit(
 		"release",
 		backend=args.backend,
-		reservation_id=args.reservation_id,
+		reservation_id=reservation_id,
 		result=result,
 	)
 	return 0

@@ -1,6 +1,14 @@
 import os
 
 
+def normalize_qfw_reservation_id(value):
+	if isinstance(value, str):
+		value = value.strip()
+		if value.isdecimal():
+			return int(value)
+	return value
+
+
 def qfw_reservation_options(required=True):
 	reservation_id = os.environ.get("QFW_RESERVATION_ID")
 	if not reservation_id:
@@ -10,7 +18,7 @@ def qfw_reservation_options(required=True):
 				"example reservation driver")
 		return {}
 
-	options = {"reservation_id": reservation_id}
+	options = {"reservation_id": normalize_qfw_reservation_id(reservation_id)}
 	token = os.environ.get("QFW_RESERVATION_TOKEN")
 	if token:
 		options["token"] = token
