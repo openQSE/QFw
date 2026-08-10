@@ -7,7 +7,7 @@ source "${script_dir}/qfw_example_common.sh"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_iqm_site_services.sh <start|stop|status|preflight> [options]
+Usage: ./qfw_iqm_site_services.sh <start|stop|status|preflight|install-deps> [options]
 
 Start, probe, or stop a Docker-hosted site-style DEFw directory service and
 long-running ORNL IQM QPM service.
@@ -25,12 +25,19 @@ Options:
   --qpm-port PORT               IQM QPM listen port (default: 8290)
   --qpm-telnet-port PORT        IQM QPM telnet port (default: 8291)
   --timeout SEC                 Startup and preflight timeout (default: 120)
+  --venv DIR                    Virtual environment for install-deps
+  --requirements PATH           Override IQM service requirements file
+  --constraints PATH            Override IQM service constraints file
   --skip-preflight              Start services without telemetry preflight
   --dry-run                     Create ready files without launching processes
   -h, --help                    Show this help
 
 The start action leaves the directory service and QPM running. Use the stop
 action with the same --run-dir to terminate them.
+
+The install-deps action installs the IQM QPM service dependencies into the
+given virtual environment, or into the active virtual environment when --venv
+is omitted.
 EOF
 }
 
@@ -47,6 +54,9 @@ dirsvc_port="${QFW_IQM_DIRSVC_PORT:-8090}"
 qpm_port="${QFW_IQM_QPM_PORT:-8290}"
 qpm_telnet_port="${QFW_IQM_QPM_TELNET_PORT:-8291}"
 startup_timeout="${QFW_IQM_TIMEOUT:-120}"
+deps_venv="${QFW_IQM_DEPS_VENV:-${QFW_SHARED_VENV:-}}"
+requirements_path="${QFW_IQM_REQUIREMENTS:-}"
+constraints_path="${QFW_IQM_CONSTRAINTS:-}"
 run_preflight="${QFW_IQM_PREFLIGHT:-yes}"
 dry_run="no"
 
@@ -60,7 +70,7 @@ qfw_iqm_need_value() {
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		start|stop|status|preflight)
+		start|stop|status|preflight|install-deps)
 			if [[ -n "${action}" ]]; then
 				echo "ERROR: multiple actions specified" >&2
 				exit 2
@@ -126,6 +136,21 @@ while [[ $# -gt 0 ]]; do
 		--timeout)
 			qfw_iqm_need_value "$@"
 			startup_timeout="$2"
+			shift 2
+			;;
+		--venv)
+			qfw_iqm_need_value "$@"
+			deps_venv="$2"
+			shift 2
+			;;
+		--requirements)
+			qfw_iqm_need_value "$@"
+			requirements_path="$2"
+			shift 2
+			;;
+		--constraints)
+			qfw_iqm_need_value "$@"
+			constraints_path="$2"
 			shift 2
 			;;
 		--skip-preflight)
@@ -245,6 +270,42 @@ qfw_iqm_source_root() {
 	return 1
 }
 
+qfw_iqm_service_deps_dir() {
+	local source_root candidate
+	source_root="$(qfw_iqm_source_root 2>/dev/null || true)"
+	for candidate in \
+		"${QFW_PREFIX:-}/lib/qfw/services/svc_iqm_qpm" \
+		"${QFW_PREFIX:-}/lib64/qfw/services/svc_iqm_qpm" \
+		"${source_root}/services/svc_iqm_qpm"; do
+		if [[ -n "${candidate}" && -d "${candidate}" ]]; then
+			printf "%s\n" "${candidate}"
+			return 0
+		fi
+	done
+	echo "ERROR: unable to locate svc_iqm_qpm dependency files" >&2
+	return 1
+}
+
+qfw_iqm_default_requirements_path() {
+	if [[ -n "${requirements_path}" ]]; then
+		printf "%s\n" "${requirements_path}"
+		return 0
+	fi
+	local deps_dir
+	deps_dir="$(qfw_iqm_service_deps_dir)"
+	printf "%s\n" "${deps_dir}/requirements.in"
+}
+
+qfw_iqm_default_constraints_path() {
+	if [[ -n "${constraints_path}" ]]; then
+		printf "%s\n" "${constraints_path}"
+		return 0
+	fi
+	local deps_dir
+	deps_dir="$(qfw_iqm_service_deps_dir)"
+	printf "%s\n" "${deps_dir}/constraints.txt"
+}
+
 qfw_iqm_default_service_manifest() {
 	local candidate
 	for candidate in \
@@ -257,6 +318,103 @@ qfw_iqm_default_service_manifest() {
 		fi
 	done
 	return 1
+}
+
+qfw_iqm_install_deps_emit() {
+	local status="$1"
+	local rc="$2"
+	local python_bin="$3"
+	local requirements_file="$4"
+	local constraints_file="$5"
+	python3 - "${status}" "${rc}" "${python_bin}" "${requirements_file}" \
+		"${constraints_file}" "${deps_venv}" "${dry_run}" <<'PY'
+import json
+import sys
+import time
+
+(
+	status,
+	rc,
+	python_bin,
+	requirements_file,
+	constraints_file,
+	deps_venv,
+	dry_run,
+) = sys.argv[1:]
+record = {
+	"schema": "qfw-iqm-install-deps-v1",
+	"kind": "iqm-install-deps",
+	"status": status,
+	"rc": int(rc),
+	"python": python_bin,
+	"venv": deps_venv,
+	"requirements": requirements_file,
+	"constraints": constraints_file,
+	"dry_run": dry_run == "yes",
+	"timestamp_ns": time.time_ns(),
+}
+print("QFW_IQM_INSTALL_DEPS_RESULT " + json.dumps(record, sort_keys=True))
+PY
+}
+
+qfw_iqm_install_deps() {
+	local requirements_file constraints_file python_bin
+	requirements_file="$(qfw_iqm_default_requirements_path)"
+	constraints_file="$(qfw_iqm_default_constraints_path)"
+	if [[ ! -r "${requirements_file}" ]]; then
+		echo "ERROR: IQM requirements file not readable: ${requirements_file}" >&2
+		return 1
+	fi
+	if [[ -n "${constraints_file}" && ! -r "${constraints_file}" ]]; then
+		echo "ERROR: IQM constraints file not readable: ${constraints_file}" >&2
+		return 1
+	fi
+
+	if [[ -n "${deps_venv}" ]]; then
+		python_bin="${deps_venv%/}/bin/python"
+	elif [[ -n "${VIRTUAL_ENV:-}" ]]; then
+		deps_venv="${VIRTUAL_ENV}"
+		python_bin="${VIRTUAL_ENV%/}/bin/python"
+	else
+		python_bin="$(command -v python3 || true)"
+	fi
+	if qfw_iqm_bool_enabled "${dry_run}"; then
+		python_bin="${python_bin:-python3}"
+	elif [[ -z "${python_bin}" || ! -x "${python_bin}" ]]; then
+		echo "ERROR: Python executable not found for install-deps" >&2
+		return 1
+	fi
+
+	local command=(
+		"${python_bin}"
+		-m pip install
+		-r "${requirements_file}"
+	)
+	if [[ -n "${constraints_file}" ]]; then
+		command+=(-c "${constraints_file}")
+	fi
+
+	printf "Installing IQM QPM dependencies with: "
+	printf "%q " "${command[@]}"
+	printf "\n"
+	if qfw_iqm_bool_enabled "${dry_run}"; then
+		qfw_iqm_install_deps_emit "dry-run" 0 "${python_bin}" \
+			"${requirements_file}" "${constraints_file}"
+		return 0
+	fi
+
+	local rc
+	set +e
+	"${command[@]}"
+	rc=$?
+	set -e
+	local status="ok"
+	if [[ "${rc}" -ne 0 ]]; then
+		status="error"
+	fi
+	qfw_iqm_install_deps_emit "${status}" "${rc}" "${python_bin}" \
+		"${requirements_file}" "${constraints_file}"
+	return "${rc}"
 }
 
 qfw_iqm_default_service_runtime_config() {
@@ -705,6 +863,11 @@ record = {
 print("QFW_IQM_SITE_SERVICES_RESULT " + json.dumps(record, sort_keys=True))
 PY
 }
+
+if [[ "${action}" == "install-deps" ]]; then
+	qfw_iqm_install_deps
+	exit "$?"
+fi
 
 qfw_iqm_prepare_defaults
 

@@ -171,6 +171,8 @@ install(DIRECTORY services/
 	FILES_MATCHING
 		PATTERN "*.py"
 		PATTERN "*.yaml"
+		PATTERN "*.txt"
+		PATTERN "*.in"
 		PATTERN "__pycache__" EXCLUDE)
 install(DIRECTORY service-apis/
 	DESTINATION "${CMAKE_INSTALL_LIBDIR}/qfw/service-apis"
