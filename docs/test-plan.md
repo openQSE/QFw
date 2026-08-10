@@ -339,6 +339,201 @@ runtime-task or provider-inflight leaks in the final scheduler queue state, no
 held-capacity or pending-capacity leaks in the final capacity snapshot, and a
 measured scenario duration within the configured harness walltime.
 
+## Chemistry Application Provider Smoke
+
+### Test And Expected Results
+
+The chemistry application smoke is a special provider-facing test outside the
+main system matrix. It validates an external application that uses QFw through
+Qiskit Estimator rather than through a purpose-built QFw example script. The
+baseline Docker run targets `nwqsim`. The ORNL IQM run can also be driven from
+the Slurm Docker environment: the Docker allocation starts a site-style
+DEFw-dirsvc and long-running IQM QPM, and that QPM reaches the ORNL IQM endpoint
+over the network. The same procedure can be moved to a production site-owned
+service plane later.
+
+The baseline script is
+`example_1_He_from_pyscf.py --smoke --no-draw` from a QFw-enabled
+`chemistry_example_aim2` checkout. The current Docker validation path uses
+`/workspace/qfw-container-base/chemistry_example_aim2` and the matching host
+path under `QFw-SLURM-Cluster-doug/shared-dir/chemistry_example_aim2`.
+
+A passing simulator smoke proves that the wrapper activates QFw, uses
+`qfw-setup`, `qfw-srun`, and `qfw-teardown`, starts only job-owned simulator
+services, creates or receives a reservation ID, submits estimator circuits
+through QFw, releases the reservation, and cleans job-owned runtime state. The
+wrapper must emit a final `QFW_EXAMPLE_RESULT` record with `status: ok`, app
+return code zero, teardown return code zero, the backend provider, run
+directory, reservation ID, and release result.
+
+A passing ORNL IQM smoke uses site mode even when the services are launched
+inside Docker. It proves that the application can discover a long-running IQM
+QPM through the configured directory, that `qfw-teardown` does not stop that
+directory or IQM QPM, and that IQM credentials are loaded by the service from
+the device-access configuration rather than being embedded in the application.
+Before the chemistry workload runs, the IQM QPM should pass a telemetry
+preflight through the same resolver path the application will use.
+
+The test evidence must preserve application output because chemistry
+applications may print scientific results only to stdout or stderr. The result
+record should include `stdout_path`, `stderr_path`, embedded `stdout` and
+`stderr` snippets, `stdout_truncated`, `stderr_truncated`, and
+`max_output_bytes`. The full stdout and stderr files must remain in the run
+directory. IQM hardware evidence should also include the selected
+`QFW_QPU_DEVICE_ID`, sanitized endpoint, credential source path, IQM job ID,
+terminal hardware status, timing metadata, QPM log path, site directory log
+path, Slurm job or allocation ID, and target device.
+
+Hardware smoke should use a small shot count and the smallest chemistry script
+until IQM QASM translation, qubit mapping, calibration selection, network access
+from the Docker service node, TLS trust, and timeslot behavior are confirmed.
+
+### Manual Run Procedure
+
+Build and install QFw and DEFw from the shared checkout that will be visible to
+the Docker nodes or to the target allocation:
+
+```bash
+export QFW_SRC=/workspace/qfw-container-base/QFw
+export QFW_BUILD=/workspace/qfw-container-base/build/qfw-chem
+export QFW_PREFIX=/workspace/qfw-container-base/install/qfw-chem
+
+git -C "$QFW_SRC" submodule update --init --recursive
+cmake -S "$QFW_SRC" -B "$QFW_BUILD" \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_INSTALL_PREFIX="$QFW_PREFIX"
+cmake --build "$QFW_BUILD" -j "$(nproc)"
+cmake --install "$QFW_BUILD" --prefix "$QFW_PREFIX"
+```
+
+Activate the shared application environment and the installed QFw prefix:
+
+```bash
+source "$QFW_PREFIX/bin/qfw-activate" \
+  --venv /workspace/qfw-container-base/qfw-shared-test-venv
+export QFW_RUN_BASE_DIR=/workspace/qfw-container-base/test-runs/chem-$(date +%Y%m%d-%H%M%S)
+```
+
+Run the Docker `nwqsim` baseline from a one-node Slurm allocation:
+
+```bash
+cd /workspace/qfw-container-base/QFw/examples
+salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:20:00 \
+  ./qfw_chem_app.sh --backend nwqsim \
+  --chem-app-dir /workspace/qfw-container-base/chemistry_example_aim2 \
+  example_1_He_from_pyscf.py --smoke --no-draw \
+  --reservation-shots 128 \
+  --estimator-precision 0.08838834764831845
+```
+
+For the ORNL IQM path, first verify that the Docker service node can reach the
+ORNL IQM endpoint and has the required TLS trust configuration. Then prepare a
+service-readable device-access directory in the shared Docker filesystem. The
+QFw example device map is `services/dev-config/config.yaml`; it defines the
+target device and points at a credential database:
+
+```yaml
+qpus:
+  ornl-iqm-20q:
+    provider-device-id: default
+    url: https://qccsw.ccs.ornl.gov/
+    credential-db: qpu_users.json
+```
+
+The API key is stored in the credential DB referenced by that YAML file. The
+example DB is `services/dev-config/qpu_users.json`. For a real run, copy both
+files to a protected service location, replace the dummy API key, and keep the
+credential DB readable only by the service account:
+
+```bash
+export QFW_IQM_DEVICE_DIR=/workspace/qfw-container-base/iqm-device
+install -d -m 700 "$QFW_IQM_DEVICE_DIR"
+cp "$QFW_SRC/services/dev-config/config.yaml" "$QFW_IQM_DEVICE_DIR/config.yaml"
+cp "$QFW_SRC/services/dev-config/qpu_users.json" "$QFW_IQM_DEVICE_DIR/qpu_users.json"
+chmod 600 "$QFW_IQM_DEVICE_DIR/qpu_users.json"
+
+export QFW_DEVICE_ACCESS_CFG="$QFW_IQM_DEVICE_DIR/config.yaml"
+export QFW_QPU_DEVICE_ID=ornl-iqm-20q
+```
+
+Create or select a site configuration shared by the Docker-launched directory,
+IQM QPM, and application allocations. The endpoint host must be resolvable from
+all Docker Slurm nodes used by the test:
+
+```bash
+export QFW_SITE_CONFIG=/workspace/qfw-container-base/iqm-site.yaml
+cat > "$QFW_SITE_CONFIG" <<EOF
+install:
+  qfw-prefix: $QFW_PREFIX
+  defw-prefix: $QFW_PREFIX
+
+directory:
+  site:
+    name: qfw-docker-iqm-dirsvc
+    endpoint: <docker-service-node-host>:8090
+    connect-timeout-seconds: 300
+EOF
+```
+
+Start the directory and the long-running IQM QPM inside a Docker Slurm
+allocation. These processes are site-style services for the test, even though
+Docker owns their lifetime. The service launcher should take the target device
+as an input. If the installed service manifest does not already define that
+device, the launcher should generate a temporary service manifest entry for the
+requested target device and pass the generated manifest to `qfw-service-start`.
+
+```bash
+salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:30:00 bash
+
+export QFW_IQM_RUN_DIR=/workspace/qfw-container-base/test-runs/iqm-smoke-$(date +%Y%m%d-%H%M%S)
+qfw-dirsvc-start --site-config "$QFW_SITE_CONFIG" \
+  --run-dir "$QFW_IQM_RUN_DIR" --background
+
+qfw-service-start --service-id iqm-ornl-20q \
+  --site-config "$QFW_SITE_CONFIG" \
+  --service-manifest "$QFW_SHARE_DIR/config/services/qfw_services.yaml" \
+  --device-access-config "$QFW_DEVICE_ACCESS_CFG" \
+  --run-dir "$QFW_IQM_RUN_DIR" \
+  --background --timeout 120
+```
+
+Before running the chemistry application, call the IQM QPM telemetry path
+through the site resolver and confirm that the service reports the selected
+device, can reach the ORNL IQM endpoint, and has no credential errors. Then run
+the application allocation in site mode:
+
+```bash
+source "$QFW_PREFIX/bin/qfw-activate" \
+  --venv /workspace/qfw-container-base/qfw-shared-test-venv
+export QFW_SITE_CONFIG=/workspace/qfw-container-base/iqm-site.yaml
+export QFW_CHEM_SETUP_MODE=site
+
+cd "$QFW_SHARE_DIR/examples"
+salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:20:00 \
+  ./qfw_chem_app.sh --backend iqm \
+  --chem-app-dir /workspace/qfw-container-base/chemistry_example_aim2 \
+  example_1_He_from_pyscf.py --smoke --no-draw \
+  --reservation-qubits 20 \
+  --reservation-shots <small-shot-count> \
+  --reservation-walltime-s <walltime> \
+  --reservation-ttl-s <ttl>
+```
+
+The planned IQM helper scripts should mirror the existing Slurm-style driver
+pattern used by the admission and scheduler fixture:
+
+- `examples/qfw_iqm_site_services.sh` builds or selects a site config, accepts
+  `--target-device`, starts the Docker-hosted site-style directory and
+  long-running IQM QPM, runs telemetry preflight, records service logs, and
+  leaves services running until explicitly stopped.
+- `examples/qfw_iqm_chem_smoke.sh` accepts `--target-device`,
+  `--device-access-config`, `--site-config`, `--qfw-src`, `--build-dir`,
+  `--install-prefix`, `--shared-venv`, `--chem-app-dir`, `--partition`,
+  `--nodes`, `--nodelist`, `--time`, `--shots`, and `--max-output-bytes`;
+  captures stdout and stderr; embeds bounded output in a JSONL result record;
+  and verifies that app-side teardown does not stop the Docker-hosted
+  site-style services.
+
 ## System Test Cases
 
 | Test ID | Scenario | Requirements |
