@@ -101,16 +101,16 @@ fi
 
 _qfw_script_dir="$(_qfw_resolve_script_dir "${BASH_SOURCE[0]}")"
 _qfw_script_prefix="$(cd "${_qfw_script_dir}/.." && pwd)"
-_qfw_configured_source_prefix="@CMAKE_CURRENT_SOURCE_DIR@"
-_qfw_configured_generated_prefix="@QFW_GENERATED_DIR@"
-if [[ -d "${_qfw_configured_source_prefix}/share/qfw" ]]; then
-	_qfw_configured_source_prefix="$(
-		cd "${_qfw_configured_source_prefix}" && pwd
+_qfw_cmake_source_prefix="@CMAKE_CURRENT_SOURCE_DIR@"
+_qfw_cmake_generated_prefix="@QFW_GENERATED_DIR@"
+if [[ -d "${_qfw_cmake_source_prefix}/share/qfw" ]]; then
+	_qfw_cmake_source_prefix="$(
+		cd "${_qfw_cmake_source_prefix}" && pwd
 	)"
 fi
-if [[ -d "${_qfw_configured_generated_prefix}" ]]; then
-	_qfw_configured_generated_prefix="$(
-		cd "${_qfw_configured_generated_prefix}" && pwd
+if [[ -d "${_qfw_cmake_generated_prefix}" ]]; then
+	_qfw_cmake_generated_prefix="$(
+		cd "${_qfw_cmake_generated_prefix}" && pwd
 	)"
 fi
 
@@ -125,9 +125,9 @@ unset _qfw_var
 
 export _QFW_ACTIVE=1
 if [[ -z "${QFW_PREFIX:-}" &&
-      "${_qfw_script_prefix}" == "${_qfw_configured_generated_prefix}" &&
-      -d "${_qfw_configured_source_prefix}/share/qfw" ]]; then
-	export QFW_PREFIX="${_qfw_configured_source_prefix}"
+      "${_qfw_script_prefix}" == "${_qfw_cmake_generated_prefix}" &&
+      -d "${_qfw_cmake_source_prefix}/share/qfw" ]]; then
+	export QFW_PREFIX="${_qfw_cmake_source_prefix}"
 else
 	export QFW_PREFIX="${QFW_PREFIX:-${_qfw_script_prefix}}"
 fi
@@ -223,5 +223,5 @@ qfw_deactivate() {
 }
 
 unset _qfw_script_dir _qfw_script_prefix
-unset _qfw_configured_source_prefix _qfw_configured_generated_prefix
+unset _qfw_cmake_source_prefix _qfw_cmake_generated_prefix
 unset _qfw_venv_path
