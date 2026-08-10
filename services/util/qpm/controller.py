@@ -1039,6 +1039,9 @@ class QPMTargetController:
 		qtask_id = circuit.info["qtask_id"]
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
+			if (qtask_id in self.provider_inflight or
+					runtime.state == QPM_TASK_SUBMITTED):
+				return None
 			if runtime.scheduler_task_id is not None:
 				mark_scheduler_task_started(
 					self.scheduler_context, runtime.scheduler_task_id)

@@ -13,9 +13,11 @@ Start a local DEFw directory service and deterministic fake IQM QPM, then run
 the qhw-admission/qhw-scheduler stress driver through qfw-srun.
 
 Common driver options:
-  --scenario-set NAME      startup, smoke, workload, hybrid, scheduler, or all
+  --scenario-set NAME      startup, smoke, admission, workload, hybrid,
+                           scheduler, or all
   --workers N              Concurrent application workers per scenario
   --tasks-per-worker N     Circuits per worker reservation
+  --waves N                Application waves per heavier scenario
   --harness-walltime SEC   Per-scenario walltime bound
   -h, --help               Show driver help
 EOF

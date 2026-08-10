@@ -49,6 +49,7 @@ SMOKE_SCHEDULERS = (
 	"ordered",
 )
 SMOKE_ADMISSION = ("credit", "rate")
+LIMIT_ADMISSION = ("credit", "rate")
 WORKLOAD_SHAPES = (
 	"short_only",
 	"long_only",
@@ -64,10 +65,13 @@ def parse_args():
 		description="Run fake IQM admission/scheduler stress scenarios.")
 	parser.add_argument(
 		"--scenario-set",
-		choices=("startup", "smoke", "workload", "hybrid", "scheduler", "all"),
+		choices=(
+			"startup", "smoke", "admission", "workload", "hybrid",
+			"scheduler", "all"),
 		default="startup")
 	parser.add_argument("--workers", type=int, default=2)
 	parser.add_argument("--tasks-per-worker", type=int, default=2)
+	parser.add_argument("--waves", type=int, default=1)
 	parser.add_argument("--backend", default=FAKE_PROVIDER)
 	parser.add_argument("--system-up-timeout", type=int, default=40)
 	parser.add_argument("--completion-timeout", type=int, default=30)
@@ -133,6 +137,8 @@ def build_scenarios(args):
 					workers=args.workers,
 					tasks_per_worker=args.tasks_per_worker,
 					dispatch_depth=args.dispatch_depth))
+	if args.scenario_set in ("admission", "all"):
+		scenarios.extend(admission_limit_scenarios())
 	if args.scenario_set in ("workload", "all"):
 		for workload in WORKLOAD_SHAPES:
 			scenarios.append(_scenario(
@@ -144,7 +150,10 @@ def build_scenarios(args):
 				"sequential_pre",
 				workers=args.workers,
 				tasks_per_worker=args.tasks_per_worker,
-				dispatch_depth=args.dispatch_depth))
+				dispatch_depth=args.dispatch_depth,
+				profile_overrides=stress_capacity_profile(),
+				reservation_count_margin=1,
+				waves=args.waves))
 	if args.scenario_set in ("hybrid", "all"):
 		for admission in SMOKE_ADMISSION:
 			for classical_mode in CLASSICAL_MODES:
@@ -157,7 +166,10 @@ def build_scenarios(args):
 					classical_mode,
 					workers=args.workers,
 					tasks_per_worker=args.tasks_per_worker,
-					dispatch_depth=args.dispatch_depth))
+					dispatch_depth=args.dispatch_depth,
+					profile_overrides=stress_capacity_profile(),
+					reservation_count_margin=1,
+					waves=args.waves))
 	if args.scenario_set in ("scheduler", "all"):
 		for scheduler in SMOKE_SCHEDULERS:
 			scenarios.append(_scenario(
@@ -169,12 +181,29 @@ def build_scenarios(args):
 				"parallel",
 				workers=args.workers,
 				tasks_per_worker=args.tasks_per_worker,
-				dispatch_depth=1))
+				dispatch_depth=1,
+				waves=args.waves,
+				profile_overrides=stress_capacity_profile(),
+				reservation_count_margin=1,
+				queue_all_before_resume=True,
+				assert_scheduler_order=True))
 	return scenarios
 
 
+def stress_capacity_profile():
+	return {
+		"total_credits": 512,
+		"device_rate": 16384,
+		"concurrent_jobs": 8,
+	}
+
+
 def _scenario(name, tier, admission, scheduler, workload, classical_mode,
-	      workers, tasks_per_worker, dispatch_depth):
+	      workers, tasks_per_worker, dispatch_depth, waves=1,
+	      expect_all_reservations=True, expect_all_tasks=True,
+	      expected_reservation_statuses=None, profile_overrides=None,
+	      walltime_ns=None, queue_all_before_resume=False,
+	      assert_scheduler_order=False, reservation_count_margin=0):
 	return {
 		"name": name,
 		"tier": tier,
@@ -184,10 +213,113 @@ def _scenario(name, tier, admission, scheduler, workload, classical_mode,
 		"classical_mode": classical_mode,
 		"workers": workers,
 		"tasks_per_worker": tasks_per_worker,
+		"waves": waves,
 		"dispatch_depth": dispatch_depth,
-		"expect_all_reservations": True,
-		"expect_all_tasks": True,
+		"expect_all_reservations": expect_all_reservations,
+		"expect_all_tasks": expect_all_tasks,
+		"expected_reservation_statuses": (
+			list(expected_reservation_statuses or [])),
+		"profile_overrides": dict(profile_overrides or {}),
+		"walltime_ns": walltime_ns,
+		"queue_all_before_resume": queue_all_before_resume,
+		"assert_scheduler_order": assert_scheduler_order,
+		"reservation_count_margin": reservation_count_margin,
 	}
+
+
+def admission_limit_scenarios():
+	return [
+		_scenario(
+			"admission-credit-accept-exact",
+			"admission",
+			"credit",
+			"fifo",
+			"short_only",
+			"sequential_pre",
+			workers=1,
+			tasks_per_worker=1,
+			dispatch_depth=1,
+			expected_reservation_statuses=["accepted"],
+			profile_overrides={"total_credits": 1}),
+		_scenario(
+			"admission-credit-delay-remaining",
+			"admission",
+			"credit",
+			"fifo",
+			"short_only",
+			"sequential_pre",
+			workers=2,
+			tasks_per_worker=1,
+			dispatch_depth=1,
+			expect_all_reservations=False,
+			expected_reservation_statuses=["accepted", "delayed"],
+			profile_overrides={"total_credits": 1}),
+		_scenario(
+			"admission-credit-reject-limit",
+			"admission",
+			"credit",
+			"fifo",
+			"long_only",
+			"sequential_pre",
+			workers=1,
+			tasks_per_worker=1,
+			dispatch_depth=1,
+			expect_all_reservations=False,
+			expect_all_tasks=False,
+			expected_reservation_statuses=["rejected"],
+			profile_overrides={"total_credits": 1}),
+		_scenario(
+			"admission-rate-accept-exact",
+			"admission",
+			"rate",
+			"fifo",
+			"short_only",
+			"sequential_pre",
+			workers=1,
+			tasks_per_worker=1,
+			dispatch_depth=1,
+			expected_reservation_statuses=["accepted"],
+			profile_overrides={
+				"device_rate": 60,
+				"concurrent_jobs": 1,
+			},
+			walltime_ns=1_000_000_000),
+		_scenario(
+			"admission-rate-delay-remaining",
+			"admission",
+			"rate",
+			"fifo",
+			"short_only",
+			"sequential_pre",
+			workers=2,
+			tasks_per_worker=1,
+			dispatch_depth=1,
+			expect_all_reservations=False,
+			expected_reservation_statuses=["accepted", "delayed"],
+			profile_overrides={
+				"device_rate": 60,
+				"concurrent_jobs": 1,
+			},
+			walltime_ns=1_000_000_000),
+		_scenario(
+			"admission-rate-reject-limit",
+			"admission",
+			"rate",
+			"fifo",
+			"long_only",
+			"sequential_pre",
+			workers=1,
+			tasks_per_worker=1,
+			dispatch_depth=1,
+			expect_all_reservations=False,
+			expect_all_tasks=False,
+			expected_reservation_statuses=["rejected"],
+			profile_overrides={
+				"device_rate": 60,
+				"concurrent_jobs": 1,
+			},
+			walltime_ns=1_000_000_000),
+	]
 
 
 def run_scenario(qpm, scenario, args, result_sink):
@@ -202,6 +334,7 @@ def run_scenario(qpm, scenario, args, result_sink):
 		"policy": {},
 		"reservation_decisions": [],
 		"worker_results": [],
+		"waves": [],
 		"errors": [],
 	}
 	try:
@@ -209,28 +342,35 @@ def run_scenario(qpm, scenario, args, result_sink):
 		record["capacity_before"] = qpm.get_capacity_snapshot()
 		record["queue_before"] = qpm.get_scheduler_queue_state(
 			include_restricted=True)
-		reservations = reserve_workers(qpm, scenario)
-		record["reservation_decisions"] = [
-			deepcopy(item["decision"]) for item in reservations
+		for wave_index in range(max(1, int(scenario.get("waves", 1)))):
+			wave = run_wave(qpm, scenario, args, deadline, wave_index)
+			record["waves"].append(wave)
+			record["reservation_decisions"].extend(
+				deepcopy(wave["reservation_decisions"]))
+			record["worker_results"].extend(
+				deepcopy(wave["worker_results"]))
+			if wave.get("status") != "ok":
+				raise DEFwError(
+					f"wave failed: scenario={scenario['name']} "
+					f"wave_index={wave_index}")
+		record["expected_dispatch_order"] = [
+			wave.get("expected_dispatch_order")
+			for wave in record["waves"]
 		]
-		active = [
-			item for item in reservations
-			if item["decision"].get("status") == "accepted"
+		record["actual_dispatch_order"] = [
+			wave.get("actual_dispatch_order")
+			for wave in record["waves"]
 		]
-		if scenario["expect_all_reservations"] and len(active) != len(reservations):
-			raise DEFwError(
-				"not all reservations were accepted: "
-				f"accepted={len(active)} total={len(reservations)}")
-		record["expected_dispatch_order"] = expected_dispatch_order(
-			scenario, active)
-		record["worker_results"] = run_workers(
-			qpm, scenario, active, args, deadline)
 		record["completion_order"] = [
-			completion.get("qtask_id")
-			for worker in record["worker_results"]
-			for completion in worker.get("completions", [])
+			qtask_id
+			for wave in record["waves"]
+			for qtask_id in wave.get("actual_dispatch_order", [])
 		]
-		record["releases"] = release_workers(qpm, active)
+		record["releases"] = [
+			release
+			for wave in record["waves"]
+			for release in wave.get("releases", [])
+		]
 		record["capacity_after"] = qpm.get_capacity_snapshot()
 		record["queue_after"] = qpm.get_scheduler_queue_state(
 			include_restricted=True)
@@ -259,12 +399,79 @@ def run_scenario(qpm, scenario, args, result_sink):
 	return record
 
 
+def run_wave(qpm, scenario, args, deadline, wave_index):
+	wave = {
+		"wave_index": wave_index,
+		"status": "running",
+		"reservation_decisions": [],
+		"worker_results": [],
+		"submitted_tasks": [],
+		"releases": [],
+		"errors": [],
+	}
+	active = []
+	try:
+		reservations = reserve_workers(qpm, scenario, wave_index)
+		wave["reservation_decisions"] = [
+			deepcopy(item["decision"]) for item in reservations
+		]
+		validate_reservation_decisions(scenario, reservations)
+		active = [
+			item for item in reservations
+			if decision_status(item["decision"]) == "accepted"
+		]
+		wave["expected_reservation_count"] = len(reservations)
+		wave["accepted_reservation_count"] = len(active)
+		if scenario.get("expect_all_tasks") and active:
+			if scenario.get("queue_all_before_resume"):
+				wave["worker_results"] = run_workers_queued(
+					qpm, scenario, active, args, deadline, wave)
+			else:
+				wave["worker_results"] = run_workers(
+					qpm, scenario, active, args, deadline)
+		wave["submitted_tasks"] = submitted_tasks_from_workers(
+			wave["worker_results"])
+		wave["expected_dispatch_order"] = expected_dispatch_order(
+			scenario, wave["submitted_tasks"])
+		wave["actual_dispatch_order"] = actual_dispatch_order(
+			wave["worker_results"])
+		validate_dispatch_order(scenario, wave)
+		wave["status"] = "ok"
+	except Exception as error:
+		wave["status"] = "failed"
+		wave["errors"].append({
+			"type": type(error).__name__,
+			"message": str(error),
+			"traceback": traceback.format_exc(),
+		})
+	finally:
+		wave["releases"] = release_workers(qpm, active)
+	return wave
+
+
+def validate_reservation_decisions(scenario, reservations):
+	statuses = [
+		decision_status(item["decision"]) for item in reservations
+	]
+	expected = scenario.get("expected_reservation_statuses") or []
+	if expected and statuses != expected:
+		raise DEFwError(
+			"reservation decisions did not match expectation: "
+			f"expected={expected} actual={statuses}")
+	active_count = sum(1 for status in statuses if status == "accepted")
+	if scenario["expect_all_reservations"] and active_count != len(reservations):
+		raise DEFwError(
+			"not all reservations were accepted: "
+			f"accepted={active_count} total={len(reservations)} "
+			f"statuses={statuses}")
+
+
+def decision_status(decision):
+	return str(decision.get("status") or decision.get("decision") or "").lower()
+
+
 def apply_runtime_configuration(qpm, scenario, record):
-	profile_result = qpm.get_device_profile()
-	profile = dict(profile_result.get("device_profile") or {})
-	profile.setdefault("external_device_id", FAKE_TARGET)
-	profile.setdefault("max_qubits", 20)
-	profile.setdefault("max_shots", 10_000)
+	profile = fake_device_profile(qpm, scenario)
 	profile_result = qpm.configure_device_profile(profile=profile)
 	estimator_result = qpm.set_estimator_policy({"name": "baseline"})
 	admission_result = qpm.set_admission_policy({
@@ -283,6 +490,51 @@ def apply_runtime_configuration(qpm, scenario, record):
 		"scheduler": scheduler_result,
 		"dispatch": dispatch_result,
 	}
+
+
+def fake_device_profile(qpm, scenario):
+	current = dict((qpm.get_device_profile() or {}).get("device_profile") or {})
+	device_id = current.get("device_id", FAKE_TARGET)
+	profile = {
+		"device_id": device_id,
+		"external_device_id": FAKE_TARGET,
+		"max_qubits": 20,
+		"max_shots": 10_000,
+		"time_span_ns": 60_000_000_000,
+		"baseline": {
+			"qubit_count": 4,
+			"depth": 10,
+			"one_q_gate_count": 10,
+			"two_q_gate_count": 5,
+			"measurement_count": 4,
+			"shots": 128,
+		},
+		"one_q_gate_ns": 20,
+		"two_q_gate_ns": 100,
+		"measurement_ns": 1000,
+		"one_q_gate_transfer_ns": 1,
+		"two_q_gate_transfer_ns": 4,
+		"measurement_transfer_ns": 10,
+		"compile_ns": 1000,
+		"control_overhead_ns": 200,
+		"provider_overhead_ns": 300,
+		"total_credits": 64,
+		"device_rate": 512,
+		"concurrent_jobs": 8,
+		"default_ttl_ns": 60_000_000_000,
+		"max_provider_queue_depth": 8,
+	}
+	_deep_update(profile, scenario.get("profile_overrides") or {})
+	return profile
+
+
+def _deep_update(target, updates):
+	for key, value in updates.items():
+		if isinstance(value, dict) and isinstance(target.get(key), dict):
+			_deep_update(target[key], value)
+		else:
+			target[key] = value
+	return target
 
 
 def admission_policy_options(scenario):
@@ -319,16 +571,18 @@ def scheduler_policy_payload(name):
 	return dict(SCHEDULER_ALIASES[name])
 
 
-def reserve_workers(qpm, scenario):
+def reserve_workers(qpm, scenario, wave_index=0):
 	reservations = []
 	for worker_index in range(scenario["workers"]):
 		tasks = build_workload(
 			scenario["workload"], worker_index,
 			scenario["tasks_per_worker"])
-		request = reservation_request(scenario, worker_index, tasks)
+		request = reservation_request(
+			scenario, worker_index, tasks, wave_index)
 		decision = qpm.reserve(request=request)
 		reservations.append({
 			"worker_index": worker_index,
+			"wave_index": wave_index,
 			"tasks": tasks,
 			"request": request,
 			"decision": decision,
@@ -336,28 +590,33 @@ def reserve_workers(qpm, scenario):
 	return reservations
 
 
-def reservation_request(scenario, worker_index, tasks):
+def reservation_request(scenario, worker_index, tasks, wave_index=0):
 	max_qubits = max(task["num_qubits"] for task in tasks)
 	max_depth = max(task["depth"] for task in tasks)
 	shots = max(task["shots"] for task in tasks)
+	task_count = len(tasks) + int(scenario.get("reservation_count_margin", 0))
 	return {
 		"owner": {"user": os.environ.get("USER", "fake-iqm-stress")},
-		"job_id": f"{scenario['name']}-worker-{worker_index}",
+		"job_id": (
+			f"{scenario['name']}-wave-{wave_index}-worker-{worker_index}"),
 		"allocation_id": os.environ.get("SLURM_JOB_ID", scenario["name"]),
 		"scope_id": scenario["name"],
 		"target_device_id": FAKE_TARGET,
 		"num_qubits": max_qubits,
-		"walltime_ns": scenario_walltime_ns(scenario, tasks),
+		"walltime_ns": (
+			scenario.get("walltime_ns") or
+			scenario_walltime_ns(scenario, tasks)),
 		"ttl_ns": 120_000_000_000,
 		"workload": {
 			"example": "fake-iqm-stress",
 			"tier": scenario["tier"],
 			"category": scenario["workload"],
 			"classical_mode": scenario["classical_mode"],
+			"wave_index": wave_index,
 		},
 		"run_context": {"operation": "async_run"},
 		"task_class": {
-			"count": len(tasks),
+			"count": task_count,
 			"qubit_count": max_qubits,
 			"depth": max_depth,
 			"one_q_gate_count": max(
@@ -553,8 +812,10 @@ def run_worker(qpm, scenario, reservation, args, deadline):
 			task["payload"],
 			reservation_id=reservation_id,
 			timeout=remaining_seconds(deadline))
-		worker["submissions"].append(submission)
-		if scenario["expect_all_tasks"] and submission.get("outcome") != "ACCEPTED":
+		worker["submissions"].append(submission_record(
+			submission, reservation, task))
+		if (scenario["expect_all_tasks"] and
+				not submission_will_complete(submission)):
 			raise DEFwError(f"qtask was not accepted: {submission}")
 		completion = wait_for_completion(
 			qpm, submission["cid"], reservation_id,
@@ -567,6 +828,111 @@ def run_worker(qpm, scenario, reservation, args, deadline):
 		run_classical_phase(worker, scenario, task, "post", args.classical_scale)
 	worker["status"] = "ok"
 	return worker
+
+
+def run_workers_queued(qpm, scenario, reservations, args, deadline, wave):
+	workers = [
+		{
+			"wave_index": reservation["wave_index"],
+			"worker_index": reservation["worker_index"],
+			"reservation_id": reservation["decision"]["reservation_id"],
+			"status": "running",
+			"submissions": [],
+			"completions": [],
+			"classical_events": [],
+		}
+		for reservation in reservations
+	]
+	pending = []
+	parallel_threads = []
+	qpm.pause(reason=f"fake-iqm-stress:{scenario['name']}:wave-{wave['wave_index']}")
+	try:
+		for worker, reservation in zip(workers, reservations):
+			reservation_id = reservation["decision"]["reservation_id"]
+			for task in reservation["tasks"]:
+				run_classical_phase(
+					worker, scenario, task, "pre",
+					args.classical_scale)
+				parallel = None
+				if scenario["classical_mode"] == "parallel":
+					parallel = start_parallel_classical(
+						worker, task, args.classical_scale)
+					parallel_threads.append(parallel)
+				submission = qpm.async_run(
+					task["payload"],
+					reservation_id=reservation_id,
+					timeout=remaining_seconds(deadline))
+				record = submission_record(submission, reservation, task)
+				worker["submissions"].append(record)
+				pending.append({
+					"worker": worker,
+					"reservation": reservation,
+					"task": task,
+					"submission": record,
+				})
+				if (scenario["expect_all_tasks"] and
+						not submission_will_complete(submission)):
+					raise DEFwError(
+						f"qtask was not accepted: {submission}")
+		wave["queued_state"] = qpm.get_scheduler_queue_state(
+			include_restricted=True)
+	finally:
+		qpm.resume()
+	complete_pending_submissions(qpm, scenario, pending, args, deadline)
+	for thread in parallel_threads:
+		thread.join(max(0.1, remaining_seconds(deadline)))
+		if thread.is_alive():
+			raise DEFwError("parallel classical emulation timed out")
+	for worker, reservation in zip(workers, reservations):
+		for task in reservation["tasks"]:
+			run_classical_phase(
+				worker, scenario, task, "post", args.classical_scale)
+		worker["status"] = "ok"
+	return workers
+
+
+def complete_pending_submissions(qpm, scenario, pending, args, deadline):
+	incomplete = list(pending)
+	while incomplete:
+		if time.monotonic() > deadline:
+			raise DEFwError("queued workers exceeded harness walltime")
+		qpm.retry_pending_capacity()
+		next_incomplete = []
+		for item in incomplete:
+			submission = item["submission"]
+			completion = qpm.read_cq(
+				cid=submission["cid"],
+				reservation_id=submission["reservation_id"])
+			if completion.get("completion_ready"):
+				item["worker"]["completions"].append(completion)
+			else:
+				next_incomplete.append(item)
+		if len(next_incomplete) == len(incomplete):
+			time.sleep(0.05)
+		incomplete = next_incomplete
+
+
+def submission_record(submission, reservation, task):
+	record = dict(submission)
+	record.update({
+		"wave_index": reservation["wave_index"],
+		"worker_index": reservation["worker_index"],
+		"reservation_id": reservation["decision"].get("reservation_id"),
+		"workload_index": task["workload_index"],
+		"workload_label": task["label"],
+		"priority": task["priority"],
+		"rough_quantum_ns": task["rough_quantum_ns"],
+		"num_qubits": task["num_qubits"],
+		"depth": task["depth"],
+		"shots": task["shots"],
+	})
+	return record
+
+
+def submission_will_complete(submission):
+	return (
+		submission.get("cid") is not None and
+		submission.get("outcome") in ("ACCEPTED", "DELAYED"))
 
 
 def run_classical_phase(worker, scenario, task, phase, scale):
@@ -655,44 +1021,91 @@ def leak_check(capacity, queue):
 	return leaks
 
 
-def expected_dispatch_order(scenario, reservations):
+def submitted_tasks_from_workers(workers):
 	tasks = []
-	for reservation in reservations:
-		for task in reservation["tasks"]:
-			tasks.append({
-				"worker_index": reservation["worker_index"],
-				"workload_index": task["workload_index"],
-				"priority": task["priority"],
-				"rough_quantum_ns": task["rough_quantum_ns"],
-			})
+	for worker in workers:
+		for submission in worker.get("submissions", []):
+			tasks.append(dict(submission))
+	return tasks
+
+
+def actual_dispatch_order(workers):
+	completions = []
+	for worker in workers:
+		for completion in worker.get("completions", []):
+			completions.append(dict(completion))
+	completions.sort(key=lambda item: (
+		item.get("qpm_cq_enqueue_time_ns", 0),
+		item.get("qtask_id", 0)))
+	return [completion.get("qtask_id") for completion in completions]
+
+
+def expected_dispatch_order(scenario, submitted_tasks):
+	tasks = [dict(task) for task in submitted_tasks]
 	policy = scenario["scheduler_policy"]
 	if policy in ("fifo", "ordered"):
-		return {"assertion": "submission-order", "tasks": tasks}
-	if policy == "priority":
-		return {
-			"assertion": "priority-descending",
-			"tasks": sorted(
-				tasks, key=lambda item: (-item["priority"],
-					item["worker_index"], item["workload_index"])),
-		}
-	if policy == "ordered_sjf":
-		return {
-			"assertion": "shortest-estimate-first",
-			"tasks": sorted(
-				tasks, key=lambda item: (item["rough_quantum_ns"],
-					item["worker_index"], item["workload_index"])),
-		}
-	if policy == "ordered_ljf":
-		return {
-			"assertion": "longest-estimate-first",
-			"tasks": sorted(
-				tasks, key=lambda item: (-item["rough_quantum_ns"],
-					item["worker_index"], item["workload_index"])),
-		}
+		ordered = tasks
+		assertion = "submission-order"
+	elif policy == "priority":
+		ordered = sorted(
+			tasks, key=lambda item: (-item["priority"],
+				item["worker_index"], item["workload_index"]))
+		assertion = "priority-descending"
+	elif policy == "ordered_sjf":
+		ordered = sorted(
+			tasks, key=lambda item: (item["rough_quantum_ns"],
+				item["worker_index"], item["workload_index"]))
+		assertion = "shortest-estimate-first"
+	elif policy == "ordered_ljf":
+		ordered = sorted(
+			tasks, key=lambda item: (-item["rough_quantum_ns"],
+				item["worker_index"], item["workload_index"]))
+		assertion = "longest-estimate-first"
+	elif policy == "round_robin":
+		ordered = round_robin_order(tasks)
+		assertion = "round-robin-by-reservation"
+	else:
+		ordered = tasks
+		assertion = "policy-specific-order"
 	return {
-		"assertion": "round-robin-visible-in-qhw-scheduler-order",
-		"tasks": tasks,
+		"assertion": assertion,
+		"qtask_ids": [task.get("qtask_id") for task in ordered],
+		"tasks": ordered,
 	}
+
+
+def round_robin_order(tasks):
+	groups = []
+	group_map = {}
+	for task in tasks:
+		key = task.get("reservation_id") or task.get("job_id")
+		if key not in group_map:
+			group = []
+			group_map[key] = group
+			groups.append(group)
+		group_map[key].append(task)
+	ordered = []
+	while groups:
+		next_groups = []
+		for group in groups:
+			if group:
+				ordered.append(group.pop(0))
+			if group:
+				next_groups.append(group)
+		groups = next_groups
+	return ordered
+
+
+def validate_dispatch_order(scenario, wave):
+	if not scenario.get("assert_scheduler_order"):
+		return
+	expected = wave["expected_dispatch_order"].get("qtask_ids", [])
+	actual = wave["actual_dispatch_order"]
+	if expected != actual:
+		raise DEFwError(
+			"scheduler dispatch order mismatch: "
+			f"expected={expected} actual={actual} "
+			f"assertion={wave['expected_dispatch_order'].get('assertion')}")
 
 
 class ResultSink:
@@ -750,6 +1163,7 @@ def main():
 			"backend": resolved_backend,
 			"workers": args.workers,
 			"tasks_per_worker": args.tasks_per_worker,
+			"waves": args.waves,
 			"harness_walltime": args.harness_walltime,
 		},
 		metrics={

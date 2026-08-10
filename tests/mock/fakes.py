@@ -44,28 +44,93 @@ class FakeSchedulerContext:
 		self.target_id = target_id
 		self.policy = None
 		self.submitted = []
+		self.tasks = {}
+		self.task_sequence = {}
 		self.queue = []
 		self.states = {}
 		self.started = []
 		self.completed = []
 		self.failed = []
 		self.cancelled = []
+		self.round_robin_index = 0
 
 	def set_policy(self, name, options):
 		self.policy = (name, dict(options))
 
 	def submit_task(self, task):
 		task = dict(task)
+		task_id = task["task_id"]
 		self.submitted.append(task)
-		self.queue.append(task["task_id"])
-		self.states[task["task_id"]] = "queued"
-		return task["task_id"]
+		self.tasks[task_id] = task
+		self.task_sequence[task_id] = len(self.task_sequence)
+		self.queue.append(task_id)
+		self.states[task_id] = "queued"
+		return task_id
 
 	def select_next_assignment(self):
 		if not self.queue:
 			return None
-		task_id = self.queue.pop(0)
+		index = self._selected_queue_index()
+		task_id = self.queue.pop(index)
 		self.states[task_id] = "selected"
+		return {"task_id": task_id}
+
+	def _selected_queue_index(self):
+		name = (self.policy or ("fifo", {}))[0]
+		if name == "priority":
+			return self._priority_queue_index()
+		if name == "round_robin":
+			return self._round_robin_queue_index()
+		if name == "ordered":
+			order = self._ordered_key()
+			if order == 2:
+				return self._runtime_queue_index(reverse=False)
+			if order == 3:
+				return self._runtime_queue_index(reverse=True)
+		return 0
+
+	def _priority_queue_index(self):
+		return min(
+			range(len(self.queue)),
+			key=lambda index: (
+				-self._task(self.queue[index]).get("priority", 0),
+				self.task_sequence.get(self.queue[index], index)))
+
+	def _runtime_queue_index(self, reverse=False):
+		def key(index):
+			task_id = self.queue[index]
+			runtime = self._task(task_id).get("estimated_runtime_ns", 0)
+			if reverse:
+				runtime = -runtime
+			return runtime, self.task_sequence.get(task_id, index)
+		return min(range(len(self.queue)), key=key)
+
+	def _round_robin_queue_index(self):
+		groups = []
+		group_to_indices = {}
+		for index, task_id in enumerate(self.queue):
+			task = self._task(task_id)
+			group = (
+				task.get("reservation_id") or
+				task.get("job_id") or
+				("task", task_id))
+			if group not in group_to_indices:
+				group_to_indices[group] = []
+				groups.append(group)
+			group_to_indices[group].append(index)
+		group = groups[self.round_robin_index % len(groups)]
+		self.round_robin_index += 1
+		return group_to_indices[group][0]
+
+	def _ordered_key(self):
+		options = (self.policy or ("ordered", {}))[1]
+		for value in options.values():
+			return int(value)
+		return 1
+
+	def _task(self, task_id):
+		if task_id in self.tasks:
+			return self.tasks[task_id]
 		return {"task_id": task_id}
 
 	def task_started(self, task_id):

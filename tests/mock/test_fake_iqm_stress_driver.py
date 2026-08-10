@@ -31,6 +31,7 @@ def test_startup_scenario_matches_test_plan_defaults():
 		scenario_set="startup",
 		workers=2,
 		tasks_per_worker=2,
+		waves=1,
 		dispatch_depth=3,
 	)
 
@@ -45,9 +46,16 @@ def test_startup_scenario_matches_test_plan_defaults():
 		"classical_mode": "sequential_pre",
 		"workers": 1,
 		"tasks_per_worker": 2,
+		"waves": 1,
 		"dispatch_depth": 1,
 		"expect_all_reservations": True,
 		"expect_all_tasks": True,
+		"expected_reservation_statuses": [],
+		"profile_overrides": {},
+		"walltime_ns": None,
+		"queue_all_before_resume": False,
+		"assert_scheduler_order": False,
+		"reservation_count_margin": 0,
 	}]
 
 
@@ -57,6 +65,7 @@ def test_smoke_matrix_focuses_on_credit_and_rate():
 		scenario_set="smoke",
 		workers=2,
 		tasks_per_worker=3,
+		waves=1,
 		dispatch_depth=2,
 	)
 
@@ -70,6 +79,33 @@ def test_smoke_matrix_focuses_on_credit_and_rate():
 	assert {item["scheduler_policy"] for item in scenarios} == set(
 		driver.SMOKE_SCHEDULERS)
 	assert all(item["workload"] == "short_only" for item in scenarios)
+
+
+def test_admission_limit_matrix_has_expected_decisions():
+	driver = _driver()
+	args = argparse.Namespace(
+		scenario_set="admission",
+		workers=2,
+		tasks_per_worker=3,
+		waves=1,
+		dispatch_depth=2,
+	)
+
+	scenarios = driver.build_scenarios(args)
+
+	assert len(scenarios) == 6
+	assert {item["admission_policy"] for item in scenarios} == {
+		"credit",
+		"rate",
+	}
+	assert {
+		tuple(item["expected_reservation_statuses"])
+		for item in scenarios
+	} == {
+		("accepted",),
+		("accepted", "delayed"),
+		("rejected",),
+	}
 
 
 def test_ordered_scheduler_aliases_use_ordered_plugin_options():
@@ -100,6 +136,7 @@ def test_startup_scenario_runs_against_fake_qpm(monkeypatch, tmp_path):
 		scenario_set="startup",
 		workers=1,
 		tasks_per_worker=2,
+		waves=1,
 		dispatch_depth=1,
 		harness_walltime=10,
 		completion_timeout=5,
@@ -116,3 +153,46 @@ def test_startup_scenario_runs_against_fake_qpm(monkeypatch, tmp_path):
 	assert len(record["worker_results"][0]["completions"]) == 2
 	assert (tmp_path / "stress.jsonl").read_text(
 		encoding="utf-8").strip()
+
+
+def test_scheduler_scenario_asserts_policy_order(monkeypatch, tmp_path):
+	driver = _driver()
+	clear_target_controllers()
+	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
+	monkeypatch.setenv("QFW_FAKE_QPM_MIN_SLEEP_SECONDS", "0.001")
+	monkeypatch.setenv("QFW_FAKE_QPM_MAX_SLEEP_SECONDS", "0.01")
+	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
+	qpm = QPM(
+		admission_context_factory=FakeAdmissionContext,
+		scheduler_context_factory=FakeSchedulerContext,
+	)
+	args = argparse.Namespace(
+		backend="fake-iqm",
+		scenario_set="scheduler",
+		workers=2,
+		tasks_per_worker=2,
+		waves=1,
+		dispatch_depth=1,
+		harness_walltime=10,
+		completion_timeout=5,
+		classical_scale=0.0,
+	)
+	scenario = driver._scenario(
+		"scheduler-credit-priority",
+		"scheduler",
+		"credit",
+		"priority",
+		"mixed_job_types",
+		"parallel",
+		workers=2,
+		tasks_per_worker=2,
+		dispatch_depth=1,
+		queue_all_before_resume=True,
+		assert_scheduler_order=True)
+	sink = driver.ResultSink(str(tmp_path / "scheduler.jsonl"))
+
+	record = driver.run_scenario(qpm, scenario, args, sink)
+
+	assert record["status"] == "ok"
+	assert record["actual_dispatch_order"][0] == (
+		record["expected_dispatch_order"][0]["qtask_ids"])

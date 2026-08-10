@@ -209,7 +209,9 @@ qhw-admission/qhw-scheduler stress driver. The wrapper uses only
 ```bash
 ./qfw_fake_iqm_stress.sh --scenario-set startup
 ./qfw_fake_iqm_stress.sh --scenario-set smoke --workers 2 --tasks-per-worker 2
-./qfw_fake_iqm_stress.sh --scenario-set hybrid --harness-walltime 120
+./qfw_fake_iqm_stress.sh --scenario-set admission
+./qfw_fake_iqm_stress.sh --scenario-set scheduler --workers 2 --tasks-per-worker 2
+./qfw_fake_iqm_stress.sh --scenario-set hybrid --waves 2 --harness-walltime 120
 ```
 
 Scenario records are printed with `QFW_FAKE_IQM_STRESS_RESULT ` and include

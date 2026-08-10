@@ -292,19 +292,60 @@ class UTIL_QPM:
 
 	def process_oor_queue(self):
 		while True:
-			if self.oor_queue.empty():
+			if not self._prune_oor_queue():
 				break
 			try:
-				# now that we have the resources for the circuit secured
-				# pop that entry off the queue.
-				cid = self.oor_queue.get(block=False)
-				runtime = self.controller.task_for_cid(cid)
-				if (runtime is None or
-						runtime.state in QPM_TASK_TERMINAL_STATES):
-					continue
-				self.async_run_oor(cid)
+				cid = self._next_oor_cid_without_scheduler_task()
+				if cid is not None:
+					self.async_run_oor(cid)
+					self._remove_oor_cid(cid)
+				else:
+					status = self.dispatch_ready_qtask()
+					if status is None:
+						break
+					self._remove_oor_cid(status.get("cid"))
 			except DEFwOutOfResources:
 				break
+
+	def _prune_oor_queue(self):
+		active = []
+		while not self.oor_queue.empty():
+			cid = self.oor_queue.get(block=False)
+			runtime = self.controller.task_for_cid(cid)
+			if (runtime is not None and
+					runtime.state not in QPM_TASK_TERMINAL_STATES):
+				active.append(cid)
+		for cid in active:
+			self.oor_queue.put(cid)
+		return active
+
+	def _remove_oor_cid(self, dispatched_cid):
+		if dispatched_cid is None:
+			return
+		pending = []
+		removed = False
+		while not self.oor_queue.empty():
+			cid = self.oor_queue.get(block=False)
+			if not removed and cid == dispatched_cid:
+				removed = True
+				continue
+			pending.append(cid)
+		for cid in pending:
+			self.oor_queue.put(cid)
+
+	def _next_oor_cid_without_scheduler_task(self):
+		pending = []
+		selected = None
+		while not self.oor_queue.empty():
+			cid = self.oor_queue.get(block=False)
+			pending.append(cid)
+			runtime = self.controller.task_for_cid(cid)
+			if (selected is None and runtime is not None and
+					runtime.scheduler_task_id is None):
+				selected = cid
+		for cid in pending:
+			self.oor_queue.put(cid)
+		return selected
 
 	def free_resources(self, circ, result=None):
 		self.finalize_provider_task(circ, result=result)
@@ -373,11 +414,19 @@ class UTIL_QPM:
 		return circuit
 
 	def submit_provider_sync(self, circuit):
-		self.controller.start_provider_submission(circuit)
+		runtime = self.controller.start_provider_submission(circuit)
+		if runtime is None:
+			raise DEFwOutOfResources("qtask is already submitted")
 		return self.qrc.sync_run(circuit)
 
 	def submit_provider_async(self, circuit, return_status=False):
-		self.controller.start_provider_submission(circuit)
+		runtime = self.controller.start_provider_submission(circuit)
+		if runtime is None:
+			if return_status:
+				return self.controller.task_status_for_cid(
+					circuit.get_cid(),
+					reservation_id=circuit.info.get("reservation_id"))
+			return None
 		response = (
 			self.controller.task_status_for_cid(
 				circuit.get_cid(),
