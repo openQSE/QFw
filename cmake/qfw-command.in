@@ -17,7 +17,7 @@ resolve_script_dir() {
 script_dir="$(resolve_script_dir "${BASH_SOURCE[0]}")"
 if [[ -z "${_QFW_ACTIVE:-}" && -r "${script_dir}/qfw-activate" ]]; then
 	# shellcheck source=/dev/null
-	source "${script_dir}/qfw-activate"
+	source "${script_dir}/qfw-activate" --qfw-no-args
 fi
 
 qfw_prefix="${QFW_PREFIX:-$(cd "${script_dir}/.." && pwd)}"

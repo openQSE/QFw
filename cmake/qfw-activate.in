@@ -5,6 +5,69 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	exit 2
 fi
 
+_qfw_requested_venv=""
+_qfw_parse_args=0
+case "${1:-}" in
+	--qfw-no-args|--venv|--venv=*|-h|--help) _qfw_parse_args=1 ;;
+esac
+
+if [[ "${_qfw_parse_args}" == "1" ]]; then
+	while [[ "$#" -gt 0 ]]; do
+		case "$1" in
+			--qfw-no-args)
+				shift
+				break
+				;;
+			--venv)
+				if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
+					echo "qfw-activate: --venv requires a path" >&2
+					unset _qfw_requested_venv _qfw_parse_args
+					return 2
+				fi
+				_qfw_requested_venv="$2"
+				shift 2
+				;;
+			--venv=*)
+				_qfw_requested_venv="${1#--venv=}"
+				if [[ -z "${_qfw_requested_venv}" ]]; then
+					echo "qfw-activate: --venv requires a path" >&2
+					unset _qfw_requested_venv _qfw_parse_args
+					return 2
+				fi
+				shift
+				;;
+			-h|--help)
+				cat <<'EOF'
+Usage: source qfw-activate [--venv PATH]
+
+Options:
+  --venv PATH  Activate PATH first, then layer QFw and DEFw paths on top.
+  -h, --help   Show this help text.
+EOF
+				unset _qfw_requested_venv _qfw_parse_args
+				return 0
+				;;
+			*)
+				echo "qfw-activate: unsupported argument: $1" >&2
+				unset _qfw_requested_venv _qfw_parse_args
+				return 2
+				;;
+		esac
+	done
+fi
+
+if [[ -n "${_QFW_ACTIVE:-}" ]]; then
+	if [[ -z "${_qfw_requested_venv}" ]]; then
+		unset _qfw_requested_venv _qfw_parse_args
+		return 0
+	fi
+	if declare -F qfw_deactivate >/dev/null 2>&1; then
+		qfw_deactivate
+	else
+		unset _QFW_ACTIVE
+	fi
+fi
+
 _qfw_resolve_script_dir() {
 	local source="$1"
 	local dir
@@ -95,9 +158,47 @@ for item in paths:
 PY
 }
 
-if [[ -n "${_QFW_ACTIVE:-}" ]]; then
-	return 0
+_qfw_activate_requested_venv() {
+	local requested_venv="$1"
+	local resolved_venv
+	local active_venv=""
+
+	[[ -n "${requested_venv}" ]] || return 0
+	if [[ ! -d "${requested_venv}" ]]; then
+		echo "qfw-activate: virtual environment not found: ${requested_venv}" >&2
+		return 2
+	fi
+	resolved_venv="$(cd "${requested_venv}" && pwd)"
+	if [[ ! -r "${resolved_venv}/bin/activate" ||
+	      ! -x "${resolved_venv}/bin/python" ]]; then
+		echo "qfw-activate: invalid virtual environment: ${resolved_venv}" >&2
+		return 2
+	fi
+	if [[ -n "${VIRTUAL_ENV:-}" && -d "${VIRTUAL_ENV}" ]]; then
+		active_venv="$(cd "${VIRTUAL_ENV}" && pwd)"
+	fi
+	if [[ -n "${active_venv}" && "${active_venv}" != "${resolved_venv}" ]]; then
+		echo "qfw-activate: switching virtual environment from ${VIRTUAL_ENV} to ${resolved_venv}" >&2
+	fi
+	if [[ "${active_venv}" != "${resolved_venv}" ]]; then
+		# shellcheck source=/dev/null
+		source "${resolved_venv}/bin/activate"
+	fi
+}
+
+_qfw_activate_requested_venv "${_qfw_requested_venv}"
+_qfw_activate_rc=$?
+if [[ "${_qfw_activate_rc}" -ne 0 ]]; then
+	unset _qfw_requested_venv _qfw_parse_args _qfw_activate_rc
+	unset -f _qfw_active_venv_python_paths
+	unset -f _qfw_resolve_script_dir
+	unset -f _qfw_prepend_path
+	unset -f _qfw_save_var
+	unset -f _qfw_restore_var
+	unset -f _qfw_activate_requested_venv
+	return 2
 fi
+unset _qfw_activate_rc
 
 _qfw_script_dir="$(_qfw_resolve_script_dir "${BASH_SOURCE[0]}")"
 _qfw_script_prefix="$(cd "${_qfw_script_dir}/.." && pwd)"
@@ -220,8 +321,10 @@ qfw_deactivate() {
 	unset -f _qfw_prepend_path
 	unset -f _qfw_save_var
 	unset -f _qfw_restore_var
+	unset -f _qfw_activate_requested_venv
 }
 
 unset _qfw_script_dir _qfw_script_prefix
 unset _qfw_cmake_source_prefix _qfw_cmake_generated_prefix
 unset _qfw_venv_path
+unset _qfw_requested_venv _qfw_parse_args

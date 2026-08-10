@@ -385,12 +385,86 @@ execute_process(
 		qfw_deactivate
 		test -z \"\${QFW_PREFIX+x}\""
 	RESULT_VARIABLE activation_rc)
-if(NOT activation_rc EQUAL 0)
-	message(FATAL_ERROR "QFw install activation smoke failed")
-endif()
+	if(NOT activation_rc EQUAL 0)
+		message(FATAL_ERROR "QFw install activation smoke failed")
+	endif()
 
-execute_process(
-	COMMAND "${QFW_BASH}" -c
+	set(qfw_activation_venv "${qfw_run_base}/activation-venv")
+	set(qfw_switch_venv "${qfw_run_base}/switch-venv")
+	foreach(qfw_fake_venv IN ITEMS
+			"${qfw_activation_venv}"
+			"${qfw_switch_venv}")
+		file(MAKE_DIRECTORY "${qfw_fake_venv}/bin")
+		file(WRITE "${qfw_fake_venv}/bin/activate"
+			"#!/usr/bin/env bash\n"
+			"if declare -F deactivate >/dev/null 2>&1; then\n"
+			"\tdeactivate nondestructive\n"
+			"fi\n"
+			"deactivate() {\n"
+			"\tif [[ -n \"\${_OLD_VIRTUAL_PATH+x}\" ]]; then\n"
+			"\t\texport PATH=\"\${_OLD_VIRTUAL_PATH}\"\n"
+			"\t\tunset _OLD_VIRTUAL_PATH\n"
+			"\tfi\n"
+			"\tunset VIRTUAL_ENV\n"
+			"\tif [[ \"\${1:-}\" != \"nondestructive\" ]]; then\n"
+			"\t\tunset -f deactivate\n"
+			"\tfi\n"
+			"}\n"
+			"_OLD_VIRTUAL_PATH=\"\${PATH:-}\"\n"
+			"export VIRTUAL_ENV='${qfw_fake_venv}'\n"
+			"export PATH=\"\${VIRTUAL_ENV}/bin:\${PATH:-}\"\n")
+		file(WRITE "${qfw_fake_venv}/bin/python"
+			"#!/usr/bin/env bash\n"
+			"exec '${QFW_PYTHON}' \"\$@\"\n")
+		file(CHMOD
+			"${qfw_fake_venv}/bin/activate"
+			"${qfw_fake_venv}/bin/python"
+			PERMISSIONS
+				OWNER_READ OWNER_WRITE OWNER_EXECUTE
+				GROUP_READ GROUP_EXECUTE
+				WORLD_READ WORLD_EXECUTE)
+	endforeach()
+
+	execute_process(
+		COMMAND "${QFW_BASH}" -c
+			"set -e
+			source '${qfw_activation_venv}/bin/activate'
+			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
+			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
+			test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
+			qfw_deactivate
+			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			deactivate
+			test -z \"\${VIRTUAL_ENV+x}\"
+
+			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_activation_venv}'
+			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
+			test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
+			qfw_deactivate
+			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+
+			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_switch_venv}' 2> '${qfw_run_base}/qfw-activate-switch.err'
+			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
+			test \"\$(command -v python)\" = '${qfw_switch_venv}/bin/python'
+			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-switch.err'
+			qfw_deactivate
+			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
+			deactivate
+			test -z \"\${VIRTUAL_ENV+x}\"
+
+			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv='${qfw_activation_venv}'
+			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			qfw_deactivate
+			deactivate"
+		RESULT_VARIABLE activation_venv_rc)
+	if(NOT activation_venv_rc EQUAL 0)
+		message(FATAL_ERROR "QFw install activation venv smoke failed")
+	endif()
+
+	execute_process(
+		COMMAND "${QFW_BASH}" -c
 		"set -e
 		unset QFW_PATH
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'

@@ -307,10 +307,19 @@ The default runtime configuration files are:
 
 `qfw-activate` exports `QFW_PREFIX`, `QFW_SHARE_DIR`, `QFW_SITE_CONFIG`,
 `QFW_RUN_BASE_DIR`, `DEFW_PREFIX`, `DEFW_EXTERNAL_SERVICES_PATH`, and
-`DEFW_EXTERNAL_SERVICE_APIS_PATH`. An active user virtual environment is
-preserved and its site-packages are prepended to `PYTHONPATH` so services
-started through `defw-python` see the same Python package set as the
-application.
+`DEFW_EXTERNAL_SERVICE_APIS_PATH`. It can also activate a shared Python virtual
+environment before layering QFw paths:
+
+```bash
+source /path/to/qfw-install/bin/qfw-activate --venv /path/to/shared-venv
+```
+
+Without `--venv`, activation still works with the default installed
+environment. If a user virtual environment is already active, it is preserved
+and its site-packages are prepended to `PYTHONPATH` so services started through
+`defw-python` see the same Python package set as the application. When
+`--venv` is provided and a different virtual environment is already active, the
+explicit `--venv` path takes precedence and `qfw-activate` switches to it.
 
 Simulator and hardware-provider dependencies are site/image concerns.
 Install them into the shared user environment or make them available
