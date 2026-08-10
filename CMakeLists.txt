@@ -201,6 +201,8 @@ install(PROGRAMS
 	examples/qfw_fake_iqm_stress.sh
 	examples/qfw_ghz.sh
 	examples/qfw_init_test.sh
+	examples/qfw_iqm_chem_smoke.sh
+	examples/qfw_iqm_site_services.sh
 	examples/qfw_long_running_qpm.sh
 	examples/qfw_mpi_smoke.sh
 	examples/qfw_pennylane.sh
