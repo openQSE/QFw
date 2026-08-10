@@ -40,6 +40,7 @@ QPM_SERVICE_TYPE = "qfw.qpm"
 QPM_DEFAULT_CLIENT_MODULE = "api_qpm"
 QPM_DEFAULT_CLIENT_CLASS = "QPM"
 MANAGED_SUBMISSION_FAILURE_REASONS = (
+	"credential-binding-failed",
 	"scheduler-submission-failed",
 	"provider-submission-failed",
 )
@@ -407,6 +408,8 @@ class UTIL_QPM:
 			self.controller.set_task_state(
 				circuit.info["qtask_id"], QPM_TASK_RESOURCES_CONSUMED)
 		logging.debug(f"Running {cid}\n{circuit.info}")
+		if circuit.info.get("reservation_id") is not None:
+			self.controller.attach_provider_credential(circuit)
 		self.prepare_provider_submission(circuit)
 		return circuit
 
@@ -665,6 +668,14 @@ class UTIL_QPM:
 			try:
 				self.controller.validate_reservation_for_context(
 					request.context)
+				credential_getter = getattr(
+					self.controller,
+					"provider_credential_for_reservation",
+					None)
+				if credential_getter is not None:
+					credential_getter(
+						request.context.reservation_id,
+						operation="execution")
 			except (QPMAdmissionUnavailable,
 				QPMAdmissionValidationError) as error:
 				raise DEFwExecutionError(str(error))
@@ -1176,6 +1187,7 @@ class UTIL_QPM:
 
 		qpm_shutdown = True
 		self.controller.stop_completion_purge_worker()
+		self.controller.clear_provider_credentials()
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None
@@ -1221,6 +1233,7 @@ class UTIL_QPM:
 
 	def shutdown_provider(self):
 		self.controller.stop_completion_purge_worker()
+		self.controller.clear_provider_credentials()
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None
@@ -1254,8 +1267,6 @@ def _token_reservation_request_args(token, reservation_id, request):
 def _token_reservation_reason_args(token, reservation_id, reason):
 	if reservation_id is None:
 		return None, token, reason
-	if reason is None and not isinstance(reservation_id, str):
-		return None, token, reservation_id
 	return token, reservation_id, reason
 
 

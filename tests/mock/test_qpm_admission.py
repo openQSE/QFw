@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 import sys
@@ -304,8 +305,34 @@ def test_reserve_stores_unverified_request_metadata(monkeypatch):
 
 
 def test_reserve_stores_structured_binding_without_provider_secrets(
-		monkeypatch):
+		monkeypatch, tmp_path):
 	_setup(monkeypatch)
+	(tmp_path / "qpu_users.json").write_text(
+		json.dumps({
+			"users": {
+				"alice": {
+					"devices": {
+						"ornl-iqm-20q": {
+							"api_key": "alice-provider-api-key",
+						}
+					}
+				}
+			}
+		}),
+		encoding="utf-8")
+	config_path = tmp_path / "config.yaml"
+	config_path.write_text(
+		"\n".join([
+			"qpus:",
+			"  ornl-iqm-20q:",
+			"    provider: iqm",
+			"    provider-device-id: default",
+			"    url: https://iqm.example.invalid/",
+			"    credential-db: qpu_users.json",
+			"",
+		]),
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
 	qpm = AdmissionQPM()
 
 	decision = qpm.reserve({
@@ -366,7 +393,13 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 	assert credential_binding["secret_material"] == "not-stored"
 	assert binding["analytics"]["application"] == "chemistry_example_aim2"
 	assert binding["analytics"]["access_token"] == "<redacted>"
-	assert metadata["provider_credential_binding"] == credential_binding
+	resolved_binding = metadata["provider_credential_binding"]
+	assert resolved_binding["provider_type"] == "file"
+	assert resolved_binding["user"] == "alice"
+	assert resolved_binding["target_device_id"] == "ornl-iqm-20q"
+	assert resolved_binding["secret_material"] == "cached-in-qpm"
+	assert "secret-value" not in str(metadata)
+	assert "alice-provider-api-key" not in str(metadata)
 
 
 def test_completion_retention_loads_service_runtime_config(

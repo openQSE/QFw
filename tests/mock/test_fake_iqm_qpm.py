@@ -1,3 +1,4 @@
+import json
 import time
 
 import util.qpm.util_qpm as util_qpm
@@ -159,6 +160,97 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch):
 	assert admission.actual[-1][1]["actual_baseline_units"] == 4
 	assert qpm.controller.scheduler_context.completed == [response["qtask_id"]]
 	assert qpm.get_scheduler_queue_state()["provider_inflight_qtask_ids"] == []
+
+
+def test_fake_iqm_qpm_uses_reservation_provider_credential(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	credential_db = {
+		"users": {
+			"stress-user": {
+				"devices": {
+					FAKE_IQM_TARGET_ID: {
+						"api_key": "fake-api-key-stress",
+					}
+				}
+			}
+		}
+	}
+	(tmp_path / "qpu_users.json").write_text(
+		json.dumps(credential_db),
+		encoding="utf-8")
+	config_path = tmp_path / "config.yaml"
+	config_path.write_text(
+		"\n".join([
+			"qpus:",
+			f"  {FAKE_IQM_TARGET_ID}:",
+			"    provider: fake-iqm",
+			"    provider-device-id: default",
+			"    url: https://fake-iqm.invalid/",
+			"    credential-db: qpu_users.json",
+			"",
+		]),
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
+
+	qpm = QPM(
+		admission_context_factory=FakeAdmissionContext,
+		scheduler_context_factory=FakeSchedulerContext,
+	)
+	decision = qpm.reserve({
+		"owner": {"user": "stress-user"},
+		"job_id": "job-fake-iqm-credential",
+		"scope_id": "allocation-credential",
+		"target_device_id": FAKE_IQM_TARGET_ID,
+		"task_class": {
+			"qubit_count": 2,
+			"depth": 4,
+			"one_q_gate_count": 4,
+			"two_q_gate_count": 1,
+			"measurement_count": 2,
+			"shots": 16,
+		},
+	})
+
+	assert decision["status"] == "accepted"
+	reservation = qpm.get_reservation(
+		reservation_id=decision["reservation_id"])
+	credential_binding = (
+		reservation["request_metadata"]["provider_credential_binding"])
+	assert credential_binding["provider_type"] == "file"
+	assert credential_binding["user"] == "stress-user"
+	assert credential_binding["target_device_id"] == FAKE_IQM_TARGET_ID
+	assert credential_binding["secret_material"] == "cached-in-qpm"
+	assert "fake-api-key-stress" not in str(reservation)
+
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"shots": 16,
+		"depth": 4,
+		"one_q_gate_count": 4,
+		"two_q_gate_count": 1,
+		"measurement_count": 2,
+	}, reservation_id=decision["reservation_id"])
+	completion = _wait_for_completion(
+		qpm, response["cid"], decision["reservation_id"])
+
+	assert completion["outcome"] == "COMPLETED"
+	assert completion["provider_credential"] == {
+		"api_key_present": True,
+		"api_key_suffix": "ress",
+		"provider": "file",
+		"provider_type": "file",
+		"user": "stress-user",
+		"target_device_id": FAKE_IQM_TARGET_ID,
+		"provider_device_id": "default",
+		"secret_material": "cached-in-qpm",
+	}
+	assert "fake-api-key-stress" not in str(completion)
+	release = qpm.release(reservation_id=decision["reservation_id"])
+	assert release["status"] == "accepted"
+	assert decision["reservation_id"] not in (
+		qpm.controller.reservation_credentials_by_id)
 
 
 def _wait_for_completion(qpm, cid, reservation_id, timeout=1.0):

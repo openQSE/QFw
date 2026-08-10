@@ -47,6 +47,7 @@ from .scheduler import (
 	QPMSchedulerError,
 	QPMSchedulerQueueEmpty,
 )
+from .credentials import bind_reservation_credential
 
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -263,6 +264,7 @@ class QPMTargetController:
 		self.external_id_next = 1
 		self.admission_request_id_next = 1
 		self.reservation_metadata_by_id = {}
+		self.reservation_credentials_by_id = {}
 		self.reservation_close_state = {}
 		self.device_profile = None
 		self.capacity_model = {}
@@ -336,6 +338,8 @@ class QPMTargetController:
 					self.scheduler_config_versions),
 				"reservation_metadata_count": len(
 					self.reservation_metadata_by_id),
+				"credential_binding_count": len(
+					self.reservation_credentials_by_id),
 				"closing_reservation_count": len(
 					self.reservation_close_state),
 				"scheduler_task_count": scheduler_task_count(
@@ -877,8 +881,22 @@ class QPMTargetController:
 			reservation_id = decision.get("reservation_id")
 			if (decision.get("status") == "accepted" and
 					reservation_id is not None):
-				self.reservation_metadata_by_id[reservation_id] = (
-					admission_request["metadata"])
+				metadata = admission_request["metadata"]
+				try:
+					self._bind_provider_credential_locked(
+						reservation_id, metadata)
+				except Exception as error:
+					self._reject_credential_binding_reservation_locked(
+						reservation_id)
+					return {
+						"status": "rejected",
+						"request_id": decision.get("request_id"),
+						"reservation_id": reservation_id,
+						"reason": "credential-binding-failed",
+						"message": str(error),
+						"admission_status": dict(decision),
+					}
+				self.reservation_metadata_by_id[reservation_id] = metadata
 				self._ensure_completion_queue_locked(reservation_id)
 			return decision
 
@@ -896,6 +914,7 @@ class QPMTargetController:
 				deliveries=deliveries)
 			if result.get("status") == "accepted":
 				self.reservation_metadata_by_id.pop(reservation_id, None)
+				self._remove_provider_credential_locked(reservation_id)
 		self._dispatch_completion_deliveries(deliveries)
 		return result
 
@@ -907,6 +926,7 @@ class QPMTargetController:
 				deliveries=deliveries)
 			if result.get("status") == "accepted":
 				self.reservation_metadata_by_id.pop(reservation_id, None)
+				self._remove_provider_credential_locked(reservation_id)
 		self._dispatch_completion_deliveries(deliveries)
 		return result
 
@@ -947,6 +967,104 @@ class QPMTargetController:
 			self._require_reservation_matches_context_locked(
 				reservation, request_context)
 			return reservation
+
+	def provider_credential_for_reservation(self, reservation_id,
+						operation="execution"):
+		with self.lock:
+			if reservation_id is None:
+				raise QPMAdmissionValidationError(
+					"reservation_id is required for provider credentials")
+			reservation = get_reservation(
+				self.admission_context, reservation_id)
+			self._require_reservation_active(reservation, operation)
+			self._require_reservation_not_expired(reservation)
+			record = self.reservation_credentials_by_id.get(reservation_id)
+			if record is None:
+				record = self._fallback_provider_credential_locked(
+					reservation_id)
+			expires_at_ns = record["metadata"].get("expires_at_ns")
+			if expires_at_ns and expires_at_ns <= time.time_ns():
+				raise QPMAdmissionValidationError(
+					"provider credential binding expired for "
+					f"reservation_id={reservation_id}")
+			return {
+				"secret": dict(record.get("secret") or {}),
+				"metadata": dict(record.get("metadata") or {}),
+			}
+
+	def attach_provider_credential(self, circuit):
+		reservation_id = circuit.info.get("reservation_id")
+		record = self.provider_credential_for_reservation(
+			reservation_id, operation="execution")
+		secret = dict(record.get("secret") or {})
+		metadata = _drop_none(_redacted_metadata(
+			dict(record.get("metadata") or {})))
+		setattr(circuit, "provider_credential", secret)
+		setattr(circuit, "provider_credential_metadata", metadata)
+		if metadata:
+			circuit.info["provider_credential_binding"] = metadata
+		return circuit
+
+	def clear_provider_credentials(self):
+		with self.lock:
+			self.reservation_credentials_by_id.clear()
+
+	def _bind_provider_credential_locked(self, reservation_id, metadata):
+		reservation_binding = dict(metadata.get("reservation_binding") or {})
+		response = bind_reservation_credential(reservation_binding)
+		secret = dict(response.secret or {})
+		credential_metadata = _drop_none(_redacted_metadata(
+			dict(response.metadata or {})))
+		self.reservation_credentials_by_id[reservation_id] = {
+			"secret": secret,
+			"metadata": credential_metadata,
+			"binding": reservation_binding,
+		}
+		if credential_metadata:
+			metadata["provider_credential_binding"] = credential_metadata
+		return credential_metadata
+
+	def _remove_provider_credential_locked(self, reservation_id):
+		self.reservation_credentials_by_id.pop(reservation_id, None)
+
+	def _fallback_provider_credential_locked(self, reservation_id):
+		request_metadata = self.reservation_metadata_by_id.get(reservation_id)
+		if isinstance(request_metadata, dict):
+			credential_metadata = (
+				request_metadata.get("provider_credential_binding") or {})
+			if credential_metadata.get("secret_material") == "cached-in-qpm":
+				raise QPMAdmissionValidationError(
+					"provider credential binding is missing for "
+					f"reservation_id={reservation_id}")
+		now_ns = time.time_ns()
+		record = {
+			"secret": {},
+			"metadata": {
+				"schema": "qfw-provider-credential-binding-v1",
+				"provider": "no-secret",
+				"provider_type": "no-secret",
+				"reservation_id": reservation_id,
+				"bound_at_ns": now_ns,
+				"expires_at_ns": 0,
+				"refresh_policy": "none",
+				"secret_material": "none",
+			},
+			"binding": {},
+		}
+		self.reservation_credentials_by_id[reservation_id] = record
+		return record
+
+	def _reject_credential_binding_reservation_locked(self, reservation_id):
+		self.reservation_metadata_by_id.pop(reservation_id, None)
+		self.reservation_credentials_by_id.pop(reservation_id, None)
+		self.completion_queues.pop(reservation_id, None)
+		try:
+			release_reservation(self.admission_context, reservation_id, 1)
+		except Exception:
+			try:
+				cancel_reservation(self.admission_context, reservation_id, 1)
+			except Exception:
+				pass
 
 	def authorize_capacity_hold(self, circuit):
 		qtask_id = circuit.info["qtask_id"]
@@ -3186,6 +3304,8 @@ class QPMTargetController:
 		for expired_reservation_id, close_state in close_states:
 			close_state["completed_at_ns"] = time.time_ns()
 			close_state["status"] = "accepted"
+			self.reservation_metadata_by_id.pop(expired_reservation_id, None)
+			self._remove_provider_credential_locked(expired_reservation_id)
 			self._mark_completion_queue_terminal_locked(
 				expired_reservation_id, close_state["completed_at_ns"])
 		return {
@@ -3524,6 +3644,7 @@ def clear_target_controllers():
 		controllers = list(_CONTROLLERS.values())
 		_CONTROLLERS.clear()
 	for controller in controllers:
+		controller.clear_provider_credentials()
 		controller.stop_completion_purge_worker()
 
 
@@ -3682,6 +3803,8 @@ def _redacted_metadata(value):
 
 def _is_sensitive_metadata_key(key):
 	name = str(key).strip().lower().replace("-", "_")
+	if name == "secret_material":
+		return False
 	return any(part in name for part in SENSITIVE_METADATA_KEY_PARTS)
 
 

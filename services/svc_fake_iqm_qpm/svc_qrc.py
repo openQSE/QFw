@@ -130,6 +130,9 @@ class QRC:
 		info = circuit.info
 		cid = circuit.get_cid()
 		qtask_id = info.get("qtask_id")
+		credential = dict(getattr(circuit, "provider_credential", {}) or {})
+		credential_metadata = dict(
+			getattr(circuit, "provider_credential_metadata", {}) or {})
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
 		num_qubits = int(info.get("num_qubits", 1))
 		state = "0" * max(1, num_qubits)
@@ -157,6 +160,8 @@ class QRC:
 				"two_q_gate_count": info.get("two_q_gate_count"),
 				"measurement_count": info.get("measurement_count"),
 			},
+			"provider_credential": self._credential_observation(
+				credential, credential_metadata),
 		}
 		if cancelled:
 			result["reason"] = "provider-cancelled"
@@ -181,10 +186,25 @@ class QRC:
 			"admission_estimate": dict(result.get("admission_estimate") or {}),
 			"requested_timing_metadata": dict(
 				result.get("requested_timing_metadata") or {}),
+			"provider_credential": dict(
+				result.get("provider_credential") or {}),
 		}
 		with self._lock:
 			self._last_timing[cid] = timing
 			self._last_metadata[cid] = metadata
+
+	def _credential_observation(self, credential, metadata):
+		api_key = credential.get("api_key") or credential.get("token")
+		return {
+			"api_key_present": bool(api_key),
+			"api_key_suffix": str(api_key)[-4:] if api_key else None,
+			"provider": metadata.get("provider"),
+			"provider_type": metadata.get("provider_type"),
+			"user": metadata.get("user"),
+			"target_device_id": metadata.get("target_device_id"),
+			"provider_device_id": metadata.get("provider_device_id"),
+			"secret_material": metadata.get("secret_material"),
+		}
 
 	def _store_result(self, result):
 		with self._lock:

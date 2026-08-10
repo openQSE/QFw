@@ -171,6 +171,7 @@ install(DIRECTORY services/
 	FILES_MATCHING
 		PATTERN "*.py"
 		PATTERN "*.yaml"
+		PATTERN "*.json"
 		PATTERN "*.txt"
 		PATTERN "*.in"
 		PATTERN "__pycache__" EXCLUDE)
