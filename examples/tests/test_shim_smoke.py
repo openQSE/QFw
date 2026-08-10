@@ -15,7 +15,8 @@ from defw_app_util import defw_get_directory_service
 from defw_event_baseapi import BaseEventAPI
 from defw_exception import DEFwError, DEFwNotReady
 from defw_util import fg, prformat
-from qfw_example_report import emit_result
+from qfw_example_context import qfw_reservation_options
+from qfw_example_report import emit_result, parse_bool
 
 EVENT_TYPE_CIRC_RESULT = 1
 DEFAULT_CALL_SEQUENCE = (
@@ -323,66 +324,6 @@ def can_skip_qrmi_provider_completion(qpm, lib):
 	return True
 
 
-def admission_policy_path():
-	candidates = [
-		os.environ.get("QFW_SHIM_SMOKE_ADMISSION_POLICY_PATH"),
-		os.environ.get("QHW_ADMISSION_POLICY_PATH"),
-	]
-	qfw_prefix = os.environ.get("QFW_PREFIX")
-	if qfw_prefix:
-		base_dir = os.path.dirname(qfw_prefix)
-		candidates.extend([
-			os.path.join(base_dir, "qhw-admission", "build", "policies"),
-			os.path.join(
-				base_dir, "install", "qhw-admission", "lib",
-				"qhw_admission", "policies"),
-		])
-	for candidate in candidates:
-		if candidate and os.path.isdir(candidate):
-			return candidate
-	return None
-
-
-def configure_admission_policy(qpm):
-	policy = {"name": "unlimited"}
-	policy_path = admission_policy_path()
-	if policy_path:
-		policy["path"] = policy_path
-	result = qpm.set_admission_policy(policy)
-	dump_result("set_admission_policy", result)
-
-
-def reserve_execution(qpm, args):
-	configure_admission_policy(qpm)
-	job_id = os.environ.get("SLURM_JOB_ID", "shim-smoke")
-	request = {
-		"owner": {"user": os.environ.get("USER", "shim-smoke")},
-		"job_id": job_id,
-		"allocation_id": job_id,
-		"target_device_id": args.device_id,
-		"num_qubits": 1,
-		"walltime_ns": 2_000_000_000,
-		"ttl_ns": 60_000_000_000,
-		"workload": {
-			"example": "qfw_shim_smoke",
-			"operation": "async_run",
-		},
-		"run_context": {"operation": "async_run"},
-		"task_class": {
-			"count": 1,
-			"qubit_count": 1,
-			"shots": args.shots,
-			"measurement_count": 1,
-		},
-	}
-	decision = qpm.reserve(request)
-	dump_result("reserve", decision)
-	if decision.get("status") != "accepted" or not decision.get(
-			"reservation_id"):
-		raise DEFwError(f"reservation was not accepted: {decision}")
-	return decision["reservation_id"]
-
-
 def run_circuit(qpm, lib, shots, timeout, reservation_id):
 	event_api = BaseEventAPI()
 	event_api.register_external()
@@ -476,32 +417,27 @@ def main():
 	failures = []
 
 	qpm = reserve_shim_qpm(args.device_id, args.system_up_timeout)
-	reservation_id = None
 	try:
 		wait_ready(qpm, args.system_up_timeout)
 		# Only needed to skip unsupported libraries during a --libs comparison.
 		cap_map = fetch_capability_map(qpm) if len(libs) > 1 else {}
 		cid = None
 		calls = (args.call,) if args.call else DEFAULT_CALL_SEQUENCE
+		reservation_id = qfw_reservation_options(
+			required="async_run" in calls).get("reservation_id")
 		if "async_run" in calls:
-			reservation_id = reserve_execution(qpm, args)
+			dump_result("reservation_context", {
+				"reservation_id": reservation_id,
+			})
 		for call in calls:
 			cid = run_named_call(
 				call, qpm, libs, cap_map, failures, args, cid,
 				reservation_id=reservation_id)
 	finally:
-		if reservation_id is not None:
-			try:
-				dump_result(
-					"release", qpm.release(reservation_id, reason=0))
-			except Exception as exc:
-				failures.append(("release", exc))
-				prformat(
-					fg.red + fg.bold,
-					f"[shim-smoke] release: FAILED: {exc}")
-				traceback.print_exc()
 		try:
-			qpm.shutdown()
+			if parse_bool(os.environ.get(
+					"QFW_SHIM_SMOKE_SHUTDOWN_QPM", "yes")):
+				qpm.shutdown()
 		except Exception:
 			pass
 

@@ -493,6 +493,41 @@ sys.exit(1)
 PY
 }
 
+qfw_lrq_supermarq_operation() {
+	if [[ "${run_mode}" == "sync" ]]; then
+		printf "%s\n" "sync_run"
+	else
+		printf "%s\n" "async_run"
+	fi
+}
+
+qfw_lrq_supermarq_reservation_qubits() {
+	local max_qubits="${startqbit}"
+	case "${increase}" in
+		1|yes|true|on|y|YES|TRUE|ON|Y)
+			max_qubits=$(( startqbit + supermarq_iterations - 1 ))
+			;;
+	esac
+	printf "%s\n" "${max_qubits}"
+}
+
+qfw_lrq_supermarq_json() {
+	python3 - "${supermarq_iterations}" "${startqbit}" "${shots}" \
+		"${increase}" "${method}" <<'PY'
+import json
+import sys
+
+iterations, startqbit, shots, increase, method = sys.argv[1:]
+print(json.dumps({
+	"iterations": int(iterations),
+	"startqbit": int(startqbit),
+	"shots": int(shots),
+	"increase": increase,
+	"method": method,
+}))
+PY
+}
+
 qfw_lrq_stop_dvm() {
 	if [[ -s "${dvm_uri}" ]]; then
 		echo "Stopping PRTE DVM ${dvm_uri}"
@@ -532,6 +567,7 @@ qfw_lrq_run_app() {
 	local app_run_dir="${app_dir}/runtime"
 	local app_log="${app_dir}/app.log"
 	local app_result="${app_dir}/result.jsonl"
+	local driver_result="${app_dir}/driver.jsonl"
 	local setup_rc app_rc teardown_rc
 
 	mkdir -p "${app_dir}"
@@ -557,12 +593,22 @@ qfw_lrq_run_app() {
 
 		set +e
 		QFW_EXAMPLE_RESULT_FILE="${app_result}" \
+			QFW_SLURM_DRIVER_RESULT_FILE="${driver_result}" \
 			QFW_SUPERMARQ_SHUTDOWN_QPM=no \
-			qfw-srun \
+			"$(qfw_example_path qfw_slurm_driver.sh)" \
 				--run-dir "${app_run_dir}" \
 				--nodes 1 \
 				--ntasks 1 \
 				--nodelist "${app_node}" \
+				--backend "${backend}" \
+				--example long-running-supermarq \
+				--qubits "$(qfw_lrq_supermarq_reservation_qubits)" \
+				--shots "${shots}" \
+				--count "${supermarq_iterations}" \
+				--operation "$(qfw_lrq_supermarq_operation)" \
+				--parameters-json "$(qfw_lrq_supermarq_json)" \
+				--workload-json "{\"method\":\"${method}\"}" \
+				-- \
 				"$(qfw_example_path tests/test_supermarq.py)" \
 				--run "${run_mode}" \
 				--iterations "${supermarq_iterations}" \

@@ -155,82 +155,8 @@ qfw_example_srun() {
 	qfw-srun "$@"
 }
 
-qfw_example_parse_reservation_id() {
-	python3 -c '
-import json
-import sys
-
-reservation_id = None
-for line in sys.stdin:
-	if not line.startswith("QFW_EXAMPLE_RESERVATION "):
-		continue
-	record = json.loads(line.split(" ", 1)[1])
-	if record.get("kind") != "reserve":
-		continue
-	decision = record.get("decision") or {}
-	reservation_id = decision.get("reservation_id")
-if not reservation_id:
-	raise SystemExit("ERROR: reservation_id not found in reservation output")
-print(reservation_id)
-'
-}
-
-qfw_example_reserve_backend_execution() {
-	if [[ $# -lt 6 ]]; then
-		echo "ERROR: qfw_example_reserve_backend_execution requires backend, example, qubits, shots, count, and operation" >&2
-		return 2
-	fi
-	local backend="$1"
-	local example="$2"
-	local qubits="$3"
-	local shots="$4"
-	local count="$5"
-	local operation="$6"
-	local output reservation_id rc
-
-	output="$(
-		qfw_example_srun \
-			--nodes 1 \
-			--ntasks 1 \
-			"$(qfw_example_path tests/qfw_example_reservation_driver.py)" \
-			reserve \
-			--backend "${backend}" \
-			--example "${example}" \
-			--qubits "${qubits}" \
-			--shots "${shots}" \
-			--count "${count}" \
-			--operation "${operation}"
-	)"
-	rc=$?
-	printf "%s\n" "${output}" >&2
-	if [[ "${rc}" -ne 0 ]]; then
-		return "${rc}"
-	fi
-	reservation_id="$(printf "%s\n" "${output}" | qfw_example_parse_reservation_id)"
-	printf "%s\n" "${reservation_id}"
-}
-
-qfw_example_release_backend_execution() {
-	if [[ $# -lt 2 ]]; then
-		echo "ERROR: qfw_example_release_backend_execution requires backend and reservation id" >&2
-		return 2
-	fi
-	local backend="$1"
-	local reservation_id="$2"
-	local output rc
-
-	output="$(
-		qfw_example_srun \
-			--nodes 1 \
-			--ntasks 1 \
-			"$(qfw_example_path tests/qfw_example_reservation_driver.py)" \
-			release \
-			--backend "${backend}" \
-			--reservation-id "${reservation_id}"
-	)"
-	rc=$?
-	printf "%s\n" "${output}" >&2
-	return "${rc}"
+qfw_example_slurm_driver() {
+	"$(qfw_example_path qfw_slurm_driver.sh)" "$@"
 }
 
 qfw_example_srun_with_backend_reservation() {
@@ -246,34 +172,16 @@ qfw_example_srun_with_backend_reservation() {
 	local operation="$6"
 	shift 6
 
-	local reservation_id run_rc release_rc restore_errexit
-	reservation_id="$(
-		qfw_example_reserve_backend_execution \
-			"${backend}" "${example}" "${qubits}" "${shots}" "${count}" \
-			"${operation}"
-	)"
-
-	restore_errexit=0
-	case "$-" in
-		*e*) restore_errexit=1 ;;
-	esac
-	set +e
-	(
-		export QFW_RESERVATION_ID="${reservation_id}"
-		qfw_example_srun "$@"
-	)
-	run_rc=$?
-	qfw_example_release_backend_execution "${backend}" "${reservation_id}"
-	release_rc=$?
-	if [[ "${restore_errexit}" == "1" ]]; then
-		set -e
-	else
-		set +e
-	fi
-	if [[ "${run_rc}" -ne 0 ]]; then
-		return "${run_rc}"
-	fi
-	return "${release_rc}"
+	qfw_example_slurm_driver \
+		--backend "${backend}" \
+		--example "${example}" \
+		--qubits "${qubits}" \
+		--shots "${shots}" \
+		--count "${count}" \
+		--operation "${operation}" \
+		--nodes 1 \
+		--ntasks 1 \
+		-- "$@"
 }
 
 qfw_example_srun_with_modules() {

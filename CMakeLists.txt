@@ -213,6 +213,7 @@ install(PROGRAMS
 	examples/qfw_qiskit_vqe.sh
 	examples/qfw_run_all.sh
 	examples/qfw_shim_smoke.sh
+	examples/qfw_slurm_driver.sh
 	examples/qfw_supermarq.sh
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/examples")
 

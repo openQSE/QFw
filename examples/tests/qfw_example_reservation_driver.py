@@ -51,12 +51,27 @@ def allocation_id():
 	return f"qfw-example-{os.getpid()}"
 
 
+def json_object(value, label):
+	if not value:
+		return {}
+	try:
+		parsed = json.loads(value)
+	except json.JSONDecodeError as exc:
+		raise DEFwError(f"{label} must be a JSON object: {exc}") from exc
+	if not isinstance(parsed, dict):
+		raise DEFwError(f"{label} must be a JSON object")
+	return parsed
+
+
 def reserve(args):
 	qpm = resolve_qpm(args.backend, args.timeout)
-	alloc_id = allocation_id()
+	alloc_id = args.allocation_id or allocation_id()
+	job_id = args.job_id or alloc_id
 	request = {
-		"owner": {"user": os.environ.get("USER", "qfw-example")},
-		"job_id": alloc_id,
+		"owner": {
+			"user": args.owner or os.environ.get("USER", "qfw-example"),
+		},
+		"job_id": job_id,
 		"allocation_id": alloc_id,
 		"num_qubits": args.qubits,
 		"walltime_ns": max(1, args.walltime) * 1_000_000_000,
@@ -74,6 +89,18 @@ def reserve(args):
 			"measurement_count": args.qubits,
 		},
 	}
+	if args.target_device:
+		request["target_device_id"] = args.target_device
+	if args.scope_id:
+		request["scope_id"] = args.scope_id
+	request["workload"].update(json_object(args.workload_json, "workload JSON"))
+	request["run_context"].update(
+		json_object(args.run_context_json, "run-context JSON"))
+	request["task_class"].update(
+		json_object(args.task_class_json, "task-class JSON"))
+	parameters = json_object(args.parameters_json, "parameters JSON")
+	if parameters:
+		request["parameters"] = parameters
 	decision = qpm.reserve(request=request)
 	emit("reserve", backend=args.backend, request=request, decision=decision)
 	if decision.get("status") != "accepted" or not decision.get(
@@ -109,6 +136,15 @@ def build_parser():
 	reserve_parser.add_argument("--walltime", type=int, default=300)
 	reserve_parser.add_argument("--ttl", type=int, default=600)
 	reserve_parser.add_argument("--timeout", type=float, default=40.0)
+	reserve_parser.add_argument("--target-device")
+	reserve_parser.add_argument("--scope-id")
+	reserve_parser.add_argument("--owner")
+	reserve_parser.add_argument("--job-id")
+	reserve_parser.add_argument("--allocation-id")
+	reserve_parser.add_argument("--parameters-json")
+	reserve_parser.add_argument("--workload-json")
+	reserve_parser.add_argument("--run-context-json")
+	reserve_parser.add_argument("--task-class-json")
 	reserve_parser.set_defaults(func=reserve)
 
 	release_parser = subparsers.add_parser("release")

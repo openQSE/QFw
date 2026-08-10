@@ -28,15 +28,21 @@ EOF
 
 lib=""
 libs=""
+shots=100
+device_id="ornl-iqm-20q"
 capture=""
 for arg in "$@"; do
 	case "${capture}" in
 		lib)  lib="${arg}";  capture=""; continue ;;
 		libs) libs="${arg}"; capture=""; continue ;;
+		shots) shots="${arg}"; capture=""; continue ;;
+		device_id) device_id="${arg}"; capture=""; continue ;;
 	esac
 	case "${arg}" in
 		--lib)  capture="lib" ;;
 		--libs) capture="libs" ;;
+		--shots) capture="shots" ;;
+		--device-id) capture="device_id" ;;
 	esac
 done
 
@@ -58,7 +64,18 @@ fi
 echo "Starting QFw shim smoke test with ${libs:+libs=${libs} }${lib:+lib=${lib}}"
 qfw_example_begin "shim-smoke" "$@"
 qfw_example_setup_local_services qfw_shim_smoke_services.yaml shim-ornl-20q
-qfw_example_srun_with_modules api_qpm \
-	"$(qfw_example_path tests/test_shim_smoke.py)" "$@"
+DEFW_ONLY_LOAD_MODULE=api_qpm \
+	QFW_SHIM_SMOKE_SHUTDOWN_QPM=no \
+	qfw_example_slurm_driver \
+		--backend shim \
+		--example qfw_shim_smoke \
+		--qubits 1 \
+		--shots "${shots}" \
+		--count 1 \
+		--operation async_run \
+		--nodes 1 \
+		--ntasks 1 \
+		--target-device "${device_id}" \
+		-- "$(qfw_example_path tests/test_shim_smoke.py)" "$@"
 
 echo "Stopping QFw shim smoke test"

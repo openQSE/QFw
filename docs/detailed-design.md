@@ -1036,6 +1036,18 @@ revocation removes the cached entry and any provider client derived from it. A
 resource-affecting operation with no valid reservation-scoped credential fails
 before provider submission.
 
+For example and Docker validation, `examples/qfw_slurm_driver.sh` is the
+canonical development stand-in for the future SLURM/SPANK integration. The
+driver runs after `qfw-setup` and before `qfw-teardown` in allocation-local
+profiles, and after an application-scoped `qfw-setup` in site or long-running
+profiles. In both modes it performs the same reserve, launch, and release
+sequence. It resolves QPM through the active QFw runtime, creates a reservation
+from trusted launcher metadata, exports `QFW_RESERVATION_ID` only for the
+application step, launches the application with `qfw-srun`, releases the
+reservation after the application step returns, and emits JSON evidence. The
+application never creates the normal execution reservation itself; it only uses
+the launcher-supplied reservation context.
+
 The expected long-running QPM flow is:
 
 ```mermaid
@@ -1060,7 +1072,8 @@ sequenceDiagram
     QPM->>Provider: submit with selected credential
     Provider-->>QPM: job status and result
     QPM-->>App: reservation-scoped result
-    App->>QPM: release(reservation_id)
+    App-->>Driver: application step exits
+    Driver->>QPM: release(reservation_id)
     QPM->>Cred: revoke or release credential binding
 ```
 
@@ -1684,7 +1697,8 @@ The control flow should use these steps:
    directory using service and selector filters.
 8. The application binds to the selected endpoint through the DEFw transport.
 9. Task lifecycle calls use the QPM service directly after reservation
-   authorization. DEFw-dirsvc does not perform QPM capacity accounting.
+   authorization. The launcher releases the reservation after the application
+   step exits. DEFw-dirsvc does not perform QPM capacity accounting.
 
 #### Connection Establishment Flow
 
@@ -1711,6 +1725,8 @@ sequenceDiagram
     ST-->>CT: peer ready for RPC
     CT-->>Client: bound QPM client handle
     Client->>QPM: reservation-scoped task lifecycle API
+    Client-->>Driver: application step exits
+    Driver->>QPM: release(reservation_id)
 ```
 
 The resolve response carries enough identity for the client side to reject

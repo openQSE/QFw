@@ -16,6 +16,7 @@ from time import sleep, time
 from defw_event_baseapi import BaseEventAPI
 from qfw_qiskit.qpm_resolver import QPMResolver
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
+from qfw_example_context import qfw_reservation_options
 from qfw_example_report import emit_result, parse_bool
 
 req_timeout = 20
@@ -109,64 +110,6 @@ def build_circuit_plan(cb, start_qubits, num_shots, itr, increase):
 		if increase:
 			nqubits += 1
 	return circuit_plan
-
-
-def configure_admission_policy(qpm):
-	result = qpm.set_admission_policy({"name": "unlimited"})
-	logging.defw_app(f"set_admission_policy: {yaml.dump(result)}")
-	return result
-
-
-def reserve_execution(qpm, circuit_plan, backend, runtype, method_name,
-		      iterations, startqbit, num_shots, increase):
-	if not circuit_plan:
-		raise DEFwError("reservation requires at least one circuit")
-
-	configure_admission_policy(qpm)
-	operation = "sync_run" if runtype == "sync" else "async_run"
-	job_id = os.environ.get("SLURM_JOB_ID", "supermarq")
-	max_qubits = max(record["num_qubits"] for record in circuit_plan)
-	request = {
-		"owner": {"user": os.environ.get("USER", "supermarq")},
-		"job_id": job_id,
-		"allocation_id": job_id,
-		"num_qubits": max_qubits,
-		"walltime_ns": max(1, circuit_run_timeout) * 1_000_000_000,
-		"ttl_ns": max(60, system_up_timeout + circuit_run_timeout + 30) *
-			1_000_000_000,
-		"workload": {
-			"example": "qfw_supermarq",
-			"operation": operation,
-			"backend": backend or "tnqvm",
-			"method": method_name,
-		},
-		"run_context": {"operation": operation},
-		"task_class": {
-			"count": len(circuit_plan),
-			"qubit_count": max_qubits,
-			"shots": num_shots,
-			"measurement_count": max_qubits,
-		},
-		"parameters": {
-			"iterations": iterations,
-			"startqbit": startqbit,
-			"increase": increase,
-		},
-	}
-	decision = qpm.reserve(request=request)
-	logging.defw_app(f"reserve: {yaml.dump(decision)}")
-	if decision.get("status") != "accepted" or not decision.get(
-			"reservation_id"):
-		raise DEFwError(f"reservation was not accepted: {decision}")
-	return decision["reservation_id"]
-
-
-def release_execution(qpm, reservation_id):
-	if reservation_id is None:
-		return None
-	result = qpm.release(reservation_id=reservation_id, reason=0)
-	logging.defw_app(f"release: {yaml.dump(result)}")
-	return result
 
 
 def resolve_qpm(backend, timeout):
@@ -353,9 +296,8 @@ if __name__ == "__main__":
 		method_name = getattr(op, "__name__", str(op))
 		circuit_plan = build_circuit_plan(
 			op, startqbit, num_shots, iterations, increase)
-		reservation_id = reserve_execution(
-			qpm, circuit_plan, resolved_backend, runtype, method_name,
-			iterations, startqbit, num_shots, increase)
+		reservation_options = qfw_reservation_options(required=True)
+		reservation_id = reservation_options.get("reservation_id")
 
 		if runtype == "sync":
 			metrics = run_circuit(qpm, circuit_plan, reservation_id)
@@ -384,11 +326,6 @@ if __name__ == "__main__":
 		exit_rc = 1
 	finally:
 		if qpm is not None:
-			try:
-				release_execution(qpm, reservation_id)
-			except Exception as e:
-				logging.defw_app(f"QPM release failed: {e}")
-				traceback.print_exc()
 			if parse_bool(os.environ.get("QFW_SUPERMARQ_SHUTDOWN_QPM", "yes")):
 				qpm.shutdown()
 	if exit_rc:
