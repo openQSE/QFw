@@ -218,6 +218,32 @@ qfw_lrq_collect_allocation_nodes() {
 	done | awk 'NF && !seen[$0]++'
 }
 
+qfw_lrq_het_group_for_node() {
+	local node="$1"
+	local index=0
+	local group_count="${SLURM_HET_SIZE:-}"
+	local var raw candidate
+
+	while true; do
+		var="SLURM_JOB_NODELIST_HET_GROUP_${index}"
+		raw="${!var:-}"
+		if [[ -z "${raw}" ]]; then
+			if [[ -n "${group_count}" && "${index}" -lt "${group_count}" ]]; then
+				index=$((index + 1))
+				continue
+			fi
+			break
+		fi
+		while IFS= read -r candidate; do
+			if [[ "${candidate}" == "${node}" ]]; then
+				printf "%s\n" "${index}"
+				return 0
+			fi
+		done < <(qfw_lrq_expand_nodelist "${raw}")
+		index=$((index + 1))
+	done
+}
+
 qfw_lrq_service_runtime_config() {
 	local candidate
 	for candidate in \
@@ -239,7 +265,14 @@ qfw_lrq_on_node() {
 	shift
 	if [[ -n "${SLURM_JOB_ID:-}" &&
 	      "${QFW_LONG_RUNNING_QPM_DISABLE_SRUN:-no}" != "yes" ]]; then
-		srun --nodes=1 --ntasks=1 --nodelist "${node}" "$@"
+		local srun_options=()
+		local het_group
+		het_group="$(qfw_lrq_het_group_for_node "${node}")"
+		if [[ -n "${het_group}" ]]; then
+			srun_options+=("--het-group=${het_group}")
+		fi
+		srun_options+=(--nodes=1 --ntasks=1 --nodelist "${node}")
+		srun "${srun_options[@]}" "$@"
 	else
 		"$@"
 	fi
