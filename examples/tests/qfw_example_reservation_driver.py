@@ -67,6 +67,9 @@ def reserve(args):
 	qpm = resolve_qpm(args.backend, args.timeout)
 	alloc_id = args.allocation_id or allocation_id()
 	job_id = args.job_id or alloc_id
+	measurement_count = args.measurements
+	if measurement_count is None:
+		measurement_count = args.qubits
 	request = {
 		"owner": {
 			"user": args.owner or os.environ.get("USER", "qfw-example"),
@@ -74,6 +77,7 @@ def reserve(args):
 		"job_id": job_id,
 		"allocation_id": alloc_id,
 		"num_qubits": args.qubits,
+		"workload_kind": args.workload_kind,
 		"walltime_ns": max(1, args.walltime) * 1_000_000_000,
 		"ttl_ns": max(args.walltime + 60, args.ttl) * 1_000_000_000,
 		"workload": {
@@ -85,8 +89,11 @@ def reserve(args):
 		"task_class": {
 			"count": args.count,
 			"qubit_count": args.qubits,
+			"depth": args.depth,
+			"one_q_gate_count": args.one_q_gates,
+			"two_q_gate_count": args.two_q_gates,
 			"shots": args.shots,
-			"measurement_count": args.qubits,
+			"measurement_count": measurement_count,
 		},
 	}
 	if args.target_device:
@@ -101,6 +108,19 @@ def reserve(args):
 	parameters = json_object(args.parameters_json, "parameters JSON")
 	if parameters:
 		request["parameters"] = parameters
+	if args.credential_hint:
+		request["credential_hint"] = args.credential_hint
+	analytics = json_object(args.analytics_json, "analytics JSON")
+	if analytics:
+		request["analytics"] = analytics
+	credential_hint = json_object(
+		args.credential_hint_json, "credential-hint JSON")
+	if credential_hint:
+		request["credential_hint"] = credential_hint
+	if args.credential_handle:
+		request["credential_handle"] = args.credential_handle
+	if args.credential_scope:
+		request["credential_scope"] = args.credential_scope
 	decision = qpm.reserve(request=request)
 	emit("reserve", backend=args.backend, request=request, decision=decision)
 	if decision.get("status") != "accepted" or not decision.get(
@@ -132,6 +152,11 @@ def build_parser():
 	reserve_parser.add_argument("--qubits", type=int, required=True)
 	reserve_parser.add_argument("--shots", type=int, default=1024)
 	reserve_parser.add_argument("--count", type=int, default=1)
+	reserve_parser.add_argument("--depth", type=int, default=1)
+	reserve_parser.add_argument("--one-q-gates", type=int, default=0)
+	reserve_parser.add_argument("--two-q-gates", type=int, default=0)
+	reserve_parser.add_argument("--measurements", type=int)
+	reserve_parser.add_argument("--workload-kind", default="quantum")
 	reserve_parser.add_argument("--operation", default="async_run")
 	reserve_parser.add_argument("--walltime", type=int, default=300)
 	reserve_parser.add_argument("--ttl", type=int, default=600)
@@ -145,6 +170,11 @@ def build_parser():
 	reserve_parser.add_argument("--workload-json")
 	reserve_parser.add_argument("--run-context-json")
 	reserve_parser.add_argument("--task-class-json")
+	reserve_parser.add_argument("--analytics-json")
+	reserve_parser.add_argument("--credential-hint")
+	reserve_parser.add_argument("--credential-hint-json")
+	reserve_parser.add_argument("--credential-handle")
+	reserve_parser.add_argument("--credential-scope")
 	reserve_parser.set_defaults(func=reserve)
 
 	release_parser = subparsers.add_parser("release")

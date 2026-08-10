@@ -21,12 +21,26 @@ Required driver options:
 Common driver options:
   --shots N               Shot count for reservation metadata (default: 1024)
   --count N               Number of quantum tasks reserved (default: 1)
+  --depth N               Circuit depth for admission metadata (default: 1)
+  --one-q-gates N         One-qubit gate count for admission metadata
+  --two-q-gates N         Two-qubit gate count for admission metadata
+  --measurements N        Measured qubit count (default: --qubits)
+  --workload-kind NAME    Workload kind, for example quantum or hybrid
   --operation NAME        Operation name, for example async_run or sync_run
   --walltime SEC          Reservation walltime seconds (default: 300)
   --ttl SEC               Reservation TTL seconds (default: 600)
   --timeout SEC           QPM resolution timeout (default: 40)
   --target-device ID      Optional target device id
   --scope-id ID           Optional reservation scope id
+  --owner USER            Trusted launcher user for the reservation
+  --job-id ID             Trusted scheduler job id
+  --allocation-id ID      Trusted scheduler allocation id
+  --credential-hint TEXT  Non-secret provider credential selector
+  --credential-hint-json JSON
+                          Non-secret provider credential selector metadata
+  --credential-handle ID  Opaque non-secret provider credential handle
+  --credential-scope ID   Optional credential lookup scope
+  --analytics-json JSON   Optional JSON object with descriptive run metadata
   --parameters-json JSON  Optional JSON object merged into request parameters
   --workload-json JSON    Optional JSON object merged into request workload
   --run-context-json JSON Optional JSON object merged into request run_context
@@ -62,7 +76,10 @@ qfw_slurm_emit() {
 	python3 - "${event}" "${status}" "${rc}" "${reservation_id}" \
 		"${QFW_SLURM_DRIVER_RESULT_FILE:-}" \
 		"${backend:-}" "${example:-}" "${qubits:-}" "${shots:-}" \
-		"${count:-}" "${operation:-}" <<'PY'
+		"${count:-}" "${depth:-}" "${one_q_gates:-}" \
+		"${two_q_gates:-}" "${measurements:-}" "${workload_kind:-}" \
+		"${operation:-}" "${owner:-}" "${job_id:-}" \
+		"${allocation_id:-}" "${scope_id:-}" "${target_device:-}" <<'PY'
 import json
 import os
 import sys
@@ -79,8 +96,19 @@ import time
 	qubits,
 	shots,
 	count,
+	depth,
+	one_q_gates,
+	two_q_gates,
+	measurements,
+	workload_kind,
 	operation,
+	owner,
+	job_id,
+	allocation_id,
+	scope_id,
+	target_device,
 ) = sys.argv[1:]
+measurement_count = measurements or qubits
 record = {
 	"schema": "qfw-slurm-driver-v1",
 	"kind": "slurm-driver",
@@ -92,7 +120,17 @@ record = {
 	"qubits": int(qubits) if qubits else None,
 	"shots": int(shots) if shots else None,
 	"count": int(count) if count else None,
+	"depth": int(depth) if depth else None,
+	"one_q_gate_count": int(one_q_gates) if one_q_gates else None,
+	"two_q_gate_count": int(two_q_gates) if two_q_gates else None,
+	"measurement_count": int(measurement_count) if measurement_count else None,
+	"workload_kind": workload_kind,
 	"operation": operation,
+	"owner": owner or None,
+	"job_id": job_id or None,
+	"allocation_id": allocation_id or None,
+	"scope_id": scope_id or None,
+	"target_device_id": target_device or None,
 	"reservation_id": reservation_id or None,
 	"slurm_job_id": os.environ.get("SLURM_JOB_ID"),
 	"timestamp_ns": time.time_ns(),
@@ -128,17 +166,40 @@ print(reservation_id)
 '
 }
 
+qfw_slurm_default_allocation_id() {
+	for name in SLURM_JOB_ID SLURM_JOBID QFW_ALLOCATION_ID; do
+		if [[ -n "${!name:-}" ]]; then
+			printf "%s\n" "${!name}"
+			return 0
+		fi
+	done
+	printf "qfw-example-%s\n" "$$"
+}
+
 backend=""
 example=""
 qubits=""
 shots=1024
 count=1
+depth=1
+one_q_gates=0
+two_q_gates=0
+measurements=""
+workload_kind="quantum"
 operation="async_run"
 walltime=300
 ttl=600
 timeout=40
 target_device=""
 scope_id=""
+owner=""
+job_id=""
+allocation_id=""
+credential_hint=""
+credential_hint_json=""
+credential_handle=""
+credential_scope=""
+analytics_json=""
 parameters_json=""
 workload_json=""
 run_context_json=""
@@ -177,6 +238,31 @@ while [[ $# -gt 0 ]]; do
 			count="$2"
 			shift 2
 			;;
+		--depth)
+			qfw_slurm_need_value "$@"
+			depth="$2"
+			shift 2
+			;;
+		--one-q-gates)
+			qfw_slurm_need_value "$@"
+			one_q_gates="$2"
+			shift 2
+			;;
+		--two-q-gates)
+			qfw_slurm_need_value "$@"
+			two_q_gates="$2"
+			shift 2
+			;;
+		--measurements)
+			qfw_slurm_need_value "$@"
+			measurements="$2"
+			shift 2
+			;;
+		--workload-kind)
+			qfw_slurm_need_value "$@"
+			workload_kind="$2"
+			shift 2
+			;;
 		--operation)
 			qfw_slurm_need_value "$@"
 			operation="$2"
@@ -205,6 +291,46 @@ while [[ $# -gt 0 ]]; do
 		--scope-id)
 			qfw_slurm_need_value "$@"
 			scope_id="$2"
+			shift 2
+			;;
+		--owner)
+			qfw_slurm_need_value "$@"
+			owner="$2"
+			shift 2
+			;;
+		--job-id)
+			qfw_slurm_need_value "$@"
+			job_id="$2"
+			shift 2
+			;;
+		--allocation-id)
+			qfw_slurm_need_value "$@"
+			allocation_id="$2"
+			shift 2
+			;;
+		--credential-hint)
+			qfw_slurm_need_value "$@"
+			credential_hint="$2"
+			shift 2
+			;;
+		--credential-hint-json)
+			qfw_slurm_need_value "$@"
+			credential_hint_json="$2"
+			shift 2
+			;;
+		--credential-handle)
+			qfw_slurm_need_value "$@"
+			credential_handle="$2"
+			shift 2
+			;;
+		--credential-scope)
+			qfw_slurm_need_value "$@"
+			credential_scope="$2"
+			shift 2
+			;;
+		--analytics-json)
+			qfw_slurm_need_value "$@"
+			analytics_json="$2"
 			shift 2
 			;;
 		--parameters-json)
@@ -283,6 +409,16 @@ if [[ $# -lt 1 ]]; then
 	exit 2
 fi
 
+if [[ -z "${allocation_id}" ]]; then
+	allocation_id="$(qfw_slurm_default_allocation_id)"
+fi
+if [[ -z "${job_id}" ]]; then
+	job_id="${allocation_id}"
+fi
+if [[ -z "${owner}" ]]; then
+	owner="${USER:-${LOGNAME:-qfw-example}}"
+fi
+
 qfw_example_require_runtime
 
 qfw_srun_base=()
@@ -323,16 +459,47 @@ reserve_command=(
 	--qubits "${qubits}"
 	--shots "${shots}"
 	--count "${count}"
+	--depth "${depth}"
+	--one-q-gates "${one_q_gates}"
+	--two-q-gates "${two_q_gates}"
+	--workload-kind "${workload_kind}"
 	--operation "${operation}"
 	--walltime "${walltime}"
 	--ttl "${ttl}"
 	--timeout "${timeout}"
 )
+if [[ -n "${measurements}" ]]; then
+	reserve_command+=(--measurements "${measurements}")
+fi
 if [[ -n "${target_device}" ]]; then
 	reserve_command+=(--target-device "${target_device}")
 fi
 if [[ -n "${scope_id}" ]]; then
 	reserve_command+=(--scope-id "${scope_id}")
+fi
+if [[ -n "${owner}" ]]; then
+	reserve_command+=(--owner "${owner}")
+fi
+if [[ -n "${job_id}" ]]; then
+	reserve_command+=(--job-id "${job_id}")
+fi
+if [[ -n "${allocation_id}" ]]; then
+	reserve_command+=(--allocation-id "${allocation_id}")
+fi
+if [[ -n "${credential_hint}" ]]; then
+	reserve_command+=(--credential-hint "${credential_hint}")
+fi
+if [[ -n "${credential_hint_json}" ]]; then
+	reserve_command+=(--credential-hint-json "${credential_hint_json}")
+fi
+if [[ -n "${credential_handle}" ]]; then
+	reserve_command+=(--credential-handle "${credential_handle}")
+fi
+if [[ -n "${credential_scope}" ]]; then
+	reserve_command+=(--credential-scope "${credential_scope}")
+fi
+if [[ -n "${analytics_json}" ]]; then
+	reserve_command+=(--analytics-json "${analytics_json}")
 fi
 if [[ -n "${parameters_json}" ]]; then
 	reserve_command+=(--parameters-json "${parameters_json}")

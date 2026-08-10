@@ -223,8 +223,9 @@ changes.
 | PH10-C03 | QFw | PH10.4, PH10.5 | Add the reservation-scoped credential cache and lifecycle cleanup for release, cancel, expiration, disconnect, refresh failure, and revocation. |
 | PH10-C04 | QFw | PH10.6 | Route `sync_run()`, `async_run()`, cancel, status, and result paths through credential selection before provider submission or provider job operations. |
 | PH10-C05 | QFw | PH10.7 | Refactor IQM, QRMI, and QDMI provider-client construction so provider clients are scoped by selected reservation credential or handle. |
-| PH10-C06 | QFw | PH10.8, PH10.9 | Extend site-driver and Docker fixture support for trusted reservation context, redacted logging, structured errors, and telemetry that exposes binding state without secrets. |
-| PH10-C07 | QFw | PH10.10 | Add multi-user, multi-reservation, lifecycle cleanup, redaction, and ORNL-IQM-shaped smoke tests using the file-backed development provider. |
+| PH10-C06 | QFw | PH10.8 | Add IQM site-service and chemistry launch support on top of the shared `qfw_slurm_driver.sh` reservation driver. |
+| PH10-C07 | QFw | PH10.9 | Add redacted logging, structured credential errors, and telemetry that exposes binding state without secrets. |
+| PH10-C08 | QFw | PH10.10 | Add multi-user, multi-reservation, lifecycle cleanup, redaction, and ORNL-IQM-shaped smoke tests using the file-backed development provider. |
 
 ## Phase 1. Directory And Transport Foundation
 
@@ -1311,6 +1312,51 @@ reservation. This phase implements provider-credential binding and injection.
 Caller-token validation remains in
 `docs/implementation-plan-authentication.md`.
 
+The phase uses the runtime and launcher infrastructure from earlier work as a
+baseline. `qfw-activate --venv` prepares a shared Python environment for the
+application and QFw service launch path. `qfw-setup`, `qfw-srun`, and
+`qfw-teardown` own allocation-local runtime lifecycle. The shared
+`examples/qfw_slurm_driver.sh` owns the reservation lifecycle for example and
+Docker validation runs. It creates the reservation, exports
+`QFW_RESERVATION_ID` only for the application step, launches the application
+through `qfw-srun`, releases the reservation after the application exits, and
+emits structured result records. New chemistry and IQM work should reuse that
+driver rather than adding another application-side reservation path.
+
+Chemistry execution against ORNL IQM uses the same split. The IQM QPM starts as
+a long-running service with privileged device-access configuration and any IQM
+client dependencies installed in the shared service environment. The launcher
+or future SLURM plugin creates the reservation with target-device, user,
+allocation, credential, and resource-shape metadata. The chemistry application
+receives only the reservation context and normal runtime environment. The QPM
+selects and injects the provider credential when it submits through the IQM,
+QRMI, or QDMI provider path.
+
+The managed reservation contract has three layers. Core reservation fields are
+required for all managed reservations and are the only fields the QPM and
+qhw-admission path must understand for resource enforcement. Trusted launcher
+context is also required, because every managed reservation must be associated
+with a scheduler-owned user and job or allocation identity. Credential context
+is required for IQM and other credentialed hardware unless the configured site
+policy can derive it from the trusted user and target device. Descriptive
+metadata is stored and reported for analytics, audit, and optional site policy
+plugins, but it is not a built-in QPM semantic.
+
+The core resource shape includes target device, workload kind, walltime, and
+one or more qtask classes. Each qtask class carries `count`, `qubit_count`,
+`depth`, `one_q_gate_count`, `two_q_gate_count`, `shots`, and
+`measurement_count`. For most initial circuits, `measurement_count` is the
+number of measured qubits and often equals `qubit_count`. Optional timing
+fields such as classical runtime or overhead may be supplied by a workflow
+manager, but the Slurm-style launcher should not be required to invent them.
+
+Trusted launcher context includes user identity, job ID or allocation ID, and
+the scheduler or site scope used for capacity and credential binding. Hardware
+credential context includes a credential hint or opaque credential handle when
+the site cannot derive the correct credential from user identity, target
+device, and scope. Analytics metadata may include application name, workflow
+ID, frontend, operation label, campaign ID, or site-specific tags.
+
 Primary requirements: `ADM-001`, `ADM-002`, `ADM-003`, `ADM-004`,
 `ADM-005`, `ADM-021`, `CAT-003`, `CAT-005`, `API-001`, `API-002`,
 `API-003`, `API-004`.
@@ -1343,9 +1389,13 @@ Primary requirements: `ADM-001`, `ADM-002`, `ADM-003`, `ADM-004`,
 
 3. PH10.3 Bind credentials during trusted reservation creation.
    - Extend the admission-control `reserve()` path so a trusted SLURM driver or
-     site driver can supply launcher context, user identity, allocation or job
-     identity, device identity, credential hint, or credential handle.
-   - Normalize the reservation binding before calling the credential provider.
+     site driver supplies user identity, job or allocation identity, scope,
+     target device, and the qtask-class resource shape.
+   - Require credential context for IQM and other credentialed hardware unless
+     site policy can derive it from trusted user, scope, and target device.
+   - Normalize the trusted reservation binding before calling the credential
+     provider. The binding should keep resource-shape fields separate from
+     analytics metadata.
    - Ask the provider to bind a credential or handle after qhw-admission accepts
      the reservation.
    - Persist only non-secret binding metadata with the reservation metadata that
@@ -1400,14 +1450,29 @@ Primary requirements: `ADM-001`, `ADM-002`, `ADM-003`, `ADM-004`,
    - Reqs: `ADM-005`, `API-001`, `API-002`, `API-003`, `API-004`.
 
 8. PH10.8 Extend site-driver and Docker fixture support.
-   - Extend the existing Docker IQM site-service and chemistry fixtures with a
-     SLURM-style driver path that creates reservations with trusted user,
-     allocation, target-device, credential-hint, and workload metadata before
-     launching application workers.
+   - Use `examples/qfw_slurm_driver.sh` as the single reservation driver for
+     local Docker, long-running QPM, chemistry, and future SLURM plugin shims.
+   - Add or refine an IQM site-service helper that can install IQM QPM service
+     dependencies into a shared venv, start a site DEFw-dirsvc, start a
+     long-running IQM QPM, run redacted readiness checks, and stop only the
+     services it owns.
+   - Ensure service launch preserves the activated shared venv and
+     `QFW_DEVICE_ACCESS_CFG` for the IQM QPM while keeping provider secrets out
+     of application environments.
+   - Update the chemistry wrapper and the chemistry application scripts so the
+     application receives `QFW_RESERVATION_ID` from the driver and never calls
+     `reserve()` or reads provider credentials itself.
+   - Pass the standardized reservation fields through the driver request:
+     target device, workload kind, walltime, qtask-class resource shape, trusted
+     user, job or allocation identity, scope, and credential hint or handle when
+     required.
+   - Store application name, operation labels, workflow IDs, frontend names, and
+     other descriptive fields as analytics metadata rather than core QPM
+     semantics.
+   - Capture chemistry stdout, stderr, QFw result records, driver records, and
+     service logs in one run directory for both `nwqsim` and IQM runs.
    - Let Docker tests use the file-backed development provider with protected
-     test credentials and multiple fake users.
-   - Keep application environments limited to reservation id, QFw execution
-     credential or trusted launcher context, and normal runtime configuration.
+     test credentials and multiple fake users before any live IQM run.
    - Provide operator-facing setup checks that confirm provider configuration is
      loaded without printing raw credential values.
    - Reqs: `ADM-002`, `CAT-003`, `API-003`, `API-004`.
@@ -1435,9 +1500,15 @@ Primary requirements: `ADM-001`, `ADM-002`, `ADM-003`, `ADM-004`,
     - Cover missing credential, wrong user, wrong reservation, expired binding,
       provider refresh failure, release, cancel, expiration, and shutdown
       cleanup.
-    - Cover IQM-shaped execution through a fake provider client and a narrow
-      Docker smoke path that verifies ORNL-IQM configuration without exposing
-      secrets.
+    - Cover chemistry execution against `nwqsim` through the same driver path
+      used for IQM so application-script drift is caught before hardware runs.
+    - Cover IQM-shaped execution through a fake provider client and a Docker
+      smoke path that verifies ORNL-IQM configuration without exposing secrets.
+    - Cover a narrow Docker-to-ORNL-IQM manual smoke run with a small shot count
+      and the smallest chemistry workload. The evidence should include
+      sanitized endpoint information, target device, reservation id, IQM job id
+      when one is created, chemistry stdout and stderr, QFw result records,
+      driver records, and redacted service logs.
     - Reqs: `ADM-001`, `ADM-002`, `ADM-003`, `ADM-005`, `ADM-021`,
       `CAT-003`, `CAT-005`, `API-001`, `API-002`, `API-003`, `API-004`.
 

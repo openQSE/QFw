@@ -303,6 +303,72 @@ def test_reserve_stores_unverified_request_metadata(monkeypatch):
 		"qubit_count"] == 4
 
 
+def test_reserve_stores_structured_binding_without_provider_secrets(
+		monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	decision = qpm.reserve({
+		"owner": {"user": "alice"},
+		"job_id": "slurm-77",
+		"allocation_id": "alloc-77",
+		"scope_id": "iqm-site",
+		"target_device_id": "ornl-iqm-20q",
+		"workload_kind": "hybrid",
+		"walltime_ns": 10_000_000_000,
+		"ttl_ns": 20_000_000_000,
+		"task_class": {
+			"count": 3,
+			"qubit_count": 6,
+			"depth": 24,
+			"one_q_gate_count": 12,
+			"two_q_gate_count": 5,
+			"shots": 128,
+			"measurement_count": 6,
+		},
+		"credential_hint": {
+			"credential_db": "qpu_users.json",
+			"user_record": "alice",
+			"api_key": "secret-value",
+		},
+		"credential_handle": "iqm-handle-77",
+		"analytics": {
+			"application": "chemistry_example_aim2",
+			"access_token": "secret-token",
+		},
+	})
+	reservation = qpm.get_reservation(decision["reservation_id"])
+	metadata = reservation["request_metadata"]
+	binding = metadata["reservation_binding"]
+	credential_binding = binding["provider_credential_binding"]
+
+	assert binding["schema"] == "qfw-reservation-binding-v1"
+	assert binding["launcher"]["external_user_id"] == "alice"
+	assert binding["launcher"]["external_job_id"] == "slurm-77"
+	assert binding["launcher"]["allocation_id"] == "alloc-77"
+	assert binding["resource"]["target_device_id"] == "ornl-iqm-20q"
+	assert binding["resource"]["workload_kind"] == "hybrid"
+	assert binding["resource"]["task_class"] == {
+		"class_id": 1,
+		"count": 3,
+		"qubit_count": 6,
+		"depth": 24,
+		"one_q_gate_count": 12,
+		"two_q_gate_count": 5,
+		"shots": 128,
+		"measurement_count": 6,
+	}
+	assert "execution" in binding["allowed_operations"]
+	assert credential_binding["credential_handle"] == "iqm-handle-77"
+	assert credential_binding["credential_hint"]["credential_db"] == (
+		"qpu_users.json")
+	assert credential_binding["credential_hint"]["api_key"] == "<redacted>"
+	assert credential_binding["secret_material"] == "not-stored"
+	assert binding["analytics"]["application"] == "chemistry_example_aim2"
+	assert binding["analytics"]["access_token"] == "<redacted>"
+	assert metadata["provider_credential_binding"] == credential_binding
+
+
 def test_completion_retention_loads_service_runtime_config(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)

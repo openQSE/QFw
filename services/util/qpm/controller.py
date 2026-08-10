@@ -116,6 +116,25 @@ TELEMETRY_ACCESS_CLASSES = (
 	TELEMETRY_OPERATOR,
 )
 
+RESERVATION_BINDING_SCHEMA = "qfw-reservation-binding-v1"
+SENSITIVE_METADATA_KEY_PARTS = (
+	"api_key",
+	"apikey",
+	"authorization",
+	"bearer",
+	"client_secret",
+	"password",
+	"private_key",
+	"secret",
+	"token",
+)
+DEFAULT_RESERVATION_OPERATIONS = (
+	"execution",
+	"status",
+	"result",
+	"cancel",
+)
+
 TELEMETRY_METHOD_LABELS = {
 	"get_backend_info": TELEMETRY_BASIC_DISCOVERY,
 	"get_device_info": TELEMETRY_BASIC_DISCOVERY,
@@ -2604,6 +2623,56 @@ class QPMTargetController:
 		job_id = _numeric_or_canonical(
 			self, "job_id", request.get("job_numeric_id"), job_external)
 		task_class = self._admission_task_class(request)
+		workload_kind = (
+			request.get("workload_kind") or
+			request.get("workload_type") or
+			workload.get("kind") or
+			workload.get("type") or
+			"quantum")
+		walltime_ns = request.get("walltime_ns", 0)
+		ttl_ns = request.get(
+			"ttl_ns", request.get("expiration_ttl_ns", 0))
+		metadata = {
+			"owner": owner,
+			"token_present": token is not None,
+			"external_device_id": device_external,
+			"external_scope_id": scope_external,
+			"external_user_id": user_external,
+			"external_job_id": job_external,
+			"external_allocation_id": request.get("allocation_id"),
+			"external_project_id": request.get("project_id"),
+			"external_session_id": request.get("session_id"),
+			"operation": operation,
+			"policy": policy,
+			"workload": workload,
+			"workload_kind": workload_kind,
+			"run_context": run_context,
+			"walltime_ns": walltime_ns,
+			"ttl_ns": ttl_ns,
+			"task_class": dict(task_class),
+		}
+		binding = self._reservation_binding_metadata(
+			request=request,
+			owner=owner,
+			workload=workload,
+			run_context=run_context,
+			device_external=device_external,
+			device_id=device_id,
+			scope_external=scope_external,
+			scope_id=scope_id,
+			user_external=user_external,
+			user_id=user_id,
+			job_external=job_external,
+			job_id=job_id,
+			workload_kind=workload_kind,
+			walltime_ns=walltime_ns,
+			ttl_ns=ttl_ns,
+			task_class=task_class,
+			operation=operation)
+		metadata["reservation_binding"] = binding
+		credential_binding = binding.get("provider_credential_binding")
+		if credential_binding:
+			metadata["provider_credential_binding"] = credential_binding
 		return {
 			"request_id": request.get(
 				"request_id", self._allocate_admission_request_id()),
@@ -2612,29 +2681,120 @@ class QPMTargetController:
 			"job_id": job_id,
 			"scope_id": scope_id,
 			"reservation_id": request.get("reservation_id", 0),
-			"workload_kind": request.get("workload_kind", "quantum"),
-			"walltime_ns": request.get("walltime_ns", 0),
-			"ttl_ns": request.get("ttl_ns", request.get("expiration_ttl_ns", 0)),
+			"workload_kind": workload_kind,
+			"walltime_ns": walltime_ns,
+			"ttl_ns": ttl_ns,
 			"classical_runtime_ns": request.get("classical_runtime_ns", 0),
 			"overhead_ns": request.get("overhead_ns", 0),
 			"priority": request.get("priority", 0),
 			"task_class": task_class,
-			"metadata": {
-				"owner": owner,
-				"token_present": token is not None,
-				"external_device_id": device_external,
-				"external_scope_id": scope_external,
-				"external_user_id": user_external,
-				"external_job_id": job_external,
-				"external_allocation_id": request.get("allocation_id"),
-				"external_project_id": request.get("project_id"),
-				"external_session_id": request.get("session_id"),
-				"operation": operation,
-				"policy": policy,
-				"workload": workload,
-				"run_context": run_context,
-			},
+			"metadata": metadata,
 		}
+
+	def _reservation_binding_metadata(
+			self, request, owner, workload, run_context, device_external,
+			device_id, scope_external, scope_id, user_external, user_id,
+			job_external, job_id, workload_kind, walltime_ns, ttl_ns,
+			task_class, operation):
+		launcher = dict(request.get("launcher", {}))
+		if "scheduler" not in launcher:
+			value = request.get("scheduler") or request.get("launcher_name")
+			if value is not None:
+				launcher["scheduler"] = value
+		launcher.update({
+			"user_id": user_id,
+			"external_user_id": user_external,
+			"job_id": job_id,
+			"external_job_id": job_external,
+			"allocation_id": request.get("allocation_id"),
+			"project_id": request.get("project_id"),
+			"session_id": request.get("session_id"),
+			"scope_id": scope_id,
+			"external_scope_id": scope_external,
+		})
+		resource = {
+			"device_id": device_id,
+			"target_device_id": device_external,
+			"scope_id": scope_id,
+			"external_scope_id": scope_external,
+			"workload_kind": workload_kind,
+			"walltime_ns": walltime_ns,
+			"ttl_ns": ttl_ns,
+			"task_class": dict(task_class),
+		}
+		binding = {
+			"schema": RESERVATION_BINDING_SCHEMA,
+			"owner": _redacted_metadata(owner),
+			"launcher": _drop_none(_redacted_metadata(launcher)),
+			"resource": _drop_none(_redacted_metadata(resource)),
+			"allowed_operations": _allowed_reservation_operations(
+				request, operation),
+			"analytics": self._reservation_analytics_metadata(
+				request, workload, run_context, operation),
+		}
+		credential_binding = self._provider_credential_binding(
+			request, workload, device_external, scope_external,
+			user_external)
+		if credential_binding:
+			binding["provider_credential_binding"] = credential_binding
+		return binding
+
+	def _reservation_analytics_metadata(
+			self, request, workload, run_context, operation):
+		analytics = dict(request.get("analytics", {}))
+		for key in (
+				"application",
+				"workflow_id",
+				"frontend",
+				"campaign_id",
+				"operation_label",
+				"site_tags"):
+			if key in request and key not in analytics:
+				analytics[key] = request[key]
+		for key, value in (
+				("application", workload.get("application") or
+				 workload.get("example")),
+				("frontend", workload.get("frontend")),
+				("operation", operation or run_context.get("operation")),
+				("workflow_id", workload.get("workflow_id"))):
+			if value is not None and key not in analytics:
+				analytics[key] = value
+		return _drop_none(_redacted_metadata(analytics))
+
+	def _provider_credential_binding(
+			self, request, workload, device_external, scope_external,
+			user_external):
+		binding = {}
+		for key in (
+				"provider_credential_binding",
+				"credential_binding",
+				"credential_context"):
+			value = request.get(key)
+			if isinstance(value, dict):
+				binding.update(_redacted_metadata(value))
+		for target_key, source_key in (
+				("provider", "credential_provider"),
+				("credential_hint", "credential_hint"),
+				("credential_handle", "credential_handle"),
+				("credential_scope", "credential_scope")):
+			value = request.get(source_key)
+			if value is not None:
+				binding[target_key] = _redacted_metadata(value)
+		if "provider" not in binding:
+			provider = (
+				request.get("provider") or
+				request.get("backend") or
+				workload.get("backend") or
+				workload.get("provider"))
+			if provider is not None:
+				binding["provider"] = provider
+		if not binding:
+			return {}
+		binding.setdefault("target_device_id", device_external)
+		binding.setdefault("scope_id", scope_external)
+		binding.setdefault("user_id", user_external)
+		binding.setdefault("secret_material", "not-stored")
+		return _drop_none(binding)
 
 	def _admission_task_class(self, request):
 		task_class = dict(request.get("task_class", {}))
@@ -3476,6 +3636,67 @@ def _provider_cancel_is_terminal(status):
 		"not-supported",
 		"deferred",
 	}
+
+
+def _allowed_reservation_operations(request, operation):
+	raw_operations = (
+		request.get("allowed_operations") or
+		request.get("operations"))
+	if isinstance(raw_operations, str):
+		operations = [raw_operations]
+	elif isinstance(raw_operations, (list, tuple, set)):
+		operations = list(raw_operations)
+	else:
+		operations = list(DEFAULT_RESERVATION_OPERATIONS)
+	if operation is not None:
+		operations.append(operation)
+
+	normalized = []
+	seen = set()
+	for item in operations:
+		if item is None:
+			continue
+		value = _normalized_operation_name(item)
+		if value in seen:
+			continue
+		seen.add(value)
+		normalized.append(value)
+	return normalized
+
+
+def _redacted_metadata(value):
+	if isinstance(value, dict):
+		redacted = {}
+		for key, item in value.items():
+			if _is_sensitive_metadata_key(key):
+				redacted[key] = "<redacted>"
+			else:
+				redacted[key] = _redacted_metadata(item)
+		return redacted
+	if isinstance(value, list):
+		return [_redacted_metadata(item) for item in value]
+	if isinstance(value, tuple):
+		return [_redacted_metadata(item) for item in value]
+	return value
+
+
+def _is_sensitive_metadata_key(key):
+	name = str(key).strip().lower().replace("-", "_")
+	return any(part in name for part in SENSITIVE_METADATA_KEY_PARTS)
+
+
+def _drop_none(value):
+	if isinstance(value, dict):
+		return {
+			key: _drop_none(item)
+			for key, item in value.items()
+			if item is not None
+		}
+	if isinstance(value, list):
+		return [_drop_none(item) for item in value if item is not None]
+	if isinstance(value, tuple):
+		return [_drop_none(item) for item in value if item is not None]
+	return value
 
 
 def _normalize_directory_event_type(event_type):

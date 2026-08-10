@@ -186,6 +186,36 @@ QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
 QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
 ```
 
+Examples that need a managed reservation should be launched through
+`qfw_slurm_driver.sh`. This script is the test stand-in for the future
+Slurm/SPANK integration: it reserves capacity, exports only
+`QFW_RESERVATION_ID` to the application step, runs the application through
+`qfw-srun`, and releases the reservation afterward.
+
+The driver request carries the standardized reservation shape used by QPM
+and qhw-admission: target device, workload kind, walltime, qtask count,
+qubits, depth, one-qubit gate count, two-qubit gate count, shots, and
+measurement count. It also carries trusted launcher context such as user,
+job/allocation, and scope. Hardware runs may add a non-secret credential
+hint or opaque credential handle; provider API keys stay in the site-owned
+QPM environment and are not exported to the application.
+
+```bash
+./qfw_slurm_driver.sh \
+  --backend nwqsim \
+  --example supermarq \
+  --qubits 4 \
+  --depth 8 \
+  --one-q-gates 4 \
+  --two-q-gates 3 \
+  --shots 128 \
+  --count 1 \
+  --workload-kind quantum \
+  --operation async_run \
+  --analytics-json '{"application":"supermarq"}' \
+  -- ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
+```
+
 `qfw_supermarq.batch` is a Frontier-oriented batch template. Edit the
 account, node counts, paths, and arguments before submitting it with
 `sbatch`:
