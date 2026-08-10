@@ -3,9 +3,8 @@
 import json
 import os
 import sys
-import time
 
-from defw_app_util import defw_get_directory_service, defw_bind_service_by_name
+from defw_app_util import defw_connect_service_by_name, defw_get_directory_service
 from qfw_example_report import emit_result
 
 
@@ -38,15 +37,12 @@ def validate_result(result, expected_np):
 
 
 def bind_mpi_smoke(dirsvc, timeout):
-	deadline = time.time() + timeout
-	last_error = None
-	while time.time() < deadline:
-		try:
-			return defw_bind_service_by_name(dirsvc, 'MPISmoke')[0]
-		except Exception as err:
-			last_error = err
-			time.sleep(1)
-	raise RuntimeError(f"MPISmoke service was not available: {last_error}")
+	return defw_connect_service_by_name(
+		dirsvc,
+		'MPISmoke',
+		timeout=timeout,
+		binding_name='default',
+	)[0]
 
 
 def main():

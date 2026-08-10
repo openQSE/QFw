@@ -380,14 +380,13 @@ def _service_info_record(defw_module, service_info):
 	lifecycle_service_id = os.environ.get("QFW_QPM_SERVICE_ID")
 	if lifecycle_service_id:
 		properties.setdefault("service_id", lifecycle_service_id)
-	capability, qpm_type, qpm_capabilities = \
-		_service_info_capability(service_info)
+	capability, _, _ = _service_info_capability(service_info)
 	service_name = service_info.get_service_name()
 	endpoint = _defw_endpoint(defw_module)
 	endpoint_record = _endpoint_record(endpoint)
-	qpm_type = properties.get("qpm_type", qpm_type)
+	qpm_type = properties.get("qpm_type", -1)
 	qpm_capabilities = properties.get(
-		"qpm_capabilities", qpm_capabilities)
+		"qpm_capabilities", properties.get("qpm_capability", -1))
 	if qpm_type != -1:
 		properties.setdefault("qpm_type", qpm_type)
 	if qpm_capabilities != -1:

@@ -496,13 +496,11 @@ class QPMResolver:
 		if request.service_type and candidate.service_type != request.service_type:
 			return False
 		if not _candidate_bits_match(
-				candidate, ("qpm_type",), "type",
-				request.qpm_type):
+				candidate, ("qpm_type",), request.qpm_type):
 			return False
 		if not _candidate_bits_match(
 				candidate,
 				("qpm_capabilities", "qpm_capability"),
-				"caps",
 				request.qpm_capabilities):
 			return False
 		if request.selector_resource:
@@ -934,8 +932,7 @@ def _simulator_fallback_allowed(request):
 	return bool(qpm_type & QPM_TYPE_SIMULATOR)
 
 
-def _candidate_bits_match(candidate, property_keys, capability_key,
-			  requested_bits):
+def _candidate_bits_match(candidate, property_keys, requested_bits):
 	if requested_bits in (-1, None):
 		return True
 	properties = candidate.properties or {}
@@ -944,15 +941,12 @@ def _candidate_bits_match(candidate, property_keys, capability_key,
 		record_bits = properties.get(property_key)
 		if record_bits not in (-1, None):
 			break
-	capability = properties.get("capability")
-	if record_bits in (-1, None) and isinstance(capability, dict):
-		record_bits = capability.get(capability_key)
 	if record_bits in (-1, None):
 		return True
-	return _legacy_bits_match(record_bits, requested_bits)
+	return _bits_match(record_bits, requested_bits)
 
 
-def _legacy_bits_match(record_bits, requested_bits):
+def _bits_match(record_bits, requested_bits):
 	try:
 		record_bits = int(record_bits)
 		requested_bits = int(requested_bits)

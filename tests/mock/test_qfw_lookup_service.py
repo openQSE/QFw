@@ -110,7 +110,7 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 
 	result = lookup_service.get_qpm(
 		qpm_type=DEFAULT_QPM_TYPE,
-		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 	)
 
 	assert result is fake_qpm
@@ -121,8 +121,6 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	assert dirsvc.queries[0]["qpm_type"] == DEFAULT_QPM_TYPE
 	assert dirsvc.queries[0]["qpm_capability"] == DEFAULT_QPM_CAPABILITIES
 	assert dirsvc.queries[0]["qpm_capabilities"] == DEFAULT_QPM_CAPABILITIES
-	assert "svc_type" not in dirsvc.queries[0]
-	assert "svc_caps" not in dirsvc.queries[0]
 	assert len(fake_defw.binding_connections) == 1
 	binding = fake_defw.binding_connections[0]
 	assert binding["service_record"]["service_id"] == "qpm-iqm"
@@ -144,7 +142,7 @@ def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
 
 	result = lookup_service.get_qpm(
 		qpm_type=DEFAULT_QPM_TYPE,
-		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 	)
 
 	assert result is fake_qpm
@@ -167,7 +165,7 @@ def test_get_qpm_propagates_directory_failures(monkeypatch):
 	try:
 		lookup_service.get_qpm(
 			qpm_type=DEFAULT_QPM_TYPE,
-			qpm_cap=DEFAULT_QPM_CAPABILITIES,
+			qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 		)
 	except RuntimeError as exc:
 		assert str(exc) == "directory lookup failed"
@@ -196,7 +194,7 @@ def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
 
 	result = lookup_service.get_qpm(
 		qpm_type=DEFAULT_QPM_TYPE,
-		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 	)
 
 	assert result is fake_qpm
@@ -224,7 +222,7 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 
 	result = lookup_service.get_qpm(
 		qpm_type=DEFAULT_QPM_TYPE,
-		qpm_cap=DEFAULT_QPM_CAPABILITIES,
+		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 	)
 
 	assert result is shim_qpm
@@ -250,7 +248,7 @@ def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):
 	try:
 		lookup_service.get_qpm(
 			qpm_type=DEFAULT_QPM_TYPE,
-			qpm_cap=DEFAULT_QPM_CAPABILITIES,
+			qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 		)
 	except QPMProviderPolicyError as exc:
 		assert "provider 'iqm'" in str(exc)

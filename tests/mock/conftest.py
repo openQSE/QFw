@@ -278,13 +278,14 @@ def _install_defw_stubs():
 			raise AssertionError(
 				"defw_get_directory_service must be patched in tests")
 
-		def defw_bind_service_by_name(*args, **kwargs):
+		def defw_connect_service_by_name(*args, **kwargs):
 			raise AssertionError(
-				"defw_bind_service_by_name must be patched in tests")
+				"defw_connect_service_by_name must be patched in tests")
 
 		defw_app_util.SYSTEM_UP_TIMEOUT = 1
 		defw_app_util.defw_get_directory_service = defw_get_directory_service
-		defw_app_util.defw_bind_service_by_name = defw_bind_service_by_name
+		defw_app_util.defw_connect_service_by_name = (
+			defw_connect_service_by_name)
 		sys.modules["defw_app_util"] = defw_app_util
 
 	if "defw_event_baseapi" not in sys.modules:
