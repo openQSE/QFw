@@ -192,10 +192,24 @@ install(DIRECTORY examples/
 		PATTERN "*.batch"
 		PATTERN "*.md"
 		PATTERN "*.py"
-		PATTERN "*.sh"
 		PATTERN "*.yaml"
 		PATTERN "*.yml"
 		PATTERN "__pycache__" EXCLUDE)
+install(PROGRAMS
+	examples/qfw_chem_app.sh
+	examples/qfw_example_common.sh
+	examples/qfw_ghz.sh
+	examples/qfw_init_test.sh
+	examples/qfw_long_running_qpm.sh
+	examples/qfw_mpi_smoke.sh
+	examples/qfw_pennylane.sh
+	examples/qfw_qaoa.sh
+	examples/qfw_qiskit_simple.sh
+	examples/qfw_qiskit_vqe.sh
+	examples/qfw_run_all.sh
+	examples/qfw_shim_smoke.sh
+	examples/qfw_supermarq.sh
+	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/examples")
 
 install(FILES
 	services/config/container.yaml
