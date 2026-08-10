@@ -22,6 +22,15 @@ services:
     target: group1-head
     device-id: ornl-iqm-20q
 
+  - name: fake-iqm
+    module: svc_fake_iqm_qpm
+    load-modules: svc_fake_iqm_qpm,api_launcher
+    agent-prefix: qpm_fake_iqm
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: fake-iqm-20q
+
   - name: shim-ornl-20q
     module: svc_lib_qpm
     load-modules: svc_lib_qpm,api_launcher

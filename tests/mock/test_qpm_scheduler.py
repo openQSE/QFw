@@ -1,5 +1,6 @@
 import util.qpm.util_qpm as util_qpm
 from fakes import FakeSchedulerContext
+from util.qpm.scheduler import NativeSchedulerContext, set_scheduler_policy
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_FAILED,
@@ -126,6 +127,20 @@ class FailingSchedulerQPM(UTIL_QPM):
 		return info
 
 
+class DuplicateLoadNativeScheduler:
+	def __init__(self):
+		self.loaded = []
+		self.policies = []
+
+	def load_standard_plugin(self, name):
+		if name in self.loaded:
+			raise RuntimeError(f"duplicate scheduler plugin load: {name}")
+		self.loaded.append(name)
+
+	def set_policy(self, name, options=None):
+		self.policies.append((name, options))
+
+
 def _setup(monkeypatch):
 	clear_target_controllers()
 	FakeAdmissionContext.usage_status = "accepted"
@@ -150,6 +165,36 @@ def _assert_terminal_queue_garbage_collected(qpm, reservation_id, cid):
 	assert reservation_id in summary["purged_reservations"]
 	assert reservation_id not in qpm.controller.completion_queues
 	assert result["outcome"] == "NO_LONGER_RETAINED"
+
+
+def test_native_standard_scheduler_plugin_load_is_idempotent():
+	scheduler = DuplicateLoadNativeScheduler()
+	context = NativeSchedulerContext(
+		qhw_scheduler=object(),
+		qpu=object(),
+		scheduler=scheduler,
+		threading_mode="thread-safe",
+	)
+
+	set_scheduler_policy(context, {"policy": "fifo"})
+	set_scheduler_policy(context, {"policy": "fifo"})
+
+	assert scheduler.loaded == ["fifo"]
+	assert scheduler.policies == [("fifo", []), ("fifo", [])]
+
+
+def test_scheduler_metrics_keep_retained_history_out_of_depth(monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM()
+	qpm.controller.scheduler_context.queue.extend([1, 2, 3, 4])
+
+	capacity = qpm.get_capacity_snapshot()
+	metrics = qpm.get_queue_metrics()
+
+	assert capacity["scheduler_task_count"] == 4
+	assert capacity["scheduler_queue_depth"] == 0
+	assert metrics["scheduler_task_count"] == 4
+	assert metrics["scheduler_depth"] == 0
 
 
 def test_scheduler_control_state_is_target_scoped(monkeypatch):

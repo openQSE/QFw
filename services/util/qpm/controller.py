@@ -15,6 +15,7 @@ from .admission import (
 	consume_usage,
 	admission_context_available,
 	create_admission_context,
+	estimate_qtask_class as estimate_admission_qtask_class,
 	evaluate_request,
 	expire_reservations,
 	get_reservation,
@@ -537,7 +538,9 @@ class QPMTargetController:
 				"timestamp_ns": now_ns,
 				"access_class": access_class,
 				"pending_qtask_count": len(self.pending_capacity),
-				"scheduler_queue_depth": scheduler_task_count(
+				"scheduler_queue_depth": (
+					self._active_scheduler_task_count_locked()),
+				"scheduler_task_count": scheduler_task_count(
 					self.scheduler_context),
 				"active_reservation_count": (
 					self._active_reservation_count_locked()),
@@ -564,7 +567,9 @@ class QPMTargetController:
 				"timestamp_ns": time.time_ns(),
 				"access_class": access_class,
 				"pending_qtask_count": len(self.pending_capacity),
-				"scheduler_depth": scheduler_task_count(
+				"scheduler_depth": (
+					self._active_scheduler_task_count_locked()),
+				"scheduler_task_count": scheduler_task_count(
 					self.scheduler_context),
 				"active_task_count": len(self.runtime_by_qtask_id),
 				"selected_task_count": len(self.selected_qtask_ids),
@@ -2483,6 +2488,13 @@ class QPMTargetController:
 		return sum(1 for reservation in reservations
 			if reservation.get("state") == "active")
 
+	def _active_scheduler_task_count_locked(self):
+		return sum(
+			1 for runtime in self.runtime_by_qtask_id.values()
+			if (
+				runtime.scheduler_task_id is not None and
+				runtime.state not in QPM_TASK_TERMINAL_STATES))
+
 	def _held_capacity_locked(self):
 		return self._usage_totals_locked(self.capacity_holds.values())
 
@@ -2638,10 +2650,13 @@ class QPMTargetController:
 			"count": task_class.get("count", 1),
 			"qubit_count": qubits,
 			"depth": task_class.get("depth", request.get("depth", 1)),
-			"one_q_gate_count": task_class.get("one_q_gate_count", 0),
-			"two_q_gate_count": task_class.get("two_q_gate_count", 0),
+			"one_q_gate_count": task_class.get(
+				"one_q_gate_count", request.get("one_q_gate_count", 0)),
+			"two_q_gate_count": task_class.get(
+				"two_q_gate_count", request.get("two_q_gate_count", 0)),
 			"shots": shots,
-			"measurement_count": task_class.get("measurement_count", 1),
+			"measurement_count": task_class.get(
+				"measurement_count", request.get("measurement_count", 1)),
 		}
 
 	def _admission_filters(self, filters):
@@ -2665,19 +2680,37 @@ class QPMTargetController:
 	def _estimated_usage(self, circuit, runtime):
 		info = circuit.info
 		shots = info.get("num_shots", info.get("shots", 1))
-		estimated_ns = info.get(
-			"estimated_ns",
-			info.get("walltime_ns", info.get("estimated_device_ns", 0)))
+		task_class = self._admission_task_class(info)
+		estimate = estimate_admission_qtask_class(
+			self.admission_context, self._device_id(), task_class)
+		if estimate is not None:
+			info["admission_estimate"] = dict(estimate)
+			estimated_ns = _estimate_total_ns(estimate)
+			baseline_units = _estimate_baseline_units(estimate)
+			if estimated_ns:
+				info["estimated_ns"] = estimated_ns
+				info["estimated_device_ns"] = estimated_ns
+			if baseline_units:
+				info["baseline_units"] = baseline_units
+				info.setdefault("estimated_cost", baseline_units)
+		else:
+			estimated_ns = info.get(
+				"estimated_ns",
+				info.get("walltime_ns", info.get("estimated_device_ns", 0)))
+			baseline_units = info.get("baseline_units", max(1, shots))
 		return {
 			"reservation_id": runtime.reservation_id,
 			"task_id": runtime.qtask_id,
-			"class_id": info.get("class_id", 1),
+			"class_id": task_class.get("class_id", 1),
 			"event_time_ns": time.time_ns(),
 			"estimated_ns": estimated_ns,
-			"baseline_units": info.get("baseline_units", max(1, shots)),
-			"credits": info.get("credits", info.get("estimated_credits", 1)),
+			"baseline_units": baseline_units,
+			"credits": info.get(
+				"credits",
+				info.get("estimated_credits", baseline_units)),
 			"rate_units": info.get(
-				"rate_units", info.get("estimated_rate_units", 1)),
+				"rate_units",
+				info.get("estimated_rate_units", baseline_units)),
 		}
 
 	def _scheduler_task_desc(self, circuit, runtime):
@@ -3453,6 +3486,22 @@ def _int_or_none(value):
 		return int(value)
 	except (TypeError, ValueError):
 		return None
+
+
+def _estimate_total_ns(estimate):
+	return _int_or_zero(
+		estimate.get("total_ns", estimate.get("estimated_total_ns", 0)))
+
+
+def _estimate_baseline_units(estimate):
+	return _int_or_zero(estimate.get("baseline_units", 0))
+
+
+def _int_or_zero(value):
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return 0
 
 
 def _target_id(qrc, explicit_target_id):

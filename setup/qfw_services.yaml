@@ -22,6 +22,15 @@ services:
     target: group1-head
     device-id: ornl-iqm-20q
 
+  - name: fake-iqm
+    module: svc_fake_iqm_qpm
+    load-modules: svc_fake_iqm_qpm,api_launcher
+    agent-prefix: qpm_fake_iqm
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: fake-iqm-20q
+
   # QRMI/QDMI bifurcation shim — parallel to svc_iqm_qpm, same IQM q20 device
   # reached via QRMI / QDMI-on-IQM. Select this instead of iqm-ornl-20q to
   # drive the resource through the shim.

@@ -2,6 +2,8 @@ QHW_SCHED_THREAD_SAFE = "QHW_SCHED_THREAD_SAFE"
 QHW_SCHED_THREAD_USER = "QHW_SCHED_THREAD_USER"
 
 DEFAULT_SCHEDULER_POLICY = "fifo"
+STANDARD_SCHEDULER_POLICIES = frozenset(
+	("fifo", "ordered", "priority", "round_robin"))
 
 
 class QPMSchedulerError(RuntimeError):
@@ -31,6 +33,7 @@ class NativeSchedulerContext:
 		self.qpu = qpu
 		self.scheduler = scheduler
 		self.threading = threading_mode
+		self.loaded_standard_plugins = set()
 
 	def close(self):
 		self.scheduler.close()
@@ -83,10 +86,19 @@ def set_scheduler_policy(context, policy):
 		context.set_policy(name, normalized["options"])
 		return normalized
 	options = _native_options(context.qhw_scheduler, normalized["options"])
-	if name in ("fifo", "ordered", "priority", "round_robin"):
-		context.scheduler.load_standard_plugin(name)
+	if name in STANDARD_SCHEDULER_POLICIES:
+		_load_standard_scheduler_plugin(context, name)
 	context.scheduler.set_policy(name, options=options)
 	return normalized
+
+
+def _load_standard_scheduler_plugin(context, name):
+	loaded = getattr(context, "loaded_standard_plugins", None)
+	if loaded is not None and name in loaded:
+		return
+	context.scheduler.load_standard_plugin(name)
+	if loaded is not None:
+		loaded.add(name)
 
 
 def submit_scheduler_task(context, task):

@@ -68,6 +68,9 @@ QFW_RUN_ALL_SHIM_LIB=qrmi ./qfw_run_all.sh
 long-running QPM example below needs a multi-node allocation and is run
 separately.
 
+The fake IQM stress fixture is also run separately because it exercises a
+bounded admission/scheduler matrix rather than a single application smoke.
+
 ## Example Wrappers
 
 ### `qfw_init_test.sh`
@@ -196,6 +199,23 @@ Example:
 ```bash
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
+
+### `qfw_fake_iqm_stress.sh`
+
+Starts a deterministic fake `fake-iqm-20q` QPM and runs the
+qhw-admission/qhw-scheduler stress driver. The wrapper uses only
+`qfw-setup`, `qfw-srun`, and `qfw-teardown`.
+
+```bash
+./qfw_fake_iqm_stress.sh --scenario-set startup
+./qfw_fake_iqm_stress.sh --scenario-set smoke --workers 2 --tasks-per-worker 2
+./qfw_fake_iqm_stress.sh --scenario-set hybrid --harness-walltime 120
+```
+
+Scenario records are printed with `QFW_FAKE_IQM_STRESS_RESULT ` and include
+policy configuration, reservation decisions, capacity and scheduler snapshots,
+worker submissions, completion records, timing metadata, release results, and
+final leak checks.
 
 ### `qfw_chem_app.sh`
 

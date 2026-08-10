@@ -34,6 +34,7 @@ QPM_TYPE_SIMULATOR = 1 << 1
 SIMULATOR_PROVIDERS = {"simulator", "nwqsim", "tnqvm", "qb"}
 PROVIDER_SERVICE_MODULES = {
 	"iqm": "svc_iqm_qpm.svc_qpm",
+	"fake-iqm": "svc_fake_iqm_qpm.svc_qpm",
 	"shim": "svc_lib_qpm.svc_qpm",
 	"nwqsim": "svc_nwqsim_qpm.svc_qpm",
 	"tnqvm": "svc_tnqvm_qpm.svc_qpm",

@@ -198,6 +198,7 @@ install(DIRECTORY examples/
 install(PROGRAMS
 	examples/qfw_chem_app.sh
 	examples/qfw_example_common.sh
+	examples/qfw_fake_iqm_stress.sh
 	examples/qfw_ghz.sh
 	examples/qfw_init_test.sh
 	examples/qfw_long_running_qpm.sh

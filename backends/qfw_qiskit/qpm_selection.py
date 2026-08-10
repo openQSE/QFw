@@ -9,6 +9,11 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
 		"qpm_capability": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
+	"fake-iqm": {
+		"provider": "fake-iqm",
+		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
+		"qpm_capability": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
 	"shim": {
 		"provider": "shim",
 		"qpm_type": QPMType.QPM_TYPE_HARDWARE,

@@ -1,5 +1,7 @@
 import threading
 import time
+import sys
+import types
 
 import pytest
 import util.qpm.util_qpm as util_qpm
@@ -11,6 +13,7 @@ from util.qpm.controller import (
 	clear_target_controllers,
 )
 from util.qpm.util_qpm import UTIL_QPM
+import util.qpm.admission as qpm_admission
 
 
 class FakeQRC:
@@ -44,6 +47,7 @@ class FakeAdmissionContext:
 	usage_status = "accepted"
 	reservation_state = "active"
 	expires_at_ns = 0
+	estimate_response = None
 
 	def __init__(self, threading_mode):
 		self.threading = threading_mode
@@ -61,6 +65,7 @@ class FakeAdmissionContext:
 		self.cancelled = []
 		self.expired = []
 		self.calls = []
+		self.estimates = []
 
 	def evaluate_request(self, request):
 		self.requests.append(("evaluate", dict(request)))
@@ -90,6 +95,12 @@ class FakeAdmissionContext:
 			"expires_at_ns": FakeAdmissionContext.expires_at_ns,
 		}
 		return self._decision(request, reservation_id=reservation_id)
+
+	def estimate_qtask_class_request(self, device_id, task_class):
+		self.estimates.append((device_id, dict(task_class)))
+		if FakeAdmissionContext.estimate_response is None:
+			return None
+		return dict(FakeAdmissionContext.estimate_response)
 
 	def renew_reservation(self, reservation_id, request):
 		return {"status": "accepted", "reservation_id": reservation_id}
@@ -240,6 +251,7 @@ def _setup(monkeypatch):
 	FakeAdmissionContext.usage_status = "accepted"
 	FakeAdmissionContext.reservation_state = "active"
 	FakeAdmissionContext.expires_at_ns = 0
+	FakeAdmissionContext.estimate_response = None
 	for env_name in (
 			"QFW_SERVICE_RUNTIME_CONFIG",
 			"QFW_QPM_COMPLETION_TTL_SECONDS",
@@ -530,6 +542,75 @@ def test_capacity_model_uses_api_device_id_without_profile(monkeypatch):
 	assert profile["device_rate"] == 4
 	assert profile["concurrent_jobs"] == 2
 	assert profile["max_qubits"] == 1
+
+
+def test_default_policy_paths_include_qhw_admission_source_build(
+		monkeypatch, tmp_path):
+	policy_dir = tmp_path / "qhw-admission" / "build" / "policies"
+	package_dir = tmp_path / "qhw-admission" / "python" / "qhw_admission"
+	policy_dir.mkdir(parents=True)
+	package_dir.mkdir(parents=True)
+	fake_module = types.ModuleType("qhw_admission")
+	fake_module.__file__ = str(package_dir / "__init__.py")
+	monkeypatch.setitem(sys.modules, "qhw_admission", fake_module)
+	monkeypatch.delenv(qpm_admission.POLICY_PATH_ENV, raising=False)
+	monkeypatch.delenv("QFW_PREFIX", raising=False)
+
+	assert str(policy_dir) in qpm_admission._default_policy_paths()
+
+
+def test_qtask_usage_uses_admission_estimator_output(monkeypatch):
+	_setup(monkeypatch)
+	FakeAdmissionContext.estimate_response = {
+		"execution_ns": 12_000,
+		"measurement_ns": 2_000,
+		"compile_ns": 500,
+		"transfer_ns": 300,
+		"control_overhead_ns": 200,
+		"total_ns": 15_000,
+		"baseline_units": 7,
+		"confidence_ppm": 1_000_000,
+	}
+	qpm = AdmissionQPM()
+	decision = qpm.reserve({
+		"owner": {"user": "alice"},
+		"job_id": "job-7",
+		"scope_id": "scope-a",
+		"target_device_id": "admission-target",
+		"num_qubits": 4,
+	})
+
+	status = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 4,
+		"shots": 10,
+		"depth": 12,
+		"one_q_gate_count": 20,
+		"two_q_gate_count": 5,
+	}, reservation_id=decision["reservation_id"])
+
+	usage = qpm.controller.admission_context.consumed[-1][1]
+	scheduler_task = qpm.controller.scheduler_context.submitted[-1]
+	circuit = qpm.circuits[status["cid"]]
+
+	assert usage["estimated_ns"] == 15_000
+	assert usage["baseline_units"] == 7
+	assert usage["credits"] == 7
+	assert usage["rate_units"] == 7
+	assert scheduler_task["estimated_runtime_ns"] == 15_000
+	assert scheduler_task["estimated_cost"] == 7
+	assert circuit.info["admission_estimate"]["total_ns"] == 15_000
+	assert circuit.info["admission_estimate"]["baseline_units"] == 7
+	assert qpm.controller.admission_context.estimates[-1][1] == {
+		"class_id": 1,
+		"count": 1,
+		"qubit_count": 4,
+		"depth": 12,
+		"one_q_gate_count": 20,
+		"two_q_gate_count": 5,
+		"shots": 10,
+		"measurement_count": 1,
+	}
 
 
 def test_execution_rejects_invalid_reservation_state(monkeypatch):

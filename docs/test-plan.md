@@ -62,7 +62,8 @@ The environment must provide:
   workload completes.
 - A long-running service target that can remain up across multiple client jobs.
 - Configurable admission device profiles, admission policies, estimator
-  policies, scheduler policies, dispatch-depth limits, and reservation TTLs.
+  selection and options, scheduler policies, dispatch-depth limits, and
+  reservation TTLs.
 - A way to force capacity pressure, delayed admission, scheduler failure,
   provider failure, peer loss, service restart, and stale directory-generation
   cases without relying on production hardware instability.
@@ -143,13 +144,21 @@ accepting reservations and should include at least:
 - rate policy capacity: `device_rate` and `concurrent_jobs`
 - reservation TTL and provider queue-depth limits suitable for short tests
 
-The fake backend computes each task estimate from the same profile used by
-qhw-admission. Circuit payload inspection or explicit annotations supply
-`num_qubits`, `shots`, `depth`, one-qubit gate count, two-qubit gate count,
-measurement count, `priority`, `estimated_cost`, and optional explicit
-`credits`, `rate_units`, or `baseline_units`. When explicit capacity fields
-are omitted, the fake backend derives them from the profile. The fake provider
-then sleeps for a scaled duration:
+The estimator is part of the test configuration. The default estimator is
+qhw-admission's built-in `baseline` estimator, selected by name through the
+normal qhw-admission estimator API. The harness must also accept an estimator
+plugin path, estimator name, and estimator options so later IQM-specific,
+calibration-backed, or topology-aware estimators can be substituted without
+rewriting the workload driver, fake provider, or scheduler assertions.
+
+Circuit payload inspection or explicit annotations supply `num_qubits`, `shots`,
+`depth`, one-qubit gate count, two-qubit gate count, measurement count,
+`priority`, `estimated_cost`, and optional estimator metadata. The QPM
+controller must ask qhw-admission's selected estimator for the task estimate and
+must treat the returned `estimated_runtime_ns`, `baseline_units`,
+`credits_required`, and `rate_required` values as the source of truth. The fake
+provider consumes the estimate attached by QPM and does not duplicate admission
+credit or rate math. It then sleeps for a scaled duration:
 
 ```text
 sleep_seconds =
@@ -162,14 +171,22 @@ relative ordering and resource pressure. The fake result must report both the
 estimated device time and observed fake execution time so QPM can exercise
 `return_usage()` and `record_actual()` paths.
 
+The default workload classes should be calibrated against the baseline estimator
+rather than a separate qSchedSim formula. The qSchedSim workload shapes are used
+only to choose interpretable small, medium, and large circuit families. For the
+fake 20-qubit target, the large class must fit within `max_qubits`; any
+qSchedSim 40-qubit shape should be adapted to a 20-qubit, deeper circuit rather
+than bypassing qhw-admission validation.
+
 The Slurm-like test driver represents the future scheduler integration until
 real Slurm admission integration exists. It is not a qhw-scheduler plugin. It
-acts as a workload manager:
+acts as the site administrator and workload manager for the fixture:
 
 - discovers the fake QPM through the same configured resolver path as an
   application
-- configures the fake device profile, admission policy, estimator policy when
-  needed, scheduler policy, and dispatch depth through QPM control APIs
+- owns the fake device profile, estimator selection and options, admission
+  policy, scheduler policy, and dispatch-depth decisions, then applies them
+  through QPM control APIs
 - submits reservation requests with owner, user, job ID, allocation ID, account
   or project, scope, target device, walltime, TTL, workload metadata, priority,
   and qtask class information
@@ -179,6 +196,44 @@ acts as a workload manager:
 - releases, cancels, or expires reservations at the end of each scenario and
   verifies that QPM cleanup has no leaked holds, pending capacity, scheduler
   queue entries, provider inflight tasks, or completion-queue ownership errors
+
+The core protocol for every scenario is:
+
+```mermaid
+sequenceDiagram
+  participant Driver as Slurm-like driver
+  participant Dir as DEFw-dirsvc
+  participant QPM as Fake IQM QPM
+  participant Adm as qhw-admission
+  participant Sched as qhw-scheduler
+  participant App as App worker
+  participant Prov as Fake provider
+
+  QPM->>Dir: Register fake-iqm-20q service and API bindings
+  Driver->>Dir: Resolve fake-iqm-20q QPM
+  Note over Driver,QPM: Driver owns site/admin policy decisions
+  Driver->>QPM: Apply device profile, estimator, admission policy, scheduler policy, dispatch limits
+  QPM->>Adm: Apply requested device profile, estimator, and admission policy
+  QPM->>Sched: Apply requested scheduler policy and dispatch limits
+  Driver->>QPM: reserve(job/allocation, walltime, workload, qtask classes)
+  QPM->>Adm: estimate and reserve with selected estimator
+  Adm-->>QPM: accepted, delayed, or rejected decision
+  QPM-->>Driver: reservation decision and reservation_id
+  Driver->>App: Start worker with accepted reservation_id
+  App->>Dir: Resolve fake-iqm-20q QPM
+  App->>QPM: Submit circuit with reservation_id and qtask metadata
+  QPM->>Adm: authorize_usage and consume for accepted reservation
+  QPM->>Sched: Insert admitted qtask
+  Sched-->>QPM: Select qtask according to scheduler policy
+  QPM->>Prov: Dispatch scheduler-selected qtask with admission estimate
+  Prov-->>QPM: Completion, failure, or cancellation with observed runtime
+  QPM->>Adm: record_actual or return_usage
+  QPM->>Sched: Mark terminal scheduler state
+  QPM-->>App: Completion queue record and task status
+  App-->>Driver: Worker result record
+  Driver->>QPM: release, cancel, or expire reservation
+  Driver->>QPM: Query final capacity, scheduler, provider, and queue state
+```
 
 The workload generator should be SuperMarQ-like in shape and use real circuit
 payloads. The fake backend provides deterministic execution, but applications
@@ -207,28 +262,49 @@ task metadata, immediate QPM response, completion record, final task status,
 and observed walltime.
 
 Reservation walltime should be derived from the emulated classical phases plus
-the profile-derived quantum estimate and a configurable margin. For
-`parallel` jobs, the expected elapsed runtime is the larger of the overlapped
-classical path and quantum path, plus any configured setup and cleanup margin.
+the qhw-admission estimator-derived quantum estimate and a configurable margin.
+For `parallel` jobs, the expected elapsed runtime is the larger of the
+overlapped classical path and quantum path, plus any configured setup and
+cleanup margin.
 The stress harness must also enforce an outer walltime for the whole test run
 so stalled reservations, blocked workers, or leaked services fail with
 evidence before the allocation limit is reached.
 
-The stress matrix must cover these qhw-admission policies:
+The stress matrix is tiered to avoid an exhaustive product of all policies,
+schedulers, workload shapes, and hybrid modes. `unlimited` admission is only a
+startup sanity case because it does not exercise finite capacity. The main test
+surface is `credit` and `rate` admission.
 
-- `unlimited`: every valid reservation and task should be accepted, and
-  capacity snapshots should show active reservations without finite credit or
-  rate exhaustion.
-- `credit`: finite `total_credits` should produce accepted, delayed, and
-  rejected decisions. Tests must show that a task with no accepted hold never
-  enters qhw-scheduler, that released or completed work returns unused credits
-  when actual usage is lower than the estimate, and that repeated concurrent
-  submissions cannot overrun the credit budget.
-- `rate`: finite `device_rate`, `concurrent_jobs`, and accounting window
-  settings should produce accepted, delayed, and rejected decisions. Tests must
-  show that rate usage follows event-time windows, that delayed work remains in
-  QPM pending capacity rather than qhw-scheduler, and that retries only move
-  into qhw-scheduler after an accepted authorization and consumed hold.
+The default tiers are:
+
+- Startup sanity: run one `unlimited` plus `fifo` scenario with a small workload,
+  one worker, one wave, and two to four qtasks. Verify service startup,
+  estimator configuration, scheduler configuration, execution, completion, and
+  cleanup.
+- Credit and rate smoke matrix: run `credit` and `rate` against `fifo`,
+  `priority`, `round_robin`, `ordered_sjf`, `ordered_ljf`, and `ordered` with a
+  small workload and four to eight qtasks. Verify the policy can reserve,
+  authorize, schedule, execute, complete, and release under each scheduler.
+- Admission limit stress: run focused `credit` and `rate` cases that force
+  accepted, delayed, and rejected decisions. For `credit`, vary `total_credits`
+  so requests fit exactly, exceed remaining capacity, and exceed the policy
+  limit. For `rate`, vary `device_rate`, `concurrent_jobs`, accounting window,
+  and reservation walltime so requests fit, delay into a later window, and
+  become infeasible.
+- Scheduler stress under finite admission: use finite but generous `credit` or
+  `rate` settings so multiple admitted qtasks reach qhw-scheduler together.
+  Then validate `priority`, `round_robin`, `ordered_sjf`, `ordered_ljf`, and
+  `ordered` dispatch order with controlled priority, group, cost, and estimated
+  runtime metadata.
+- Workload-shape stress: run representative `credit` and `rate` scenarios over
+  `short_only`, `long_only`, `mixed_short_long`, `mixed_job_types`, and
+  `standalone` workloads. This tier should use a bounded scenario count by
+  pairing each workload with one admission/scheduler combination selected to
+  expose a specific behavior.
+- Hybrid walltime stress: run `sequential_pre`, `sequential_post`, and
+  `parallel` classical emulation modes under at least one `credit` case and one
+  `rate` case. Verify reservation walltime and harness walltime remain within
+  configured bounds.
 
 The stress matrix must cover these qhw-scheduler policies:
 
@@ -247,12 +323,21 @@ The stress matrix must cover these qhw-scheduler policies:
   `estimated_runtime_ns` and `estimated_cost` metadata.
 
 For every stress run, evidence must include the selected admission policy,
-scheduler policy, fake device profile, workload category, classical mode,
-reservation walltime, harness walltime, reservation decisions, capacity
-snapshots before and after execution, scheduler queue state, task status
-history, expected dispatch order, actual dispatch and completion order,
-completion-queue output, fake provider timing records, release or cancel
-result, and final leak check.
+scheduler policy, estimator name and options, fake device profile, workload
+category, classical mode, reservation walltime, harness walltime, reservation
+decisions, estimator outputs, capacity snapshots before and after execution,
+scheduler queue state, task status history, expected dispatch order, actual
+dispatch and completion order, completion-queue output, fake provider timing
+records, release or cancel result, and final leak check.
+
+The canonical fixture output is JSONL. The Python driver prints one
+`QFW_FAKE_IQM_STRESS_RESULT ` record per scenario and appends the same JSON to
+`QFW_EXAMPLE_RESULT_FILE` when that variable is set. The wrapper also emits the
+standard `QFW_EXAMPLE_RESULT ` summary record. A passing scenario must have
+`status: ok`, successful completion records for every expected qtask, no
+runtime-task or provider-inflight leaks in the final scheduler queue state, no
+held-capacity or pending-capacity leaks in the final capacity snapshot, and a
+measured scenario duration within the configured harness walltime.
 
 ## System Test Cases
 
@@ -282,7 +367,7 @@ result, and final leak check.
 | ST-022 | Reservation-scoped completion queues. Create reservation queues on accepted reservations, complete multiple tasks under multiple reservations, verify oldest-ready and targeted `peek_cq()` and `read_cq()` behavior, missing-reservation and mismatched-reservation rejection, peek idempotency, single completion consumption, and diagnostic-result separation. | `CAT-002`, `API-001`, `API-004`, `SCHED-012`, `STATE-001` through `STATE-003` |
 | ST-023 | Completion notifications and retention. Verify terminal completions are enqueued after admission and scheduler finalization and before event dispatch, notifications do not consume polling records, QRC completion sink ownership is acknowledged only after enqueue, retention settings evict records deterministically, no-longer-retained responses are structured, and terminal reservation queues are garbage-collected only after active work and retention conditions are satisfied. | `ADM-021`, `SCHED-005`, `SCHED-006`, `SCHED-011`, `STATE-003`, `STATE-004` |
 | ST-024 | Long-running QPM concurrent app waves. Allocate at least three nodes, start a site DEFw-dirsvc, PRTE DVM, and long-running `nwqsim` QPM on one service node, then launch two or more application instances concurrently on separate app nodes through site-scoped `qfw-setup`, `qfw-srun`, and `qfw-teardown`. Repeat a second concurrent wave against the same QPM without restarting the service plane. Verify each app resolves the site QPM, reserves capacity, submits work, receives completion, releases the reservation, deregisters or disconnects cleanly, and that app teardown does not stop the site directory, DVM, or QPM. | `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003`, `CAT-002`, `ADM-001`, `ADM-003`, `SCHED-008`, `STATE-003` |
-| ST-025 | qhw-admission and qhw-scheduler stress with a fake IQM-like backend. Start a deterministic fake `fake-iqm-20q` QPM service, configure its qhw-admission device profile and fake provider timing model from the same profile, and run a Slurm-like admission driver plus concurrent SuperMarQ-like workload workers that submit real circuit payloads. Cover `short_only`, `long_only`, `mixed_short_long`, `mixed_job_types`, and `standalone` workloads; `sequential_pre`, `sequential_post`, and `parallel` classical emulation modes; `unlimited`, `credit`, and `rate` admission policies; and `fifo`, `priority`, `round_robin`, `ordered_sjf`, `ordered_ljf`, and `ordered` scheduler policies. Verify finite capacity is honored, pending-capacity work stays out of qhw-scheduler, scheduler-selected order matches policy expectations, fake provider sleep follows the profile-derived estimate, walltime remains within the reservation and harness limits, terminal completions are visible only after admission and scheduler accounting, and final cleanup leaves no active reservations, held capacity, pending qtasks, scheduler tasks, provider inflight work, or leaked completion queues. | `ADM-001` through `ADM-007`, `ADM-016` through `ADM-022`, `SCHED-001` through `SCHED-014`, `CAT-002` through `CAT-005`, `CTRL-001`, `CTRL-002`, `CTRL-004` through `CTRL-008`, `STATE-001` through `STATE-004` |
+| ST-025 | qhw-admission and qhw-scheduler stress with a fake IQM-like backend. Start a deterministic fake `fake-iqm-20q` QPM service, configure its qhw-admission device profile, selected estimator, and fake provider timing model from the same profile, and run a Slurm-like admission driver plus concurrent SuperMarQ-like workload workers that submit real circuit payloads. Use one `unlimited` startup sanity case, then focus smoke and stress coverage on `credit` and `rate` admission across `fifo`, `priority`, `round_robin`, `ordered_sjf`, `ordered_ljf`, and `ordered` scheduler policies. Cover representative `short_only`, `long_only`, `mixed_short_long`, `mixed_job_types`, and `standalone` workloads plus `sequential_pre`, `sequential_post`, and `parallel` classical emulation modes without running the full Cartesian product by default. Verify finite capacity is honored, pending-capacity work stays out of qhw-scheduler, scheduler-selected order matches policy expectations, fake provider sleep follows the qhw-admission estimator output, walltime remains within the reservation and harness limits, terminal completions are visible only after admission and scheduler accounting, and final cleanup leaves no active reservations, held capacity, pending qtasks, scheduler tasks, provider inflight work, or leaked completion queues. | `ADM-001` through `ADM-007`, `ADM-016` through `ADM-022`, `SCHED-001` through `SCHED-014`, `CAT-002` through `CAT-005`, `CTRL-001`, `CTRL-002`, `CTRL-004` through `CTRL-008`, `STATE-001` through `STATE-004` |
 
 ## Workflow Checks
 
@@ -305,11 +390,11 @@ result, and final leak check.
   application workers with the returned reservation IDs, and compare expected
   admission and scheduler outcomes against observed task status, queue state,
   completion order, and capacity snapshots.
-- Repeat the fake stress workflow across all required admission policies
-  (`unlimited`, `credit`, `rate`) and scheduler policies (`fifo`, `priority`,
-  `round_robin`, `ordered_sjf`, `ordered_ljf`, `ordered`) with dispatch depth
-  one for deterministic ordering checks and a higher dispatch depth for
-  contention checks.
+- Run one fake stress startup sanity workflow with `unlimited` admission, then
+  run the bounded smoke and stress matrix focused on `credit` and `rate`
+  admission across the required scheduler policies. Use dispatch depth one for
+  deterministic ordering checks and a higher dispatch depth for contention
+  checks.
 - Repeat the fake stress workflow across `short_only`, `long_only`,
   `mixed_short_long`, `mixed_job_types`, and `standalone` workloads using real
   circuit payloads.

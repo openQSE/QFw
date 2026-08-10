@@ -127,6 +127,7 @@ qfw_example_service_for_backend() {
 	case "${backend}" in
 		""|"tnqvm") printf "%s\n" "tnqvm" ;;
 		"nwqsim")  printf "%s\n" "nwqsim" ;;
+		"fake-iqm"|"fake-iqm-20q") printf "%s\n" "fake-iqm" ;;
 		*)
 			echo "ERROR: no local QPM service mapping for backend '${backend}'" >&2
 			return 1
@@ -183,6 +184,7 @@ qfw_example_exit() {
 }
 
 qfw_example_finish() {
+	trap - EXIT
 	local rc="$1"
 	local teardown_rc=0
 	if [[ "${QFW_EXAMPLE_SETUP_STARTED:-0}" == "1" &&

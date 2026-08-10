@@ -1,5 +1,6 @@
 import inspect
 import os
+from pathlib import Path
 
 
 QHW_ADM_THREAD_SAFE = "QHW_ADM_THREAD_SAFE"
@@ -30,10 +31,43 @@ def _default_policy_paths():
 				qfw_prefix, libdir, "qhw_admission", "policies")
 			if os.path.isdir(policy_dir):
 				paths.append(policy_dir)
+	paths.extend(_module_policy_paths())
+	return paths
+
+
+def _module_policy_paths():
+	try:
+		import qhw_admission
+	except Exception:
+		return []
+
+	module_file = getattr(qhw_admission, "__file__", "")
+	if not module_file:
+		return []
+	module_dir = Path(module_file).resolve().parent
+	candidates = []
+	for parent in (module_dir, *module_dir.parents):
+		candidates.extend((
+			parent / "policies",
+			parent / "build" / "policies",
+			parent / "qhw_admission" / "policies",
+			parent / "lib" / "qhw_admission" / "policies",
+			parent / "lib64" / "qhw_admission" / "policies",
+		))
+	paths = []
+	seen = set()
+	for candidate in candidates:
+		if candidate in seen or not candidate.is_dir():
+			continue
+		seen.add(candidate)
+		paths.append(str(candidate))
 	return paths
 
 
 def _add_policy_paths(context, policy):
+	adder = getattr(context, "add_policy_path", None)
+	if adder is None:
+		return
 	paths = []
 	paths.extend(_path_values(policy.get("path")))
 	paths.extend(_path_values(policy.get("paths")))
@@ -44,7 +78,7 @@ def _add_policy_paths(context, policy):
 		if path in seen:
 			continue
 		seen.add(path)
-		context.add_policy_path(path)
+		adder(path)
 
 
 class QPMAdmissionUnavailable(RuntimeError):
@@ -296,6 +330,21 @@ def list_reservations(context, filters=None):
 		_reservation_dict(item)
 		for item in context.list_reservations(**filters)
 	]
+
+
+def estimate_qtask_class(context, device_id, task_class):
+	handler = _handler(context, "estimate_qtask_class_request")
+	if handler is not None:
+		return _estimate_dict(handler(device_id, dict(task_class or {})))
+	if not admission_context_available(context):
+		return None
+	estimator = getattr(context, "estimate_qtask_class", None)
+	if estimator is None:
+		return None
+
+	qhw_admission = _import_qhw_admission()
+	native_task = _native_qtask_class(qhw_admission, task_class or {})
+	return _estimate_dict(estimator(device_id, native_task))
 
 
 def authorize_usage(context, reservation_id, usage):
@@ -628,16 +677,7 @@ def _yaml_scalar(value):
 
 def _native_admission_request(qhw_admission, request):
 	task_info = dict(request.get("task_class", {}))
-	task_class = qhw_admission.QtaskClass(
-		class_id=task_info.get("class_id", 1),
-		count=task_info.get("count", 1),
-		qubit_count=task_info.get("qubit_count", 1),
-		depth=task_info.get("depth", 1),
-		one_q_gate_count=task_info.get("one_q_gate_count", 0),
-		two_q_gate_count=task_info.get("two_q_gate_count", 0),
-		shots=task_info.get("shots", 1),
-		measurement_count=task_info.get("measurement_count", 1),
-	)
+	task_class = _native_qtask_class(qhw_admission, task_info)
 	workload_kind = _workload_kind(qhw_admission, request.get("workload_kind"))
 	return qhw_admission.AdmissionRequest(
 		request_id=request["request_id"],
@@ -653,6 +693,20 @@ def _native_admission_request(qhw_admission, request):
 		classical_runtime_ns=request.get("classical_runtime_ns", 0),
 		overhead_ns=request.get("overhead_ns", 0),
 		priority=request.get("priority", 0),
+	)
+
+
+def _native_qtask_class(qhw_admission, task_info):
+	task_info = dict(task_info or {})
+	return qhw_admission.QtaskClass(
+		class_id=task_info.get("class_id", 1),
+		count=task_info.get("count", 1),
+		qubit_count=task_info.get("qubit_count", 1),
+		depth=task_info.get("depth", 1),
+		one_q_gate_count=task_info.get("one_q_gate_count", 0),
+		two_q_gate_count=task_info.get("two_q_gate_count", 0),
+		shots=task_info.get("shots", 1),
+		measurement_count=task_info.get("measurement_count", 1),
 	)
 
 
@@ -699,6 +753,24 @@ def _decision_dict(decision):
 		"estimated_finish_ns": getattr(decision, "estimated_finish_ns", None),
 		"retry_after_ns": getattr(decision, "retry_after_ns", None),
 		"message": getattr(decision, "message", None),
+	}
+
+
+def _estimate_dict(estimate):
+	if estimate is None:
+		return None
+	if isinstance(estimate, dict):
+		return dict(estimate)
+	return {
+		"execution_ns": getattr(estimate, "execution_ns", None),
+		"measurement_ns": getattr(estimate, "measurement_ns", None),
+		"compile_ns": getattr(estimate, "compile_ns", None),
+		"transfer_ns": getattr(estimate, "transfer_ns", None),
+		"control_overhead_ns": getattr(
+			estimate, "control_overhead_ns", None),
+		"total_ns": getattr(estimate, "total_ns", None),
+		"baseline_units": getattr(estimate, "baseline_units", None),
+		"confidence_ppm": getattr(estimate, "confidence_ppm", None),
 	}
 
 
