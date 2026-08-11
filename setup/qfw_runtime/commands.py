@@ -1153,7 +1153,10 @@ def _defw_endpoint_ready_unbounded(endpoint):
     try:
         client = _endpoint_client(endpoint)
         if hasattr(client, "is_ready"):
-            return bool(client.is_ready())
+            status = client.is_ready()
+            if isinstance(status, dict):
+                return bool(status.get("ready"))
+            return bool(status)
         if hasattr(client, "ready"):
             ready = client.ready
             return bool(ready() if callable(ready) else ready)

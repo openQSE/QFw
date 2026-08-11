@@ -487,7 +487,7 @@ Resolution:
 
 ## Consolidate QPM Telemetry And Task Information APIs
 
-Status: open
+Status: resolved
 
 The QPM telemetry surface contains task-specific APIs inherited from the
 original monolithic QPM API, including `get_last_job_timing()` and
@@ -567,9 +567,18 @@ Proposed fix:
   calls, examples, readiness checks, tests, requirements, detailed design,
   implementation plan, and test plan for the consolidated contracts.
 
+Resolution:
+
+- Replaced provider-visible last-job methods with reservation-scoped,
+  task-ID-based timing and metadata under execution.
+- Kept telemetry read-only and moved readiness, reconciliation, liveness, and
+  shutdown declarations to QPM control.
+- Migrated readiness probes and provider implementations to structured shared
+  control behavior.
+
 ## Add Privileged QPM Control API Category
 
-Status: open
+Status: resolved
 
 QPM process-lifecycle operations are currently mixed into execution and
 telemetry. `is_ready()` is declared under execution, while `test()`,
@@ -624,6 +633,15 @@ Proposed fix:
   directory deregistration, provider cleanup, and long-running QPM ownership.
 - Update requirements, detailed design, implementation plan, and test plan to
   define the new category and its lifecycle state machine.
+
+Resolution:
+
+- Added and advertised the `api_qpm_control` binding with structured liveness,
+  readiness, service status, audited reconciliation, and shutdown operations.
+- Shutdown now quiesces requests, drains or cancels work, stops QPM-owned
+  resources, acknowledges idempotently, and exits through DEFw asynchronously.
+- Removed provider-specific liveness strings and updated readiness consumers
+  for structured status.
 
 ## Repository-Wide QPM API Migration Scrub
 

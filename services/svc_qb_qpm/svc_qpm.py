@@ -173,6 +173,3 @@ class QPM(UTIL_QPM):
 			if self.launcher:
 				self.launcher.shutdown()
 		super().shutdown_provider()
-
-	def test(self):
-		return "****QB QPM Test Successful****"

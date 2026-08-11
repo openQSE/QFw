@@ -359,7 +359,7 @@ def test_operations_timeout_expiration_and_reconciliation(monkeypatch):
 	qpm.controller.admission_context.reservations[
 		reservation_id]["state"] = "expired"
 
-	summary = qpm.reconcile_runtime_state(now_ns=456)
+	summary = qpm.reconcile_runtime_state(reason="test-reconciliation")
 	telemetry = qpm.get_service_lifecycle_telemetry()
 	status = qpm.task_status(
 		qtask_id=response["qtask_id"], reservation_id=reservation_id)

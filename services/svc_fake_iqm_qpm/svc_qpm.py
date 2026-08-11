@@ -133,6 +133,3 @@ class QPM(UTIL_QPM):
 			],
 			"test_backend": True,
 		}
-
-	def test(self):
-		return "****Fake IQM QPM Test Successful****"

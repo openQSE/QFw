@@ -67,6 +67,3 @@ class QPM(UTIL_QPM):
 			'calibration_set_id': calibration_set_id,
 			'metadata_supported': False,
 		}
-
-	def test(self):
-		return "****TNQVM QPM Test Successful****"

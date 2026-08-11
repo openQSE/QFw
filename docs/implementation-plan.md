@@ -1074,7 +1074,15 @@ Primary requirements: `CAT-005`, `API-002`, `API-004`, `CTRL-002` through
      execution.
    - Reqs: `DISC-001`, `DISC-002`, `SCHED-009`, `SCHED-010`, `API-001`.
 
-7. PH7.7 Add end-to-end and operations tests.
+7. PH7.7 Add privileged QPM lifecycle control.
+   - Expose structured liveness, readiness, and service status through a
+     dedicated control binding.
+   - Require an audit reason for reconciliation.
+   - Acknowledge shutdown before asynchronously draining or cancelling work,
+     stopping workers and providers, and exiting through DEFw deregistration.
+   - Reqs: `CAT-008`, `CTRL-009`, `DISC-001`, `STATE-004`.
+
+8. PH7.8 Add end-to-end and operations tests.
    - Cover QFw-managed and long-running modes, resolver behavior, reservation
      creation, reservation-scoped execution, scheduler dispatch, cancellation,
      timeout, release, expiration, telemetry filtering, capacity snapshots,

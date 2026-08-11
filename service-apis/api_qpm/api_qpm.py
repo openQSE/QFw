@@ -32,9 +32,6 @@ class QPMExecution(QPMRemoteBase):
 				  cancel_on_timeout=False):
 		pass
 
-	def is_ready(self):
-		pass
-
 	def read_cq(self, cid=None, reservation_id=None, token=None):
 		pass
 
@@ -158,19 +155,28 @@ class QPMTelemetry(QPMRemoteBase):
 	def get_queue_metrics(self, token=None, device_id=None, access_class=None):
 		pass
 
-	def reconcile_runtime_state(self, token=None, now_ns=None):
-		pass
-
 	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
 		pass
 
-	def test(self):
+
+class QPMControl(QPMRemoteBase):
+	def test(self, token=None):
 		pass
 
-	def shutdown(self):
+	def is_ready(self, token=None):
+		pass
+
+	def get_service_status(self, token=None):
+		pass
+
+	def reconcile_runtime_state(self, token=None, reason=None):
+		pass
+
+	def shutdown(self, token=None, mode="graceful", timeout_s=None,
+		     reason=None):
 		pass
 
 
 class QPM(QPMExecution, QPMAdmissionControl, QPMAdmissionPolicyConfig,
-	  QPMSchedulerControl, QPMTelemetry):
+	  QPMSchedulerControl, QPMTelemetry, QPMControl):
 	pass

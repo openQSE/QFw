@@ -7,6 +7,7 @@ import uuid
 import time
 import queue
 import os
+import threading
 from defw_exception import (
 	DEFwError,
 	DEFwExecutionError,
@@ -48,6 +49,7 @@ QPM_CATEGORY_API_BINDINGS = (
 	 "QPMAdmissionPolicyConfig"),
 	("scheduler", "api_qpm_scheduler_control", "QPMSchedulerControl"),
 	("telemetry", "api_qpm_telemetry", "QPMTelemetry"),
+	("control", "api_qpm_control", "QPMControl"),
 )
 qpm_initialized = False
 qpm_shutdown = False
@@ -575,10 +577,14 @@ class UTIL_QPM:
 			device_id=device_id,
 			access_class=access_class or "manager-aggregate")
 
-	def reconcile_runtime_state(self, token=None, now_ns=None):
-		result = self.controller.reconcile_runtime_state(now_ns=now_ns)
+	def reconcile_runtime_state(self, token=None, reason=None):
+		if not reason:
+			raise DEFwExecutionError(
+				"runtime reconciliation requires an audit reason")
+		result = self.controller.reconcile_runtime_state()
 		self.process_oor_queue()
-		return result
+		return self.controller.record_control_reconciliation(
+			reason, result, token=token)
 
 	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
 		return self.controller.service_lifecycle_telemetry(
@@ -673,6 +679,11 @@ class UTIL_QPM:
 			reservation_id=request.context.reservation_id)
 
 	def require_managed_execution(self, request):
+		service_state = getattr(self.controller, "service_state", "running")
+		if service_state != "running":
+			raise DEFwExecutionError(
+				f"QPM is not accepting execution: "
+				f"state={service_state}")
 		if request.context.reservation_id is not None:
 			try:
 				self.controller.validate_reservation_for_context(
@@ -843,11 +854,8 @@ class UTIL_QPM:
 			push_info = dict(self.controller.push_info)
 		register(push_info)
 
-	def is_ready(self):
-		if not qpm_initialized:
-			raise DEFwNotReady("QPM has not initialized properly")
-
-		return True
+	def is_ready(self, token=None):
+		return self.get_service_status(token=token)
 
 	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc,
 					 properties=None):
@@ -1034,29 +1042,74 @@ class UTIL_QPM:
 		logging.critical(f"Min: {min(data):.6f} seconds")
 		logging.critical(f"Max: {max(data):.6f} seconds")
 
-	def shutdown(self):
-		logging.debug("Scheduling QPM Shutdown")
-		create_launch = []
-		launch_running = []
-		exec_completion = []
-		for r in self.all_results:
-			create_launch.append(r['launch_time'] - r['creation_time'])
-			launch_running.append(r['exec_time'] - r['launch_time'])
-			exec_completion.append(r['completion_time'] - r['exec_time'])
+	def test(self, token=None):
+		status = self.get_service_status(token=token)
+		return {
+			"status": "ok" if status["initialized"] else "not-ready",
+			"rpc_ready": True,
+			"service": status,
+		}
 
-		try:
-			self.compute_stats(create_launch, 'create->launch')
-			self.compute_stats(launch_running, 'launch->running')
-			self.compute_stats(exec_completion, 'exec->completion')
-		except Exception:
-			pass
+	def get_service_status(self, token=None):
+		return self.controller.get_service_status(
+			initialized=qpm_initialized,
+			provider_ready=self.qrc is not None)
 
+	def shutdown(self, token=None, mode="graceful", timeout_s=None,
+		     reason=None):
+		if mode not in ("graceful", "cancel"):
+			raise DEFwExecutionError(f"unsupported shutdown mode: {mode}")
+		if timeout_s is not None and float(timeout_s) < 0:
+			raise DEFwExecutionError("shutdown timeout must not be negative")
+		request = self.controller.begin_service_shutdown(
+			mode, timeout_s, reason, token=token)
+		if request.get("repeated"):
+			return request
+		thread = threading.Thread(
+			target=self._complete_service_shutdown,
+			args=(mode, timeout_s),
+			name=f"qpm-shutdown-{self.controller.config.target_id}",
+			daemon=True)
+		thread.start()
+		return request
+
+	def _complete_service_shutdown(self, mode, timeout_s):
+		deadline = None
+		if timeout_s is not None:
+			deadline = time.monotonic() + float(timeout_s)
+		if mode == "graceful":
+			while self._active_runtime_task_ids():
+				if deadline is not None and time.monotonic() >= deadline:
+					mode = "cancel"
+					break
+				time.sleep(0.05)
+		if mode == "cancel":
+			self._cancel_active_runtime_tasks()
+		self.controller.set_service_state("stopping")
 		self.shutdown_provider()
-		#ss = threading.Thread(target=self.schedule_shutdown, args=())
-		#ss.start()
+		self.controller.set_service_state("stopped")
+		time.sleep(0.05)
+		me.exit()
 
-	def test(self):
-		return "****UTIL QPM Test Successful****"
+	def _active_runtime_task_ids(self):
+		with self.controller.lock:
+			return [
+				runtime.qtask_id
+				for runtime in self.controller.runtime_by_qtask_id.values()
+				if runtime.state not in QPM_TASK_TERMINAL_STATES
+			]
+
+	def _cancel_active_runtime_tasks(self):
+		with self.controller.lock:
+			tasks = [
+				(runtime.qtask_id, runtime.reservation_id)
+				for runtime in self.controller.runtime_by_qtask_id.values()
+				if runtime.state not in QPM_TASK_TERMINAL_STATES
+			]
+		for task_id, reservation_id in tasks:
+			self.controller.cancel_task(
+				qtask_id=task_id, reservation_id=reservation_id,
+				require_reservation=False, reason="service-shutdown")
 
 	def shutdown_provider(self):
 		self.controller.stop_completion_purge_worker()

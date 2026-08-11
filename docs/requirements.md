@@ -188,13 +188,14 @@ validate tokens or authorize callers from them.
 
 | Requirement ID | Requirement |
 | --- | --- |
-| CAT-001 | The QFw service API model shall separate execution APIs, admission control APIs, scheduler control APIs, and telemetry/discovery APIs. |
+| CAT-001 | The QFw service API model shall separate execution, admission control, admission policy configuration, scheduler control, telemetry/discovery, and privileged QPM control APIs. |
 | CAT-002 | Execution APIs shall provide task submission, synchronous execution, asynchronous execution, completion polling, event notification, cancellation, result retrieval, and task metadata behavior for application and runtime clients. |
 | CAT-003 | Admission control APIs shall provide workflow-level operations for evaluating, reserving, renewing, releasing, cancelling, and inspecting admission reservations. |
 | CAT-004 | Scheduler control APIs shall provide workflow-level operations for configuring scheduler policy, inspecting queue state, draining or pausing execution targets, and tuning scheduler options. |
 | CAT-005 | Telemetry and discovery APIs shall provide workflow-level operations for inspecting backend metadata, calibration data, topology, queue state, scheduler policy state, capacity state, and provenance data. |
 | CAT-006 | QFw service APIs shall not re-expose the complete low-level qhw-admission or qhw-scheduler C API as remote service APIs. |
 | CAT-007 | QFw service APIs shall define observable workflow semantics independently of whether admission and scheduling are implemented directly in QPM, in a closely associated QPU control service, or by a future passive controller library. |
+| CAT-008 | QPM readiness, status, reconciliation, and shutdown shall be exposed only through a privileged control binding and shall not be part of execution or telemetry bindings. |
 
 </details>
 
@@ -227,6 +228,7 @@ validate tokens or authorize callers from them.
 | CTRL-006 | The QPM service or associated QPU control service shall atomically configure admission policy, baseline estimator, policy-specific capacity, and scheduler policy for each managed QPU through control-plane configuration. |
 | CTRL-007 | QFw telemetry shall expose aggregate queue metrics, including pending qtask count, scheduler queue depth, estimated queued device time, active task count, held or in-flight capacity, and policy-specific scheduling state when permitted by site policy. |
 | CTRL-008 | Queue telemetry APIs shall label estimates with their confidence, timestamp, and policy context when those values are available. |
+| CTRL-009 | QPM shutdown shall quiesce new work, drain or cancel active work, finalize managed accounting, stop provider and background resources, and acknowledge before DEFw process exit and directory deregistration. |
 
 </details>
 

@@ -58,6 +58,3 @@ class QPM(UTIL_QPM):
 	def get_coupling_graph(self, calibration_set_id=None, lib=None,
 			       token=None):
 		return self.qrc.get_coupling_graph(calibration_set_id, lib=lib)
-
-	def test(self):
-		return "****Shim (QRMI/QDMI) QPM Test Successful****"

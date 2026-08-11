@@ -203,8 +203,9 @@ def wait_ready(qpm, timeout):
 	start = time()
 	while time() - start < timeout:
 		try:
-			qpm.is_ready()
-			return
+			if qpm.is_ready().get("ready"):
+				return
+			sleep(1)
 		except Exception as exc:
 			if isinstance(exc, DEFwNotReady):
 				sleep(1)

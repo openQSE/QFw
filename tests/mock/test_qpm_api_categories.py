@@ -27,6 +27,7 @@ def test_qpm_category_surfaces_are_importable():
 		QPMExecution,
 		QPMSchedulerControl,
 		QPMTelemetry,
+		QPMControl,
 	)
 
 	assert issubclass(QPM, QPMExecution)
@@ -34,6 +35,7 @@ def test_qpm_category_surfaces_are_importable():
 	assert issubclass(QPM, QPMAdmissionPolicyConfig)
 	assert issubclass(QPM, QPMSchedulerControl)
 	assert issubclass(QPM, QPMTelemetry)
+	assert issubclass(QPM, QPMControl)
 	assert hasattr(QPMAdmissionControl, "reserve")
 	assert hasattr(QPMAdmissionPolicyConfig, "configure_device_profile")
 	assert hasattr(QPMAdmissionPolicyConfig, "set_admission_policy")
@@ -46,8 +48,9 @@ def test_qpm_category_surfaces_are_importable():
 	assert not hasattr(QPMSchedulerControl, "pause")
 	assert not hasattr(QPMSchedulerControl, "set_dispatch_depth")
 	assert hasattr(QPMTelemetry, "get_calibration_snapshot")
-	assert hasattr(QPMTelemetry, "reconcile_runtime_state")
 	assert hasattr(QPMTelemetry, "get_service_lifecycle_telemetry")
+	assert hasattr(QPMControl, "reconcile_runtime_state")
+	assert hasattr(QPMControl, "get_service_status")
 
 
 def test_qpm_category_service_api_packages_export_single_surface():
@@ -56,6 +59,7 @@ def test_qpm_category_service_api_packages_export_single_surface():
 	import api_qpm_execution
 	import api_qpm_scheduler_control
 	import api_qpm_telemetry
+	import api_qpm_control
 
 	assert api_qpm_execution.svc_info["category"] == "execution"
 	assert api_qpm_execution.service_classes[0].__name__ == "QPMExecution"
@@ -68,6 +72,7 @@ def test_qpm_category_service_api_packages_export_single_surface():
 	)
 	assert api_qpm_scheduler_control.svc_info["category"] == "scheduler"
 	assert api_qpm_telemetry.svc_info["category"] == "telemetry"
+	assert api_qpm_control.svc_info["category"] == "control"
 
 
 def test_qpm_category_surfaces_accept_token_placeholders():
@@ -99,6 +104,7 @@ def test_qpm_category_surfaces_accept_token_placeholders():
 def test_qpm_category_surfaces_use_token_first_order():
 	from api_qpm import (
 		QPMAdmissionPolicyConfig,
+		QPMControl,
 		QPMExecution,
 		QPMSchedulerControl,
 		QPMTelemetry,
@@ -122,6 +128,13 @@ def test_qpm_category_surfaces_use_token_first_order():
 			["self", "token", "reservation_id", "task_id"],
 		(QPMExecution, "get_task_timing"):
 			["self", "token", "reservation_id", "task_id"],
+		(QPMControl, "test"): ["self", "token"],
+		(QPMControl, "is_ready"): ["self", "token"],
+		(QPMControl, "get_service_status"): ["self", "token"],
+		(QPMControl, "reconcile_runtime_state"):
+			["self", "token", "reason"],
+		(QPMControl, "shutdown"):
+			["self", "token", "mode", "timeout_s", "reason"],
 	}
 
 	for (cls, method_name), parameters in expected.items():

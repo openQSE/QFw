@@ -1293,11 +1293,10 @@ registers event callbacks, and handles QPM shutdown. Provider-specific QPM
 classes choose the QRC implementation, advertise type and capability metadata,
 and add provider-specific circuit metadata.
 
-The current `service-apis/api_qpm/api_qpm.py` class combines task lifecycle,
-telemetry, event, readiness, and shutdown operations in one remote API surface.
-The separation into execution, admission control, admission policy
-configuration, scheduler control, and telemetry APIs is a service API design
-change. It should not create separate execution paths inside each QPM service.
+The aggregate QPM class is replaced by execution, admission control, admission
+policy configuration, scheduler control, telemetry, and privileged QPM control
+bindings. The split changes remote API ownership without creating separate
+execution paths inside each QPM service.
 
 ### Current Execution Flow
 
@@ -2206,6 +2205,7 @@ controller, but the remote API classes should match the caller roles.
 | Admission policy configuration | `api_qpm_admission_policy_config` | Site operators, administrators, site automation. |
 | Scheduler control | `api_qpm_scheduler_control` | Site operators, administrators, site automation. |
 | Telemetry/discovery | `api_qpm_telemetry` | Applications, workflow managers, operators, telemetry collectors, admission policies. |
+| QPM control | `api_qpm_control` | Service owners, site operators, and authorized service managers. |
 
 These QFw API categories are implemented as concrete DEFw API bindings on a
 registered service. A QPM service may advertise several bindings under the
@@ -2494,6 +2494,29 @@ Access filtering is deferred to the authentication feature.
 Task timing and metadata are execution-lifecycle operations. They require an
 explicit QPM task ID and reservation scope; telemetry never infers a global or
 per-service "last job".
+
+#### Privileged QPM Control APIs
+
+The `api_qpm_control` binding is reserved for service owners, site operators,
+and service managers. Its token remains opaque until QFw authentication is
+enabled, but the distinct binding permits policy to deny ordinary application
+proxies.
+
+| API | Parameters | Result |
+| --- | --- | --- |
+| `test(token)` | Operator token placeholder. | Returns structured RPC, initialization, and process liveness without provider work. |
+| `is_ready(token)` | Operator token placeholder. | Returns structured initialization, provider, lifecycle, and request-acceptance readiness. |
+| `get_service_status(token)` | Operator token placeholder. | Returns lifecycle state, readiness, active reservation and task counts, provider state, and shutdown state. |
+| `reconcile_runtime_state(token, reason)` | Operator token and required audit reason. | Repairs runtime mappings and accounting, then records the reason and summary. |
+| `shutdown(token, mode, timeout_s, reason)` | Operator token, `graceful` or `cancel` mode, optional timeout, and reason. | Acknowledges quiescing before asynchronous service termination. |
+
+Shutdown changes the service from `running` to `draining` or `quiescing` and
+rejects new reservations and execution. A graceful timeout changes the action
+to cancellation. QPM then stops background workers, clears provider
+credentials, stops the QRC, and enters `stopped`. It returns the acknowledgement
+before calling the DEFw process exit path, which performs normal directory
+deregistration. Repeated requests return the original shutdown state without
+starting another finalizer.
 
 ### Integration Sequence
 

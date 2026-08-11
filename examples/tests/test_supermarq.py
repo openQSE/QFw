@@ -282,8 +282,10 @@ if __name__ == "__main__":
 		wait = 0
 		while wait < system_up_timeout:
 			try:
-				qpm.is_ready()
-				break
+				if qpm.is_ready().get("ready"):
+					break
+				wait += 1
+				time.sleep(1)
 			except Exception as e:
 				if isinstance(e, DEFwNotReady):
 					logging.debug("QPM not ready yet")

@@ -102,7 +102,7 @@ def wait_for_qpm(qpm, timeout):
 	deadline = time.monotonic() + timeout
 	while time.monotonic() < deadline:
 		try:
-			if qpm.is_ready():
+			if qpm.is_ready().get("ready"):
 				return
 		except DEFwNotReady:
 			time.sleep(1)

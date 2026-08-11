@@ -257,6 +257,8 @@ class QPMTargetController:
 		self.terminal_tasks_by_qtask_id = {}
 		self.audit_records = []
 		self.lifecycle_events = []
+		self.service_state = "running"
+		self.shutdown_request = None
 		self.reconciliation_faults = []
 		self.external_id_maps = {}
 		self.external_id_next = 1
@@ -359,6 +361,69 @@ class QPMTargetController:
 				"provider_inflight_count": len(self.provider_inflight),
 				"dispatch_limits": self._dispatch_limits_locked(),
 			}
+
+	def get_service_status(self, initialized=False, provider_ready=False):
+		with self.lock:
+			return {
+				"state": self.service_state,
+				"initialized": bool(initialized),
+				"ready": bool(initialized and provider_ready and
+					self.service_state == "running"),
+				"accepting_requests": self.service_state == "running",
+				"provider_ready": bool(provider_ready),
+				"active_task_count": sum(
+					1 for runtime in self.runtime_by_qtask_id.values()
+					if runtime.state not in QPM_TASK_TERMINAL_STATES),
+				"active_reservation_count": len(
+					self.reservation_metadata_by_id),
+				"shutdown": deepcopy(self.shutdown_request),
+			}
+
+	def begin_service_shutdown(self, mode, timeout_s, reason, token=None):
+		with self.lock:
+			if self.shutdown_request is not None:
+				return dict(self.shutdown_request, repeated=True)
+			self.service_state = (
+				"draining" if mode == "graceful" else "quiescing")
+			self.scheduler_control["paused"] = True
+			self.scheduler_control["draining"] = mode == "graceful"
+			request = {
+				"status": "accepted",
+				"mode": mode,
+				"timeout_s": timeout_s,
+				"reason": reason,
+				"state": self.service_state,
+				"requested_at_ns": time.time_ns(),
+			}
+			self.shutdown_request = dict(request)
+			self.audit_records.append({
+				"operation": "shutdown",
+				"reason": reason,
+				"mode": mode,
+				"token_metadata": _token_metadata(token),
+				"timestamp": time.time(),
+			})
+			self._record_lifecycle_event_locked(
+				"service-shutdown-requested", reason=reason,
+				details={"mode": mode, "timeout_s": timeout_s})
+			return request
+
+	def record_control_reconciliation(self, reason, summary, token=None):
+		with self.lock:
+			self.audit_records.append({
+				"operation": "reconcile_runtime_state",
+				"reason": reason,
+				"summary": deepcopy(summary),
+				"token_metadata": _token_metadata(token),
+				"timestamp": time.time(),
+			})
+			return summary
+
+	def set_service_state(self, state):
+		with self.lock:
+			self.service_state = state
+			self._record_lifecycle_event_locked(
+				"service-state-change", details={"state": state})
 
 	def get_scheduler_policy(self):
 		with self.lock:
@@ -886,6 +951,12 @@ class QPMTargetController:
 
 	def reserve_admission(self, request, token=None):
 		with self.lock:
+			if self.service_state != "running":
+				return {
+					"status": "rejected",
+					"reason": "service-quiescing",
+					"state": self.service_state,
+				}
 			admission_request = self._admission_request(request, token=token)
 			decision = reserve_request(self.admission_context, admission_request)
 			reservation_id = decision.get("reservation_id")

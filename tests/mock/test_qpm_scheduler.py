@@ -730,7 +730,7 @@ def test_lifecycle_telemetry_records_controls_and_reconciliation(monkeypatch):
 
 	qpm.controller.admission_context.reservation_states[
 		"reservation-1"] = "expired"
-	summary = qpm.reconcile_runtime_state(now_ns=123)
+	summary = qpm.reconcile_runtime_state(reason="test-lifecycle")
 	telemetry = qpm.get_service_lifecycle_telemetry()
 	status = qpm.task_status(
 		qtask_id=response["qtask_id"], reservation_id="reservation-1")
@@ -761,7 +761,7 @@ def test_reconciliation_keeps_provider_active_hold_until_cancel_terminal(
 
 	qpm.controller.admission_context.reservation_states[
 		"reservation-1"] = "expired"
-	summary = qpm.reconcile_runtime_state(now_ns=789)
+	summary = qpm.reconcile_runtime_state(reason="test-provider-cancel")
 	runtime = qpm.controller.task_for_cid(response["cid"])
 
 	assert summary["capacity_hold_faults"][0]["reason"] == (

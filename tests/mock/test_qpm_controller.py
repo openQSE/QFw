@@ -1,3 +1,5 @@
+import time
+
 import util.qpm.util_qpm as util_qpm
 from defw_exception import DEFwExecutionError, DEFwOutOfResources
 from fakes import FakeSchedulerContext
@@ -344,3 +346,49 @@ def test_managed_execution_strips_internal_payload_fields(monkeypatch):
 	assert "_qfw_internal_control" not in qpm.circuits[response["cid"]].info
 	assert runtime.scheduler_task_id is not None
 	assert runtime.qtask_id in qpm.controller.capacity_holds
+
+
+def test_control_readiness_and_shutdown_are_structured(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = HookQPM(target_id="control-structured")
+	completed = []
+	monkeypatch.setattr(
+		qpm, "_complete_service_shutdown",
+		lambda mode, timeout_s: completed.append((mode, timeout_s)))
+
+	status = qpm.is_ready(token={"opaque": "token"})
+	probe = qpm.test(token={"opaque": "token"})
+	shutdown = qpm.shutdown(
+		token={"opaque": "token"}, mode="cancel", timeout_s=1,
+		reason="test shutdown")
+	for _ in range(100):
+		if completed:
+			break
+		time.sleep(0.001)
+	repeated = qpm.shutdown(mode="cancel", reason="repeat")
+
+	assert status["ready"] is True
+	assert status["state"] == "running"
+	assert probe["status"] == "ok"
+	assert shutdown["status"] == "accepted"
+	assert shutdown["state"] == "quiescing"
+	assert completed == [("cancel", 1)]
+	assert repeated["repeated"] is True
+	assert any(record.get("operation") == "shutdown"
+		for record in qpm.controller.audit_records)
+
+
+def test_control_shutdown_finalizer_stops_provider_then_exits(monkeypatch):
+	_setup_qpm(monkeypatch)
+	qpm = HookQPM(target_id="control-finalizer")
+	qrc = qpm.qrc
+	exits = []
+	monkeypatch.setattr(util_qpm.me, "exit", lambda: exits.append(True))
+
+	qpm.controller.begin_service_shutdown("cancel", 0, "test")
+	qpm._complete_service_shutdown("cancel", 0)
+
+	assert qrc.shutdown_called is True
+	assert qpm.qrc is None
+	assert qpm.controller.service_state == "stopped"
+	assert exits == [True]
