@@ -15,10 +15,6 @@ def test_qpm_telemetry_api_accepts_token_placeholders():
 			"self", "calibration_set_id", "lib", "token"],
 		"get_coupling_graph": [
 			"self", "calibration_set_id", "lib", "token"],
-		"get_last_job_timing": [
-			"self", "cid", "lib", "reservation_id", "token"],
-		"get_last_job_metadata": [
-			"self", "cid", "lib", "reservation_id", "token"],
 	}
 
 	for method_name, parameters in expected_parameters.items():
@@ -48,8 +44,6 @@ def _assert_full_metadata_category_shape(qpm, backend):
 	token = {"opaque": "token"}
 	lib = "ignored-lib"
 	calibration_set_id = "calibration-1"
-	cid = "cid-1"
-	reservation_id = "reservation-1"
 
 	assert qpm.get_backend_info(lib, token)["backend"] == backend
 	assert qpm.get_device_info(lib, token)["backend"] == backend
@@ -67,14 +61,6 @@ def _assert_full_metadata_category_shape(qpm, backend):
 	coupling = qpm.get_coupling_graph(calibration_set_id, lib, token)
 	assert coupling["backend"] == backend
 	assert coupling["calibration_set_id"] == calibration_set_id
-
-	timing = qpm.get_last_job_timing(cid, lib, reservation_id, token)
-	assert timing["backend"] == backend
-	assert timing["cid"] == cid
-
-	metadata = qpm.get_last_job_metadata(cid, lib, reservation_id, token)
-	assert metadata["backend"] == backend
-	assert metadata["cid"] == cid
 
 
 def test_non_shim_provider_metadata_methods_accept_full_category_shape(
@@ -126,20 +112,6 @@ def test_non_shim_provider_metadata_methods_accept_full_category_shape(
 				"calibration_set_id": calibration_set_id,
 			}
 
-		def get_last_job_timing(self, cid=None):
-			self.calls.append(("get_last_job_timing", cid))
-			return {
-				"backend": "iqm",
-				"cid": cid,
-			}
-
-		def get_last_job_metadata(self, cid=None):
-			self.calls.append(("get_last_job_metadata", cid))
-			return {
-				"backend": "iqm",
-				"cid": cid,
-			}
-
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 
 	for qpm_class, backend in (
@@ -159,9 +131,45 @@ def test_non_shim_provider_metadata_methods_accept_full_category_shape(
 		("get_dynamic_backend_info", "calibration-1"),
 		("get_calibration_snapshot", "calibration-1"),
 		("get_coupling_graph", "calibration-1"),
-		("get_last_job_timing", "cid-1"),
-		("get_last_job_metadata", "cid-1"),
 	]
+
+
+def test_task_information_is_task_id_and_reservation_scoped():
+	from util.qpm.util_qpm import UTIL_QPM
+
+	class RecordingController:
+		def task_status_for_qtask_id(
+				self, task_id, reservation_id=None,
+				require_reservation=False):
+			assert task_id == 17
+			assert reservation_id == 23
+			assert require_reservation is True
+			return {
+				"outcome": "COMPLETED",
+				"lifecycle_state": "completed",
+				"cid": "cid-17",
+				"qtask_id": 17,
+			}
+
+	class RecordingQRC:
+		def get_last_job_timing(self, cid):
+			assert cid == "cid-17"
+			return {"provider_elapsed_ns": 100}
+
+		def get_last_job_metadata(self, cid):
+			assert cid == "cid-17"
+			return {"provider_job_id": "job-17"}
+
+	qpm = UTIL_QPM.__new__(UTIL_QPM)
+	qpm.controller = RecordingController()
+	qpm.qrc = RecordingQRC()
+
+	assert qpm.get_task_timing(
+		reservation_id=23, task_id=17)["timing"] == {
+			"provider_elapsed_ns": 100}
+	assert qpm.get_task_metadata(
+		reservation_id=23, task_id=17)["provider_metadata"] == {
+			"provider_job_id": "job-17"}
 
 
 def _install_qb_import_stubs():

@@ -2332,6 +2332,8 @@ placeholder.
 | `async_run(info, reservation_id, token)` | Current circuit `info`; `reservation_id`; opaque token placeholder. | Returns QFw circuit ID, qtask ID, scheduler task ID when available, and managed lifecycle status. |
 | `cancel_task(cid, reservation_id, token, reason)` | QFw circuit or qtask ID; `reservation_id`; opaque token placeholder; optional reason. | Cancels pending, queued, selected, or provider-submitted work and updates admission accounting. |
 | `task_status(cid, reservation_id, token)` | QFw circuit or qtask ID; `reservation_id`; opaque token placeholder. | Returns pending, queued, selected, submitted, running, completed, failed, cancelled, or timed-out state. |
+| `get_task_timing(token, reservation_id, task_id)` | Opaque token placeholder, required reservation ID, and required QPM task ID. | Returns provider and QPM timing for the reservation-scoped task. |
+| `get_task_metadata(token, reservation_id, task_id)` | Opaque token placeholder, required reservation ID, and required QPM task ID. | Returns managed lifecycle, scheduler, provider, and result metadata permitted to the caller. |
 | `read_cq(cid, reservation_id, token)` | Optional circuit ID; required reservation ID for managed work; opaque token placeholder. | Returns and removes a completion record from the reservation-scoped completion queue or a structured in-progress status. |
 | `peek_cq(cid, reservation_id, token)` | Optional circuit ID; required reservation ID for managed work; opaque token placeholder. | Returns a completion record from the reservation-scoped completion queue without removing it. |
 | `register_event_notification(ep, evtype, class_id, token, reservation_id, filters)` | Event endpoint, event type, class ID, opaque token placeholder, optional reservation scope and filters. | Registers event delivery for task lifecycle events. |
@@ -2474,8 +2476,8 @@ All synchronous responses use the same structured status envelope:
 
 #### Telemetry And Discovery APIs
 
-Telemetry and discovery APIs contain the read-only subset of the current QPM
-API plus scheduler, capacity, reservation, and task telemetry. Responses are
+Telemetry and discovery APIs contain aggregate read-only QPM, scheduler,
+capacity, reservation, and device telemetry. Responses are
 structured around the telemetry access classes in the managed-resource model.
 Access filtering is deferred to the authentication feature.
 
@@ -2486,11 +2488,12 @@ Access filtering is deferred to the authentication feature.
 | `get_dynamic_backend_info(calibration_set_id, lib, token)` | Optional calibration set, library selector, and token. | Returns dynamic backend metadata. |
 | `get_calibration_snapshot(calibration_set_id, lib, token)` | Optional calibration set, library selector, and opaque token placeholder. | Returns calibration data. |
 | `get_coupling_graph(calibration_set_id, lib, token)` | Optional calibration set, library selector, and opaque token placeholder. | Returns topology data. |
-| `get_last_job_timing(cid, lib, reservation_id, token)` | Optional circuit ID, library selector, reservation ID, and opaque token placeholder. | Returns timing data. |
-| `get_last_job_metadata(cid, lib, reservation_id, token)` | Optional circuit ID, library selector, reservation ID, and opaque token placeholder. | Returns provider and QPM metadata. |
 | `get_capacity_snapshot(token, device_id, scope_id)` | Opaque token placeholder, device ID, optional scope. | Returns admission capacity, held capacity, active reservations, and confidence values. |
 | `get_queue_metrics(token, device_id, access_class)` | Opaque token placeholder, device ID, requested access class. | Returns pending count, scheduler depth, estimated queued device time, active task count, and policy-specific metrics. |
-| `get_task_metadata(token, cid, reservation_id)` | Opaque token placeholder, circuit or qtask ID, optional reservation ID. | Returns managed-resource lifecycle metadata. |
+
+Task timing and metadata are execution-lifecycle operations. They require an
+explicit QPM task ID and reservation scope; telemetry never infers a global or
+per-service "last job".
 
 ### Integration Sequence
 

@@ -527,14 +527,39 @@ class UTIL_QPM:
 			cid, reservation_id=reservation_id,
 			require_reservation=True)
 
-	def get_task_metadata(self, token=None, cid=None, reservation_id=None,
-			      qtask_id=None):
-		token, cid, reservation_id, qtask_id = (
-			_token_task_metadata_args(
-				token, cid, reservation_id, qtask_id))
-		return self.task_status(
-			cid=cid, qtask_id=qtask_id,
-			reservation_id=reservation_id, token=token)
+	def get_task_timing(self, token=None, reservation_id=None, task_id=None):
+		status = self.controller.task_status_for_qtask_id(
+			task_id, reservation_id=reservation_id, require_reservation=True)
+		if status.get("outcome") == "INVALID_RESERVATION":
+			return status
+		provider_timing = self._provider_task_details(
+			"get_last_job_timing", status.get("cid"))
+		return {
+			"task_id": task_id,
+			"reservation_id": reservation_id,
+			"lifecycle_state": status.get("lifecycle_state"),
+			"timing": provider_timing,
+		}
+
+	def get_task_metadata(self, token=None, reservation_id=None, task_id=None):
+		status = self.controller.task_status_for_qtask_id(
+			task_id, reservation_id=reservation_id, require_reservation=True)
+		if status.get("outcome") == "INVALID_RESERVATION":
+			return status
+		metadata = dict(status)
+		metadata["task_id"] = task_id
+		metadata["provider_metadata"] = self._provider_task_details(
+			"get_last_job_metadata", status.get("cid"))
+		return metadata
+
+	def _provider_task_details(self, method_name, cid):
+		method = getattr(self.qrc, method_name, None)
+		if method is None:
+			return {"available": False, "reason": "provider-unsupported"}
+		result = method(cid)
+		if isinstance(result, dict):
+			return dict(result)
+		return {"available": result is not None, "value": result}
 
 	def get_telemetry_access_model(self, token=None):
 		return self.controller.telemetry_access_model()

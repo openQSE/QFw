@@ -65,13 +65,5 @@ class QPM(UTIL_QPM):
 			       token=None):
 		return self.qrc.get_coupling_graph(calibration_set_id)
 
-	def get_last_job_timing(self, cid=None, lib=None, reservation_id=None,
-				token=None):
-		return self.qrc.get_last_job_timing(cid)
-
-	def get_last_job_metadata(self, cid=None, lib=None, reservation_id=None,
-				  token=None):
-		return self.qrc.get_last_job_metadata(cid)
-
 	def test(self):
 		return "****IQM QPM Test Successful****"

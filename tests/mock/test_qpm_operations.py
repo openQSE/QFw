@@ -385,7 +385,7 @@ def test_operations_reject_reservation_mismatched_task_selectors(monkeypatch):
 	status = qpm.task_status(
 		qtask_id=response["qtask_id"], reservation_id=reservation_b)
 	metadata = qpm.get_task_metadata(
-		cid=response["cid"], reservation_id=reservation_b)
+		task_id=response["qtask_id"], reservation_id=reservation_b)
 	cancelled = qpm.cancel_task(qtask_id=response["qtask_id"])
 	deleted = qpm.delete_circuit(
 		response["cid"], reservation_id=reservation_b)

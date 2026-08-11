@@ -134,13 +134,5 @@ class QPM(UTIL_QPM):
 			"test_backend": True,
 		}
 
-	def get_last_job_timing(self, cid=None, lib=None, reservation_id=None,
-				token=None):
-		return self.qrc.get_last_job_timing(cid)
-
-	def get_last_job_metadata(self, cid=None, lib=None, reservation_id=None,
-				  token=None):
-		return self.qrc.get_last_job_metadata(cid)
-
 	def test(self):
 		return "****Fake IQM QPM Test Successful****"

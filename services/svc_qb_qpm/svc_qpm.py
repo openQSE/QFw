@@ -112,22 +112,6 @@ class QPM(UTIL_QPM):
 			'metadata_supported': False,
 		}
 
-	def get_last_job_timing(self, cid=None, lib=None, reservation_id=None,
-				token=None):
-		return {
-			'backend': 'qb',
-			'cid': cid,
-			'metadata_supported': False,
-		}
-
-	def get_last_job_metadata(self, cid=None, lib=None, reservation_id=None,
-				  token=None):
-		return {
-			'backend': 'qb',
-			'cid': cid,
-			'metadata_supported': False,
-		}
-
 	def start_vqpus(self):
 		cfg_template = os.path.join(
 			os.environ['QFW_BIN_PATH'], 'QB', 'cfg', 'remote_backends.yaml')

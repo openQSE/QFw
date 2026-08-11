@@ -70,21 +70,5 @@ class QPM(UTIL_QPM):
 			'metadata_supported': False,
 		}
 
-	def get_last_job_timing(self, cid=None, lib=None, reservation_id=None,
-				token=None):
-		return {
-			'backend': 'nwqsim',
-			'cid': cid,
-			'metadata_supported': False,
-		}
-
-	def get_last_job_metadata(self, cid=None, lib=None, reservation_id=None,
-				  token=None):
-		return {
-			'backend': 'nwqsim',
-			'cid': cid,
-			'metadata_supported': False,
-		}
-
 	def test(self):
 		return "****NWQSIM QPM Test Successful****"

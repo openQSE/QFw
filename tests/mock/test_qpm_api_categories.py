@@ -89,7 +89,8 @@ def test_qpm_category_surfaces_accept_token_placeholders():
 		(QPMAdmissionPolicyConfig, "configure_device_profile"),
 		(QPMSchedulerControl, "configure_scheduler_policy"),
 		(QPMTelemetry, "get_backend_info"),
-		(QPMTelemetry, "get_task_metadata"),
+		(QPMExecution, "get_task_metadata"),
+		(QPMExecution, "get_task_timing"),
 	):
 		signature = inspect.signature(getattr(cls, method_name))
 		assert "token" in signature.parameters
@@ -117,8 +118,10 @@ def test_qpm_category_surfaces_use_token_first_order():
 			["self", "token", "device_id", "limits"],
 		(QPMSchedulerControl, "get_scheduler_queue_state"):
 			["self", "token", "device_id", "include_restricted"],
-		(QPMTelemetry, "get_task_metadata"):
-			["self", "token", "cid", "reservation_id", "qtask_id"],
+		(QPMExecution, "get_task_metadata"):
+			["self", "token", "reservation_id", "task_id"],
+		(QPMExecution, "get_task_timing"):
+			["self", "token", "reservation_id", "task_id"],
 	}
 
 	for (cls, method_name), parameters in expected.items():

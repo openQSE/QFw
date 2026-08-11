@@ -53,6 +53,12 @@ class QPMExecution(QPMRemoteBase):
 		    qtask_id=None):
 		pass
 
+	def get_task_timing(self, token=None, reservation_id=None, task_id=None):
+		pass
+
+	def get_task_metadata(self, token=None, reservation_id=None, task_id=None):
+		pass
+
 
 class QPMAdmissionControl(QPMRemoteBase):
 	def evaluate(self, token=None, request=None):
@@ -140,18 +146,6 @@ class QPMTelemetry(QPMRemoteBase):
 
 	def get_coupling_graph(self, calibration_set_id=None, lib=None,
 			       token=None):
-		pass
-
-	def get_last_job_timing(self, cid=None, lib=None, reservation_id=None,
-				token=None):
-		pass
-
-	def get_last_job_metadata(self, cid=None, lib=None, reservation_id=None,
-				  token=None):
-		pass
-
-	def get_task_metadata(self, token=None, cid=None, reservation_id=None,
-				      qtask_id=None):
 		pass
 
 	def get_telemetry_access_model(self, token=None):
