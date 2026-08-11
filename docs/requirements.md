@@ -170,7 +170,7 @@ validate tokens or authorize callers from them.
 | SCHED-004 | When site policy delays qtasks that are waiting for reservation capacity, the QPM service shall keep those qtasks in a QPM-managed pending state instead of submitting them to qhw-scheduler. |
 | SCHED-005 | The QPM service shall update scheduler task lifecycle state for task insertion, selection, provider submission, completion, failure, cancellation, and timeout. |
 | SCHED-006 | The QPM service shall update qhw-admission usage and accounting state from task lifecycle events before exposing terminal reservation-scoped task results to clients. |
-| SCHED-007 | The QPM service shall bound provider queue depth according to site policy or configuration when dispatching scheduler-selected work. |
+| SCHED-007 | When dispatching scheduler-selected work, QPMController shall enforce the smaller nonzero value of the operator `max_inflight` limit and device-profile `max_provider_queue_depth`; zero means unspecified. |
 | SCHED-008 | The QPM service shall define externally visible behavior for synchronous execution requests that are accepted but waiting for reservation capacity or scheduler selection, including blocking, timeout, cancellation, and delayed-status semantics. |
 | SCHED-009 | Public execution APIs shall not provide a normal execution path that bypasses qhw-admission capacity checks and scheduler selection before provider submission. |
 | SCHED-010 | QPM shall not expose a public execution path that bypasses qhw-admission capacity checks or qhw-scheduler selection. |

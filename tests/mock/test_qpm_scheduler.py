@@ -279,6 +279,75 @@ def test_dispatch_depth_keeps_later_qtasks_queued(monkeypatch):
 	assert second["scheduler_task_id"] == second["qtask_id"]
 
 
+def test_provider_queue_depth_bounds_dispatch_and_reports_limits(monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM(target_id="provider-depth")
+	qpm.controller.device_profile = {
+		"device_id": 1,
+		"max_provider_queue_depth": 2,
+	}
+	qpm.set_dispatch_depth(0)
+
+	responses = [qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	}) for _ in range(3)]
+	status = qpm.get_scheduler_status()
+
+	assert qpm.fake_qrc.async_cids == [
+		responses[0]["cid"], responses[1]["cid"]]
+	assert responses[2]["lifecycle_state"] == QPM_TASK_QUEUED
+	assert status["dispatch_limits"] == {
+		"max_inflight": 0,
+		"max_provider_queue_depth": 2,
+		"effective_max_inflight": 2,
+		"provider_inflight": 2,
+	}
+
+
+def test_effective_dispatch_limit_uses_smallest_nonzero_limit(monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM(target_id="combined-depth")
+
+	for operator, device, expected in (
+		(0, 0, 0),
+		(3, 0, 3),
+		(0, 4, 4),
+		(3, 4, 3),
+		(5, 2, 2),
+	):
+		qpm.controller.device_profile = {
+			"device_id": 1,
+			"max_provider_queue_depth": device,
+		}
+		qpm.set_dispatch_depth(operator)
+		limits = qpm.get_scheduler_status()["dispatch_limits"]
+		assert limits["effective_max_inflight"] == expected
+
+
+def test_lowering_provider_limit_does_not_cancel_inflight_work(monkeypatch):
+	_setup(monkeypatch)
+	qpm = SchedulerQPM(target_id="dynamic-provider-depth")
+	qpm.set_dispatch_depth(3)
+	responses = [qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": "reservation-1",
+	}) for _ in range(3)]
+
+	qpm.controller.device_profile = {
+		"device_id": 1,
+		"max_provider_queue_depth": 1,
+	}
+	status = qpm.get_scheduler_status()
+
+	assert status["dispatch_limits"]["effective_max_inflight"] == 1
+	assert status["provider_inflight_count"] == 2
+	assert qpm.fake_qrc.cancelled == []
+	assert len(responses) == 3
+
+
 def test_async_run_reports_new_qtask_when_older_work_dispatches(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM()

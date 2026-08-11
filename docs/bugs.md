@@ -378,7 +378,7 @@ Resolution:
 
 ## Enforce Device Provider Queue Depth In QPMController
 
-Status: open
+Status: resolved
 
 The qhw-admission device profile already carries
 `max_provider_queue_depth`, and QFw preserves it when registering a device.
@@ -423,6 +423,15 @@ Proposed fix:
   terminal or failed-submission path.
 - Update requirements, detailed design, implementation plan, and test plan to
   assign provider queue-depth enforcement to QPMController.
+
+Resolution:
+
+- QPMController now computes and enforces the smaller nonzero operator and
+  device provider limits.
+- Scheduler status, queue state, and queue metrics report both limits, the
+  effective limit, and current provider occupancy.
+- Added coverage for device-only, operator-only, combined, unspecified, and
+  dynamically lowered limits.
 
 ## Consolidate QPM Scheduler Control APIs
 

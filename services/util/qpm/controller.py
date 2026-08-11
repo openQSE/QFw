@@ -357,6 +357,7 @@ class QPMTargetController:
 				"runtime_task_count": len(self.runtime_by_qtask_id),
 				"selected_task_count": len(self.selected_qtask_ids),
 				"provider_inflight_count": len(self.provider_inflight),
+				"dispatch_limits": self._dispatch_limits_locked(),
 			}
 
 	def get_scheduler_policy(self):
@@ -434,8 +435,8 @@ class QPMTargetController:
 	def set_dispatch_depth(self, max_inflight):
 		with self.lock:
 			depth = int(max_inflight)
-			if depth < 1:
-				raise ValueError("dispatch depth must be at least 1")
+			if depth < 0:
+				raise ValueError("dispatch depth must not be negative")
 			self.scheduler_control["dispatch_depth"] = depth
 			version = self._bump_scheduler_config_version(
 				"scheduler_control")
@@ -462,6 +463,7 @@ class QPMTargetController:
 				"selected_qtask_ids": sorted(self.selected_qtask_ids),
 				"provider_inflight_qtask_ids": sorted(
 					self.provider_inflight),
+				"dispatch_limits": self._dispatch_limits_locked(),
 				"runtime_tasks": [
 					self._task_status_locked(runtime)
 					for runtime in self.runtime_by_qtask_id.values()
@@ -589,6 +591,7 @@ class QPMTargetController:
 				"active_task_count": len(self.runtime_by_qtask_id),
 				"selected_task_count": len(self.selected_qtask_ids),
 				"provider_inflight_count": len(self.provider_inflight),
+				"dispatch_limits": self._dispatch_limits_locked(),
 				"held_capacity": self._held_capacity_locked(),
 				"in_flight_capacity": self._in_flight_capacity_locked(),
 				"policy_state": {
@@ -3132,9 +3135,31 @@ class QPMTargetController:
 	def _can_select_scheduler_task_locked(self):
 		if self.scheduler_control["paused"] or self.scheduler_control["draining"]:
 			return False
-		return (
-			len(self.provider_inflight) <
-			self.scheduler_control["dispatch_depth"])
+		limit = self._effective_dispatch_limit_locked()
+		return limit == 0 or len(self.provider_inflight) < limit
+
+	def _effective_dispatch_limit_locked(self):
+		operator_limit = max(0, int(
+			self.scheduler_control.get("dispatch_depth", 0) or 0))
+		device_limit = 0
+		if self.device_profile is not None:
+			device_limit = max(0, int(
+				self.device_profile.get("max_provider_queue_depth", 0) or 0))
+		limits = [value for value in (operator_limit, device_limit) if value]
+		return min(limits) if limits else 0
+
+	def _dispatch_limits_locked(self):
+		device_limit = 0
+		if self.device_profile is not None:
+			device_limit = max(0, int(
+				self.device_profile.get("max_provider_queue_depth", 0) or 0))
+		return {
+			"max_inflight": max(0, int(
+				self.scheduler_control.get("dispatch_depth", 0) or 0)),
+			"max_provider_queue_depth": device_limit,
+			"effective_max_inflight": self._effective_dispatch_limit_locked(),
+			"provider_inflight": len(self.provider_inflight),
+		}
 
 	def _require_reservation_active(self, reservation, operation):
 		if reservation.get("state") == "active":

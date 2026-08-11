@@ -1522,8 +1522,11 @@ scheduler selection.
 
 QRC should receive work only after scheduler selection. The provider queue can
 still hold a bounded number of selected qtasks when a backend benefits from
-prefetching, but provider queue depth is a scheduler-control setting rather
-than an accidental side effect of asynchronous QRC dispatch.
+prefetching. QPMController enforces the smaller nonzero value of operator
+`max_inflight` and device-profile `max_provider_queue_depth`. Zero means that
+the corresponding limit is unspecified. Lowering either limit does not cancel
+submitted work; it blocks new selection until occupancy falls below the new
+effective limit.
 
 The qhw-admission call sequence uses `qhw_adm_usage_t.task_id` as the stable
 key for estimated usage operations. QPM fills that field with the QPM qtask ID
@@ -3227,13 +3230,16 @@ admission accounting is final.
 
 ### SCHED-007
 
-The scheduler-backed dispatcher should bound provider queue depth according to
-site policy or configuration. A strict single-dispatch policy submits one
+The scheduler-backed dispatcher bounds provider queue depth with the smaller
+nonzero value of operator `max_inflight` and device-profile
+`max_provider_queue_depth`. A strict single-dispatch policy submits one
 selected qtask at a time. A prefetching policy may keep a small bounded number
 of selected qtasks in the provider queue when the backend benefits from it.
 
 In either case, qhw-scheduler remains the ordering authority for normal
 execution and the provider queue should not grow without a configured bound.
+Scheduler status and queue telemetry report both configured limits, their
+effective value, and current provider occupancy.
 
 </details>
 

@@ -953,8 +953,10 @@ Primary requirements: `SCHED-001` through `SCHED-014`, `CAT-002`, `CAT-004`,
 
 4. PH6.4 Dispatch only scheduler-selected qtasks.
    - Select work through qhw-scheduler before provider submission.
-   - Bound provider queue depth using site policy or scheduler control
-     configuration.
+   - Bound provider queue depth with the smaller nonzero value of operator
+     `max_inflight` and device-profile `max_provider_queue_depth`.
+   - Report configured, device, and effective limits with provider occupancy;
+     apply lowered limits without cancelling submitted work.
    - Store submitted-provider overlay state and provider handles in QPM runtime
      state.
    - Reqs: `SCHED-001`, `SCHED-005`, `SCHED-007`, `SCHED-009`,
