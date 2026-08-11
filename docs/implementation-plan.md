@@ -936,9 +936,10 @@ Primary requirements: `SCHED-001` through `SCHED-014`, `CAT-002`, `CAT-004`,
    - Reqs: `SCHED-002`, `STATE-001`.
 
 2. PH6.2 Implement scheduler control APIs.
-   - Configure scheduler policy and options.
-   - Implement queue-state inspection, pause, resume, drain, and dispatch depth
-     controls.
+   - Configure scheduler policy and options through one structured operation.
+   - Implement queue-state inspection, target-specific pause, resume, and
+     drain operations, plus structured `max_inflight` dispatch limits.
+   - Do not retain duplicate setters or short-form lifecycle aliases.
    - Keep token placeholders on scheduler control APIs without checking them
      in this milestone.
    - Reqs: `CAT-004`, `CTRL-001`, `CTRL-006`, `SCHED-007`.

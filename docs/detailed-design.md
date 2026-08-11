@@ -2280,13 +2280,18 @@ execution target. They are operator-facing. The current milestone accepts the
 
 | API | Parameters | Result |
 | --- | --- | --- |
-| `configure_scheduler_policy(token, device_id, policy_name, policy_options)` | `token`, `device_id`, selected scheduler policy and options. | Activates the scheduler policy for the device. |
+| `configure_scheduler_policy(token, device_id, configuration)` | `token`, `device_id`, structured scheduler policy name and options. | Validates and activates the scheduler policy for the device. |
+| `get_scheduler_status(token, device_id)` | `token`, `device_id`. | Returns running, paused, or draining state and configured, device, and effective dispatch limits. |
 | `get_scheduler_policy(token, device_id)` | `token`, `device_id`. | Returns active scheduler policy, options, and version. |
 | `pause_execution_target(token, device_id, reason)` | `token`, `device_id`, optional reason. | Stops dispatching newly selected qtasks while preserving queue state. |
 | `resume_execution_target(token, device_id)` | `token`, `device_id`. | Re-enables scheduler dispatch. |
 | `drain_execution_target(token, device_id, mode, timeout_s)` | `token`, `device_id`, drain mode, optional timeout. | Stops new dispatch and lets selected or running work finish according to policy. |
-| `set_dispatch_depth(token, device_id, max_inflight)` | `token`, `device_id`, provider queue depth bound. | Updates the maximum selected qtasks allowed below the scheduler boundary. |
+| `configure_dispatch_limits(token, device_id, limits)` | `token`, `device_id`, structured operator limits containing `max_inflight`. | Atomically updates operator dispatch limits. |
 | `get_scheduler_queue_state(token, device_id, include_restricted)` | `token`, `device_id`, access selector. | Returns scheduler queue state. Access filtering is deferred to the authentication feature. |
+
+There are no short-form `pause()`, `resume()`, or `drain()` aliases and no
+alternate scheduler-policy setter. Provider queue capability remains in the
+device profile rather than the dispatch-limits payload.
 
 #### Admission Control APIs
 

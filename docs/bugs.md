@@ -435,7 +435,7 @@ Resolution:
 
 ## Consolidate QPM Scheduler Control APIs
 
-Status: open
+Status: resolved
 
 The QPM scheduler control surface contains duplicate policy and lifecycle
 operations. It exposes both `configure_scheduler_policy()` and
@@ -476,6 +476,14 @@ Proposed fix:
 - Update service API definitions, UTIL_QPM wrappers, controller entry points,
   service binding tests, fake-IQM stress tests, documentation, and system-test
   expectations to use only the consolidated surface.
+
+Resolution:
+
+- Removed the duplicate policy setter and short-form lifecycle aliases.
+- Replaced scalar dispatch depth with token-first
+  `configure_dispatch_limits(token, device_id, limits)`.
+- Migrated the fake-IQM stress driver, controller tests, and API contract to
+  the structured scheduler operations.
 
 ## Consolidate QPM Telemetry And Task Information APIs
 

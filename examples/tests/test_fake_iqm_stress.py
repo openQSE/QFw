@@ -493,9 +493,10 @@ def apply_runtime_configuration(qpm, scenario, record):
 	})
 	scheduler_payload = scheduler_policy_payload(
 		scenario["scheduler_policy"])
-	scheduler_result = qpm.set_scheduler_policy(scheduler_payload)
-	dispatch_result = qpm.set_dispatch_depth(
-		max_inflight=scenario["dispatch_depth"])
+	scheduler_result = qpm.configure_scheduler_policy(
+		configuration=scheduler_payload)
+	dispatch_result = qpm.configure_dispatch_limits(
+		limits={"max_inflight": scenario["dispatch_depth"]})
 	record["policy"] = {
 		"device_profile": profile_result,
 		"admission": admission_result,
@@ -857,7 +858,8 @@ def run_workers_queued(qpm, scenario, reservations, args, deadline, wave):
 	]
 	pending = []
 	parallel_threads = []
-	qpm.pause(reason=f"fake-iqm-stress:{scenario['name']}:wave-{wave['wave_index']}")
+	qpm.pause_execution_target(
+		reason=f"fake-iqm-stress:{scenario['name']}:wave-{wave['wave_index']}")
 	try:
 		for worker, reservation in zip(workers, reservations):
 			reservation_id = reservation["decision"]["reservation_id"]
@@ -889,7 +891,7 @@ def run_workers_queued(qpm, scenario, reservations, args, deadline, wave):
 		wave["queued_state"] = qpm.get_scheduler_queue_state(
 			include_restricted=True)
 	finally:
-		qpm.resume()
+		qpm.resume_execution_target()
 	complete_pending_submissions(qpm, scenario, pending, args, deadline)
 	for thread in parallel_threads:
 		thread.join(max(0.1, remaining_seconds(deadline)))

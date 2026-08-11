@@ -204,8 +204,9 @@ def test_scheduler_control_state_is_target_scoped(monkeypatch):
 	qpm_b = SchedulerQPM(target_id="sched-b")
 	qpm_a_again = SchedulerQPM(target_id="sched-a")
 
-	qpm_a.set_scheduler_policy({"policy": "fifo", "options": {7: 3}})
-	qpm_a.pause(reason="operator")
+	qpm_a.configure_scheduler_policy(
+		configuration={"policy": "fifo", "options": {7: 3}})
+	qpm_a.pause_execution_target(reason="operator")
 
 	assert qpm_a.controller is qpm_a_again.controller
 	assert qpm_a.controller is not qpm_b.controller
@@ -261,7 +262,7 @@ def test_delayed_capacity_stays_out_of_scheduler(monkeypatch):
 def test_dispatch_depth_keeps_later_qtasks_queued(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM()
-	qpm.set_dispatch_depth(1)
+	qpm.configure_dispatch_limits(limits={"max_inflight": 1})
 
 	first = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
@@ -286,7 +287,7 @@ def test_provider_queue_depth_bounds_dispatch_and_reports_limits(monkeypatch):
 		"device_id": 1,
 		"max_provider_queue_depth": 2,
 	}
-	qpm.set_dispatch_depth(0)
+	qpm.configure_dispatch_limits(limits={"max_inflight": 0})
 
 	responses = [qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
@@ -321,7 +322,7 @@ def test_effective_dispatch_limit_uses_smallest_nonzero_limit(monkeypatch):
 			"device_id": 1,
 			"max_provider_queue_depth": device,
 		}
-		qpm.set_dispatch_depth(operator)
+		qpm.configure_dispatch_limits(limits={"max_inflight": operator})
 		limits = qpm.get_scheduler_status()["dispatch_limits"]
 		assert limits["effective_max_inflight"] == expected
 
@@ -329,7 +330,7 @@ def test_effective_dispatch_limit_uses_smallest_nonzero_limit(monkeypatch):
 def test_lowering_provider_limit_does_not_cancel_inflight_work(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM(target_id="dynamic-provider-depth")
-	qpm.set_dispatch_depth(3)
+	qpm.configure_dispatch_limits(limits={"max_inflight": 3})
 	responses = [qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -351,14 +352,14 @@ def test_lowering_provider_limit_does_not_cancel_inflight_work(monkeypatch):
 def test_async_run_reports_new_qtask_when_older_work_dispatches(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM()
-	qpm.pause(reason="operator")
+	qpm.pause_execution_target(reason="operator")
 	first = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": "reservation-1",
 	})
 
-	qpm.resume()
+	qpm.resume_execution_target()
 	second = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -374,7 +375,7 @@ def test_async_run_reports_new_qtask_when_older_work_dispatches(monkeypatch):
 def test_sync_timeout_returns_task_handles(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM()
-	qpm.pause(reason="operator")
+	qpm.pause_execution_target(reason="operator")
 
 	response = qpm.sync_run({
 		"qasm": "OPENQASM 2.0;",
@@ -719,8 +720,8 @@ def test_task_status_exposes_queue_observations(monkeypatch):
 def test_lifecycle_telemetry_records_controls_and_reconciliation(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM()
-	qpm.set_scheduler_policy({"policy": "fifo"})
-	qpm.pause(reason="operator")
+	qpm.configure_scheduler_policy(configuration={"policy": "priority"})
+	qpm.pause_execution_target(reason="operator")
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,

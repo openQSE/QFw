@@ -368,10 +368,17 @@ class QPMTargetController:
 				"scheduler_policy": dict(self.scheduler_policy),
 			}
 
-	def set_scheduler_policy(self, policy):
+	def configure_scheduler_policy(self, configuration):
 		with self.lock:
 			normalized = activate_scheduler_policy(
-				self.scheduler_context, policy)
+				self.scheduler_context, configuration)
+			if self.scheduler_policy == normalized:
+				return {
+					"status": "unchanged",
+					"version": self.scheduler_config_versions[
+						"scheduler_policy"],
+					"scheduler_policy": dict(self.scheduler_policy),
+				}
 			self.scheduler_policy = normalized
 			version = self._bump_scheduler_config_version(
 				"scheduler_policy")
@@ -432,22 +439,34 @@ class QPMTargetController:
 				})
 			return self._scheduler_control_result("draining", version)
 
-	def set_dispatch_depth(self, max_inflight):
+	def configure_dispatch_limits(self, limits):
 		with self.lock:
-			depth = int(max_inflight)
+			limits = dict(limits or {})
+			unknown = set(limits) - {"max_inflight"}
+			if unknown:
+				raise ValueError(
+					"unsupported dispatch limits: " +
+					", ".join(sorted(unknown)))
+			if "max_inflight" not in limits:
+				raise ValueError("dispatch limits require max_inflight")
+			depth = int(limits["max_inflight"])
 			if depth < 0:
-				raise ValueError("dispatch depth must not be negative")
+				raise ValueError("max_inflight must not be negative")
+			if self.scheduler_control["dispatch_depth"] == depth:
+				return self._scheduler_control_result(
+					"unchanged",
+					self.scheduler_config_versions["scheduler_control"])
 			self.scheduler_control["dispatch_depth"] = depth
 			version = self._bump_scheduler_config_version(
 				"scheduler_control")
 			self._record_lifecycle_event_locked(
-				"scheduler-dispatch-depth-change",
+				"scheduler-dispatch-limits-change",
 				details={
 					"version": version,
-					"dispatch_depth": depth,
+					"max_inflight": depth,
 				})
 			return self._scheduler_control_result(
-				"dispatch-depth-updated", version)
+				"dispatch-limits-updated", version)
 
 	def get_scheduler_queue_state(self, include_restricted=False):
 		with self.lock:

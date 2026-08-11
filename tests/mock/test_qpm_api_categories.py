@@ -42,7 +42,9 @@ def test_qpm_category_surfaces_are_importable():
 	assert not hasattr(QPMAdmissionPolicyConfig, "set_estimator_policy")
 	assert hasattr(QPMSchedulerControl, "configure_scheduler_policy")
 	assert hasattr(QPMSchedulerControl, "pause_execution_target")
-	assert hasattr(QPMSchedulerControl, "set_scheduler_policy")
+	assert not hasattr(QPMSchedulerControl, "set_scheduler_policy")
+	assert not hasattr(QPMSchedulerControl, "pause")
+	assert not hasattr(QPMSchedulerControl, "set_dispatch_depth")
 	assert hasattr(QPMTelemetry, "get_calibration_snapshot")
 	assert hasattr(QPMTelemetry, "reconcile_runtime_state")
 	assert hasattr(QPMTelemetry, "get_service_lifecycle_telemetry")
@@ -109,8 +111,10 @@ def test_qpm_category_surfaces_use_token_first_order():
 			["self", "cid", "reservation_id", "token", "qtask_id"],
 		(QPMAdmissionPolicyConfig, "set_admission_policy"):
 			["self", "token", "device_id", "configuration"],
-		(QPMSchedulerControl, "set_dispatch_depth"):
-			["self", "token", "device_id", "max_inflight"],
+		(QPMSchedulerControl, "configure_scheduler_policy"):
+			["self", "token", "device_id", "configuration"],
+		(QPMSchedulerControl, "configure_dispatch_limits"):
+			["self", "token", "device_id", "limits"],
 		(QPMSchedulerControl, "get_scheduler_queue_state"):
 			["self", "token", "device_id", "include_restricted"],
 		(QPMTelemetry, "get_task_metadata"):
@@ -136,9 +140,9 @@ def test_util_qpm_control_methods_accept_token_first_order():
 			self.admission_configuration = configuration
 			return {"configuration": configuration}
 
-		def set_dispatch_depth(self, max_inflight):
-			self.dispatch_depth = max_inflight
-			return {"max_inflight": max_inflight}
+		def configure_dispatch_limits(self, limits):
+			self.dispatch_depth = limits["max_inflight"]
+			return dict(limits)
 
 		def get_scheduler_queue_state(self, include_restricted=False):
 			self.include_restricted = include_restricted
@@ -151,10 +155,12 @@ def test_util_qpm_control_methods_accept_token_first_order():
 		"opaque-token", "device-1", {"policy": {"name": "unlimited"}}) == {
 			"configuration": {"policy": {"name": "unlimited"}},
 		}
-	assert qpm.set_dispatch_depth("opaque-token", "device-1", 4) == {
+	assert qpm.configure_dispatch_limits(
+		"opaque-token", "device-1", {"max_inflight": 4}) == {
 		"max_inflight": 4,
 	}
-	assert qpm.set_dispatch_depth({"opaque": "token"}, "device-1", 5) == {
+	assert qpm.configure_dispatch_limits(
+		{"opaque": "token"}, "device-1", {"max_inflight": 5}) == {
 		"max_inflight": 5,
 	}
 	assert qpm.get_scheduler_queue_state(

@@ -332,7 +332,7 @@ def test_operations_timeout_expiration_and_reconciliation(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-timeout")
 	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	qpm.pause(reason="operator")
+	qpm.pause_execution_target(reason="operator")
 
 	timed_out = qpm.sync_run({
 		"qasm": "OPENQASM 2.0;",

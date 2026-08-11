@@ -94,16 +94,13 @@ class QPMAdmissionPolicyConfig(QPMRemoteBase):
 
 class QPMSchedulerControl(QPMRemoteBase):
 	def configure_scheduler_policy(self, token=None, device_id=None,
-				       policy_name=None, policy_options=None):
+				       configuration=None):
 		pass
 
 	def get_scheduler_status(self, token=None, device_id=None):
 		pass
 
 	def get_scheduler_policy(self, token=None, device_id=None):
-		pass
-
-	def set_scheduler_policy(self, policy, token=None, device_id=None):
 		pass
 
 	def pause_execution_target(self, token=None, device_id=None,
@@ -117,18 +114,8 @@ class QPMSchedulerControl(QPMRemoteBase):
 				   mode="graceful", timeout_s=None):
 		pass
 
-	def pause(self, target_id=None, reason=None, token=None):
-		pass
-
-	def resume(self, target_id=None, token=None):
-		pass
-
-	def drain(self, target_id=None, mode="graceful", timeout_s=None,
-		  token=None):
-		pass
-
-	def set_dispatch_depth(self, token=None, device_id=None,
-			   max_inflight=None):
+	def configure_dispatch_limits(self, token=None, device_id=None,
+				      limits=None):
 		pass
 
 	def get_scheduler_queue_state(self, token=None, device_id=None,

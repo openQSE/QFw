@@ -445,7 +445,7 @@ Potential scheduler control APIs are:
 | --- | --- |
 | `list_scheduler_policies(device_id=None)` | Return the scheduler policies supported by a service or device, such as FIFO, round robin, priority, size-aware, deadline-aware, or shot-slicing policies. |
 | `get_scheduler_config(device_id=None)` | Return the active scheduler policy and effective configuration. |
-| `set_scheduler_policy(device_id, policy, config=None)` | Select the scheduler policy for a device or service instance and apply policy-specific configuration. |
+| `configure_scheduler_policy(device_id, configuration)` | Select the scheduler policy for a device or service instance and apply policy-specific configuration. |
 | `update_scheduler_config(device_id, config)` | Adjust tunables such as slice size, priority weights, deadline thresholds, or fairness windows when policy allows runtime changes. |
 | `get_queue_state(device_id=None, filter=None)` | Return queue depth, per-job queue state, runnable task count, blocked task count, and scheduler-visible accounting. |
 | `pause_scheduler(device_id, reason=None)` | Stop dispatching new work while preserving queued state. This is useful for maintenance and controlled testing. |

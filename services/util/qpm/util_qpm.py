@@ -904,23 +904,14 @@ class UTIL_QPM:
 			configuration, device_id=device_id)
 
 	def configure_scheduler_policy(self, token=None, device_id=None,
-				       policy_name=None, policy_options=None):
-		policy = {
-			"policy_name": policy_name,
-			"policy_options": dict(policy_options or {}),
-		}
-		if device_id is not None:
-			policy["device_id"] = device_id
-		return self.controller.set_scheduler_policy(policy)
+				       configuration=None):
+		return self.controller.configure_scheduler_policy(configuration)
 
 	def get_scheduler_status(self, token=None, device_id=None):
 		return self.controller.get_scheduler_status()
 
 	def get_scheduler_policy(self, token=None, device_id=None):
 		return self.controller.get_scheduler_policy()
-
-	def set_scheduler_policy(self, policy, token=None, device_id=None):
-		return self.controller.set_scheduler_policy(policy)
 
 	def pause_execution_target(self, token=None, device_id=None,
 				   reason=None):
@@ -934,26 +925,9 @@ class UTIL_QPM:
 		return self.controller.drain_scheduler(
 			mode=mode, timeout_s=timeout_s)
 
-	def pause(self, target_id=None, reason=None, token=None):
-		return self.controller.pause_scheduler(reason=reason)
-
-	def resume(self, target_id=None, token=None):
-		return self.controller.resume_scheduler()
-
-	def drain(self, target_id=None, mode="graceful", timeout_s=None,
-		  token=None):
-		return self.controller.drain_scheduler(
-			mode=mode, timeout_s=timeout_s)
-
-	def set_dispatch_depth(self, token=None, device_id=None,
-			   max_inflight=None):
-		if max_inflight is None and device_id is None:
-			max_inflight = token
-			token = None
-		else:
-			token, device_id, max_inflight = _token_device_payload_args(
-				token, device_id, max_inflight)
-		return self.controller.set_dispatch_depth(max_inflight)
+	def configure_dispatch_limits(self, token=None, device_id=None,
+				      limits=None):
+		return self.controller.configure_dispatch_limits(limits)
 
 	def get_scheduler_queue_state(self, token=None, device_id=None,
 				      include_restricted=False):
