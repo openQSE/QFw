@@ -96,6 +96,8 @@ class QFwBackend(BackendV2):
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
 		self._event_endpoint = me.my_endpoint()
+		self._event_registration_lock = threading.Lock()
+		self._completion_event_registration = None
 
 		super().__init__(name=self.my_name())
 		self._target = target
@@ -109,6 +111,7 @@ class QFwBackend(BackendV2):
 		self.options.set_validator("shots", (1, 65536))
 		self.options.set_validator("seed_simulator", int)
 		self.options.set_validator("seed", int)
+		self.register_completion_events()
 
 	def __copy__(self):
 		return self
@@ -209,22 +212,16 @@ class QFwBackend(BackendV2):
 		self._qfw_job.submit()
 		return self._qfw_job
 
-	def register_completion_event(self, qpm, event_api, cid, response, options):
-		filters = {"cid": cid}
-		if isinstance(response, dict) and response.get("qtask_id") is not None:
-			filters["qtask_id"] = response["qtask_id"]
-		kwargs = {"filters": filters}
-		if options.get("reservation_id") is not None:
-			kwargs["reservation_id"] = normalize_reservation_id(
-				options["reservation_id"])
-		if options.get("token") is not None:
-			kwargs["token"] = options["token"]
-		return qpm.register_event_notification(
-			self._event_endpoint,
-			EVENT_TYPE_CIRC_RESULT,
-			event_api.class_id(),
-			**kwargs,
-		)
+	def register_completion_events(self):
+		with self._event_registration_lock:
+			if self._completion_event_registration is not None:
+				return self._completion_event_registration
+			self._completion_event_registration = \
+				self.qpm.register_event_notification(
+					self._event_endpoint,
+					EVENT_TYPE_CIRC_RESULT,
+					self.event_api.class_id())
+			return self._completion_event_registration
 
 	def log_statistics(self, res):
 		g_circ_metrics.add_time(res['creation_time'], res['launch_time'], "creation->launch")

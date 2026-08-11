@@ -83,7 +83,6 @@ class QFwJob(Job):
 			context = self._execution_context()
 			response = self._qpm.async_run(info, **context)
 			cid = _async_response_cid(response)
-			self._register_completion_event(cid, response)
 			return cid
 		except Exception as e:
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
@@ -102,18 +101,6 @@ class QFwJob(Job):
 		if not context.get("reservation_id"):
 			raise DEFwError("reservation_id is required for QPM execution")
 		return context
-
-	def _register_completion_event(self, cid, response):
-		register = getattr(self._backend, "register_completion_event", None)
-		if register is None:
-			return None
-		return register(
-			self._qpm,
-			self._qpm_event_api,
-			cid,
-			response,
-			self._options,
-		)
 
 	def submit(self):
 		if isinstance(self._qobj, QuantumCircuit):
