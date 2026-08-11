@@ -6,6 +6,7 @@ import types
 
 import pytest
 import util.qpm.util_qpm as util_qpm
+import util.qpm.controller as qpm_controller
 from defw_exception import DEFwExecutionError
 from fakes import FakeSchedulerContext
 from util.qpm.controller import (
@@ -15,6 +16,7 @@ from util.qpm.controller import (
 )
 from util.qpm.util_qpm import UTIL_QPM
 import util.qpm.admission as qpm_admission
+from util.qpm.admission import QPMAdmissionValidationError
 
 
 class FakeQRC:
@@ -513,24 +515,26 @@ def test_policy_configuration_reaches_admission_context(monkeypatch):
 	qpm = AdmissionQPM()
 
 	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
-	result = qpm.configure_admission_policy(
+	baseline = qpm.get_device_profile()["device_profile"]["baseline"]
+	result = qpm.set_admission_policy(
 		token="opaque-token",
 		device_id=77,
-		policy_name="credit",
-		policy_options={"total_credits": 16},
-		estimator_name="baseline",
-		estimator_options={"minimum_ns": 25},
+		configuration={
+			"policy": {"name": "credit", "options": {}},
+			"estimator": {"name": "baseline", "options": {}},
+			"baseline": baseline,
+			"capacity": {"total_credits": 16},
+		},
 	)
 
 	assert result["status"] == "accepted"
 	assert qpm.controller.admission_context.policies == [
 		(77, "unlimited", {}),
-		(77, "credit", {"total_credits": 16})]
-	assert qpm.controller.admission_context.estimators == [
-		(77, "baseline", {"minimum_ns": 25})]
-	assert result["admission_policy"]["policy_name"] == "credit"
-	assert result["estimator_policy"]["estimator_policy"][
-		"estimator_name"] == "baseline"
+		(77, "credit", {})]
+	assert qpm.controller.admission_context.estimators[-1] == (
+		77, "baseline", {})
+	assert result["configuration"]["policy"]["name"] == "credit"
+	assert result["configuration"]["capacity"]["total_credits"] == 16
 
 
 def test_repeated_device_profile_configuration_is_idempotent(monkeypatch):
@@ -555,19 +559,24 @@ def test_repeated_admission_policy_configuration_is_idempotent(monkeypatch):
 	qpm = AdmissionQPM()
 
 	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	baseline = qpm.get_device_profile()["device_profile"]["baseline"]
+	configuration = {
+		"policy": {"name": "credit", "options": {}},
+		"estimator": {"name": "baseline", "options": {}},
+		"baseline": baseline,
+		"capacity": {"total_credits": 16},
+	}
 	first = qpm.set_admission_policy(
-		{"name": "credit", "options": {"total_credits": 16}},
-		device_id=77)
+		device_id=77, configuration=configuration)
 	second = qpm.set_admission_policy(
-		{"name": "credit", "options": {"total_credits": 16}},
-		device_id=77)
+		device_id=77, configuration=configuration)
 
 	assert first["status"] == "accepted"
 	assert second["status"] == "unchanged"
 	assert second["version"] == first["version"]
 	assert qpm.controller.admission_context.policies == [
 		(77, "unlimited", {}),
-		(77, "credit", {"total_credits": 16}),
+		(77, "credit", {}),
 	]
 
 
@@ -576,71 +585,113 @@ def test_policy_options_reach_native_fallback_config(monkeypatch):
 	qpm = LegacyOptionAdmissionQPM()
 
 	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
-	result = qpm.configure_admission_policy(
+	baseline = qpm.get_device_profile()["device_profile"]["baseline"]
+	result = qpm.set_admission_policy(
 		token="opaque-token",
 		device_id=77,
-		policy_name="credit",
-		policy_options={
-			"allow_overcommit": True,
-			"overcommit_credits": 2,
+		configuration={
+			"policy": {
+				"name": "credit",
+				"options": {
+					"allow_overcommit": True,
+					"overcommit_credits": 2,
+				},
+			},
+			"estimator": {"name": "baseline", "options": {}},
+			"baseline": baseline,
+			"capacity": {"total_credits": 16},
 		},
-		estimator_name="baseline",
-		estimator_options={"observed_device_ns": 25},
 	)
 	configs = qpm.controller.admission_context.loaded_configs
 
 	assert result["status"] == "accepted"
 	assert "allow_overcommit: true" in configs[0]
 	assert "overcommit_credits: 2" in configs[0]
-	assert "observed_device_ns: 25" in configs[-1]
-	assert "device_id: 77" in configs[-1]
+	assert "device_id: 77" in configs[0]
 
 
-def test_capacity_model_updates_admission_device_profile(monkeypatch):
+def test_credit_and_rate_capacity_update_device_profile(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
 
 	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
-	result = qpm.set_capacity_model(capacity_model={
-		"credits": 64,
-		"rate": 4,
-		"concurrency": 2,
-		"ttl_ns": 9_000,
-		"window_ns": 60_000,
+	baseline = qpm.get_device_profile()["device_profile"]["baseline"]
+	credit = qpm.set_admission_policy(device_id=77, configuration={
+		"policy": {"name": "credit", "options": {}},
+		"estimator": {"name": "baseline", "options": {}},
+		"baseline": baseline,
+		"capacity": {"total_credits": 64},
 	})
-	profile = qpm.controller.admission_context.registered_profiles[-1]
+	rate = qpm.set_admission_policy(device_id=77, configuration={
+		"policy": {"name": "rate", "options": {}},
+		"estimator": {"name": "baseline", "options": {}},
+		"baseline": baseline,
+		"capacity": {"device_rate": 4, "time_span_ns": 60_000},
+	})
 
-	assert result["status"] == "accepted"
-	assert result["device_profile_version"] == 2
-	assert profile["total_credits"] == 64
+	assert credit["configuration"]["capacity"] == {"total_credits": 64}
+	assert rate["configuration"]["capacity"] == {
+		"device_rate": 4, "time_span_ns": 60_000}
+	profile = qpm.controller.admission_context.registered_profiles[-1]
 	assert profile["device_rate"] == 4
-	assert profile["concurrent_jobs"] == 2
-	assert profile["default_ttl_ns"] == 9_000
 	assert profile["time_span_ns"] == 60_000
 
 
-def test_capacity_model_uses_api_device_id_without_profile(monkeypatch):
+def test_admission_configuration_rejects_invalid_schema_atomically(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
+	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	before = qpm.get_admission_policy(device_id=77)
 
-	result = qpm.set_capacity_model(
-		token="opaque-token",
-		device_id=77,
-		capacity_model={
-			"credits": 64,
-			"rate": 4,
-			"concurrency": 2,
-		},
-	)
-	profile = qpm.controller.admission_context.registered_profiles[-1]
+	for configuration in (
+		{"policy": {"name": "unlimited"}, "capacity": {"total_credits": 1}},
+		{"policy": {"name": "credit"}, "capacity": {}},
+		{"policy": {"name": "rate"}, "capacity": {"device_rate": 4}},
+		{"policy": {"name": "credit"},
+		 "estimator": {"name": "baseline", "options": {"baseline_depth": 1}},
+		 "capacity": {"total_credits": 4}},
+	):
+		try:
+			qpm.set_admission_policy(device_id=77, configuration=configuration)
+		except QPMAdmissionValidationError:
+			pass
+		else:
+			raise AssertionError("expected invalid admission configuration")
 
-	assert result["status"] == "accepted"
-	assert result["capacity_model"]["device_id"] == 77
-	assert profile["device_id"] == 77
-	assert profile["total_credits"] == 64
-	assert profile["device_rate"] == 4
-	assert profile["concurrent_jobs"] == 2
-	assert profile["max_qubits"] == 1
+	assert qpm.get_admission_policy(device_id=77) == before
+
+
+def test_admission_configuration_rolls_back_after_apply_failure(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	before = qpm.get_admission_policy(device_id=77)
+	baseline = qpm.get_device_profile()["device_profile"]["baseline"]
+
+	def fail_policy(*args, **kwargs):
+		raise RuntimeError("policy apply failed")
+
+	monkeypatch.setattr(qpm_controller, "set_policy", fail_policy)
+	with pytest.raises(RuntimeError, match="policy apply failed"):
+		qpm.set_admission_policy(device_id=77, configuration={
+			"policy": {"name": "credit", "options": {}},
+			"estimator": {"name": "baseline", "options": {}},
+			"baseline": baseline,
+			"capacity": {"total_credits": 16},
+		})
+
+	assert qpm.get_admission_policy(device_id=77) == before
+
+
+def test_admission_configuration_checks_expected_version(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+	qpm.configure_device_profile(device_id=77, profile={"max_qubits": 8})
+	configuration = qpm.get_admission_policy(device_id=77)["configuration"]
+	configuration["expected_version"] = 0
+
+	with pytest.raises(QPMAdmissionValidationError, match="version mismatch"):
+		qpm.set_admission_policy(device_id=77, configuration=configuration)
 
 
 def test_default_policy_paths_include_qhw_admission_source_build(

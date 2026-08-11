@@ -473,10 +473,23 @@ def decision_status(decision):
 def apply_runtime_configuration(qpm, scenario, record):
 	profile = fake_device_profile(qpm, scenario)
 	profile_result = qpm.configure_device_profile(profile=profile)
-	estimator_result = qpm.set_estimator_policy({"name": "baseline"})
-	admission_result = qpm.set_admission_policy({
-		"name": scenario["admission_policy"],
-		"options": admission_policy_options(scenario),
+	policy_name = scenario["admission_policy"]
+	capacity = {}
+	if policy_name == "credit":
+		capacity["total_credits"] = profile["total_credits"]
+	elif policy_name == "rate":
+		capacity.update({
+			"device_rate": profile["device_rate"],
+			"time_span_ns": profile["time_span_ns"],
+		})
+	admission_result = qpm.set_admission_policy(configuration={
+		"policy": {
+			"name": policy_name,
+			"options": admission_policy_options(scenario),
+		},
+		"estimator": {"name": "baseline", "options": {}},
+		"baseline": profile["baseline"],
+		"capacity": capacity,
 	})
 	scheduler_payload = scheduler_policy_payload(
 		scenario["scheduler_policy"])
@@ -485,7 +498,6 @@ def apply_runtime_configuration(qpm, scenario, record):
 		max_inflight=scenario["dispatch_depth"])
 	record["policy"] = {
 		"device_profile": profile_result,
-		"estimator": estimator_result,
 		"admission": admission_result,
 		"scheduler": scheduler_result,
 		"dispatch": dispatch_result,

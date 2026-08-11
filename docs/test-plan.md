@@ -212,8 +212,8 @@ sequenceDiagram
   QPM->>Dir: Register fake-iqm-20q service and API bindings
   Driver->>Dir: Resolve fake-iqm-20q QPM
   Note over Driver,QPM: Driver owns site/admin policy decisions
-  Driver->>QPM: Apply device profile, estimator, admission policy, scheduler policy, dispatch limits
-  QPM->>Adm: Apply requested device profile, estimator, and admission policy
+  Driver->>QPM: Apply device profile, atomic admission configuration, scheduler policy, dispatch limits
+  QPM->>Adm: Apply validated baseline, capacity, estimator, and admission policy
   QPM->>Sched: Apply requested scheduler policy and dispatch limits
   Driver->>QPM: reserve(job/allocation, walltime, workload, qtask classes)
   QPM->>Adm: estimate and reserve with selected estimator
@@ -552,7 +552,7 @@ pattern used by the admission and scheduler fixture:
 | ST-012 | Cancellation propagation. Cancel pending-capacity, queued, selected, submitted, running, and timeout-returned qtasks. Verify cancellation reaches QPM pending state, qhw-scheduler, provider handles when present, result/event state, and qhw-admission accounting. | `SCHED-011`, `ADM-021`, `STATE-003`, `STATE-004` |
 | ST-013 | Reservation close protocol. Release, cancel, and expire reservations with pending, held, selected, and provider-running qtasks. Verify QPM marks the reservation closing, rejects new work, stops pending retries, finalizes held-task accounting while qhw-admission still reports active, and then performs the terminal lifecycle call. | `ADM-003`, `ADM-007`, `ADM-017`, `ADM-021`, `ADM-022`, `STATE-004` |
 | ST-014 | Managed task status and queue observations. Poll task status through every visible state: pending capacity, queued, waiting, selected, submitted, running, completed, failed, cancelled, and timed out. Verify queue position and wait/start estimates are present only when policy and telemetry support them. | `SCHED-012`, `SCHED-013`, `SCHED-014`, `API-004`, `CTRL-008` |
-| ST-015 | Telemetry and capacity snapshots. Query backend metadata, calibration/topology data, reservation state, task metadata, capacity snapshots, queue metrics, scheduler policy state, device availability, confidence, timestamps, and policy context. Verify unavailable estimates are explicit. | `API-002`, `CAT-005`, `CTRL-002` through `CTRL-008` |
+| ST-015 | Telemetry and capacity snapshots. Atomically configure unlimited, credit, and rate admission policies with a complete baseline circuit; verify invalid and stale-version updates preserve prior state. Query backend metadata, calibration/topology data, reservation state, task metadata, capacity snapshots, queue metrics, scheduler policy state, device availability, confidence, timestamps, and policy context. Verify qhw-admission estimates reach qhw-scheduler and unavailable estimates are explicit. | `API-002`, `CAT-005`, `CTRL-002` through `CTRL-008` |
 | ST-016 | Liveness, restart, and reconciliation. Inject peer loss, heartbeat timeout, service deregistration, QPM restart, stale directory generation, incomplete holds, unfinished scheduler tasks, and provider handles requiring recovery. Verify directory state, resolver behavior, reconciliation faults, and audit records. | `DISC-001`, `DISC-004`, `CTRL-004`, `STATE-004` |
 | ST-017 | Operation-mode parity. Run the same reservation, execution, cancellation, timeout, release, and telemetry workflows in QFw-managed mode and long-running QPM mode. Verify the externally visible QPM API semantics match after binding. | `OPM-001` through `OPM-003`, `API-003`, `CAT-007` |
 | ST-018 | Compatibility debt removal. Verify legacy directory `reserve()` and `release()` capacity semantics and unmanaged public execution bypasses are unavailable. Verify all circuit execution requires a reservation and follows admission and scheduler selection. | `DISC-002`, `SCHED-009`, `SCHED-010`, `API-001` |

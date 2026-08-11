@@ -84,29 +84,11 @@ class QPMAdmissionPolicyConfig(QPMRemoteBase):
 	def get_device_profile(self, token=None, device_id=None):
 		pass
 
-	def configure_admission_policy(self, token=None, device_id=None,
-				       policy_name=None, policy_options=None,
-				       estimator_name=None,
-				       estimator_options=None):
-		pass
-
 	def get_admission_policy(self, token=None, device_id=None):
 		pass
 
-	def set_admission_policy(self, policy, token=None, device_id=None):
-		pass
-
-	def get_capacity_model(self, token=None, device_id=None):
-		pass
-
-	def set_capacity_model(self, token=None, device_id=None,
-			   capacity_model=None):
-		pass
-
-	def set_estimator_policy(self, estimator, token=None, device_id=None):
-		pass
-
-	def get_estimator_policy(self, token=None, device_id=None):
+	def set_admission_policy(self, token=None, device_id=None,
+				 configuration=None):
 		pass
 
 

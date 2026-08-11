@@ -224,7 +224,7 @@ validate tokens or authorize callers from them.
 | CTRL-003 | Admission policies shall consume capacity snapshots through a defined QPM or QPU control interface instead of reading QFw service internals or qhw-scheduler internal state directly. |
 | CTRL-004 | QFw telemetry shall expose pending queue state, scheduler queue state, scheduler policy state, device availability, and capacity state needed by operators and site automation. |
 | CTRL-005 | The QPM service or associated QPU control service shall configure a qhw-admission device profile for each managed QPU before accepting admission reservations for that QPU. |
-| CTRL-006 | The QPM service or associated QPU control service shall configure admission policy, estimator policy, and scheduler policy for each managed QPU through control-plane configuration. |
+| CTRL-006 | The QPM service or associated QPU control service shall atomically configure admission policy, baseline estimator, policy-specific capacity, and scheduler policy for each managed QPU through control-plane configuration. |
 | CTRL-007 | QFw telemetry shall expose aggregate queue metrics, including pending qtask count, scheduler queue depth, estimated queued device time, active task count, held or in-flight capacity, and policy-specific scheduling state when permitted by site policy. |
 | CTRL-008 | Queue telemetry APIs shall label estimates with their confidence, timestamp, and policy context when those values are available. |
 

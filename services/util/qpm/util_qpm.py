@@ -881,67 +881,27 @@ class UTIL_QPM:
 		return result
 
 	def configure_default_admission_policy(self):
-		policy = dict(self.controller.admission_policy or {"name": "unlimited"})
-		return self.controller.set_admission_policy(policy)
+		current = self.controller.admission_configuration
+		if current:
+			return self.controller.set_admission_policy(current)
+		profile = dict(self.controller.device_profile or {})
+		return self.controller.set_admission_policy({
+			"policy": {"name": "unlimited", "options": {}},
+			"estimator": {"name": "baseline", "options": {}},
+			"baseline": dict(profile.get("baseline") or {}),
+			"capacity": {},
+		})
 
 	def get_device_profile(self, token=None, device_id=None):
 		return self.controller.get_device_profile()
 
-	def configure_admission_policy(self, token=None, device_id=None,
-				       policy_name=None, policy_options=None,
-				       estimator_name=None,
-				       estimator_options=None):
-		policy = {
-			"policy_name": policy_name,
-			"policy_options": dict(policy_options or {}),
-		}
-		if device_id is not None:
-			policy["device_id"] = device_id
-		result = self.controller.set_admission_policy(policy)
-		if estimator_name is not None or estimator_options:
-			estimator = {
-				"estimator_name": estimator_name,
-				"estimator_options": dict(estimator_options or {}),
-			}
-			if device_id is not None:
-				estimator["device_id"] = device_id
-			result["estimator_policy"] = (
-				self.controller.set_estimator_policy(estimator))
-		return result
-
 	def get_admission_policy(self, token=None, device_id=None):
-		return self.controller.get_admission_policy()
+		return self.controller.get_admission_policy(device_id=device_id)
 
-	def set_admission_policy(self, policy, token=None, device_id=None):
-		if device_id is not None:
-			policy = dict(policy or {})
-			policy.setdefault("device_id", device_id)
-		return self.controller.set_admission_policy(policy)
-
-	def get_capacity_model(self, token=None, device_id=None):
-		return self.controller.get_capacity_model()
-
-	def set_capacity_model(self, token=None, device_id=None,
-			       capacity_model=None):
-		if capacity_model is None and device_id is None:
-			capacity_model = token
-			token = None
-		else:
-			token, device_id, capacity_model = (
-				_token_device_payload_args(
-					token, device_id, capacity_model,
-					legacy_payload_first=True))
-		return self.controller.set_capacity_model(
-			capacity_model, device_id=device_id)
-
-	def get_estimator_policy(self, token=None, device_id=None):
-		return self.controller.get_estimator_policy()
-
-	def set_estimator_policy(self, estimator, token=None, device_id=None):
-		if device_id is not None:
-			estimator = dict(estimator or {})
-			estimator.setdefault("device_id", device_id)
-		return self.controller.set_estimator_policy(estimator)
+	def set_admission_policy(self, token=None, device_id=None,
+				 configuration=None):
+		return self.controller.set_admission_policy(
+			configuration, device_id=device_id)
 
 	def configure_scheduler_policy(self, token=None, device_id=None,
 				       policy_name=None, policy_options=None):

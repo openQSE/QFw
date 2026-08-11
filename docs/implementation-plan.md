@@ -163,7 +163,7 @@ changes.
 
 | Commit ID | Primary repo | Plan tasks | Scope and exit criteria |
 | --- | --- | --- | --- |
-| PH5-C01 | QFw | PH5.1, PH5.2 | Construct qhw-admission contexts per target and configure device profiles, capacity models, estimators, and admission policies. |
+| PH5-C01 | QFw | PH5.1, PH5.2 | Construct qhw-admission contexts per target and atomically configure device profiles, policy-specific capacity, the baseline estimator, and admission policy. |
 | PH5-C02 | QFw | PH5.3 | Implement admission workflows backed by qhw-admission without a duplicate QPM reservation database. |
 | PH5-C03 | QFw | PH5.4 | Enforce reservation validation and request metadata compatibility before resource-affecting work. |
 | PH5-C04 | QFw | PH5.5, PH5.6 | Add estimated usage authorization, committed holds, pending-capacity policy, and retry behavior. |
@@ -840,10 +840,12 @@ Primary requirements: `ADM-001` through `ADM-007`, `ADM-016` through
 
 2. PH5.2 Implement admission policy configuration.
    - Configure qhw-admission device profiles before accepting reservations.
-   - Configure capacity models, estimator policy, admission policy, TTLs,
-     scope metadata, and policy options through control-plane APIs.
-   - Store policy, estimator, and device-profile versions where audit and
-     later interpretation require them.
+   - Configure admission policy, baseline estimator, and policy-specific
+     capacity through one versioned `set_admission_policy()` payload.
+   - Keep physical timing, concurrency, provider limits, and TTLs in the
+     device profile.
+   - Validate the complete update before applying it, preserve the previous
+     state after failure, and store configuration versions for audit.
    - Reqs: `CTRL-005`, `CTRL-006`, `CTRL-001`, `CAT-003`.
 
 3. PH5.3 Implement admission control workflows.

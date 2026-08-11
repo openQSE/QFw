@@ -2248,9 +2248,26 @@ and lifecycle management.
 | --- | --- | --- |
 | `configure_device_profile(token, device_id, profile)` | `token`, `device_id`, device capacity and timing profile. | Stores or updates the qhw-admission device profile. |
 | `get_device_profile(token, device_id)` | `token`, `device_id`. | Returns the configured admission device profile. |
-| `configure_admission_policy(token, device_id, policy_name, policy_options, estimator_name, estimator_options)` | `token`, `device_id`, selected policy, estimator, and options. | Activates the admission policy and estimator for the device. |
-| `get_admission_policy(token, device_id)` | `token`, `device_id`. | Returns active policy, estimator, options, and versions. |
-| `set_capacity_model(token, device_id, capacity_model)` | `token`, `device_id`, capacity model or limits. | Updates credits, rate, concurrency, TTL, or policy-specific capacity settings. |
+| `set_admission_policy(token, device_id, configuration)` | `token`, `device_id`, and one structured policy, estimator, baseline, capacity, options, and optional expected-version object. | Validates and atomically activates the complete admission configuration. |
+| `get_admission_policy(token, device_id)` | `token`, `device_id`. | Returns the complete normalized admission configuration and version. |
+
+The configuration contains `policy`, `estimator`, `baseline`, and `capacity`.
+The policy object contains `name` and `options`. The only supported estimator
+is `baseline`, with no estimator-specific options. Its baseline circuit
+contains `qubit_count`, `depth`, `one_q_gate_count`, `two_q_gate_count`,
+`shots`, and `measurement_count`.
+
+An `unlimited` policy has an empty capacity object. A `credit` policy uses
+`total_credits`. A `rate` policy uses `device_rate` and `time_span_ns`. Missing
+credit or rate capacity may be derived from the registered device profile.
+Physical timing, concurrency, TTL, and provider queue limits remain in the
+device profile. QPM validates the complete object before calling
+qhw-admission and restores the previous configuration if application fails.
+The optional `expected_version` rejects stale control-plane updates.
+
+qhw-admission estimates each task in `baseline_units` and `total_ns`. QPM maps
+those values to qhw-scheduler `estimated_cost` and `estimated_runtime_ns`;
+qhw-scheduler does not interpret the baseline circuit.
 
 #### Scheduler Control APIs
 

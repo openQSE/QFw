@@ -265,9 +265,7 @@ class QPMTargetController:
 		self.reservation_credentials_by_id = {}
 		self.reservation_close_state = {}
 		self.device_profile = None
-		self.capacity_model = {}
-		self.admission_policy = {}
-		self.estimator_policy = {}
+		self.admission_configuration = {}
 		self.scheduler_policy = normalize_scheduler_policy(None)
 		self.scheduler_control = {
 			"paused": False,
@@ -280,9 +278,7 @@ class QPMTargetController:
 		}
 		self.admission_config_versions = {
 			"device_profile": 0,
-			"capacity_model": 0,
 			"admission_policy": 0,
-			"estimator_policy": 0,
 		}
 		self.scheduler_config_versions = {
 			"scheduler_policy": 0,
@@ -597,7 +593,8 @@ class QPMTargetController:
 				"in_flight_capacity": self._in_flight_capacity_locked(),
 				"policy_state": {
 					"scheduler": dict(self.scheduler_policy),
-					"admission": dict(self.admission_policy),
+					"admission": deepcopy(
+						self.admission_configuration),
 				},
 				"wait_estimate": self._unavailable_estimate_locked(
 					"wait-estimate"),
@@ -1329,98 +1326,62 @@ class QPMTargetController:
 					if self.device_profile is not None else None),
 			}
 
-	def set_capacity_model(self, capacity_model, device_id=None):
+	def set_admission_policy(self, configuration, device_id=None):
 		with self.lock:
-			capacity_model = dict(capacity_model or {})
-			if device_id is not None:
-				capacity_model["device_id"] = device_id
-			device_profile = None
-			device_profile_version = None
-			if capacity_model:
-				device_profile = self._capacity_model_device_profile(
-					capacity_model)
-				register_device_profile(self.admission_context, device_profile)
-			self.capacity_model = capacity_model
-			if device_profile is not None:
-				self.device_profile = device_profile
-				device_profile_version = self._bump_admission_config_version(
-					"device_profile")
-			version = self._bump_admission_config_version("capacity_model")
-			result = {
-				"status": "accepted",
-				"version": version,
-				"capacity_model": dict(self.capacity_model),
-			}
-			if device_profile_version is not None:
-				result["device_profile_version"] = device_profile_version
-				result["device_profile"] = dict(self.device_profile)
-			return result
-
-	def get_capacity_model(self):
-		with self.lock:
-			return {
-				"version": self.admission_config_versions["capacity_model"],
-				"capacity_model": dict(self.capacity_model),
-			}
-
-	def set_admission_policy(self, policy):
-		with self.lock:
-			requested_policy = dict(policy or {})
-			if self.admission_policy == requested_policy:
+			normalized, profile = self._normalize_admission_configuration(
+				configuration, device_id=device_id)
+			version = self.admission_config_versions["admission_policy"]
+			expected = normalized.pop("expected_version", None)
+			if expected is not None and expected != version:
+				raise QPMAdmissionValidationError(
+					"admission configuration version mismatch: "
+					f"expected={expected} actual={version}")
+			if self.admission_configuration == normalized:
 				return {
 					"status": "unchanged",
-					"version": self.admission_config_versions[
-						"admission_policy"],
-					"admission_policy": dict(self.admission_policy),
+					"version": version,
+					"configuration": deepcopy(normalized),
 				}
-			self.admission_policy = requested_policy
-			device_id = requested_policy.get("device_id")
-			if device_id is None:
-				device_id = self._device_id()
-			set_policy(
-				self.admission_context,
-				device_id,
-				self.admission_policy,
-				estimator=self.estimator_policy,
-				device_profile=self.device_profile)
+			old_profile = deepcopy(self.device_profile)
+			old_configuration = deepcopy(self.admission_configuration)
+			profile_changed = old_profile != profile
+			try:
+				if profile_changed:
+					register_device_profile(self.admission_context, profile)
+				set_estimator(
+					self.admission_context, normalized["device_id"],
+					normalized["estimator"],
+					policy=normalized["policy"], device_profile=profile)
+				set_policy(
+					self.admission_context, normalized["device_id"],
+					normalized["policy"],
+					estimator=normalized["estimator"],
+					device_profile=profile)
+			except Exception:
+				self._restore_admission_configuration(
+					old_configuration, old_profile)
+				raise
+			self.device_profile = profile
+			self.admission_configuration = normalized
+			if profile_changed:
+				self._bump_admission_config_version("device_profile")
 			version = self._bump_admission_config_version("admission_policy")
 			return {
 				"status": "accepted",
 				"version": version,
-				"admission_policy": dict(self.admission_policy),
+				"configuration": deepcopy(normalized),
 			}
 
-	def get_admission_policy(self):
+	def get_admission_policy(self, device_id=None):
 		with self.lock:
+			configuration = deepcopy(self.admission_configuration)
+			if (device_id is not None and configuration and
+					configuration["device_id"] != device_id):
+				raise QPMAdmissionValidationError(
+					f"admission policy is not configured for device {device_id}")
 			return {
 				"version": self.admission_config_versions["admission_policy"],
-				"admission_policy": dict(self.admission_policy),
-			}
-
-	def set_estimator_policy(self, estimator):
-		with self.lock:
-			self.estimator_policy = dict(estimator or {})
-			device_id = self.estimator_policy.get("device_id")
-			if device_id is None:
-				device_id = self._device_id()
-			set_estimator(
-				self.admission_context,
-				device_id,
-				self.estimator_policy,
-				policy=self.admission_policy,
-				device_profile=self.device_profile)
-			version = self._bump_admission_config_version("estimator_policy")
-			return {
-				"status": "accepted",
-				"version": version,
-				"estimator_policy": dict(self.estimator_policy),
-			}
-
-	def get_estimator_policy(self):
-		with self.lock:
-			return {
-				"version": self.admission_config_versions["estimator_policy"],
-				"estimator_policy": dict(self.estimator_policy),
+				"configuration": configuration or None,
 			}
 
 	def register_circuit(self, cid, request_context, payload):
@@ -2144,30 +2105,129 @@ class QPMTargetController:
 		normalized.setdefault("default_ttl_ns", 60_000_000_000)
 		return normalized
 
-	def _capacity_model_device_profile(self, capacity_model):
-		profile = dict(self.device_profile or {})
-		profile.update(self._capacity_model_device_profile_fields(
-			capacity_model))
-		return self._normalize_device_profile(profile)
+	def _normalize_admission_configuration(self, configuration,
+					       device_id=None):
+		configuration = deepcopy(configuration or {})
+		if not isinstance(configuration, dict):
+			raise QPMAdmissionValidationError(
+				"admission configuration must be a mapping")
+		profile = deepcopy(self.device_profile)
+		if profile is None:
+			raise QPMAdmissionValidationError(
+				"device profile must be configured before admission policy")
+		configured_device_id = configuration.get(
+			"device_id", device_id if device_id is not None else profile["device_id"])
+		if device_id is not None and configured_device_id != device_id:
+			raise QPMAdmissionValidationError(
+				"admission configuration device_id does not match request")
+		if configured_device_id != profile["device_id"]:
+			raise QPMAdmissionValidationError(
+				"admission configuration does not match the device profile")
 
-	def _capacity_model_device_profile_fields(self, capacity_model):
-		model = dict(capacity_model or {})
-		limits = model.get("limits")
-		if isinstance(limits, dict):
-			model.update(limits)
-		for source, target in (
-				("credits", "total_credits"),
-				("credit_limit", "total_credits"),
-				("rate", "device_rate"),
-				("rate_limit", "device_rate"),
-				("concurrency", "concurrent_jobs"),
-				("max_concurrent_jobs", "concurrent_jobs"),
-				("ttl_ns", "default_ttl_ns"),
-				("reservation_ttl_ns", "default_ttl_ns"),
-				("window_ns", "time_span_ns")):
-			if source in model and target not in model:
-				model[target] = model[source]
-		return model
+		policy = deepcopy(configuration.get("policy") or {})
+		if not isinstance(policy, dict):
+			raise QPMAdmissionValidationError("policy must be a mapping")
+		policy_name = policy.get("name")
+		if policy_name not in ("unlimited", "credit", "rate"):
+			raise QPMAdmissionValidationError(
+				f"unsupported admission policy: {policy_name!r}")
+		policy_options = policy.get("options") or {}
+		if not isinstance(policy_options, dict):
+			raise QPMAdmissionValidationError("policy options must be a mapping")
+		policy = {"name": policy_name, "options": dict(policy_options)}
+
+		estimator = deepcopy(configuration.get("estimator") or {
+			"name": "baseline", "options": {}})
+		if not isinstance(estimator, dict):
+			raise QPMAdmissionValidationError("estimator must be a mapping")
+		if estimator.get("name") != "baseline":
+			raise QPMAdmissionValidationError(
+				"only the baseline admission estimator is supported")
+		estimator_options = estimator.get("options") or {}
+		if estimator_options:
+			raise QPMAdmissionValidationError(
+				"baseline estimator options are not supported; configure "
+				"the complete baseline circuit instead")
+		estimator = {"name": "baseline", "options": {}}
+
+		baseline = deepcopy(
+			configuration.get("baseline") or profile.get("baseline") or {})
+		baseline_fields = (
+			"qubit_count", "depth", "one_q_gate_count", "two_q_gate_count",
+			"shots", "measurement_count")
+		missing = [field for field in baseline_fields if field not in baseline]
+		if missing:
+			raise QPMAdmissionValidationError(
+				"baseline circuit is missing fields: " + ", ".join(missing))
+		baseline = {field: _nonnegative_config_int(baseline[field], field)
+			for field in baseline_fields}
+		for field in ("qubit_count", "depth", "shots", "measurement_count"):
+			if baseline[field] == 0:
+				raise QPMAdmissionValidationError(
+					f"baseline {field} must be greater than zero")
+
+		capacity = deepcopy(configuration.get("capacity") or {})
+		if not isinstance(capacity, dict):
+			raise QPMAdmissionValidationError("capacity must be a mapping")
+		capacity = self._normalize_policy_capacity(
+			policy_name, capacity, profile)
+		profile["baseline"] = baseline
+		profile.update(capacity)
+		normalized = {
+			"device_id": configured_device_id,
+			"policy": policy,
+			"estimator": estimator,
+			"baseline": baseline,
+			"capacity": capacity,
+		}
+		if "expected_version" in configuration:
+			normalized["expected_version"] = _nonnegative_config_int(
+				configuration["expected_version"], "expected_version")
+		return normalized, self._normalize_device_profile(profile)
+
+	def _normalize_policy_capacity(self, policy_name, capacity, profile):
+		if policy_name == "unlimited":
+			if capacity:
+				raise QPMAdmissionValidationError(
+					"unlimited policy does not accept capacity settings")
+			return {}
+		if policy_name == "credit":
+			unknown = set(capacity) - {"total_credits"}
+			if unknown:
+				raise QPMAdmissionValidationError(
+					"credit capacity has unsupported fields: " +
+					", ".join(sorted(unknown)))
+			value = capacity.get("total_credits", profile.get("total_credits"))
+			value = _positive_config_int(value, "total_credits")
+			return {"total_credits": value}
+		unknown = set(capacity) - {"device_rate", "time_span_ns"}
+		if unknown:
+			raise QPMAdmissionValidationError(
+				"rate capacity has unsupported fields: " +
+				", ".join(sorted(unknown)))
+		rate = _positive_config_int(
+			capacity.get("device_rate", profile.get("device_rate")),
+			"device_rate")
+		window = _positive_config_int(
+			capacity.get("time_span_ns", profile.get("time_span_ns")),
+			"time_span_ns")
+		return {"device_rate": rate, "time_span_ns": window}
+
+	def _restore_admission_configuration(self, configuration, profile):
+		if not configuration or profile is None:
+			return
+		try:
+			register_device_profile(self.admission_context, profile)
+			set_estimator(
+				self.admission_context, configuration["device_id"],
+				configuration["estimator"], policy=configuration["policy"],
+				device_profile=profile)
+			set_policy(
+				self.admission_context, configuration["device_id"],
+				configuration["policy"], estimator=configuration["estimator"],
+				device_profile=profile)
+		except Exception:
+			pass
 
 	def _device_id(self):
 		if self.device_profile is not None:
@@ -3928,6 +3988,28 @@ def _numeric_or_canonical(controller, kind, numeric_value, external_value):
 	if isinstance(external_value, int) and not isinstance(external_value, bool):
 		return external_value
 	return controller.canonicalize_external_id(kind, external_value)
+
+
+def _nonnegative_config_int(value, field):
+	if isinstance(value, bool):
+		raise QPMAdmissionValidationError(f"{field} must be an integer")
+	try:
+		value = int(value)
+	except (TypeError, ValueError) as error:
+		raise QPMAdmissionValidationError(
+			f"{field} must be an integer") from error
+	if value < 0:
+		raise QPMAdmissionValidationError(
+			f"{field} must not be negative")
+	return value
+
+
+def _positive_config_int(value, field):
+	value = _nonnegative_config_int(value, field)
+	if value == 0:
+		raise QPMAdmissionValidationError(
+			f"{field} must be greater than zero")
+	return value
 
 
 def _token_metadata(token):

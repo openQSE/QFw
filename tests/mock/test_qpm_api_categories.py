@@ -36,8 +36,10 @@ def test_qpm_category_surfaces_are_importable():
 	assert issubclass(QPM, QPMTelemetry)
 	assert hasattr(QPMAdmissionControl, "reserve")
 	assert hasattr(QPMAdmissionPolicyConfig, "configure_device_profile")
-	assert hasattr(QPMAdmissionPolicyConfig, "configure_admission_policy")
 	assert hasattr(QPMAdmissionPolicyConfig, "set_admission_policy")
+	assert not hasattr(QPMAdmissionPolicyConfig, "configure_admission_policy")
+	assert not hasattr(QPMAdmissionPolicyConfig, "set_capacity_model")
+	assert not hasattr(QPMAdmissionPolicyConfig, "set_estimator_policy")
 	assert hasattr(QPMSchedulerControl, "configure_scheduler_policy")
 	assert hasattr(QPMSchedulerControl, "pause_execution_target")
 	assert hasattr(QPMSchedulerControl, "set_scheduler_policy")
@@ -105,8 +107,8 @@ def test_qpm_category_surfaces_use_token_first_order():
 			 "reason", "qtask_id"],
 		(QPMExecution, "task_status"):
 			["self", "cid", "reservation_id", "token", "qtask_id"],
-		(QPMAdmissionPolicyConfig, "set_capacity_model"):
-			["self", "token", "device_id", "capacity_model"],
+		(QPMAdmissionPolicyConfig, "set_admission_policy"):
+			["self", "token", "device_id", "configuration"],
 		(QPMSchedulerControl, "set_dispatch_depth"):
 			["self", "token", "device_id", "max_inflight"],
 		(QPMSchedulerControl, "get_scheduler_queue_state"):
@@ -125,14 +127,14 @@ def test_util_qpm_control_methods_accept_token_first_order():
 
 	class RecordingController:
 		def __init__(self):
-			self.capacity_model = None
+			self.admission_configuration = None
 			self.dispatch_depth = None
 			self.include_restricted = None
 
-		def set_capacity_model(self, capacity_model, device_id=None):
+		def set_admission_policy(self, configuration, device_id=None):
 			self.device_id = device_id
-			self.capacity_model = capacity_model
-			return {"capacity_model": capacity_model}
+			self.admission_configuration = configuration
+			return {"configuration": configuration}
 
 		def set_dispatch_depth(self, max_inflight):
 			self.dispatch_depth = max_inflight
@@ -145,9 +147,9 @@ def test_util_qpm_control_methods_accept_token_first_order():
 	qpm = UTIL_QPM.__new__(UTIL_QPM)
 	qpm.controller = RecordingController()
 
-	assert qpm.set_capacity_model(
-		"opaque-token", "device-1", {"credits": 5}) == {
-			"capacity_model": {"credits": 5},
+	assert qpm.set_admission_policy(
+		"opaque-token", "device-1", {"policy": {"name": "unlimited"}}) == {
+			"configuration": {"policy": {"name": "unlimited"}},
 		}
 	assert qpm.set_dispatch_depth("opaque-token", "device-1", 4) == {
 		"max_inflight": 4,

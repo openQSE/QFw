@@ -303,7 +303,7 @@ Resolution:
 
 ## Duplicate Admission Policy Configuration APIs
 
-Status: open
+Status: resolved
 
 The QPM admission policy configuration surface exposes both
 `configure_admission_policy()` and `set_admission_policy()`. Both operations
@@ -365,6 +365,16 @@ Proposed fix:
 - Update requirements, detailed design, implementation plan, and test plan to
   define the single configuration schema, policy-specific capacity, baseline
   estimation, scheduler handoff, and atomic update behavior.
+
+Resolution:
+
+- Replaced the duplicate policy, estimator, and capacity RPCs with token-first
+  `set_admission_policy(token, device_id, configuration)` and
+  `get_admission_policy(token, device_id)`.
+- Added complete baseline-circuit and policy-specific capacity validation,
+  optimistic version checks, idempotency, and rollback of local state after an
+  apply failure.
+- Migrated the fake-IQM stress fixture and mock tests to the unified schema.
 
 ## Enforce Device Provider Queue Depth In QPMController
 
