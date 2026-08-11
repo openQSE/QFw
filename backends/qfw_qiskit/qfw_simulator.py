@@ -131,11 +131,8 @@ class QFwBackend(BackendV2):
 	def get_qubit_mapping(self, circuit):
 		return get_qubit_mapping(circuit)
 
-	# This is unique to the QFw backend. We need to cleanly shutdown the
-	# QFw infrastructure.
 	def shutdown(self):
 		g_circ_metrics.dump()
-		self.qpm.shutdown()
 		me.exit()
 
 	def configuration(self):

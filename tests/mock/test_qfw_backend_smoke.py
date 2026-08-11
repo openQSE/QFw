@@ -73,7 +73,7 @@ def test_backend_provider_selector_uses_qpm_metadata(monkeypatch):
 	assert backend.returns_statevector() is True
 
 
-def test_backend_run_and_shutdown_use_job_and_runtime(monkeypatch):
+def test_backend_run_and_shutdown_leave_qpm_running(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
 
 	fake_qpm = FakeQPM()
@@ -96,7 +96,7 @@ def test_backend_run_and_shutdown_use_job_and_runtime(monkeypatch):
 	assert job.circuits is circuit
 	assert job.submit_called is True
 	assert job.options == {"seed_simulator": 34, "shots": 12, "seed": 21}
-	assert fake_qpm.shutdown_called is True
+	assert fake_qpm.shutdown_called is False
 	assert fake_runtime.exit_called is True
 
 

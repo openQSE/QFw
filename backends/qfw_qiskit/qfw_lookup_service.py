@@ -90,8 +90,5 @@ def get_qpm(qpm_type=-1, qpm_capabilities=-1, timeout=SYSTEM_UP_TIMEOUT,
 		test_qpm(qpm_api)
 	except Exception as e:
 		logging.debug(f"QPM ran into an exception {e}")
-		shutdown = getattr(qpm_api, "shutdown", None)
-		if shutdown:
-			shutdown()
 
 	return qpm_api

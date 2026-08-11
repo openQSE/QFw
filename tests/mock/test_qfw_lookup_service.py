@@ -128,7 +128,7 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	assert fake_qpm.shutdown_called is False
 
 
-def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
+def test_get_qpm_leaves_failed_service_probe_running(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 
 	fake_qpm = FakeQPM(test_error=RuntimeError("probe failed"))
@@ -146,7 +146,7 @@ def test_get_qpm_shuts_down_failed_service_probe(monkeypatch):
 	)
 
 	assert result is fake_qpm
-	assert fake_qpm.shutdown_called is True
+	assert fake_qpm.shutdown_called is False
 
 
 def test_get_qpm_propagates_directory_failures(monkeypatch):
