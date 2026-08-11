@@ -831,8 +831,7 @@ def test_usage_authorization_hold_and_pending_retry(monkeypatch):
 	runtime = qpm.controller.task_for_cid(cid)
 	assert runtime.qtask_id in qpm.controller.pending_capacity
 	FakeAdmissionContext.usage_status = "accepted"
-	result = qpm.retry_pending_capacity(reservation_id)
-	assert result[0]["status"] == "accepted"
+	qpm.process_oor_queue()
 	assert qpm.fake_qrc.async_cids == [cid]
 
 
@@ -861,7 +860,7 @@ def test_pending_capacity_retry_rejects_inactive_reservation(monkeypatch):
 			reservation_id]["state"] = state
 		FakeAdmissionContext.usage_status = "accepted"
 
-		result = qpm.retry_pending_capacity(reservation_id)
+		result = qpm.controller.retry_pending_capacity(reservation_id)
 
 		assert result[0]["status"] == "rejected"
 		assert result[0]["decision"]["reason"] == "invalid-reservation"
@@ -883,7 +882,7 @@ def test_pending_capacity_retry_rejects_expired_reservation(monkeypatch):
 		reservation_id]["expires_at_ns"] = time.time_ns() - 1
 	FakeAdmissionContext.usage_status = "accepted"
 
-	result = qpm.retry_pending_capacity(reservation_id)
+	result = qpm.controller.retry_pending_capacity(reservation_id)
 	close_state = qpm.controller.reservation_close_state[reservation_id]
 
 	assert result[0]["status"] == "rejected"

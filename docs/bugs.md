@@ -264,7 +264,7 @@ Resolution:
 
 ## Public Pending-Capacity Retry API
 
-Status: open
+Status: resolved
 
 The QPM admission control API exposes `retry_pending_capacity()` as a remote
 operation. This allows a caller-facing admission client to force QPM to retry
@@ -291,6 +291,15 @@ Proposed fix:
   operation.
 - Update requirements, detailed design, implementation plan, and test plan so
   retry behavior is specified as an internal QPM lifecycle responsibility.
+
+Resolution:
+
+- Removed `retry_pending_capacity()` from the remote admission API and QPM RPC
+  wrapper.
+- QPM retries pending capacity internally while processing deferred work,
+  reconciling runtime state, and servicing normal completion polling.
+- The stress harness now polls its reservation completion queue without
+  invoking a queue-management operation.
 
 ## Duplicate Admission Policy Configuration APIs
 

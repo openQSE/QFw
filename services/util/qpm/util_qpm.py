@@ -289,6 +289,7 @@ class UTIL_QPM:
 		logging.debug(f"Circuit consumed: {consumed_res}")
 
 	def process_oor_queue(self):
+		self.controller.retry_pending_capacity()
 		while True:
 			if not self._prune_oor_queue():
 				break
@@ -550,7 +551,9 @@ class UTIL_QPM:
 			access_class=access_class or "manager-aggregate")
 
 	def reconcile_runtime_state(self, token=None, now_ns=None):
-		return self.controller.reconcile_runtime_state(now_ns=now_ns)
+		result = self.controller.reconcile_runtime_state(now_ns=now_ns)
+		self.process_oor_queue()
+		return result
 
 	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
 		return self.controller.service_lifecycle_telemetry(
@@ -745,6 +748,7 @@ class UTIL_QPM:
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
+		self.process_oor_queue()
 		result = self.controller.read_completion(
 			reservation_id=reservation_id, cid=cid,
 			operation="read_cq")
@@ -938,12 +942,6 @@ class UTIL_QPM:
 			estimator = dict(estimator or {})
 			estimator.setdefault("device_id", device_id)
 		return self.controller.set_estimator_policy(estimator)
-
-	def retry_pending_capacity(self, reservation_id=None):
-		results = self.controller.retry_pending_capacity(
-			reservation_id=reservation_id)
-		self.process_oor_queue()
-		return results
 
 	def configure_scheduler_policy(self, token=None, device_id=None,
 				       policy_name=None, policy_options=None):

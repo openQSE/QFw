@@ -896,7 +896,6 @@ def complete_pending_submissions(qpm, scenario, pending, args, deadline):
 	while incomplete:
 		if time.monotonic() > deadline:
 			raise DEFwError("queued workers exceeded harness walltime")
-		qpm.retry_pending_capacity()
 		next_incomplete = []
 		for item in incomplete:
 			submission = item["submission"]

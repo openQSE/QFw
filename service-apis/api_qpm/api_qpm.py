@@ -76,10 +76,6 @@ class QPMAdmissionControl(QPMRemoteBase):
 	def list_reservations(self, token=None, filters=None):
 		pass
 
-	def retry_pending_capacity(self, reservation_id=None):
-		pass
-
-
 class QPMAdmissionPolicyConfig(QPMRemoteBase):
 	def configure_device_profile(self, token=None, device_id=None,
 				     profile=None):
