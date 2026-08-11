@@ -4,14 +4,29 @@ from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
 
-MAX_IQM_QUBITS = 1024
+MAX_IQM_QUBITS = int(os.environ.get("QFW_IQM_MAX_QUBITS", "20"))
+MAX_IQM_SHOTS = int(os.environ.get("QFW_IQM_MAX_SHOTS", "10000"))
+
+IQM_DEVICE_PROFILE = {
+	"max_qubits": MAX_IQM_QUBITS,
+	"max_shots": MAX_IQM_SHOTS,
+	"baseline": {
+		"qubit_count": min(MAX_IQM_QUBITS, 4),
+		"depth": 1,
+		"one_q_gate_count": 0,
+		"two_q_gate_count": 0,
+		"shots": 1,
+		"measurement_count": 1,
+	},
+	"default_ttl_ns": 60_000_000_000,
+}
 
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), max_ppn=1, start=start)
 		set_max_qubits_pp(MAX_IQM_QUBITS)
-		self.configure_device_profile(max_qubits=MAX_IQM_QUBITS)
+		self.configure_device_profile(IQM_DEVICE_PROFILE)
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC, svc_info

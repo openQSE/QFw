@@ -547,7 +547,7 @@ if ! qfw_chem_driver_bool_enabled "${dry_run}" ||
 fi
 
 runtime_config="${run_dir}/config/chem-site-runtime.yaml"
-launcher="${run_dir}/config/qfw-chem-with-reservation.sh"
+launcher="${run_dir}/config/qfw-chem-with-reservation.py"
 app_run_dir="${run_dir}/runtime"
 driver_result="${run_dir}/driver.jsonl"
 example_result="${run_dir}/chemistry-example.jsonl"
@@ -560,27 +560,55 @@ resolver:
     - site
 EOF
 
-{
-	printf '#!/bin/bash\n'
-	printf 'set -euo pipefail\n'
-	printf 'if [[ -z "${QFW_RESERVATION_ID:-}" ]]; then\n'
-	printf '\techo "ERROR: QFW_RESERVATION_ID is not set" >&2\n'
-	printf '\texit 2\n'
-	printf 'fi\n'
-	printf 'exec python3 %q --qfw --backend %q --reservation-id "${QFW_RESERVATION_ID}"' \
-		"${chem_script_path}" "${backend}"
-	printf ' --reservation-shots %q' "${shots}"
-	printf ' --reservation-qubits %q' "${reservation_qubits}"
-	printf ' --reservation-walltime-s %q' "${reservation_walltime_s}"
-	printf ' --reservation-ttl-s %q' "${reservation_ttl_s}"
-	if [[ -n "${estimator_precision}" ]]; then
-		printf ' --estimator-precision %q' "${estimator_precision}"
-	fi
-	for arg in "${chem_extra_args[@]}"; do
-		printf ' %q' "${arg}"
-	done
-	printf '\n'
-} >"${launcher}"
+launcher_args=(
+	"--qfw"
+	"--backend" "${backend}"
+	"--reservation-shots" "${shots}"
+	"--reservation-qubits" "${reservation_qubits}"
+	"--reservation-walltime-s" "${reservation_walltime_s}"
+	"--reservation-ttl-s" "${reservation_ttl_s}"
+)
+if [[ -n "${estimator_precision}" ]]; then
+	launcher_args+=("--estimator-precision" "${estimator_precision}")
+fi
+launcher_args+=("${chem_extra_args[@]}")
+python3 - "${launcher}" "${chem_script_path}" "${launcher_args[@]}" <<'PY'
+import json
+import os
+import stat
+import sys
+
+launcher = sys.argv[1]
+script_path = sys.argv[2]
+script_args = sys.argv[3:]
+script = f"""#!/usr/bin/env python3
+import os
+import runpy
+import sys
+
+for stream in (sys.stdout, sys.stderr):
+\treconfigure = getattr(stream, "reconfigure", None)
+\tif reconfigure is not None:
+\t\treconfigure(line_buffering=True)
+
+reservation_id = os.environ.get("QFW_RESERVATION_ID")
+if not reservation_id:
+\tprint("ERROR: QFW_RESERVATION_ID is not set", file=sys.stderr)
+\tsys.exit(2)
+
+script_path = {json.dumps(script_path)}
+script_args = {json.dumps(script_args)}
+script_dir = os.path.dirname(os.path.abspath(script_path))
+if script_dir not in sys.path:
+\tsys.path.insert(0, script_dir)
+sys.argv = [script_path] + script_args + ["--reservation-id", reservation_id]
+runpy.run_path(script_path, run_name="__main__")
+"""
+with open(launcher, "w", encoding="utf-8") as stream:
+	stream.write(script)
+mode = os.stat(launcher).st_mode
+os.chmod(launcher, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+PY
 chmod +x "${launcher}"
 
 driver_args=(

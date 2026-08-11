@@ -210,7 +210,7 @@ def qfw_dirsvc_start(argv):
         "DEFW_PARENT_PORT": str(dirsvc_port),
         "DEFW_PARENT_NAME": dirsvc_name,
         "DEFW_LOG_LEVEL": os.environ.get("DEFW_LOG_LEVEL", "error"),
-        "DEFW_DISABLE_DIRSVC": "no",
+        "DEFW_DISABLE_DIRSVC": "yes",
         "DEFW_LOG_DIR": str(log_dir),
     })
     if args.site_config:

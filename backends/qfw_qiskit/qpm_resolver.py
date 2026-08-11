@@ -305,7 +305,13 @@ class QPMResolver:
 			order = list(DEFAULT_SCOPE_ORDER)
 		order = _normalize_scope_order(order)
 		local_endpoint = os.environ.get(LOCAL_DIRSVC_ENDPOINT_ENV)
-		if dirsvc is not None and _names_allowed(
+		site_endpoints = _split_env_list(os.environ.get(
+			SITE_DIRSVC_ENDPOINTS_ENV))
+		bound_site_endpoint = None
+		bound_dirsvc_is_local = bool(local_endpoint) or not site_endpoints
+		if dirsvc is not None and not local_endpoint and site_endpoints:
+			bound_site_endpoint = site_endpoints[0]
+		if dirsvc is not None and bound_dirsvc_is_local and _names_allowed(
 				("allocation-local", local_endpoint), order):
 			directories.append(DirectoryScope(
 				name="allocation-local",
@@ -315,16 +321,18 @@ class QPMResolver:
 				identity=local_endpoint or "allocation-local",
 				priority=100,
 			))
-		for index, endpoint in enumerate(_split_env_list(
-				os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV))):
+		for index, endpoint in enumerate(site_endpoints):
 			name = f"site-{index}"
 			if not _names_allowed(("site", endpoint, name), order):
 				continue
-			client = (
-				directory_client_factory(endpoint)
-				if directory_client_factory is not None else
-				DEFwDirectoryClient(endpoint, defw_module)
-			)
+			if dirsvc is not None and endpoint == bound_site_endpoint:
+				client = dirsvc
+			else:
+				client = (
+					directory_client_factory(endpoint)
+					if directory_client_factory is not None else
+					DEFwDirectoryClient(endpoint, defw_module)
+				)
 			directories.append(DirectoryScope(
 				name=name,
 				scope="site",

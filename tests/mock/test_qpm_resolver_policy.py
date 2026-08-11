@@ -211,41 +211,73 @@ def test_resolver_from_environment_selects_site_scoped_directory(monkeypatch):
 	assert set(clients.keys()) == {"site-a"}
 
 
-def test_resolver_from_environment_site_scope_does_not_query_local_or_direct(
+def test_resolver_from_environment_site_scope_reuses_bound_site_dirsvc(
 		monkeypatch):
-	local = DirectoryClient([directory_record("local-qpm")])
-	site = DirectoryClient([])
+	bound_site = DirectoryClient([directory_record("site-qpm")])
 	clients = {}
 
 	def client_factory(endpoint):
-		clients[endpoint] = site
-		return site
+		clients[endpoint] = DirectoryClient([])
+		return clients[endpoint]
 
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
 	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
+	monkeypatch.delenv("QFW_LOCAL_DIRSVC_ENDPOINT", raising=False)
 	resolver = QPMResolver.from_environment(
-		dirsvc=local,
+		dirsvc=bound_site,
 		directory_client_factory=client_factory,
 		sleeper=lambda seconds: None,
 	)
 
-	try:
-		resolver.resolve(
+	resolved = resolver.resolve(
+		service_type="qfw.qpm",
+		selector_resource="IQM-20q",
+		api_category="execution",
+		timeout=1,
+	)
+
+	assert resolved.service_id == "site-qpm"
+	assert resolved.directory_scope == "site"
+	assert bound_site.queries
+	assert clients == {}
+
+
+def test_resolver_from_environment_keeps_order_with_local_and_site(
+		monkeypatch):
+	for order, expected in (
+			("site,local", "site-qpm"),
+			("local,site", "local-qpm")):
+		local = DirectoryClient([directory_record("local-qpm")])
+		site = DirectoryClient([directory_record("site-qpm")])
+		clients = {}
+
+		def client_factory(endpoint):
+			clients[endpoint] = site
+			return site
+
+		monkeypatch.setenv("QFW_LOCAL_DIRSVC_ENDPOINT", "local-a")
+		monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+		monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", order)
+		monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+		resolver = QPMResolver.from_environment(
+			dirsvc=local,
+			directory_client_factory=client_factory,
+			sleeper=lambda seconds: None,
+		)
+
+		resolved = resolver.resolve(
 			service_type="qfw.qpm",
 			selector_resource="IQM-20q",
 			api_category="execution",
 			timeout=1,
 		)
-	except DEFwReserveError:
-		pass
-	else:
-		raise AssertionError("expected site-only resolver to reject fallback")
 
-	assert set(clients.keys()) == {"site-a"}
-	assert site.queries
-	assert local.queries == []
+		assert resolved.service_id == expected
+		assert local.queries
+		assert site.queries
+		assert set(clients.keys()) == {"site-a"}
 
 
 def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
@@ -258,6 +290,7 @@ def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
 		return clients[endpoint]
 
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+	monkeypatch.setenv("QFW_LOCAL_DIRSVC_ENDPOINT", "local-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "local")
 	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
