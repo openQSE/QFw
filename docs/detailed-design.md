@@ -2327,8 +2327,7 @@ QPM creates a logical completion queue when `reserve()` accepts a reservation
 and returns a `reservation_id`. QPM also lazily ensures the queue exists when it
 registers a task for a valid reservation, so recovery from older or partially
 migrated reservation records does not lose completions. The queue is keyed by
-the QPM reservation ID. Diagnostic bypass work without a reservation must use an
-explicit diagnostic result path and must not enter a managed reservation queue.
+the QPM reservation ID. QPM does not accept unreserved execution work.
 
 `read_cq()` and `peek_cq()` require `reservation_id` for managed work. The
 `cid` selector is optional within the supplied reservation. When `cid` is
@@ -3263,13 +3262,10 @@ managed-resource boundary.
 
 ### SCHED-010
 
-Any execution path that bypasses admission authorization or scheduler selection
-should be restricted to explicitly configured diagnostic or administrative use.
-The current milestone keeps the bypass visibly separate from normal
-application execution APIs and gates it with explicit configuration.
-
-Bypass activity should still emit telemetry and audit records so operators can
-distinguish diagnostic work from scheduled reservation-scoped work.
+QPM must not expose a public execution path that bypasses admission
+authorization or scheduler selection. Diagnostic and administrative clients
+may inspect health and telemetry, but circuit execution always requires a
+reservation and follows the managed admission and scheduling path.
 
 </details>
 

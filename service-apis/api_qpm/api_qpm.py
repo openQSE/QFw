@@ -32,12 +32,6 @@ class QPMExecution(QPMRemoteBase):
 				  cancel_on_timeout=False):
 		pass
 
-	def diagnostic_sync_run(self, info, token=None, reason=None):
-		pass
-
-	def diagnostic_async_run(self, info, token=None, reason=None):
-		pass
-
 	def is_ready(self):
 		pass
 

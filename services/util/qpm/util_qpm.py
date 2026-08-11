@@ -7,12 +7,10 @@ import uuid
 import time
 import queue
 import os
-from dataclasses import replace
 from defw_exception import (
 	DEFwError,
 	DEFwExecutionError,
 	DEFwNotReady,
-	DEFwInProgress,
 	DEFwOutOfResources,
 )
 from .controller import (
@@ -35,7 +33,6 @@ from .util_circuit import Circuit, CircuitStates, MAX_PPN
 from .request import parse_execution_request
 from statistics import mean, median, stdev
 
-DIAGNOSTIC_BYPASS_ENV = "QFW_QPM_DIAGNOSTIC_BYPASS_ENABLED"
 QPM_SERVICE_TYPE = "qfw.qpm"
 QPM_DEFAULT_CLIENT_MODULE = "api_qpm"
 QPM_DEFAULT_CLIENT_CLASS = "QPM"
@@ -378,30 +375,26 @@ class UTIL_QPM:
 		if circuit is None:
 			raise DEFwExecutionError(
 				f"qtask circuit record is no longer active: cid={cid}")
-		diagnostic_bypass = (
-			runtime.diagnostic_bypass if runtime is not None else False)
-		if not diagnostic_bypass:
-			try:
-				if (circuit.info["qtask_id"]
-						not in self.controller.capacity_holds):
-					self.controller.authorize_capacity_hold(circuit)
-				self.controller.submit_qtask_to_scheduler(circuit)
-				selected_runtime = (
-					self.controller.select_qtask_for_dispatch())
-				if selected_runtime is None:
-					raise DEFwOutOfResources(
-						"scheduler has no dispatch slot available")
-				if require_selected_cid and selected_runtime.cid != cid:
-					raise DEFwOutOfResources(
-						"scheduler selected earlier queued work")
-				circuit = self.circuits[selected_runtime.cid]
-			except QPMAdmissionPendingCapacity as error:
-				raise DEFwOutOfResources(str(error))
-			except (QPMAdmissionUnavailable,
-				QPMAdmissionValidationError,
-				QPMSchedulerUnavailable,
-				QPMSchedulerError) as error:
-				raise DEFwExecutionError(str(error))
+		try:
+			if (circuit.info["qtask_id"]
+					not in self.controller.capacity_holds):
+				self.controller.authorize_capacity_hold(circuit)
+			self.controller.submit_qtask_to_scheduler(circuit)
+			selected_runtime = self.controller.select_qtask_for_dispatch()
+			if selected_runtime is None:
+				raise DEFwOutOfResources(
+					"scheduler has no dispatch slot available")
+			if require_selected_cid and selected_runtime.cid != cid:
+				raise DEFwOutOfResources(
+					"scheduler selected earlier queued work")
+			circuit = self.circuits[selected_runtime.cid]
+		except QPMAdmissionPendingCapacity as error:
+			raise DEFwOutOfResources(str(error))
+		except (QPMAdmissionUnavailable,
+			QPMAdmissionValidationError,
+			QPMSchedulerUnavailable,
+			QPMSchedulerError) as error:
+			raise DEFwExecutionError(str(error))
 		with self.controller.lock:
 			self.consume_resources(circuit)
 			circuit.set_resources_consumed()
@@ -594,18 +587,6 @@ class UTIL_QPM:
 		self.require_managed_execution(request)
 		return self._sync_run_request(request)
 
-	def diagnostic_sync_run(self, info, token=None, reason=None):
-		if not qpm_initialized:
-			raise DEFwNotReady("QPM has not initialized properly")
-
-		request = parse_execution_request(info, token=token)
-		self.require_diagnostic_bypass(
-			request, operation="diagnostic_sync_run", reason=reason)
-		request = replace(
-			request,
-			context=replace(request.context, diagnostic_bypass=True))
-		return self._sync_run_request(request)
-
 	def _sync_run_request(self, request):
 		cid = self.create_circuit(request.payload, request=request)
 		deadline = _sync_deadline(request.context.timeout)
@@ -683,20 +664,6 @@ class UTIL_QPM:
 		raise DEFwExecutionError(
 			"reservation_id is required for resource-affecting QPM execution")
 
-	def require_diagnostic_bypass(self, request, operation, reason=None):
-		if not diagnostic_bypass_enabled():
-			raise DEFwExecutionError(
-				"diagnostic bypass execution is disabled")
-		if request.context.token is None:
-			raise DEFwExecutionError(
-				"diagnostic bypass execution requires authenticated "
-				"request context")
-		if not reason:
-			raise DEFwExecutionError(
-				"diagnostic bypass execution requires an audit reason")
-		self.controller.record_diagnostic_bypass(
-			operation, request.context, reason=reason)
-
 	def async_run_oor(self, cid):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
@@ -731,18 +698,6 @@ class UTIL_QPM:
 			cancel_on_timeout=cancel_on_timeout,
 		)
 		self.require_managed_execution(request)
-		return self._async_run_request(request)
-
-	def diagnostic_async_run(self, info, token=None, reason=None):
-		if not qpm_initialized:
-			raise DEFwNotReady("QPM has not initialized properly")
-
-		request = parse_execution_request(info, token=token)
-		self.require_diagnostic_bypass(
-			request, operation="diagnostic_async_run", reason=reason)
-		request = replace(
-			request,
-			context=replace(request.context, diagnostic_bypass=True))
 		return self._async_run_request(request)
 
 	def _async_run_request(self, request):
@@ -797,39 +752,6 @@ class UTIL_QPM:
 			self.all_results.append(result)
 		return result
 
-	def diagnostic_read_cq(self, cid=None, token=None, reason=None):
-		if not qpm_initialized:
-			raise DEFwNotReady("QPM has not initialized properly")
-
-		request = parse_execution_request({}, token=token)
-		self.require_diagnostic_bypass(
-			request, operation="diagnostic_read_cq", reason=reason)
-		return self._read_provider_cq(cid=cid)
-
-	def _read_provider_cq(self, cid=None):
-		reservation_id = None
-
-		try:
-			r = self.qrc.read_cq(cid)
-		except DEFwInProgress as e:
-			return self._completion_in_progress_response(
-				cid, reservation_id, "read_cq", str(e))
-
-		if not r:
-			return self._completion_in_progress_response(
-				cid, reservation_id, "read_cq")
-
-		self.all_results.append(r)
-		cid = r.get("cid") if isinstance(r, dict) else None
-		runtime = self.controller.task_for_cid(cid)
-		if runtime is not None:
-			circuit = self.circuits.get(cid)
-			if circuit is not None:
-				self.complete_provider_submission(circuit, result=r)
-		if cid is not None:
-			self.controller.forget_terminal_task_for_cid(cid)
-		return r
-
 	def peek_cq(self, cid=None, reservation_id=None, token=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
@@ -837,56 +759,6 @@ class UTIL_QPM:
 		return self.controller.peek_completion(
 			reservation_id=reservation_id, cid=cid,
 			operation="peek_cq")
-
-	def diagnostic_peek_cq(self, cid=None, token=None, reason=None):
-		if not qpm_initialized:
-			raise DEFwNotReady("QPM has not initialized properly")
-
-		request = parse_execution_request({}, token=token)
-		self.require_diagnostic_bypass(
-			request, operation="diagnostic_peek_cq", reason=reason)
-		return self._peek_provider_cq(cid=cid)
-
-	def _peek_provider_cq(self, cid=None):
-		reservation_id = None
-
-		try:
-			r = self.qrc.peak_cq(cid)
-		except DEFwInProgress as e:
-			return self._completion_in_progress_response(
-				cid, reservation_id, "peek_cq", str(e))
-
-		if not r:
-			return self._completion_in_progress_response(
-				cid, reservation_id, "peek_cq")
-
-		cid = r.get("cid") if isinstance(r, dict) else None
-		runtime = self.controller.task_for_cid(cid)
-		if runtime is not None:
-			circuit = self.circuits.get(cid)
-			if circuit is not None:
-				self.complete_provider_submission(circuit, result=r)
-		return r
-
-	def _completion_in_progress_response(self, cid, reservation_id, operation,
-					     message=None):
-		reason = "completion-not-ready"
-		if cid is not None:
-			status = self.controller.task_status_for_cid(
-				cid, reservation_id=reservation_id, reason=reason)
-		else:
-			status = {
-				"outcome": "IN_PROGRESS",
-				"lifecycle_state": "no-ready-completion",
-				"reservation_id": reservation_id,
-				"reason": reason,
-			}
-		if message:
-			status["message"] = message
-		status["completion_ready"] = False
-		status["poll_operation"] = operation
-		return {key: value for key, value in status.items()
-			if value is not None}
 
 	def _result_selector_reservation_error(self, cid, reservation_id):
 		if reservation_id is not None and cid is None:
@@ -989,9 +861,7 @@ class UTIL_QPM:
 		return info
 
 	def controller_telemetry(self):
-		telemetry = self.controller.telemetry()
-		telemetry["diagnostic_bypass_enabled"] = diagnostic_bypass_enabled()
-		return telemetry
+		return self.controller.telemetry()
 
 	def configure_device_profile(self, token=None, device_id=None,
 				     profile=None, **overrides):
@@ -1237,12 +1107,6 @@ class UTIL_QPM:
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None
-
-
-def diagnostic_bypass_enabled():
-	value = os.environ.get(DIAGNOSTIC_BYPASS_ENV, "no").strip().lower()
-	return value in ("1", "true", "yes", "on", "y")
-
 
 def _token_request_args(token, request):
 	if request is None and isinstance(token, dict):

@@ -156,7 +156,7 @@ changes.
 | PH4-C01 | QFw | PH4.1 | Add the target-scoped QPM controller shell and per-target construction path. |
 | PH4-C02 | QFw | PH4.2, PH4.3 | Add runtime correlation maps, qtask ID allocation, and external identifier canonicalization. |
 | PH4-C03 | QFw | PH4.4 | Keep the existing provider-QPM inheritance from `UTIL_QPM`, add explicit provider hooks, and move provider-specific public run overrides into shared utility-hook usage. |
-| PH4-C04 | QFw | PH4.5 | Add explicit diagnostic bypass controls, audit hooks, and disabled-auth behavior. |
+| PH4-C04 | QFw | PH4.5 | Remove public diagnostic execution bypasses and require managed execution. |
 | PH4-C05 | QFw | PH4.6 | Add controller scaffolding tests for target isolation, mapping, hooks, and cleanup. |
 
 ### Phase 5 Commit Sequence
@@ -807,18 +807,16 @@ Primary requirements: `STATE-001` through `STATE-004`, `SCHED-002`,
      controller on completion, failure, timeout, or cancellation.
    - Reqs: `SCHED-009`, `SCHED-010`, `STATE-001`, `STATE-004`, `CAT-007`.
 
-5. PH4.5 Add diagnostic bypass controls.
-   - Keep any provider-direct or scheduler-bypass execution path visibly
-     separate from normal application execution APIs.
-   - Require explicit configuration before bypass execution can run.
-   - Keep any token or caller parameters as placeholders in this milestone.
-   - Emit telemetry or audit records for bypass activity.
+5. PH4.5 Enforce managed execution.
+   - Do not expose provider-direct or scheduler-bypass execution methods.
+   - Require every circuit execution to carry a valid reservation.
+   - Route all circuit execution through admission and scheduler selection.
    - Reqs: `SCHED-009`, `SCHED-010`, `API-004`.
 
 6. PH4.6 Add controller scaffolding tests.
    - Cover per-target state isolation, runtime mappings, qtask ID stability,
      provider hook dispatch, lock boundaries, cancellation lookup, cleanup on
-     terminal state, and diagnostic bypass configuration.
+     terminal state, and rejection of unmanaged execution.
    - Reqs: `STATE-001`, `STATE-002`, `STATE-003`, `STATE-004`,
      `SCHED-002`, `SCHED-003`, `SCHED-009`, `SCHED-010`.
 
@@ -1002,7 +1000,7 @@ Primary requirements: `SCHED-001` through `SCHED-014`, `CAT-002`, `CAT-004`,
 9. PH6.9 Add scheduler integration tests.
    - Cover admitted insertion, delayed capacity not entering scheduler,
      scheduler selection, bounded provider depth, shared sync and async path,
-     synchronous timeout behavior, diagnostic bypass restrictions, completion
+     synchronous timeout behavior, unmanaged-execution rejection, completion
      accounting order, cancellation races, task status mapping, queue position,
      wait estimates, scheduler failures, and provider failures.
    - Reqs: `SCHED-001`, `SCHED-002`, `SCHED-003`, `SCHED-004`,
@@ -1056,7 +1054,7 @@ Primary requirements: `CAT-005`, `API-002`, `API-004`, `CTRL-002` through
 
 5. PH7.5 Expose service lifecycle telemetry and audit records.
    - Report registration, deregistration, peer loss reason, timeout, restart,
-     generation change, retention purge, diagnostic bypass, policy change, and
+     generation change, retention purge, policy change, and
      reconciliation events.
    - Reqs: `DISC-001`, `CTRL-004`, `CAT-005`.
 
@@ -1225,8 +1223,7 @@ Primary requirements: `CAT-002`, `API-001`, `API-004`, `ADM-021`,
    - Lazily ensure the queue exists when registering a task for a valid
      reservation, so recovery from older reservation records does not lose
      completions.
-   - Keep diagnostic bypass work on an explicit diagnostic result path and out
-     of managed reservation queues.
+   - Reject unreserved work instead of creating an unscoped result path.
    - Implement an ordered per-reservation queue plus a `cid` or qtask index
      for targeted reads.
    - Reqs: `CAT-002`, `API-001`, `STATE-001`, `STATE-002`, `STATE-003`.

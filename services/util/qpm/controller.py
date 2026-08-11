@@ -184,7 +184,6 @@ class QPMRuntimeTask:
 	request_metadata: dict = field(default_factory=dict)
 	external_ids: dict = field(default_factory=dict)
 	canonical_ids: dict = field(default_factory=dict)
-	diagnostic_bypass: bool = False
 	state: str = QPM_TASK_CREATED
 
 
@@ -257,7 +256,6 @@ class QPMTargetController:
 		self.terminal_tasks_by_cid = {}
 		self.terminal_tasks_by_qtask_id = {}
 		self.audit_records = []
-		self.diagnostic_bypass_records = []
 		self.lifecycle_events = []
 		self.reconciliation_faults = []
 		self.external_id_maps = {}
@@ -317,8 +315,6 @@ class QPMTargetController:
 				"resource_hosts": sorted(self.free_hosts.keys()),
 				"runtime_task_count": len(self.runtime_by_qtask_id),
 				"audit_record_count": len(self.audit_records),
-				"diagnostic_bypass_count": len(
-					self.diagnostic_bypass_records),
 				"lifecycle_event_count": len(self.lifecycle_events),
 				"reconciliation_fault_count": len(
 					self.reconciliation_faults),
@@ -647,10 +643,6 @@ class QPMTargetController:
 				"audit_records": [
 					dict(record) for record in self.audit_records
 				],
-				"diagnostic_bypass_records": [
-					dict(record)
-					for record in self.diagnostic_bypass_records
-				],
 				"reconciliation_faults": [
 					dict(record)
 					for record in self.reconciliation_faults
@@ -776,8 +768,7 @@ class QPMTargetController:
 		with self.lock:
 			self._purge_completion_queues_locked(now_ns)
 			runtime = self._completion_runtime_locked(payload)
-			if (runtime is None or runtime.diagnostic_bypass or
-					runtime.reservation_id is None):
+			if runtime is None or runtime.reservation_id is None:
 				return False
 			payload_failed = (
 				_completion_payload_failed(payload) or
@@ -1450,7 +1441,6 @@ class QPMTargetController:
 				token_metadata=_token_metadata(request_context.token),
 				owner_metadata=dict(owner_metadata),
 				request_metadata=request_metadata,
-				diagnostic_bypass=request_context.diagnostic_bypass,
 			)
 			runtime.external_ids, runtime.canonical_ids = (
 				self.canonicalize_reservation_metadata(request_metadata))
@@ -1690,37 +1680,11 @@ class QPMTargetController:
 			request_metadata=dict(runtime.request_metadata),
 			external_ids=dict(runtime.external_ids),
 			canonical_ids=dict(runtime.canonical_ids),
-			diagnostic_bypass=runtime.diagnostic_bypass,
 			state=runtime.state,
 		)
 		self.terminal_tasks_by_cid[snapshot.cid] = snapshot
 		self.terminal_tasks_by_qtask_id[snapshot.qtask_id] = snapshot
 		return snapshot
-
-	def record_diagnostic_bypass(self, operation, request_context,
-				     reason=None):
-		owner_metadata = request_context.metadata.get("owner", {})
-		if not isinstance(owner_metadata, dict):
-			owner_metadata = {}
-		record = {
-			"operation": operation,
-			"reason": reason,
-			"target_id": self.config.target_id,
-			"reservation_id": request_context.reservation_id,
-			"token_metadata": _token_metadata(request_context.token),
-			"owner_metadata": dict(owner_metadata),
-			"request_metadata": dict(request_context.metadata),
-			"auth_disabled": request_context.auth_disabled,
-			"timestamp": time.time(),
-		}
-		with self.lock:
-			self.audit_records.append(record)
-			self.diagnostic_bypass_records.append(record)
-			self._record_lifecycle_event_locked(
-				"diagnostic-bypass",
-				reason=reason,
-				details={"operation": operation})
-		return record
 
 	def _ensure_completion_queue_locked(self, reservation_id):
 		queue = self.completion_queues.get(reservation_id)
@@ -1782,8 +1746,7 @@ class QPMTargetController:
 
 	def _terminal_completion_delivery_locked(
 			self, runtime, payload=None, evtype=None):
-		if (runtime is None or runtime.diagnostic_bypass or
-				runtime.reservation_id is None):
+		if runtime is None or runtime.reservation_id is None:
 			return None
 		now_ns = time.time_ns()
 		if payload is None:

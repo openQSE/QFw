@@ -219,7 +219,7 @@ Resolution:
 
 ## Unused Diagnostic Execution Bypass APIs
 
-Status: open
+Status: resolved
 
 The QPM execution API exposes `diagnostic_sync_run()` and
 `diagnostic_async_run()`. No production backend, application, example, setup
@@ -253,6 +253,14 @@ Proposed fix:
 - Update requirements, detailed design, implementation plan, and test plan to
   remove the diagnostic execution bypass while preserving the intent of
   `SCHED-010`: no unprotected path may bypass admission or scheduling.
+
+Resolution:
+
+- Removed the diagnostic execution and provider completion-queue methods.
+- Removed diagnostic request state, controller state, telemetry, audit records,
+  environment configuration, and tests.
+- All public circuit execution now requires a reservation and follows admission
+  authorization and scheduler selection.
 
 ## Public Pending-Capacity Retry API
 

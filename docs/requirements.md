@@ -173,7 +173,7 @@ validate tokens or authorize callers from them.
 | SCHED-007 | The QPM service shall bound provider queue depth according to site policy or configuration when dispatching scheduler-selected work. |
 | SCHED-008 | The QPM service shall define externally visible behavior for synchronous execution requests that are accepted but waiting for reservation capacity or scheduler selection, including blocking, timeout, cancellation, and delayed-status semantics. |
 | SCHED-009 | Public execution APIs shall not provide a normal execution path that bypasses qhw-admission capacity checks and scheduler selection before provider submission. |
-| SCHED-010 | Any execution path that bypasses qhw-admission capacity checks or scheduler selection shall be restricted to explicitly configured diagnostic or administrative use. |
+| SCHED-010 | QPM shall not expose a public execution path that bypasses qhw-admission capacity checks or qhw-scheduler selection. |
 | SCHED-011 | The QPM service shall propagate cancellation for reservation-scoped tasks across the managed queue, scheduler state, provider-side work when already submitted, result or completion state, and qhw-admission accounting. |
 | SCHED-012 | The QPM service shall provide reservation-scoped task status that distinguishes pending for capacity, queued in qhw-scheduler, selected, submitted to provider, running, completed, failed, cancelled, and timed-out tasks. |
 | SCHED-013 | The QPM service shall provide pending-queue position, scheduler queue position, or scheduling-order information for reservation-scoped tasks when permitted by site policy. |

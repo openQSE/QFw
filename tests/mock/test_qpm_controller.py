@@ -6,7 +6,7 @@ from util.qpm.controller import (
 	clear_target_controllers,
 )
 from util.qpm.request import parse_execution_request
-from util.qpm.util_qpm import DIAGNOSTIC_BYPASS_ENV, UTIL_QPM
+from util.qpm.util_qpm import UTIL_QPM
 
 
 class FakeQRC:
@@ -130,7 +130,6 @@ class RetryOnceQPM(HookQPM):
 def _setup_qpm(monkeypatch):
 	clear_target_controllers()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
-	monkeypatch.delenv(DIAGNOSTIC_BYPASS_ENV, raising=False)
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
 
 
@@ -318,7 +317,7 @@ def test_reservation_validation_uses_reservation_id_binding(monkeypatch):
 	qpm.controller.validate_reservation_for_context(request)
 
 
-def test_diagnostic_bypass_requires_configuration(monkeypatch):
+def test_execution_requires_reservation(monkeypatch):
 	_setup_qpm(monkeypatch)
 	qpm = HookQPM()
 
@@ -329,38 +328,8 @@ def test_diagnostic_bypass_requires_configuration(monkeypatch):
 	else:
 		raise AssertionError("expected missing reservation to fail")
 
-	try:
-		qpm.diagnostic_async_run({"qasm": "OPENQASM 2.0;", "num_qubits": 2})
-	except DEFwExecutionError as exc:
-		assert "diagnostic bypass execution is disabled" in str(exc)
-	else:
-		raise AssertionError("expected disabled diagnostic bypass to fail")
 
-	monkeypatch.setenv(DIAGNOSTIC_BYPASS_ENV, "yes")
-	try:
-		qpm.diagnostic_async_run(
-			{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
-			reason="maintenance",
-		)
-	except DEFwExecutionError as exc:
-		assert "requires authenticated request context" in str(exc)
-	else:
-		raise AssertionError("expected missing diagnostic auth to fail")
-
-	try:
-		qpm.diagnostic_async_run(
-			{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
-		)
-	except DEFwExecutionError as exc:
-		assert "requires authenticated request context" in str(exc)
-	else:
-		raise AssertionError("expected missing diagnostic auth to fail")
-
-	assert qpm.controller.diagnostic_bypass_records == []
-	assert qpm.controller_telemetry()["diagnostic_bypass_enabled"] is True
-
-
-def test_normal_execution_strips_forged_diagnostic_bypass(monkeypatch):
+def test_managed_execution_strips_internal_payload_fields(monkeypatch):
 	_setup_qpm(monkeypatch)
 	qpm = HookQPM()
 
@@ -368,33 +337,10 @@ def test_normal_execution_strips_forged_diagnostic_bypass(monkeypatch):
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": "reservation-1",
-		"_qfw_diagnostic_bypass": True,
+		"_qfw_internal_control": True,
 	})
 	runtime = qpm.controller.task_for_cid(response["cid"])
 
-	assert runtime.diagnostic_bypass is False
-	assert "_qfw_diagnostic_bypass" not in qpm.circuits[response["cid"]].info
+	assert "_qfw_internal_control" not in qpm.circuits[response["cid"]].info
 	assert runtime.scheduler_task_id is not None
 	assert runtime.qtask_id in qpm.controller.capacity_holds
-	assert qpm.controller.diagnostic_bypass_records == []
-
-
-def test_diagnostic_bypass_success_uses_explicit_token(monkeypatch):
-	_setup_qpm(monkeypatch)
-	monkeypatch.setenv(DIAGNOSTIC_BYPASS_ENV, "yes")
-	qpm = HookQPM()
-
-	response = qpm.diagnostic_async_run(
-		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
-		token={"opaque": "token"},
-		reason="maintenance")
-	runtime = qpm.controller.task_for_cid(response["cid"])
-	record = qpm.controller.diagnostic_bypass_records[-1]
-
-	assert runtime.diagnostic_bypass is True
-	assert runtime.reservation_id is None
-	assert runtime.scheduler_task_id is None
-	assert runtime.qtask_id not in qpm.controller.capacity_holds
-	assert record["operation"] == "diagnostic_async_run"
-	assert record["reason"] == "maintenance"
-	assert record["token_metadata"] == {"present": True, "type": "dict"}
