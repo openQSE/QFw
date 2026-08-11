@@ -19,6 +19,28 @@ EXECUTION_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
+def normalize_reservation_id(value):
+	if value is None:
+		return None
+	if isinstance(value, str):
+		value = value.strip()
+		if not value:
+			raise DEFwError("reservation_id must not be empty")
+		try:
+			value = int(value, 0)
+		except ValueError as exc:
+			raise DEFwError(
+				f"reservation_id must be an unsigned 64-bit integer: "
+				f"{value!r}") from exc
+	if isinstance(value, bool) or not isinstance(value, int):
+		raise DEFwError(
+			f"reservation_id must be an unsigned 64-bit integer: "
+			f"{value!r}")
+	if value < 0 or value > 0xffffffffffffffff:
+		raise DEFwError(
+			f"reservation_id must fit in uint64_t: {value!r}")
+	return value
+
 
 class QFwJob(Job):
 	def __init__(self, backend, qpm, event_api, qobj, options):
@@ -74,6 +96,9 @@ class QFwJob(Job):
 			for key in EXECUTION_CONTEXT_KEYS
 			if key in self._options
 		}
+		if "reservation_id" in context:
+			context["reservation_id"] = normalize_reservation_id(
+				context["reservation_id"])
 		if not context.get("reservation_id"):
 			raise DEFwError("reservation_id is required for QPM execution")
 		return context

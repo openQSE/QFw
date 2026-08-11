@@ -119,6 +119,7 @@ endif()
 foreach(example_file
 		examples/README.md
 		examples/qfw_example_common.sh
+		examples/qfw_iqm_chem_site_run.sh
 		examples/qfw_long_running_qpm.batch
 		examples/qfw_long_running_qpm.sh
 		examples/qfw_mpi_smoke.sh

@@ -7,7 +7,7 @@ from collections import deque
 
 from qiskit.providers import BackendV2, Options
 
-from .qfw_job import QFwJob
+from .qfw_job import QFwJob, normalize_reservation_id
 from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
 from .qfw_target import QFW_NUM_QUBITS, build_qfw_target, qfw_basis_gates
 from defw_exception import DEFwDumper
@@ -202,6 +202,9 @@ class QFwBackend(BackendV2):
 			if value is not None and (
 					key != "cancel_on_timeout" or value is not False):
 				options[key] = value
+		if "reservation_id" in options:
+			options["reservation_id"] = normalize_reservation_id(
+				options["reservation_id"])
 		self._qfw_job = QFwJob(self, self.qpm, self.event_api, circuits, options)
 		self._qfw_job.submit()
 		return self._qfw_job
@@ -212,7 +215,8 @@ class QFwBackend(BackendV2):
 			filters["qtask_id"] = response["qtask_id"]
 		kwargs = {"filters": filters}
 		if options.get("reservation_id") is not None:
-			kwargs["reservation_id"] = options["reservation_id"]
+			kwargs["reservation_id"] = normalize_reservation_id(
+				options["reservation_id"])
 		if options.get("token") is not None:
 			kwargs["token"] = options["token"]
 		return qpm.register_event_notification(

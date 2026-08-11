@@ -617,10 +617,22 @@ class IQMServiceClient:
 		start = time.monotonic()
 		dynamic = self.get_dynamic_architecture(
 			calibration_set_id, credential=credential)
-		iqm_circuit = build_iqm_circuit(info["qasm"], dynamic, mapping)
+		iqm_circuit = build_iqm_circuit(
+			info["qasm"],
+			dynamic,
+			mapping,
+			client=client,
+			calibration_set_id=calibration_set_id,
+		)
+		effective_calibration_set_id = calibration_set_id
+		circuit_metadata = getattr(iqm_circuit, "metadata", None)
+		if (effective_calibration_set_id is None and
+				isinstance(circuit_metadata, dict)):
+			effective_calibration_set_id = circuit_metadata.get(
+				"iqm_calibration_set_id")
 		run_request = client.create_run_request(
 			[iqm_circuit],
-			calibration_set_id=calibration_set_id,
+			calibration_set_id=effective_calibration_set_id,
 			shots=shots)
 
 		submit_started = time.monotonic()

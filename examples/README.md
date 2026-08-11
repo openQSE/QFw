@@ -229,6 +229,28 @@ application tree is present.
 ./qfw_chem_app.sh <script-name.py>
 ```
 
+### `qfw_iqm_chem_site_run.sh`
+
+Starts a site-style DEFw directory service and ORNL IQM QPM, reserves through
+the Slurm-style QFw driver, runs the QFw-enabled chemistry application, and
+tears the site services down. The wrapper is intended for the Docker/site
+workflow where the chemistry application tree and shared virtual environment
+are visible to all nodes.
+
+```bash
+./qfw_iqm_chem_site_run.sh \
+  --base /workspace/qfw-container-base \
+  --qfw-prefix /workspace/qfw-container-base/qfw-install-dev \
+  --venv /workspace/qfw-container-base/qfw-shared-test-venv \
+  --device-access-config /workspace/qfw-container-base/qfw-install-dev/lib/qfw/services/dev-config/config.yaml \
+  --chem-app-dir /workspace/qfw-container-base/chemistry_example_aim2
+```
+
+By default the wrapper uses `1000` shots and estimator precision `0.031623`,
+which maps QFwEstimator submissions to `num_shots: 1000`. Override with
+`--shots` and `--estimator-precision` when a different chemistry sampling
+budget is needed.
+
 ### `qfw_supermarq.batch`
 
 Frontier-oriented batch template for submitting the SupermarQ workflow
