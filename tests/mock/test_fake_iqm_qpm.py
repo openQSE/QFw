@@ -99,8 +99,39 @@ def _setup(monkeypatch):
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
 
 
-def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch):
+def configure_fake_credentials(monkeypatch, tmp_path, *users):
+	credential_db = {
+		"users": {
+			user: {
+				"devices": {
+					FAKE_IQM_TARGET_ID: {
+						"api_key": f"fake-api-key-{user}",
+					}
+				}
+			}
+			for user in users
+		}
+	}
+	(tmp_path / "qpu_users.json").write_text(
+		json.dumps(credential_db), encoding="utf-8")
+	config_path = tmp_path / "config.yaml"
+	config_path.write_text(
+		"\n".join([
+			"qpus:",
+			f"  {FAKE_IQM_TARGET_ID}:",
+			"    provider: fake-iqm",
+			"    provider-device-id: default",
+			"    url: https://fake-iqm.invalid/",
+			"    credential-db: qpu_users.json",
+			"",
+		]),
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
+
+
+def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 	_setup(monkeypatch)
+	configure_fake_credentials(monkeypatch, tmp_path, "stress-user")
 
 	qpm = QPM(
 		admission_context_factory=FakeAdmissionContext,
@@ -165,33 +196,7 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch):
 def test_fake_iqm_qpm_uses_reservation_provider_credential(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)
-	credential_db = {
-		"users": {
-			"stress-user": {
-				"devices": {
-					FAKE_IQM_TARGET_ID: {
-						"api_key": "fake-api-key-stress",
-					}
-				}
-			}
-		}
-	}
-	(tmp_path / "qpu_users.json").write_text(
-		json.dumps(credential_db),
-		encoding="utf-8")
-	config_path = tmp_path / "config.yaml"
-	config_path.write_text(
-		"\n".join([
-			"qpus:",
-			f"  {FAKE_IQM_TARGET_ID}:",
-			"    provider: fake-iqm",
-			"    provider-device-id: default",
-			"    url: https://fake-iqm.invalid/",
-			"    credential-db: qpu_users.json",
-			"",
-		]),
-		encoding="utf-8")
-	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
+	configure_fake_credentials(monkeypatch, tmp_path, "stress-user")
 
 	qpm = QPM(
 		admission_context_factory=FakeAdmissionContext,
@@ -238,7 +243,7 @@ def test_fake_iqm_qpm_uses_reservation_provider_credential(
 	assert completion["outcome"] == "COMPLETED"
 	assert completion["provider_credential"] == {
 		"api_key_present": True,
-		"api_key_suffix": "ress",
+		"api_key_suffix": "user",
 		"provider": "file",
 		"provider_type": "file",
 		"user": "stress-user",

@@ -59,13 +59,13 @@ class QRC:
 					return dict(result)
 		return None
 
-	def get_last_job_timing(self, cid=None):
+	def get_task_timing(self, cid=None):
 		with self._lock:
 			if cid is None and self._last_timing:
 				return dict(next(reversed(self._last_timing.values())))
 			return dict(self._last_timing.get(cid, {}))
 
-	def get_last_job_metadata(self, cid=None):
+	def get_task_metadata(self, cid=None):
 		with self._lock:
 			if cid is None and self._last_metadata:
 				return dict(next(reversed(self._last_metadata.values())))

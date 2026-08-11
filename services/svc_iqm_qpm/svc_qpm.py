@@ -30,7 +30,7 @@ class QPM(UTIL_QPM):
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC, svc_info
-		from api_qpm import QPMType, QPMCapability
+		from api_qpm_common import QPMType, QPMCapability
 		properties = dict(svc_info.get('properties', {}))
 		device_id = os.environ.get('QFW_QPU_DEVICE_ID')
 		if device_id:

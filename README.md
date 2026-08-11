@@ -9,8 +9,8 @@ QFw service APIs, and provides QPM services for execution targets such as
 
 A QPM is a Quantum Platform Manager. In QFw, a QPM service represents one
 execution target, advertises its type and capabilities, accepts circuit
-submissions through the `api_qpm` interface, and returns backend,
-device, and job information to applications.
+submissions through `api_qpm_execution`, and exposes separate admission,
+policy, scheduler, telemetry, and service-control bindings.
 
 The same QFw application workflow can run on a local node, in a Slurm
 allocation, or inside the containerized
@@ -441,7 +441,8 @@ The repository is organized around:
   default service manifest.
 - `services/`: QFw-owned DEFw services such as `svc_tnqvm_qpm` and
   `svc_nwqsim_qpm`.
-- `service-apis/`: QFw-owned DEFw service APIs such as `api_qpm`.
+- `service-apis/`: independent QFw-owned DEFw service APIs for QPM execution,
+  admission, policy, scheduler, telemetry, and privileged control.
 - `DEFw/`: the distributed runtime submodule.
 - `bin/`: simulator runner binaries copied from dependency builds.
 - `examples/`: runnable examples and integration-style tests.

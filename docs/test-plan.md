@@ -616,9 +616,8 @@ pattern used by the admission and scheduler fixture:
 - Read and peek completion queues by reservation with and without `cid`
   selectors, then confirm events remain independent from polling and retention
   produces structured no-longer-retained results.
-- Confirm compatibility wrappers, if still present during transition, route
-  through the managed reservation-scoped controller path or return a structured
-  unsupported/diagnostic-only outcome.
+- Confirm the directory advertises no aggregate or default QPM binding and
+  that each workflow resolves only the category bindings it uses.
 
 ## Manual Checks
 

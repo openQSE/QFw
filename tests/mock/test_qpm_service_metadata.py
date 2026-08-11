@@ -112,7 +112,7 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 	_install_service_info_stubs(monkeypatch)
 
 	import defw_directory
-	from api_qpm import QPMCapability, QPMType
+	from api_qpm_common import QPMCapability, QPMType
 	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
 	from util.qpm.util_qpm import UTIL_QPM
 
@@ -182,7 +182,7 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 
 def test_resolver_filters_real_directory_records_by_type_and_capability():
 	import defw_directory
-	from api_qpm import QPMCapability, QPMType
+	from api_qpm_common import QPMCapability, QPMType
 	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
 
 	directory = defw_directory.Directory()
@@ -223,7 +223,7 @@ def test_resolver_filters_real_directory_records_by_type_and_capability():
 
 def test_resolver_filters_real_directory_records_by_provider_metadata():
 	import defw_directory
-	from api_qpm import QPMCapability, QPMType
+	from api_qpm_common import QPMCapability, QPMType
 	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
 
 	directory = defw_directory.Directory()
@@ -266,7 +266,7 @@ def test_resolver_filters_real_directory_records_by_provider_metadata():
 
 def test_resolver_rejects_real_directory_stale_generation_before_binding():
 	import defw_directory
-	from api_qpm import QPMCapability, QPMType
+	from api_qpm_common import QPMCapability, QPMType
 	from qfw_qiskit.qpm_resolver import (
 		DirectoryScope,
 		QPMResolver,

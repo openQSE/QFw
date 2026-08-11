@@ -35,8 +35,6 @@ from .request import parse_execution_request
 from statistics import mean, median, stdev
 
 QPM_SERVICE_TYPE = "qfw.qpm"
-QPM_DEFAULT_CLIENT_MODULE = "api_qpm"
-QPM_DEFAULT_CLIENT_CLASS = "QPM"
 MANAGED_SUBMISSION_FAILURE_REASONS = (
 	"credential-binding-failed",
 	"scheduler-submission-failed",
@@ -64,14 +62,7 @@ class QPMEventDispatcher:
 
 
 def _qpm_api_bindings(service_module, service_class):
-	bindings = [{
-		"binding_name": "default",
-		"client_module": QPM_DEFAULT_CLIENT_MODULE,
-		"client_class": QPM_DEFAULT_CLIENT_CLASS,
-		"service_module": service_module,
-		"service_class": service_class,
-		"version": 1,
-	}]
+	bindings = []
 	for binding_name, client_module, client_class in QPM_CATEGORY_API_BINDINGS:
 		bindings.append({
 			"binding_name": binding_name,
@@ -535,7 +526,7 @@ class UTIL_QPM:
 		if status.get("outcome") == "INVALID_RESERVATION":
 			return status
 		provider_timing = self._provider_task_details(
-			"get_last_job_timing", status.get("cid"))
+			"get_task_timing", status.get("cid"))
 		return {
 			"task_id": task_id,
 			"reservation_id": reservation_id,
@@ -551,7 +542,7 @@ class UTIL_QPM:
 		metadata = dict(status)
 		metadata["task_id"] = task_id
 		metadata["provider_metadata"] = self._provider_task_details(
-			"get_last_job_metadata", status.get("cid"))
+			"get_task_metadata", status.get("cid"))
 		return metadata
 
 	def _provider_task_details(self, method_name, cid):
@@ -859,7 +850,7 @@ class UTIL_QPM:
 
 	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc,
 					 properties=None):
-		from api_qpm import QPMType, QPMCapability
+		from api_qpm_common import QPMType, QPMCapability
 		from defw_agent_info import get_bit_list, get_bit_desc, Capability, DEFwServiceInfo
 		properties = dict(properties or {})
 		service_module = self.__class__.__module__

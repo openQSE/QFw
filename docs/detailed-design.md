@@ -1310,7 +1310,7 @@ the client is bound to the QPM service.
 ```mermaid
 sequenceDiagram
     participant Client
-    participant API as api_qpm.QPM
+    participant API as api_qpm_execution.QPMExecution
     participant QPM as Provider QPM service
     participant UTIL as UTIL_QPM
     participant Circuit as QFw Circuit record
@@ -1349,7 +1349,7 @@ the completion record when one is available.
 ```mermaid
 sequenceDiagram
     participant Client
-    participant API as api_qpm.QPM
+    participant API as api_qpm_execution.QPMExecution
     participant QPM as Provider QPM service
     participant UTIL as UTIL_QPM
     participant QRC as QRC provider path
@@ -1375,7 +1375,7 @@ provider path completes.
 sequenceDiagram
     participant Client
     participant EventEP as Client event endpoint
-    participant API as api_qpm.QPM
+    participant API as api_qpm_execution.QPMExecution
     participant QPM as Provider QPM service
     participant UTIL as UTIL_QPM
     participant QRC as QRC provider path
@@ -2188,19 +2188,20 @@ Existing `create_circuit()` overrides map to `prepare_circuit(info)`.
 The QB-specific `qb_common_run()` path maps to
 `prepare_provider_submission(circuit)`, where the selected host can be
 translated into vQPU configuration before QRC submission. Provider-specific
-public `sync_run()` and `async_run()` overrides should be removed or reduced
-to compatibility wrappers once the managed path is in place. Metadata methods
-remain normal telemetry/discovery API methods rather than execution hooks.
+public `sync_run()` and `async_run()` overrides use the shared managed path.
+Metadata methods remain telemetry and discovery API methods rather than
+execution hooks.
 
 ### QFw API Categories
 
-The single `api_qpm.QPM` class should be split into category-specific service
-APIs. The QPM service process can implement all categories through the shared
-controller, but the remote API classes should match the caller roles.
+Each QPM API category owns a separate service API package and remote class.
+The QPM service process implements all categories through the shared
+controller, while each remote class exposes only the methods for its caller
+role.
 
 | API surface | Candidate service API | Primary callers |
 | --- | --- | --- |
-| Execution | `api_qpm_execution` or the narrowed execution subset of `api_qpm` | Applications, runtimes, SDK adapters. |
+| Execution | `api_qpm_execution` | Applications, runtimes, SDK adapters. |
 | Admission control | `api_qpm_admission_control` | Workflow managers, load managers, resource managers, prolog or epilog code. |
 | Admission policy configuration | `api_qpm_admission_policy_config` | Site operators, administrators, site automation. |
 | Scheduler control | `api_qpm_scheduler_control` | Site operators, administrators, site automation. |
@@ -2311,11 +2312,11 @@ the primary callers.
 
 #### Execution APIs
 
-Execution APIs replace the resource-affecting subset of the current
-`api_qpm.QPM` execution surface. Applications and runtimes call these APIs with
-a reservation ID and an opaque token parameter. The current milestone does not
-validate the token. The API contract is expressed as a managed task lifecycle
-so status, cancellation, result retrieval, and events use the same state
+Execution APIs provide the resource-affecting operations through
+`api_qpm_execution.QPMExecution`. Applications and runtimes call these APIs
+with a reservation ID and an opaque token parameter. The current milestone
+does not validate the token. The API contract uses a managed task lifecycle so
+status, cancellation, result retrieval, and events share the same state
 vocabulary.
 
 Each accepted execution submit is an independent qtask creation. QPM does not
@@ -2532,8 +2533,8 @@ The integration should proceed in the shared QPM utility layer:
    results become visible through completion queues or events.
 6. Add cancellation and timeout paths that update pending queues, scheduler
    state, provider handles, result state, and admission accounting.
-7. Move remote API definitions into category-specific service API classes while
-   preserving compatibility wrappers where a transition period requires them.
+7. Keep each remote API definition in its category-specific service API
+   package. Do not advertise an aggregate or default QPM binding.
 
 State maintained by `qhw-admission`:
 

@@ -6,7 +6,10 @@ import sys
 import util.qpm.util_qpm as util_qpm
 from fakes import FakeSchedulerContext
 from svc_fake_iqm_qpm.svc_qpm import QPM
-from test_fake_iqm_qpm import FakeAdmissionContext
+from test_fake_iqm_qpm import (
+	FakeAdmissionContext,
+	configure_fake_credentials,
+)
 from util.qpm.controller import clear_target_controllers
 
 
@@ -126,7 +129,9 @@ def test_startup_scenario_runs_against_fake_qpm(monkeypatch, tmp_path):
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_FAKE_QPM_MIN_SLEEP_SECONDS", "0.001")
 	monkeypatch.setenv("QFW_FAKE_QPM_MAX_SLEEP_SECONDS", "0.01")
+	monkeypatch.setenv("USER", "fake-iqm-stress")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
+	configure_fake_credentials(monkeypatch, tmp_path, "fake-iqm-stress")
 	qpm = QPM(
 		admission_context_factory=FakeAdmissionContext,
 		scheduler_context_factory=FakeSchedulerContext,
@@ -161,7 +166,9 @@ def test_scheduler_scenario_asserts_policy_order(monkeypatch, tmp_path):
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_FAKE_QPM_MIN_SLEEP_SECONDS", "0.001")
 	monkeypatch.setenv("QFW_FAKE_QPM_MAX_SLEEP_SECONDS", "0.01")
+	monkeypatch.setenv("USER", "fake-iqm-stress")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
+	configure_fake_credentials(monkeypatch, tmp_path, "fake-iqm-stress")
 	qpm = QPM(
 		admission_context_factory=FakeAdmissionContext,
 		scheduler_context_factory=FakeSchedulerContext,

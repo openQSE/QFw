@@ -17,7 +17,7 @@ class QPM(UTIL_QPM):
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC
-		from api_qpm import QPMType, QPMCapability
+		from api_qpm_common import QPMType, QPMCapability
 		info = self.query_helper(
 			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_STATEVECTOR,

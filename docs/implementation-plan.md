@@ -143,7 +143,7 @@ changes.
 
 | Commit ID | Primary repo | Plan tasks | Scope and exit criteria |
 | --- | --- | --- | --- |
-| PH3-C01 | QFw | PH3.1 | Split QPM remote APIs into category surfaces and keep compatibility wrappers where needed. |
+| PH3-C01 | QFw | PH3.1 | Split QPM remote APIs into independent category packages and remove the aggregate QPM binding. |
 | PH3-C02 | QFw | PH3.2, PH3.3 | Add request parsing, opaque token placeholders, and structured status envelope fields without token checking. |
 | PH3-C03 | QFw | PH3.4 | Keep API category routing separate from caller validation. |
 | PH3-C04 | QFw | PH3.5 | Migrate Qiskit backend, job, sampler, and estimator pass-through for reservation ID, token placeholder, and execution context. |
@@ -686,8 +686,8 @@ Primary requirements: `CAT-001` through `CAT-007`, `API-001` through
      and enforce them.
    - Keep the QPM service process and shared controller as the implementation
      owner behind those API surfaces.
-   - Add compatibility wrappers for existing `api_qpm.QPM` callers where a
-     transition period is required.
+   - Remove the aggregate `api_qpm.QPM` class and default binding. Callers
+     resolve the category required for each operation.
    - Reqs: `CAT-001`, `CAT-002`, `CAT-003`, `CAT-004`, `CAT-005`,
      `CAT-006`, `CAT-007`.
 
@@ -739,9 +739,9 @@ Primary requirements: `CAT-001` through `CAT-007`, `API-001` through
    - Reqs: `API-002`, `API-004`, `CAT-005`.
 
 7. PH3.7 Add API and token-pass-through tests.
-   - Cover category routing, compatibility wrappers, opaque token propagation,
-     disabled-auth behavior, Qiskit pass-through, reservation context
-     propagation, and metadata API shape.
+   - Cover category routing, the absence of an aggregate binding, opaque token
+     propagation, disabled-auth behavior, Qiskit pass-through, reservation
+     context propagation, and metadata API shape.
    - Reqs: `CAT-001`, `CAT-002`, `CAT-003`, `CAT-004`, `CAT-005`,
      `API-001`, `API-002`, `API-003`, `API-004`.
 
@@ -801,8 +801,8 @@ Primary requirements: `STATE-001` through `STATE-004`, `SCHED-002`,
    - Convert QB-specific `qb_common_run()` behavior into
      `prepare_provider_submission(circuit)` so vQPU configuration happens
      inside the shared managed path.
-   - Remove or reduce provider-specific public `sync_run()` and `async_run()`
-     overrides to compatibility wrappers after the hook path is in place.
+   - Remove provider-specific public `sync_run()` and `async_run()` overrides
+     after the hook path is in place.
    - Keep provider calls outside the controller lock and re-enter the
      controller on completion, failure, timeout, or cancellation.
    - Reqs: `SCHED-009`, `SCHED-010`, `STATE-001`, `STATE-004`, `CAT-007`.

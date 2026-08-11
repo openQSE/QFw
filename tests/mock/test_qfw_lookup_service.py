@@ -1,20 +1,12 @@
 import copy
 
 from tests.mock.fakes import FakeQPM
-from api_qpm import QPMCapability, QPMType
+from api_qpm_common import QPMCapability, QPMType
 
 
 DEFAULT_QPM_TYPE = QPMType.QPM_TYPE_HARDWARE
 DEFAULT_QPM_CAPABILITIES = QPMCapability.QPM_CAP_SUPERCONDUCTING
 QPM_BINDINGS = (
-	{
-		"binding_name": "default",
-		"client_module": "api_qpm",
-		"client_class": "QPM",
-		"service_module": "svc_iqm_qpm.svc_qpm",
-		"service_class": "QPM",
-		"version": 1,
-	},
 	{
 		"binding_name": "execution",
 		"client_module": "api_qpm_execution",
@@ -52,7 +44,7 @@ def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
 			},
 			"api_bindings": bindings,
 		},
-		"selected_binding": bindings[1],
+		"selected_binding": bindings[0],
 	}
 
 
@@ -117,14 +109,14 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	assert len(dirsvc.queries) == 1
 	assert dirsvc.queries[0]["service_name"] == "QPM"
 	assert dirsvc.queries[0]["service_type"] == "qfw.qpm"
-	assert dirsvc.queries[0]["binding_name"] == "default"
+	assert dirsvc.queries[0]["binding_name"] == "execution"
 	assert dirsvc.queries[0]["qpm_type"] == DEFAULT_QPM_TYPE
 	assert dirsvc.queries[0]["qpm_capability"] == DEFAULT_QPM_CAPABILITIES
 	assert dirsvc.queries[0]["qpm_capabilities"] == DEFAULT_QPM_CAPABILITIES
 	assert len(fake_defw.binding_connections) == 1
 	binding = fake_defw.binding_connections[0]
 	assert binding["service_record"]["service_id"] == "qpm-iqm"
-	assert binding["selected_binding"]["binding_name"] == "default"
+	assert binding["selected_binding"]["binding_name"] == "execution"
 	assert fake_qpm.shutdown_called is False
 
 
@@ -202,7 +194,7 @@ def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
 	binding = fake_defw.binding_connections[0]
 	assert binding["service_record"]["endpoint"]["address"] == "qpm-direct"
 	assert binding["service_record"]["endpoint"]["listen_port"] == 9000
-	assert binding["selected_binding"]["binding_name"] == "default"
+	assert binding["selected_binding"]["binding_name"] == "execution"
 
 
 def test_get_qpm_selects_requested_provider(monkeypatch):

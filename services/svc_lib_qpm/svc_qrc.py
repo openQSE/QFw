@@ -143,11 +143,11 @@ class QRC:
 	def get_coupling_graph(self, calibration_set_id=None, lib=None):
 		return self.frontend.get_coupling_graph(calibration_set_id, lib=lib)
 
-	def get_last_job_timing(self, cid=None, lib=None):
-		return self.frontend.get_last_job_timing(cid, lib=lib)
+	def get_task_timing(self, cid=None, lib=None):
+		return self.frontend.get_task_timing(cid, lib=lib)
 
-	def get_last_job_metadata(self, cid=None, lib=None):
-		return self.frontend.get_last_job_metadata(cid, lib=lib)
+	def get_task_metadata(self, cid=None, lib=None):
+		return self.frontend.get_task_metadata(cid, lib=lib)
 
 	def shutdown(self):
 		self.shutdown_workers = True

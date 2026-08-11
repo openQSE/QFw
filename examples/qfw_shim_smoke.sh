@@ -20,7 +20,7 @@ Optional:
                        Useful calls include test, get_backend_info,
                        get_device_info, get_coupling_graph,
                        get_calibration_snapshot, async_run, and
-                       get_last_job_metadata.
+                       get_task_metadata.
 
 The server validates whether the selected library supports each requested API.
 EOF
@@ -64,7 +64,7 @@ fi
 echo "Starting QFw shim smoke test with ${libs:+libs=${libs} }${lib:+lib=${lib}}"
 qfw_example_begin "shim-smoke" "$@"
 qfw_example_setup_local_services qfw_shim_smoke_services.yaml shim-ornl-20q
-DEFW_ONLY_LOAD_MODULE=api_qpm \
+DEFW_ONLY_LOAD_MODULE=api_qpm_execution,api_qpm_telemetry,api_qpm_control \
 	QFW_SHIM_SMOKE_SHUTDOWN_QPM=no \
 	qfw_example_slurm_driver \
 		--backend shim \

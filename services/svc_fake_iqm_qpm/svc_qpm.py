@@ -61,7 +61,7 @@ class QPM(UTIL_QPM):
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC, svc_info
-		from api_qpm import QPMCapability, QPMType
+		from api_qpm_common import QPMCapability, QPMType
 
 		properties = dict(svc_info.get('properties', {}))
 		properties.update({

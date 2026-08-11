@@ -7,6 +7,7 @@ import threading
 import time
 import traceback
 from copy import deepcopy
+from types import SimpleNamespace
 
 from defw_app_util import defw_get_directory_service
 from defw_exception import DEFwError, DEFwNotReady
@@ -87,13 +88,44 @@ def resolve_qpm(backend, timeout):
 		backend, default_provider=FAKE_PROVIDER)
 	dirsvc = defw_get_directory_service()
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
-	qpm = resolver.connect(
-		service_type="qfw.qpm",
-		binding_name="default",
-		qpm_type=selection["qpm_type"],
-		qpm_capabilities=selection["qpm_capabilities"],
-		provider=selection["provider"],
-		timeout=timeout,
+	request = {
+		"service_type": "qfw.qpm",
+		"qpm_type": selection["qpm_type"],
+		"qpm_capabilities": selection["qpm_capabilities"],
+		"provider": selection["provider"],
+		"timeout": timeout,
+	}
+	clients = {
+		name: resolver.connect(binding_name=binding, **request)
+		for name, binding in (
+			("execution", "execution"),
+			("admission", "admission"),
+			("policy", "admission-policy"),
+			("scheduler", "scheduler"),
+			("telemetry", "telemetry"),
+			("control", "control"),
+		)
+	}
+	qpm = SimpleNamespace(
+		async_run=clients["execution"].async_run,
+		read_cq=clients["execution"].read_cq,
+		reserve=clients["admission"].reserve,
+		release=clients["admission"].release,
+		configure_device_profile=clients["policy"].configure_device_profile,
+		get_device_profile=clients["policy"].get_device_profile,
+		set_admission_policy=clients["policy"].set_admission_policy,
+		configure_dispatch_limits=(
+			clients["scheduler"].configure_dispatch_limits),
+		configure_scheduler_policy=(
+			clients["scheduler"].configure_scheduler_policy),
+		get_scheduler_queue_state=(
+			clients["scheduler"].get_scheduler_queue_state),
+		pause_execution_target=(
+			clients["scheduler"].pause_execution_target),
+		resume_execution_target=(
+			clients["scheduler"].resume_execution_target),
+		get_capacity_snapshot=clients["telemetry"].get_capacity_snapshot,
+		is_ready=clients["control"].is_ready,
 	)
 	return selection["provider"], qpm
 

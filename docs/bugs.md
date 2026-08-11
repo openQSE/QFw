@@ -2,7 +2,7 @@
 
 ## Target QPM Service API Categories
 
-Status: working implementation contract
+Status: resolved
 
 This section records the category API surface agreed during review. It is the
 cross-category reference for the cleanup items below. Update this list whenever
@@ -645,7 +645,7 @@ Resolution:
 
 ## Repository-Wide QPM API Migration Scrub
 
-Status: open
+Status: resolved
 
 After the category contracts and directory-owned service APIs are implemented,
 perform a detailed QFw and DEFw scrub so no runtime path, installed artifact,
@@ -704,3 +704,16 @@ Verification requirements:
   `api_qpm_control` binding.
 - Update requirements, detailed design, implementation plan, test plan, README,
   and service API documentation to exactly match the final code surface.
+
+Resolution:
+
+- Moved all six remote API classes into independent category packages and
+  moved shared enum flags and the DEFw remote base into `api_qpm_common`.
+- Removed the aggregate `api_qpm.QPM` package and the `default` QPM binding.
+- Updated registration, direct-endpoint resolution, applications, test
+  drivers, Qiskit lookup, provider metadata, startup records, and tests to
+  select explicit category bindings.
+- Renamed provider-side last-job helpers to task-scoped operations and removed
+  stale compatibility expectations from the active design and test plan.
+- Added package import, signature, multi-binding resolver, one-time event
+  registration, and isolated fake-IQM credential tests.

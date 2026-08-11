@@ -1,4 +1,4 @@
-from api_qpm import QPMSchedulerControl
+from .api_qpm_scheduler_control import QPMSchedulerControl
 
 
 svc_info = {

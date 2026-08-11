@@ -10,8 +10,8 @@ DEFAULT_CAPS = {
 	"get_dynamic_backend_info": ["qrmi"],
 	"get_backend_info": ["qrmi"],
 	"run_circuit": ["qrmi"],
-	"get_last_job_timing": ["qrmi"],
-	"get_last_job_metadata": ["qrmi"],
+	"get_task_timing": ["qrmi"],
+	"get_task_metadata": ["qrmi"],
 }
 
 DEFAULT_LIBRARIES = ["qrmi", "qdmi"]

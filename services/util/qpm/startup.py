@@ -445,8 +445,9 @@ def _service_info_capability(service_info):
 def _default_api_binding(service_info, properties):
 	service_name = service_info.get_service_name()
 	return {
-		"binding_name": properties.get("binding_name", "default"),
-		"client_module": properties.get("client_module", "api_qpm"),
+		"binding_name": properties.get("binding_name", "execution"),
+		"client_module": properties.get(
+			"client_module", "api_qpm_execution"),
 		"client_class": properties.get("client_class", service_name),
 		"service_module": properties.get(
 			"service_module", service_info.get_module_name()),

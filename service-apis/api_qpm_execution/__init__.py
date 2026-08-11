@@ -1,4 +1,4 @@
-from api_qpm import QPMExecution
+from .api_qpm_execution import QPMExecution
 
 
 svc_info = {

@@ -55,7 +55,7 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 		"num_qubits": 3,
 		"num_shots": 17,
 		"compiler": "staq",
-		"reservation_id": "reservation-test",
+		"reservation_id": 1,
 	}
 	assert len(job._cid_list) == 1
 	assert list(job._cid_list[0].keys()) == ["cid-101"]
@@ -119,7 +119,7 @@ def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
 	assert len(backend.logged_results) == 1
 
 
-def test_qfw_job_registers_scoped_completion_event_after_submit(monkeypatch):
+def test_qfw_job_does_not_register_per_task_completion_event(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 
 	class RecordingBackend(FakeBackend):
@@ -146,7 +146,7 @@ def test_qfw_job_registers_scoped_completion_event_after_submit(monkeypatch):
 		"shots": 2,
 		"seed": 7,
 		"seed_simulator": 13,
-		"reservation_id": "reservation-1",
+		"reservation_id": 1,
 		"token": "opaque-token",
 	}
 
@@ -155,15 +155,7 @@ def test_qfw_job_registers_scoped_completion_event_after_submit(monkeypatch):
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
 
 	assert job._run_experiment_async(circuit) == "cid-scoped"
-	assert backend.registrations == [
-		{
-			"qpm": fake_qpm,
-			"event_api": event_api,
-			"cid": "cid-scoped",
-			"response": response,
-			"reservation_id": "reservation-1",
-		}
-	]
+	assert backend.registrations == []
 
 
 def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):

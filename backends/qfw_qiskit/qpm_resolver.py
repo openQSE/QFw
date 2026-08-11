@@ -51,6 +51,16 @@ API_CATEGORY_BINDINGS = {
 	"scheduler-control": "scheduler",
 	"telemetry": "telemetry",
 	"discovery": "telemetry",
+	"control": "control",
+}
+API_BINDING_CLIENTS = {
+	"execution": ("api_qpm_execution", "QPMExecution"),
+	"admission": ("api_qpm_admission_control", "QPMAdmissionControl"),
+	"admission-policy": (
+		"api_qpm_admission_policy_config", "QPMAdmissionPolicyConfig"),
+	"scheduler": ("api_qpm_scheduler_control", "QPMSchedulerControl"),
+	"telemetry": ("api_qpm_telemetry", "QPMTelemetry"),
+	"control": ("api_qpm_control", "QPMControl"),
 }
 
 
@@ -102,8 +112,8 @@ class DirectoryScope:
 @dataclass(frozen=True)
 class QPMApiBinding:
 	binding_name: str
-	client_module: str = "api_qpm"
-	client_class: str = "QPM"
+	client_module: str = "api_qpm_execution"
+	client_class: str = "QPMExecution"
 	service_module: Optional[str] = None
 	service_class: str = "QPM"
 	version: int = 1
@@ -266,8 +276,10 @@ class DirectEndpointDirectory:
 			},
 			"selected_api_binding": {
 				"binding_name": kwargs.get("binding_name", "execution"),
-				"client_module": "api_qpm",
-				"client_class": "QPM",
+				"client_module": API_BINDING_CLIENTS[
+					kwargs.get("binding_name", "execution")][0],
+				"client_class": API_BINDING_CLIENTS[
+					kwargs.get("binding_name", "execution")][1],
 				"service_module": service_module,
 				"service_class": self.service_class,
 				"version": 1,
@@ -673,11 +685,19 @@ class QPMResolver:
 
 def _api_binding_from_mapping(binding, request):
 	if binding is None:
-		return QPMApiBinding(binding_name=request.binding_filter())
+		binding_name = request.binding_filter()
+		client_module, client_class = API_BINDING_CLIENTS[binding_name]
+		return QPMApiBinding(
+			binding_name=binding_name,
+			client_module=client_module,
+			client_class=client_class,
+		)
+	binding_name = binding.get("binding_name", request.binding_filter())
+	client_module, client_class = API_BINDING_CLIENTS[binding_name]
 	return QPMApiBinding(
-		binding_name=binding.get("binding_name", request.binding_filter()),
-		client_module=binding.get("client_module", "api_qpm"),
-		client_class=binding.get("client_class", "QPM"),
+		binding_name=binding_name,
+		client_module=binding.get("client_module", client_module),
+		client_class=binding.get("client_class", client_class),
 		service_module=binding.get("service_module"),
 		service_class=binding.get("service_class", "QPM"),
 		version=binding.get("version", 1),

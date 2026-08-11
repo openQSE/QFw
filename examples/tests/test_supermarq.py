@@ -2,6 +2,7 @@
 import logging
 import yaml
 import threading
+from types import SimpleNamespace
 import select
 import traceback
 import sys
@@ -117,13 +118,23 @@ def resolve_qpm(backend, timeout):
 		backend, default_provider="tnqvm")
 	dirsvc = defw_get_directory_service()
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
-	qpm = resolver.connect(
+	request = dict(
 		service_type="qfw.qpm",
-		binding_name="default",
 		qpm_type=selection["qpm_type"],
 		qpm_capabilities=selection["qpm_capabilities"],
 		provider=selection["provider"],
 		timeout=timeout,
+	)
+	execution = resolver.connect(binding_name="execution", **request)
+	control = resolver.connect(binding_name="control", **request)
+	qpm = SimpleNamespace(
+		sync_run=execution.sync_run,
+		async_run=execution.async_run,
+		read_cq=execution.read_cq,
+		register_event_notification=execution.register_event_notification,
+		test=control.test,
+		is_ready=control.is_ready,
+		shutdown=control.shutdown,
 	)
 	return selection["provider"], qpm
 

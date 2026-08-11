@@ -40,7 +40,11 @@ def test_backend_registers_event_api(monkeypatch):
 	assert backend.qpm is fake_qpm
 	assert backend.event_api is fake_event_api
 	assert fake_event_api.registered is True
-	assert fake_qpm.registrations == []
+	assert fake_qpm.registrations == [{
+		"endpoint": "endpoint-1",
+		"event_type": qfw_simulator.EVENT_TYPE_CIRC_RESULT,
+		"class_id": "event-api-7",
+	}]
 	assert backend.options._validators["shots"] == (1, 65536)
 	assert backend.options._validators["seed_simulator"] is int
 	assert backend.options._validators["seed"] is int
@@ -48,7 +52,7 @@ def test_backend_registers_event_api(monkeypatch):
 
 def test_backend_provider_selector_uses_qpm_metadata(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
-	from api_qpm import QPMCapability, QPMType
+	from api_qpm_common import QPMCapability, QPMType
 
 	fake_qpm = FakeQPM()
 	fake_event_api = FakeEventAPI(class_id="event-api-provider")
@@ -118,11 +122,11 @@ def test_backend_run_preserves_reservation_context(monkeypatch):
 	job = backend.run(
 		circuit,
 		shots=12,
-		reservation_id="reservation-1",
+		reservation_id=1,
 		token={"opaque": "token"},
 	)
 
-	assert job.options["reservation_id"] == "reservation-1"
+	assert job.options["reservation_id"] == 1
 	assert job.options["token"] == {"opaque": "token"}
 
 
@@ -139,7 +143,7 @@ def test_backend_run_uses_option_reservation_context(monkeypatch):
 	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
 
 	backend = qfw_simulator.QFwBackend()
-	backend.options.reservation_id = "reservation-default"
+	backend.options.reservation_id = 7
 	backend.options.token = "default-token"
 	backend.options.timeout = 3.5
 	backend.options.cancel_on_timeout = True
@@ -147,17 +151,17 @@ def test_backend_run_uses_option_reservation_context(monkeypatch):
 
 	job = backend.run(
 		circuit,
-		reservation_id="reservation-run",
+		reservation_id=8,
 		timeout=1.25,
 	)
 
-	assert job.options["reservation_id"] == "reservation-run"
+	assert job.options["reservation_id"] == 8
 	assert job.options["token"] == "default-token"
 	assert job.options["timeout"] == 1.25
 	assert job.options["cancel_on_timeout"] is True
 
 
-def test_backend_registers_completion_event_with_task_scope(monkeypatch):
+def test_backend_registers_completion_event_once(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
 
 	fake_qpm = FakeQPM()
@@ -170,33 +174,15 @@ def test_backend_registers_completion_event_with_task_scope(monkeypatch):
 
 	backend = qfw_simulator.QFwBackend()
 
-	backend.register_completion_event(
-		fake_qpm,
-		fake_event_api,
-		"cid-17",
-		{"cid": "cid-17", "qtask_id": 42},
-		{"reservation_id": "reservation-1"},
-	)
+	backend.register_completion_events()
 
 	assert fake_qpm.registrations == [
 		{
 			"endpoint": "endpoint-scoped",
 			"event_type": qfw_simulator.EVENT_TYPE_CIRC_RESULT,
 			"class_id": "event-api-scoped",
-			"filters": {"cid": "cid-17", "qtask_id": 42},
-			"reservation_id": "reservation-1",
 		}
 	]
-
-	backend.register_completion_event(
-		fake_qpm,
-		fake_event_api,
-		"cid-18",
-		{"cid": "cid-18", "qtask_id": 43},
-		{"reservation_id": "reservation-2", "token": "opaque-token"},
-	)
-
-	assert fake_qpm.registrations[-1]["token"] == "opaque-token"
 
 
 def test_qfw_job_metadata_keeps_only_qhw_result():
@@ -284,7 +270,7 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 				"num_shots": 12,
 				"compiler": "staq",
 				"qubit_mapping": {"0": "QB7"},
-				"reservation_id": "reservation-test",
+				"reservation_id": 1,
 			}
 		]
 
@@ -309,7 +295,7 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 			"seed_simulator": 34,
 			"shots": 12,
 			"seed": 21,
-			"reservation_id": "reservation-1",
+			"reservation_id": 1,
 			"token": "opaque-token",
 		},
 	)
@@ -317,7 +303,7 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 	cid = job._run_experiment_async(circuit)
 
 	assert cid == "cid-context"
-	assert fake_qpm.submitted_payloads[0]["reservation_id"] == "reservation-1"
+	assert fake_qpm.submitted_payloads[0]["reservation_id"] == 1
 	assert fake_qpm.submitted_payloads[0]["token"] == "opaque-token"
 
 

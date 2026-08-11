@@ -1,4 +1,4 @@
-from api_qpm import QPMControl
+from .api_qpm_control import QPMControl
 
 
 svc_info = {

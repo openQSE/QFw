@@ -1,41 +1,22 @@
 import inspect
 
+from api_qpm_admission_control import QPMAdmissionControl
+from api_qpm_admission_policy_config import QPMAdmissionPolicyConfig
+from api_qpm_control import QPMControl
+from api_qpm_execution import QPMExecution
+from api_qpm_scheduler_control import QPMSchedulerControl
+from api_qpm_telemetry import QPMTelemetry
 
-def test_qpm_compatibility_surface_keeps_existing_methods():
-	from api_qpm import QPM
 
-	for method_name in (
-		"sync_run",
-		"async_run",
-		"read_cq",
-		"peek_cq",
-		"register_event_notification",
-		"cancel_task",
-		"task_status",
-		"get_backend_info",
-		"get_device_info",
-		"shutdown",
-	):
-		assert hasattr(QPM, method_name)
+def test_qpm_aggregate_surface_is_not_exported():
+	try:
+		import api_qpm
+	except ModuleNotFoundError:
+		return
+	assert not hasattr(api_qpm, "QPM")
 
 
 def test_qpm_category_surfaces_are_importable():
-	from api_qpm import (
-		QPM,
-		QPMAdmissionControl,
-		QPMAdmissionPolicyConfig,
-		QPMExecution,
-		QPMSchedulerControl,
-		QPMTelemetry,
-		QPMControl,
-	)
-
-	assert issubclass(QPM, QPMExecution)
-	assert issubclass(QPM, QPMAdmissionControl)
-	assert issubclass(QPM, QPMAdmissionPolicyConfig)
-	assert issubclass(QPM, QPMSchedulerControl)
-	assert issubclass(QPM, QPMTelemetry)
-	assert issubclass(QPM, QPMControl)
 	assert hasattr(QPMAdmissionControl, "reserve")
 	assert hasattr(QPMAdmissionPolicyConfig, "configure_device_profile")
 	assert hasattr(QPMAdmissionPolicyConfig, "set_admission_policy")
@@ -76,14 +57,6 @@ def test_qpm_category_service_api_packages_export_single_surface():
 
 
 def test_qpm_category_surfaces_accept_token_placeholders():
-	from api_qpm import (
-		QPMAdmissionControl,
-		QPMAdmissionPolicyConfig,
-		QPMExecution,
-		QPMSchedulerControl,
-		QPMTelemetry,
-	)
-
 	for cls, method_name in (
 		(QPMExecution, "sync_run"),
 		(QPMExecution, "async_run"),
@@ -102,14 +75,6 @@ def test_qpm_category_surfaces_accept_token_placeholders():
 
 
 def test_qpm_category_surfaces_use_token_first_order():
-	from api_qpm import (
-		QPMAdmissionPolicyConfig,
-		QPMControl,
-		QPMExecution,
-		QPMSchedulerControl,
-		QPMTelemetry,
-	)
-
 	expected = {
 		(QPMExecution, "cancel_task"):
 			["self", "cid", "reservation_id", "token",

@@ -1,4 +1,4 @@
-from api_qpm import QPMTelemetry
+from .api_qpm_telemetry import QPMTelemetry
 
 
 svc_info = {

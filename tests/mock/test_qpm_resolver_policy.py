@@ -332,7 +332,7 @@ def test_resolver_from_environment_allows_direct_endpoint_fallback(monkeypatch):
 	assert resolved.service_id == "qpm-direct:9000"
 	assert resolved.directory_scope == "direct"
 	assert resolved.endpoint == "qpm-direct:9000"
-	assert resolved.api_binding.client_class == "QPM"
+	assert resolved.api_binding.client_class == "QPMExecution"
 
 
 def test_resolver_from_environment_binds_site_directory_without_factory(

@@ -1,4 +1,4 @@
-from api_qpm import QPMCapability, QPMType
+from api_qpm_common import QPMCapability, QPMType
 
 
 DEFAULT_QPM_PROVIDER = "iqm"

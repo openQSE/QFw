@@ -175,6 +175,8 @@ install(DIRECTORY services/
 		PATTERN "*.txt"
 		PATTERN "*.in"
 		PATTERN "__pycache__" EXCLUDE)
+install(CODE
+	"file(REMOVE_RECURSE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/service-apis/api_qpm\")")
 install(DIRECTORY service-apis/
 	DESTINATION "${CMAKE_INSTALL_LIBDIR}/qfw/service-apis"
 	FILES_MATCHING

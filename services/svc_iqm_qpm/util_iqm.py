@@ -580,7 +580,7 @@ class IQMServiceClient:
 		}
 		return self.normalize_qhw("coupling", raw_payload)
 
-	def get_last_job_timing(self, cid=None):
+	def get_task_timing(self, cid=None):
 		if cid is None:
 			cid = self._latest_cid
 		return self._last_timing.get(cid, {
@@ -590,7 +590,7 @@ class IQMServiceClient:
 			"timing_available": False,
 		})
 
-	def get_last_job_metadata(self, cid=None):
+	def get_task_metadata(self, cid=None):
 		if cid is None:
 			cid = self._latest_cid
 		return self._last_metadata.get(cid, {

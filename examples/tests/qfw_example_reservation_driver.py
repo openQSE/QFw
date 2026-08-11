@@ -24,7 +24,7 @@ def resolve_qpm(provider, timeout):
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
 	return resolver.connect(
 		service_type="qfw.qpm",
-		binding_name="default",
+		binding_name="admission",
 		qpm_type=selection["qpm_type"],
 		qpm_capabilities=selection["qpm_capabilities"],
 		provider=selection["provider"],

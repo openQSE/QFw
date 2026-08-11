@@ -4,7 +4,7 @@ import types
 
 
 def test_qpm_telemetry_api_accepts_token_placeholders():
-	from api_qpm import QPMTelemetry
+	from api_qpm_telemetry import QPMTelemetry
 
 	expected_parameters = {
 		"get_backend_info": ["self", "lib", "token"],
@@ -152,11 +152,11 @@ def test_task_information_is_task_id_and_reservation_scoped():
 			}
 
 	class RecordingQRC:
-		def get_last_job_timing(self, cid):
+		def get_task_timing(self, cid):
 			assert cid == "cid-17"
 			return {"provider_elapsed_ns": 100}
 
-		def get_last_job_metadata(self, cid):
+		def get_task_metadata(self, cid):
 			assert cid == "cid-17"
 			return {"provider_job_id": "job-17"}
 

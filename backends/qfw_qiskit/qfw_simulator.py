@@ -14,7 +14,7 @@ from defw_exception import DEFwDumper
 from defw import me
 from .qfw_lookup_service import get_qpm
 from .qpm_selection import qpm_selection_for_provider
-from api_qpm import QPMCapability
+from api_qpm_common import QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 
@@ -97,6 +97,7 @@ class QFwBackend(BackendV2):
 		self.event_api.register_external()
 		self._event_endpoint = me.my_endpoint()
 		self._event_registration_lock = threading.Lock()
+		self._completion_event_registered = False
 		self._completion_event_registration = None
 
 		super().__init__(name=self.my_name())
@@ -211,13 +212,14 @@ class QFwBackend(BackendV2):
 
 	def register_completion_events(self):
 		with self._event_registration_lock:
-			if self._completion_event_registration is not None:
+			if self._completion_event_registered:
 				return self._completion_event_registration
 			self._completion_event_registration = \
 				self.qpm.register_event_notification(
 					self._event_endpoint,
 					EVENT_TYPE_CIRC_RESULT,
 					self.event_api.class_id())
+			self._completion_event_registered = True
 			return self._completion_event_registration
 
 	def log_statistics(self, res):

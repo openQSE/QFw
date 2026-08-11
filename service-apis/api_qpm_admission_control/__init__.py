@@ -1,4 +1,4 @@
-from api_qpm import QPMAdmissionControl
+from .api_qpm_admission_control import QPMAdmissionControl
 
 
 svc_info = {

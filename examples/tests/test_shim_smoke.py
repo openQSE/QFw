@@ -5,11 +5,17 @@ import os
 import select
 import sys
 import traceback
+from types import SimpleNamespace
 from time import sleep, time
 
 import yaml
-from api_qpm import QPM, QPMCapability, QPMType
-import defw
+from api_qpm_admission_control import QPMAdmissionControl
+from api_qpm_admission_policy_config import QPMAdmissionPolicyConfig
+from api_qpm_common import QPMCapability, QPMType
+from api_qpm_control import QPMControl
+from api_qpm_execution import QPMExecution
+from api_qpm_scheduler_control import QPMSchedulerControl
+from api_qpm_telemetry import QPMTelemetry
 from defw import me
 from defw_app_util import defw_get_directory_service
 from defw_event_baseapi import BaseEventAPI
@@ -17,6 +23,7 @@ from defw_exception import DEFwError, DEFwNotReady
 from defw_util import fg, prformat
 from qfw_example_context import qfw_reservation_options
 from qfw_example_report import emit_result, parse_bool
+from qfw_qiskit.qpm_resolver import QPMResolver
 
 EVENT_TYPE_CIRC_RESULT = 1
 DEFAULT_CALL_SEQUENCE = (
@@ -26,7 +33,7 @@ DEFAULT_CALL_SEQUENCE = (
 	"get_coupling_graph",
 	"get_calibration_snapshot",
 	"async_run",
-	"get_last_job_metadata",
+	"get_task_metadata",
 )
 # The composable device-introspection facet. Each of these can be routed to a
 # specific shim library from the client (lib=...), so --libs fans them out
@@ -41,7 +48,16 @@ INTROSPECTION_CALLS = (
 
 def exposed_qpm_api_names():
 	return {
-		name for name, value in vars(QPM).items()
+		name
+		for api_class in (
+			QPMExecution,
+			QPMAdmissionControl,
+			QPMAdmissionPolicyConfig,
+			QPMSchedulerControl,
+			QPMTelemetry,
+			QPMControl,
+		)
+		for name, value in vars(api_class).items()
 		if callable(value) and not name.startswith("_")
 	}
 
@@ -53,7 +69,7 @@ def validate_call_name(call):
 	if call not in api_names:
 		valid = sorted(api_names)
 		raise SystemExit(
-			f"unsupported --call {call!r}. Expected api_qpm QPM API "
+			f"unsupported --call {call!r}. Expected a category QPM API "
 			f"name. Valid APIs: {', '.join(valid)}")
 	return call
 
@@ -128,21 +144,6 @@ def introspection_api(call, qpm):
 	}[call]
 
 
-def fetch_capability_map(qpm):
-	# Best-effort per-resource gap map {call: [libs]}, used only to skip an
-	# introspection call a library does not serve during a --libs comparison.
-	# If unavailable, the fan-out simply attempts every requested library.
-	try:
-		cap_map = qpm.capability_map()
-		dump_result("capability_map", cap_map)
-		return cap_map
-	except Exception as exc:
-		prformat(
-			fg.red + fg.bold,
-			f"[shim-smoke] capability_map unavailable: {exc}")
-		return {}
-
-
 def run_introspection(call, qpm, libs, cap_map, failures):
 	# Run one introspection call once per requested library, in order, so the
 	# results can be compared back-to-back (e.g. QDMI then QRMI). In fan-out
@@ -170,33 +171,30 @@ def reserve_shim_qpm(device_id, timeout):
 	dirsvc = defw_get_directory_service()
 	qpm_type = QPMType.QPM_TYPE_HARDWARE
 	qpm_capability = QPMCapability.QPM_CAP_SUPERCONDUCTING
-	start = time()
-
-	while time() - start < timeout:
-		bindings = dirsvc.resolve_services(
-			service_name="QPM",
-			qpm_type=qpm_type,
-			qpm_capabilities=qpm_capability,
-			properties={"provider": "shim"},
-		)
-		matches = []
-		for binding in bindings:
-			props = _binding_properties(binding)
-			if device_id and props.get("device_id") != device_id:
-				continue
-			matches.append(binding)
-
-		if matches:
-			prformat(
-				fg.green + fg.bold,
-				f"selected shim QPM: {_binding_properties(matches[0])}")
-			return defw.connect_to_binding(matches[0])
-
-		sleep(1)
-
-	raise DEFwError(
-		f"failed to find shim QPM for device_id={device_id!r} "
-		f"within {timeout} seconds")
+	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
+	request = {
+		"service_type": "qfw.qpm",
+		"selector_resource": device_id,
+		"qpm_type": qpm_type,
+		"qpm_capabilities": qpm_capability,
+		"provider": "shim",
+		"timeout": timeout,
+	}
+	execution = resolver.connect(binding_name="execution", **request)
+	telemetry = resolver.connect(binding_name="telemetry", **request)
+	control = resolver.connect(binding_name="control", **request)
+	return SimpleNamespace(
+		async_run=execution.async_run,
+		get_task_metadata=execution.get_task_metadata,
+		register_event_notification=execution.register_event_notification,
+		get_backend_info=telemetry.get_backend_info,
+		get_device_info=telemetry.get_device_info,
+		get_coupling_graph=telemetry.get_coupling_graph,
+		get_calibration_snapshot=telemetry.get_calibration_snapshot,
+		test=control.test,
+		is_ready=control.is_ready,
+		shutdown=control.shutdown,
+	)
 
 
 def wait_ready(qpm, timeout):
@@ -329,7 +327,8 @@ def run_circuit(qpm, lib, shots, timeout, reservation_id):
 	event_api = BaseEventAPI()
 	event_api.register_external()
 	qpm.register_event_notification(
-		me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id())
+		me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id(),
+		reservation_id=reservation_id)
 
 	info = {
 		"qasm": smoke_qasm(),
@@ -362,18 +361,17 @@ def run_named_call(call, qpm, libs, cap_map, failures, args,
 	if call in INTROSPECTION_CALLS:
 		run_introspection(call, qpm, libs, cap_map, failures)
 		return cid
-	if call == "get_last_job_metadata":
+	if call == "get_task_metadata":
 		# Execution-facet call: stays with the single --lib selection (bound to
 		# the execution owner), not the introspection preference list.
-		if cid is None and args.call != "get_last_job_metadata":
-			print("[shim-smoke] get_last_job_metadata: SKIPPED "
+		if cid is None and args.call != "get_task_metadata":
+			print("[shim-smoke] get_task_metadata: SKIPPED "
 			      "(async_run did not complete on the provider)")
 			return cid
-		exec_lib = requested_lib(args)
-		kwargs = {"lib": exec_lib} if exec_lib else {}
 		call_api(
-			"get_last_job_metadata", qpm.get_last_job_metadata,
-			failures, cid=cid, **kwargs)
+			"get_task_metadata", qpm.get_task_metadata,
+			failures, task_id=cid,
+			reservation_id=reservation_id)
 		return cid
 
 	if call == "async_run":
@@ -396,7 +394,7 @@ def run_named_call(call, qpm, libs, cap_map, failures, args,
 		return cid
 
 	raise DEFwError(
-		f"{call!r} is an api_qpm API, but this smoke test does not have "
+		f"{call!r} is a QPM category API, but this smoke test does not have "
 		"a fixture for it")
 
 
@@ -420,8 +418,7 @@ def main():
 	qpm = reserve_shim_qpm(args.device_id, args.system_up_timeout)
 	try:
 		wait_ready(qpm, args.system_up_timeout)
-		# Only needed to skip unsupported libraries during a --libs comparison.
-		cap_map = fetch_capability_map(qpm) if len(libs) > 1 else {}
+		cap_map = {}
 		cid = None
 		calls = (args.call,) if args.call else DEFAULT_CALL_SEQUENCE
 		reservation_id = qfw_reservation_options(

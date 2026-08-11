@@ -50,8 +50,8 @@ class QrmiDriver(BaseDriver):
 		"get_dynamic_backend_info", # target() -> dynamic architecture
 		"get_backend_info",         # target() -> native composite + qhw device
 		"run_circuit",
-		"get_last_job_timing",
-		"get_last_job_metadata",
+		"get_task_timing",
+		"get_task_metadata",
 	})
 
 	def __init__(self, descriptor=None):
@@ -452,7 +452,7 @@ class QrmiDriver(BaseDriver):
 				f"{job.get('cid')!r})")
 		return job
 
-	def get_last_job_timing(self, cid=None):
+	def get_task_timing(self, cid=None):
 		job = self._last_job_for(cid)
 		return {
 			"cid": job.get("cid"),
@@ -460,7 +460,7 @@ class QrmiDriver(BaseDriver):
 			"status": job.get("status"),
 			"timing": job.get("timing") or {}}
 
-	def get_last_job_metadata(self, cid=None):
+	def get_task_metadata(self, cid=None):
 		job = self._last_job_for(cid)
 		return {
 			"cid": job.get("cid"),

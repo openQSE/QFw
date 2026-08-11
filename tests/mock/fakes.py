@@ -39,7 +39,7 @@ class FakeQPM:
 class FakeSlurmDriver:
 	def __init__(
 			self,
-			reservation_id="reservation-test",
+			reservation_id=1,
 			token=None,
 			allocation_id="allocation-test",
 			user="test-user"):

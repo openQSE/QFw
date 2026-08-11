@@ -19,7 +19,7 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc, defw_module=defw)
 	request = {
 		"timeout": timeout,
-		"binding_name": "default",
+		"binding_name": "execution",
 		"qpm_type": qpm_type,
 		"qpm_capabilities": qpm_capabilities,
 	}
@@ -68,11 +68,6 @@ def _optional_directory_service(timeout=SYSTEM_UP_TIMEOUT):
 		raise
 
 
-def test_qpm(qpm_api):
-	logging.debug("Testing QPM")
-	logging.debug(qpm_api.test())
-
-
 def get_qpm(qpm_type=-1, qpm_capabilities=-1, timeout=SYSTEM_UP_TIMEOUT,
 	    provider=None):
 	# Grab a qpm if one exists.
@@ -85,10 +80,5 @@ def get_qpm(qpm_type=-1, qpm_capabilities=-1, timeout=SYSTEM_UP_TIMEOUT,
 		provider=provider)
 
 	logging.debug(f"got the qpm {qpm_api}")
-
-	try:
-		test_qpm(qpm_api)
-	except Exception as e:
-		logging.debug(f"QPM ran into an exception {e}")
 
 	return qpm_api
