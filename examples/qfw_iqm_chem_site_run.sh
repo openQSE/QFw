@@ -28,14 +28,12 @@ Options:
   --reservation-ttl-s N      Reservation TTL seconds (default: 300)
   --chem-app-dir DIR         chemistry_example_aim2 checkout
   --chem-script SCRIPT       Chemistry script name/path
-  --device-access-config CFG Device access config YAML
   --run-dir DIR              Run directory
   --keep-services            Leave site services running after the app
   -h, --help                 Show this help
 
 Environment overrides use the same names without leading dashes, upper-cased
-and prefixed with QFW_, for example QFW_SHOTS, QFW_CHEM_APP_DIR, and
-QFW_DEVICE_ACCESS_CFG.
+and prefixed with QFW_, for example QFW_SHOTS and QFW_CHEM_APP_DIR.
 EOF
 }
 
@@ -73,26 +71,6 @@ default_prefix_from_examples() {
 	return 1
 }
 
-default_device_access_config() {
-	local candidate source_root
-	source_root=""
-	if [[ -r "${script_dir}/../CMakeLists.txt" ]]; then
-		source_root="$(cd "${script_dir}/.." && pwd)"
-	fi
-	for candidate in \
-		"${DEVICE_CFG:-}" \
-		"${QFW_DEVICE_ACCESS_CFG:-}" \
-		"${QFW_PREFIX:-}/lib/qfw/services/dev-config/config.yaml" \
-		"${QFW_PREFIX:-}/lib64/qfw/services/dev-config/config.yaml" \
-		"${source_root}/services/dev-config/config.yaml"; do
-		if [[ -n "${candidate}" && -r "${candidate}" ]]; then
-			printf "%s\n" "${candidate}"
-			return 0
-		fi
-	done
-	return 1
-}
-
 default_chem_app_dir() {
 	local candidate
 	for candidate in \
@@ -123,7 +101,6 @@ RESERVATION_TTL_S="${QFW_RESERVATION_TTL_S:-${QFW_CHEM_RESERVATION_TTL_S:-300}}"
 ESTIMATOR_PRECISION="${QFW_ESTIMATOR_PRECISION:-${QFW_CHEM_ESTIMATOR_PRECISION:-0.031623}}"
 CHEM_SCRIPT="${QFW_CHEM_SCRIPT:-example_1_He_from_pyscf.py}"
 CHEM_APP_DIR="${QFW_CHEM_APP_DIR:-}"
-DEVICE_CFG="${QFW_DEVICE_ACCESS_CFG:-}"
 RUN_ROOT="${QFW_RUN_ROOT:-}"
 KEEP_SERVICES="${QFW_KEEP_SERVICES:-0}"
 chem_args=()
@@ -200,11 +177,6 @@ while [[ $# -gt 0 ]]; do
 			CHEM_SCRIPT="$2"
 			shift 2
 			;;
-		--device-access-config)
-			need_value "$@"
-			DEVICE_CFG="$2"
-			shift 2
-			;;
 		--run-dir)
 			need_value "$@"
 			RUN_ROOT="$2"
@@ -266,10 +238,6 @@ fi
 
 qfw_example_require_runtime
 
-DEVICE_CFG="$(default_device_access_config)" || {
-	echo "ERROR: device access config is not readable; use --device-access-config" >&2
-	exit 2
-}
 CHEM_APP_DIR="$(default_chem_app_dir)" || {
 	echo "ERROR: chemistry app directory not found; use --chem-app-dir" >&2
 	exit 2
@@ -278,13 +246,11 @@ CHEM_APP_DIR="$(default_chem_app_dir)" || {
 mkdir -p "${RUN_ROOT}/logs"
 
 echo "QFW_CHEM_RUN_ROOT=${RUN_ROOT}"
-echo "QFW_CHEM_DEVICE_ACCESS_CONFIG=${DEVICE_CFG}"
 echo "QFW_CHEM_BACKEND=${BACKEND}"
 echo "QFW_CHEM_TARGET_DEVICE=${DEVICE}"
 echo "QFW_CHEM_SHOTS=${SHOTS}"
 echo "QFW_CHEM_ESTIMATOR_PRECISION=${ESTIMATOR_PRECISION}"
 
-export QFW_DEVICE_ACCESS_CFG="${DEVICE_CFG}"
 export QFW_QPU_DEVICE_ID="${DEVICE}"
 
 service_started=0
@@ -316,9 +282,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$(qfw_example_path qfw_iqm_site_services.sh)" start \
+	"$(qfw_example_path qfw_iqm_site_services.sh)" start \
 	--target-device "${DEVICE}" \
-	--device-access-config "${DEVICE_CFG}" \
 	--run-dir "${RUN_ROOT}/services" \
 	>"${RUN_ROOT}/logs/site-start.stdout.log" \
 	2>"${RUN_ROOT}/logs/site-start.stderr.log"
@@ -329,7 +294,6 @@ echo "QFW_CHEM_SITE_START_RC=0"
 	--backend "${BACKEND}" \
 	--target-device "${DEVICE}" \
 	--service-run-dir "${RUN_ROOT}/services" \
-	--device-access-config "${DEVICE_CFG}" \
 	--chem-app-dir "${CHEM_APP_DIR}" \
 	--run-dir "${RUN_ROOT}/chem-driver" \
 	--owner "${OWNER}" \

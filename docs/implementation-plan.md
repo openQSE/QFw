@@ -605,7 +605,7 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`,
      in DEFw-dirsvc.
    - Bind to the selected QPM endpoint without using directory-service
      capacity semantics.
-   - Treat `qfw_services.yaml` as the allocation launch manifest for services
+   - Treat `local-services.yaml` as the allocation launch manifest for services
      started inside the job. It should not be the primary discovery mechanism
      for long-running services.
    - Reqs: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`, `API-003`.
@@ -617,7 +617,7 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`,
      DEFw-dirsvc endpoints and trust material.
    - Have SLURM, resource-manager, prolog, or equivalent trusted launch code
      inject allocation-scoped DEFw-dirsvc endpoint configuration into the job.
-   - Keep `qfw_services.yaml` focused on allocation-launched services. Do not
+   - Keep `local-services.yaml` focused on allocation-launched services. Do not
      require it to list every long-running QPM endpoint.
    - Keep direct QPM endpoint configuration available only for fallback,
      diagnostics, or controlled development.
@@ -1137,11 +1137,11 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-001`,
      `<prefix>/lib/qfw/service-apis`, Python packages under site-packages, and
      examples and templates under `<prefix>/share/qfw`.
    - Add packaged template install rules for `site.yaml`, runtime profiles,
-     `qfw_services.yaml`, `service-runtime.yaml`, and `device-access.yaml`.
+     `local-services.yaml`, and `site-services.yaml`.
    - Document that privileged production configuration is not installed into
      the software prefix by default. Site deployments provide files such as
      `/etc/openqse/qfw/site.yaml`,
-     `/etc/openqse/qfw/services/service-runtime.yaml`, and
+     `/etc/openqse/qfw/services/site-services.yaml`, and
      `/etc/openqse/qfw/device/device-access.yaml`.
    - Support same-prefix and split-prefix QFw/DEFw deployments through
      generated defaults for `QFW_PREFIX` and `DEFW_PREFIX`.
@@ -1193,15 +1193,16 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-001`,
 6. PH8.6 Implement site and runtime configuration selection.
    - Resolve `site.yaml` in this order: `qfw-setup --site-config`,
      `QFW_SITE_CONFIG`, then `<prefix>/share/qfw/config/site.yaml`.
-   - Keep `site.yaml` client-readable and limited to installation prefixes and
-     directory-service discovery information.
-   - Keep service-runtime policy and device-access material in separate files
-     with site-controlled permissions.
+   - Keep site directory discovery, the site service manifest path, the
+     device-access path, and common QPM runtime policy in `site.yaml`.
+   - Keep provider credentials in the protected store referenced by the
+     selected device-access file.
    - Implement the implicit production profile, the local profile, and the
      hybrid profile.
-   - Use `qfw_services.yaml` only for job-local service inventory. Production
-     long-running QPM services start through service lifecycle commands and
-     register with site-scoped DEFw-dirsvc instances.
+   - Use `local-services.yaml` only for job-local service inventory and MPI
+     launch policy. Resolve production long-running QPMs from the site manifest
+     selected by `site.yaml` and register them with site-scoped DEFw-dirsvc
+     instances.
    - Reqs: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`,
      `DISC-005`, `API-003`.
 

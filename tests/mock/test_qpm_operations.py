@@ -8,6 +8,15 @@ from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.request import parse_execution_request
 
 
+def _set_retention_site(monkeypatch, tmp_path, **retention):
+	path = tmp_path / "site.yaml"
+	lines = ["qpm:", "  completion-queues:", "    retention:"]
+	for key, value in retention.items():
+		lines.append(f"      {key}: {value}")
+	path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+	monkeypatch.setenv("QFW_SITE_CONFIG", str(path))
+
+
 class CapturingEventAPI:
 	def __init__(self, class_id=None, target=None):
 		self.class_id = class_id
@@ -636,10 +645,10 @@ def test_result_reads_allow_terminal_reservation_state(monkeypatch):
 
 
 def test_completion_retention_evicts_records_with_structured_status(
-		monkeypatch):
+		monkeypatch, tmp_path):
 	_setup(monkeypatch)
-	monkeypatch.setenv(
-		"QFW_QPM_COMPLETION_MAX_RECORDS_PER_RESERVATION", "1")
+	_set_retention_site(
+		monkeypatch, tmp_path, **{"max-records-per-reservation": 1})
 	qpm = CompletingQPM(target_id="ops-retention-records")
 	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
 	first = qpm.async_run({
@@ -665,10 +674,11 @@ def test_completion_retention_evicts_records_with_structured_status(
 	assert retained["completion_ready"] is True
 
 
-def test_terminal_completion_queue_garbage_collection(monkeypatch):
+def test_terminal_completion_queue_garbage_collection(monkeypatch, tmp_path):
 	_setup(monkeypatch)
-	monkeypatch.setenv(
-		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS", "1")
+	_set_retention_site(monkeypatch, tmp_path, **{
+		"terminal-reservation-retention-seconds": 1,
+	})
 	qpm = CompletingQPM(target_id="ops-retention-terminal")
 	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
@@ -692,11 +702,13 @@ def test_terminal_completion_queue_garbage_collection(monkeypatch):
 		"terminal-reservation-garbage-collected")
 
 
-def test_completion_purge_worker_expires_idle_terminal_queue(monkeypatch):
+def test_completion_purge_worker_expires_idle_terminal_queue(
+		monkeypatch, tmp_path):
 	_setup(monkeypatch)
-	monkeypatch.setenv(
-		"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS", "1")
-	monkeypatch.setenv("QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS", "1")
+	_set_retention_site(monkeypatch, tmp_path, **{
+		"terminal-reservation-retention-seconds": 1,
+		"purge-interval-seconds": 1,
+	})
 	qpm = CompletingQPM(target_id="ops-retention-worker")
 	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({

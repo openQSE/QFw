@@ -1,5 +1,0 @@
-devices:
-  - device-id: ornl-iqm-20q
-    provider: iqm
-    credential-provider: site-managed
-    credentials: null

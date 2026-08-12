@@ -16,7 +16,7 @@ def test_site_service_config_resolves_site_owned_paths(tmp_path):
             "defw-prefix": str(tmp_path / "defw"),
         },
         "service": {
-            "runtime-config": "service-runtime.yaml",
+            "manifest": "site-services.yaml",
             "device-access-config": "<prefix>/etc/device-access.yaml",
         },
     }
@@ -25,15 +25,37 @@ def test_site_service_config_resolves_site_owned_paths(tmp_path):
         site, site_config_path=site_path)
 
     assert selected == {
-        "runtime_config": site_path.parent / "service-runtime.yaml",
+        "manifest": site_path.parent / "site-services.yaml",
         "device_access_config": tmp_path / "qfw" / "etc" /
         "device-access.yaml",
     }
 
 
+def test_site_qpm_config_returns_common_qpm_settings():
+    qpm = {
+        "completion-queues": {
+            "retention": {"completion-ttl-seconds": 42},
+        },
+    }
+
+    assert qfw_config.site_qpm_config({"qpm": qpm}) == qpm
+
+
 def test_site_service_config_requires_mapping():
     with pytest.raises(ValueError, match="service must be a mapping"):
         qfw_config.site_service_config({"service": "invalid"})
+
+
+def test_site_service_config_ignores_removed_aliases():
+    selected = qfw_config.site_service_config({
+        "service": {
+            "service-manifest": "/legacy/services.yaml",
+            "service_manifest": "/legacy/services.yaml",
+            "device_access_config": "/legacy/devices.yaml",
+        },
+    })
+
+    assert selected == {}
 
 
 def test_prepare_run_state_persists_resolver_environment_overrides(

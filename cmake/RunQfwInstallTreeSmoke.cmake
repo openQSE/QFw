@@ -163,12 +163,19 @@ file(READ
 string(FIND "${qpm_unit_text}"
 	"EnvironmentFile=/etc/openqse/qfw/services/qpm/%i.env"
 	qpm_unit_env_file_index)
-string(FIND "${qpm_unit_text}" "--module \"\${QFW_QPM_MODULE}\""
-	qpm_unit_module_index)
-string(FIND "${qpm_unit_text}" "--load-modules" qpm_unit_load_index)
-if(qpm_unit_env_file_index EQUAL -1 OR qpm_unit_module_index EQUAL -1 OR
-   qpm_unit_load_index EQUAL -1)
-	message(FATAL_ERROR "QFw QPM service-manager unit misses service metadata")
+string(FIND "${qpm_unit_text}" "--site-config \"\${QFW_SITE_CONFIG}\""
+	qpm_unit_site_config_index)
+string(FIND "${qpm_unit_text}" "--service-manifest"
+	qpm_unit_manifest_override_index)
+string(FIND "${qpm_unit_text}" "--service-runtime-config"
+	qpm_unit_runtime_override_index)
+string(FIND "${qpm_unit_text}" "--device-access-config"
+	qpm_unit_device_override_index)
+if(qpm_unit_env_file_index EQUAL -1 OR qpm_unit_site_config_index EQUAL -1 OR
+	NOT qpm_unit_manifest_override_index EQUAL -1 OR
+	NOT qpm_unit_runtime_override_index EQUAL -1 OR
+	NOT qpm_unit_device_override_index EQUAL -1)
+	message(FATAL_ERROR "QFw QPM service-manager unit violates site-config contract")
 endif()
 
 set(qfw_run_base "${QFW_BINARY_DIR}/install-runtime-smoke")

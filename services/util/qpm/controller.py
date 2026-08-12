@@ -55,7 +55,7 @@ DEVICE_ID_ENV = "QFW_QPU_DEVICE_ID"
 ADMISSION_THREADING_ENV = "QFW_QPM_ADMISSION_THREADING_MODE"
 SCHEDULER_THREADING_ENV = "QFW_QPM_SCHEDULER_THREADING_MODE"
 CONTROLLER_SERIALIZATION_ENV = "QFW_QPM_CONTROLLER_SERIALIZATION_MODE"
-SERVICE_RUNTIME_CONFIG_ENV = "QFW_SERVICE_RUNTIME_CONFIG"
+SITE_CONFIG_ENV = "QFW_SITE_CONFIG"
 COMPLETION_RETENTION_DEFAULTS = {
 	"completion_ttl_seconds": 3600,
 	"terminal_reservation_retention_seconds": 3600,
@@ -71,21 +71,6 @@ COMPLETION_RETENTION_CONFIG_KEYS = {
 	"max-bytes-per-reservation": "max_bytes_per_reservation",
 	"purge-interval-seconds": "purge_interval_seconds",
 }
-COMPLETION_RETENTION_ENV_KEYS = {
-	"QFW_QPM_COMPLETION_TTL_SECONDS": "completion_ttl_seconds",
-	"QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS": (
-		"terminal_reservation_retention_seconds"),
-	"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS": (
-		"terminal_reservation_retention_seconds"),
-	"QFW_QPM_COMPLETION_MAX_RECORDS": "max_records_per_reservation",
-	"QFW_QPM_COMPLETION_MAX_RECORDS_PER_RESERVATION": (
-		"max_records_per_reservation"),
-	"QFW_QPM_COMPLETION_MAX_BYTES": "max_bytes_per_reservation",
-	"QFW_QPM_COMPLETION_MAX_BYTES_PER_RESERVATION": (
-		"max_bytes_per_reservation"),
-	"QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS": "purge_interval_seconds",
-}
-
 DEFAULT_ADMISSION_THREADING_MODE = QHW_ADM_THREAD_SAFE
 DEFAULT_SCHEDULER_THREADING_MODE = QHW_SCHED_THREAD_SAFE
 DEFAULT_CONTROLLER_SERIALIZATION_MODE = "controller-lock"
@@ -3789,16 +3774,11 @@ def clear_target_controllers():
 def completion_retention_config():
 	retention = dict(COMPLETION_RETENTION_DEFAULTS)
 	retention.update(_completion_retention_config_file())
-	for env_name, key in COMPLETION_RETENTION_ENV_KEYS.items():
-		value = os.environ.get(env_name)
-		if value is None or str(value).strip() == "":
-			continue
-		retention[key] = _completion_retention_int(value, env_name)
 	return retention
 
 
 def _completion_retention_config_file():
-	path = os.environ.get(SERVICE_RUNTIME_CONFIG_ENV, "").strip()
+	path = os.environ.get(SITE_CONFIG_ENV, "").strip()
 	if not path or not os.path.exists(path):
 		return {}
 	try:

@@ -17,7 +17,6 @@ a JSONL evidence record.
 Options:
   --backend NAME              QPM provider/backend (default: iqm)
   --target-device DEVICE      QFw device id (default: QFW_QPU_DEVICE_ID or ornl-iqm-20q)
-  --device-access-config PATH Device access YAML for IQM service evidence
   --site-config PATH          Site config for site-mode runs
   --service-run-dir DIR       Existing IQM site-services run directory to check
   --qfw-src DIR               QFw source checkout for optional build/install
@@ -46,7 +45,7 @@ EOF
 
 backend="${QFW_CHEM_BACKEND:-iqm}"
 target_device="${QFW_QPU_DEVICE_ID:-ornl-iqm-20q}"
-device_access_config="${QFW_DEVICE_ACCESS_CFG:-}"
+device_access_config=""
 site_config="${QFW_SITE_CONFIG:-}"
 service_run_dir="${QFW_IQM_RUN_DIR:-}"
 qfw_src="${QFW_SRC:-}"
@@ -90,11 +89,6 @@ while [[ $# -gt 0 ]]; do
 		--target-device)
 			qfw_chem_need_value "$@"
 			target_device="$2"
-			shift 2
-			;;
-		--device-access-config)
-			qfw_chem_need_value "$@"
-			device_access_config="$2"
 			shift 2
 			;;
 		--site-config)
@@ -614,9 +608,6 @@ else
 		export QFW_CHEM_BACKEND="${backend}"
 		export QFW_CHEM_APP_DIR="${chem_app_dir}"
 		export QFW_QPU_DEVICE_ID="${target_device}"
-		if [[ -n "${device_access_config}" ]]; then
-			export QFW_DEVICE_ACCESS_CFG="${device_access_config}"
-		fi
 		if [[ "${setup_mode}" == "site" ]]; then
 			export QFW_SITE_CONFIG="${site_config}"
 			export QFW_RUNTIME_CONFIG="${chem_site_runtime_config}"

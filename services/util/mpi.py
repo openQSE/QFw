@@ -18,18 +18,17 @@ def _resolve_qfw_path(path):
 	return os.path.join(_qfw_path(), path)
 
 
-def runtime_config_path():
-	config_path = os.environ.get('QFW_SERVICE_RUNTIME_CONFIG', '').strip()
-	if config_path:
-		return _resolve_qfw_path(config_path)
+def service_config_path():
+	config_path = os.environ.get('QFW_SERVICE_CONFIG', '').strip()
+	if not config_path:
+		raise RuntimeError(
+			'QFW_SERVICE_CONFIG is not set for simulator service startup')
+	return _resolve_qfw_path(config_path)
 
-	runtime_mode = os.environ.get('QFW_RUNTIME_MODE', 'cluster').strip().lower()
-	return os.path.join(_qfw_path(), 'services', 'config', f'{runtime_mode}.yaml')
 
-
-def load_runtime_config(config_path=None):
+def load_service_config(config_path=None):
 	if config_path is None:
-		config_path = runtime_config_path()
+		config_path = service_config_path()
 
 	with open(config_path, 'r', encoding='utf-8') as stream:
 		config = yaml.load(stream, Loader=yaml.FullLoader)
@@ -39,14 +38,17 @@ def load_runtime_config(config_path=None):
 
 def mpi_launch_config(config=None):
 	if config is None:
-		config = load_runtime_config()
+		config = load_service_config()
 	return config.get('mpi-launch', {}) or {}
 
 
 def backend_config(backend, config=None):
 	if config is None:
-		config = load_runtime_config()
-	return (config.get('backends', {}) or {}).get(backend, {}) or {}
+		config = load_service_config()
+	for service in config.get('services', []) or []:
+		if str(service.get('name', '')) == str(backend):
+			return service.get('provider-launch', {}) or {}
+	return {}
 
 
 def backend_wrapper(backend, config=None):

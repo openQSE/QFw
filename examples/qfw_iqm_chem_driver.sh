@@ -17,7 +17,6 @@ Options:
   --target-device DEVICE      QFw device id (default: QFW_QPU_DEVICE_ID or ornl-iqm-20q)
   --site-config PATH          Site config for the long-running QPM
   --service-run-dir DIR       Existing site-services run directory with env file
-  --device-access-config PATH Device access YAML with credential DB reference
   --chem-app-dir DIR          chemistry_example_aim2 checkout
   --run-dir DIR               Evidence and application runtime directory
   --owner USER                Trusted launcher user (default: USER/LOGNAME/root)
@@ -49,7 +48,7 @@ backend="${QFW_CHEM_BACKEND:-iqm}"
 target_device="${QFW_QPU_DEVICE_ID:-ornl-iqm-20q}"
 site_config="${QFW_SITE_CONFIG:-}"
 service_run_dir="${QFW_IQM_RUN_DIR:-}"
-device_access_config="${QFW_DEVICE_ACCESS_CFG:-}"
+device_access_config=""
 chem_app_dir="${QFW_CHEM_APP_DIR:-}"
 run_dir="${QFW_CHEM_DRIVER_RUN_DIR:-}"
 owner="${QFW_CHEM_OWNER:-${USER:-${LOGNAME:-root}}}"
@@ -100,33 +99,30 @@ qfw_chem_driver_require_positive_int() {
 	fi
 }
 
-qfw_chem_driver_source_root() {
-	if [[ -n "${QFW_SRC:-}" && -d "${QFW_SRC}" ]]; then
-		printf "%s\n" "${QFW_SRC}"
-		return 0
-	fi
-	if [[ -r "${script_dir}/../CMakeLists.txt" ]]; then
-		(cd "${script_dir}/.." && pwd)
-		return 0
-	fi
-	return 1
-}
+qfw_chem_driver_device_access_config() {
+	python3 - "${site_config}" "${QFW_PREFIX:-}" <<'PY'
+import os
+import sys
+from pathlib import Path
 
-qfw_chem_driver_default_device_access_config() {
-	local source_root candidate
-	source_root="$(qfw_chem_driver_source_root 2>/dev/null || true)"
-	for candidate in \
-		"${device_access_config}" \
-		"${QFW_DEVICE_ACCESS_CFG:-}" \
-		"${QFW_PREFIX:-}/lib/qfw/services/dev-config/config.yaml" \
-		"${QFW_PREFIX:-}/lib64/qfw/services/dev-config/config.yaml" \
-		"${source_root}/services/dev-config/config.yaml"; do
-		if [[ -n "${candidate}" && -r "${candidate}" ]]; then
-			printf "%s\n" "${candidate}"
-			return 0
-		fi
-	done
-	return 1
+import yaml
+
+site_path = Path(sys.argv[1]).expanduser().resolve()
+prefix = sys.argv[2]
+with site_path.open("r", encoding="utf-8") as stream:
+	site = yaml.safe_load(stream) or {}
+value = (site.get("service") or {}).get("device-access-config")
+if not value:
+	raise SystemExit("site.yaml does not define service.device-access-config")
+value = str(value).replace("<prefix>", prefix)
+path = Path(os.path.expanduser(value))
+if not path.is_absolute():
+	path = site_path.parent / path
+path = path.resolve()
+if not path.is_file():
+	raise SystemExit(f"device access config is not readable: {path}")
+print(path)
+PY
 }
 
 qfw_chem_driver_preflight_owner() {
@@ -336,11 +332,6 @@ while [[ $# -gt 0 ]]; do
 			service_run_dir="$2"
 			shift 2
 			;;
-		--device-access-config)
-			qfw_chem_driver_need_value "$@"
-			device_access_config="$2"
-			shift 2
-			;;
 		--chem-app-dir)
 			qfw_chem_driver_need_value "$@"
 			chem_app_dir="$2"
@@ -523,9 +514,6 @@ if [[ -z "${site_config}" && -n "${service_run_dir}" &&
 	# shellcheck source=/dev/null
 	source "${service_run_dir}/env/iqm-site.env"
 	site_config="${QFW_SITE_CONFIG:-}"
-	if [[ -z "${device_access_config}" ]]; then
-		device_access_config="${QFW_DEVICE_ACCESS_CFG:-}"
-	fi
 fi
 
 if [[ -z "${site_config}" ]] &&
@@ -538,9 +526,9 @@ fi
 if ! qfw_chem_driver_bool_enabled "${dry_run}" ||
    qfw_chem_driver_bool_enabled "${preflight_only}"; then
 	device_access_config="$(
-		qfw_chem_driver_default_device_access_config
+		qfw_chem_driver_device_access_config
 	)" || {
-		echo "ERROR: --device-access-config is required for owner preflight" \
+		echo "ERROR: site device-access configuration is required for owner preflight" \
 			>&2
 		exit 2
 	}

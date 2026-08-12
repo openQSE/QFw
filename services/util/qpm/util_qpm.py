@@ -177,7 +177,9 @@ class UTIL_QPM:
 		self.controller.start_completion_purge_worker()
 
 	def setup_host_resources(self, max_ppn):
-		hl = expand_host_list(os.environ['QFW_QPM_ASSIGNED_HOSTS'])
+		assigned_hosts = os.environ.get('QFW_QPM_ASSIGNED_HOSTS')
+		hl = (expand_host_list(assigned_hosts) if assigned_hosts
+		      else [os.uname().nodename])
 		for h in hl:
 			comp = h.split(':')
 			if len(comp) == 1:

@@ -15,10 +15,7 @@ long-running ORNL IQM QPM service.
 Options:
   --target-device DEVICE        QFw device id (default: QFW_QPU_DEVICE_ID or ornl-iqm-20q)
   --service-id ID               QPM service id (default: iqm-ornl-20q)
-  --device-access-config PATH   Device access YAML with credential DB reference
   --site-config PATH            Site config to use or generate
-  --service-manifest PATH       QPM service manifest
-  --service-runtime-config PATH Service runtime config
   --run-dir DIR                 Run directory for configs, pids, and logs
   --service-node NODE           Node that hosts dirsvc and QPM
   --dirsvc-port PORT            Site directory listen port (default: 8090)
@@ -44,10 +41,7 @@ EOF
 action=""
 target_device="${QFW_QPU_DEVICE_ID:-ornl-iqm-20q}"
 service_id="${QFW_IQM_SERVICE_ID:-iqm-ornl-20q}"
-device_access_config="${QFW_DEVICE_ACCESS_CFG:-}"
 site_config="${QFW_IQM_SITE_CONFIG:-}"
-service_manifest="${QFW_IQM_SERVICE_MANIFEST:-}"
-service_runtime_config="${QFW_SERVICE_RUNTIME_CONFIG:-}"
 run_dir="${QFW_IQM_RUN_DIR:-}"
 service_node="${QFW_IQM_SERVICE_NODE:-}"
 dirsvc_port="${QFW_IQM_DIRSVC_PORT:-8090}"
@@ -88,24 +82,9 @@ while [[ $# -gt 0 ]]; do
 			service_id="$2"
 			shift 2
 			;;
-		--device-access-config)
-			qfw_iqm_need_value "$@"
-			device_access_config="$2"
-			shift 2
-			;;
 		--site-config)
 			qfw_iqm_need_value "$@"
 			site_config="$2"
-			shift 2
-			;;
-		--service-manifest)
-			qfw_iqm_need_value "$@"
-			service_manifest="$2"
-			shift 2
-			;;
-		--service-runtime-config)
-			qfw_iqm_need_value "$@"
-			service_runtime_config="$2"
 			shift 2
 			;;
 		--run-dir)
@@ -306,20 +285,6 @@ qfw_iqm_default_constraints_path() {
 	printf "%s\n" "${deps_dir}/constraints.txt"
 }
 
-qfw_iqm_default_service_manifest() {
-	local candidate
-	for candidate in \
-		"${service_manifest}" \
-		"${QFW_SHARE_DIR:-}/config/services/qfw_services.yaml" \
-		"$(qfw_iqm_source_root 2>/dev/null || true)/share/qfw/config/services/qfw_services.yaml"; do
-		if [[ -n "${candidate}" && -r "${candidate}" ]]; then
-			printf "%s\n" "${candidate}"
-			return 0
-		fi
-	done
-	return 1
-}
-
 qfw_iqm_install_deps_emit() {
 	local status="$1"
 	local rc="$2"
@@ -417,38 +382,6 @@ qfw_iqm_install_deps() {
 	return "${rc}"
 }
 
-qfw_iqm_default_service_runtime_config() {
-	local candidate
-	for candidate in \
-		"${service_runtime_config}" \
-		"${QFW_SERVICE_RUNTIME_CONFIG:-}" \
-		"${QFW_SHARE_DIR:-}/config/services/service-runtime.yaml" \
-		"${QFW_SHARE_DIR:-}/config/services/templates/container.yaml"; do
-		if [[ -n "${candidate}" && -r "${candidate}" ]]; then
-			printf "%s\n" "${candidate}"
-			return 0
-		fi
-	done
-	echo "ERROR: no service runtime config found" >&2
-	return 1
-}
-
-qfw_iqm_default_device_access_config() {
-	local candidate source_root
-	source_root="$(qfw_iqm_source_root 2>/dev/null || true)"
-	for candidate in \
-		"${device_access_config}" \
-		"${QFW_DEVICE_ACCESS_CFG:-}" \
-		"${source_root}/services/dev-config/config.yaml"; do
-		if [[ -n "${candidate}" && -r "${candidate}" ]]; then
-			printf "%s\n" "${candidate}"
-			return 0
-		fi
-	done
-	echo "ERROR: --device-access-config is required for IQM service startup" >&2
-	return 1
-}
-
 qfw_iqm_prepare_defaults() {
 	qfw_iqm_require_positive_int "--dirsvc-port" "${dirsvc_port}"
 	qfw_iqm_require_positive_int "--qpm-port" "${qpm_port}"
@@ -475,6 +408,8 @@ qfw_iqm_prepare_defaults() {
 	if [[ -z "${site_config}" ]]; then
 		site_config="${run_dir}/config/iqm-site.yaml"
 	fi
+	service_manifest="${QFW_SHARE_DIR%/}/config/services/site-services.yaml"
+	device_access_config="${QFW_PREFIX%/}/lib/qfw/services/dev-config/config.yaml"
 	dirsvc_pid_file="${run_dir}/state/dirsvc.pid"
 	dirsvc_ready_file="${run_dir}/state/dirsvc-ready.json"
 	qpm_pid_file="${run_dir}/state/${service_id}.pid"
@@ -506,8 +441,17 @@ directory:
     connect-timeout-seconds: ${startup_timeout}
 
 service:
-  runtime-config: ${service_runtime_config}
+  manifest: ${service_manifest}
   device-access-config: ${device_access_config}
+
+qpm:
+  completion-queues:
+    retention:
+      completion-ttl-seconds: 3600
+      terminal-reservation-retention-seconds: 3600
+      max-records-per-reservation: 1024
+      max-bytes-per-reservation: 67108864
+      purge-interval-seconds: 60
 EOF
 }
 
@@ -519,43 +463,13 @@ resolver:
 EOF
 }
 
-qfw_iqm_write_manifest_if_needed() {
-	local default_manifest
-	default_manifest="$(qfw_iqm_default_service_manifest 2>/dev/null || true)"
-	if [[ -z "${service_manifest}" &&
-	      "${service_id}" == "iqm-ornl-20q" &&
-	      "${target_device}" == "ornl-iqm-20q" &&
-	      -n "${default_manifest}" ]]; then
-		service_manifest="${default_manifest}"
-		return 0
-	fi
-	if [[ -n "${service_manifest}" && -r "${service_manifest}" ]]; then
-		return 0
-	fi
-	service_manifest="${run_dir}/config/iqm-services.yaml"
-	cat >"${service_manifest}" <<EOF
-services:
-  - name: ${service_id}
-    module: svc_iqm_qpm
-    load-modules: svc_iqm_qpm,api_launcher
-    agent-prefix: qpm_iqm
-    target: ${service_node}
-    assigned-hosts: ${service_node}
-    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
-    device-id: ${target_device}
-EOF
-}
-
 qfw_iqm_write_env_file() {
 	cat >"${site_env_file}" <<EOF
 export QFW_IQM_RUN_DIR=${run_dir}
 export QFW_SITE_CONFIG=${site_config}
 export QFW_RUNTIME_CONFIG=${site_runtime_config}
-export QFW_DEVICE_ACCESS_CFG=${device_access_config}
 export QFW_QPU_DEVICE_ID=${target_device}
 export QFW_IQM_SERVICE_ID=${service_id}
-export QFW_IQM_SERVICE_MANIFEST=${service_manifest}
-export QFW_SERVICE_RUNTIME_CONFIG=${service_runtime_config}
 export QFW_SITE_DIRSVC_ENDPOINTS=${service_node}:${dirsvc_port}
 EOF
 }
@@ -662,16 +576,15 @@ qfw_iqm_start_dirsvc() {
 qfw_iqm_start_qpm() {
 	echo "Starting long-running IQM QPM ${service_id} for ${target_device}"
 	(
+		export QFW_SERVICE_SCOPE="site"
 		export QFW_QPU_DEVICE_ID="${target_device}"
 		export QFW_SITE_DIRSVC_ENDPOINTS="${service_node}:${dirsvc_port}"
 		export QFW_SITE_DIRSVC_NAME="qfw-docker-iqm-dirsvc"
-		export QFW_QPM_ASSIGNED_HOSTS="${service_node}"
 		local command=(
 			qfw-service-start \
 				--background \
 				--run-dir "${run_dir}" \
 				--service-id "${service_id}" \
-				--service-manifest "${service_manifest}" \
 				--site-config "${site_config}" \
 				--operation-mode long-running \
 				--listen-port "${qpm_port}" \
@@ -772,7 +685,6 @@ qfw_iqm_preflight() {
 	QFW_SITE_CONFIG="${site_config}" \
 	QFW_RUNTIME_CONFIG="${site_runtime_config}" \
 	QFW_QPU_DEVICE_ID="${target_device}" \
-	QFW_DEVICE_ACCESS_CFG="${device_access_config}" \
 		qfw-setup \
 			--site-config "${site_config}" \
 			--runtime-config "${site_runtime_config}" \
@@ -781,7 +693,6 @@ qfw_iqm_preflight() {
 	local setup_rc=$?
 	if [[ "${setup_rc}" -eq 0 ]]; then
 		QFW_QPU_DEVICE_ID="${target_device}" \
-		QFW_DEVICE_ACCESS_CFG="${device_access_config}" \
 			qfw-srun \
 				--run-dir "${preflight_run_dir}" \
 				--nodes 1 \
@@ -874,11 +785,8 @@ qfw_iqm_prepare_defaults
 case "${action}" in
 	start|preflight)
 		qfw_iqm_require_runtime
-		service_runtime_config="$(qfw_iqm_default_service_runtime_config)"
-		device_access_config="$(qfw_iqm_default_device_access_config)"
 		qfw_iqm_write_site_config
 		qfw_iqm_write_site_runtime_config
-		qfw_iqm_write_manifest_if_needed
 		qfw_iqm_write_env_file
 		;;
 	stop|status)

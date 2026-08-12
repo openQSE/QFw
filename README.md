@@ -331,9 +331,10 @@ The default runtime configuration files are:
   startup.
 - `share/qfw/config/runtime/hybrid.yaml`: allocation-local startup with
   site fallback.
-- `share/qfw/config/services/qfw_services.yaml`: service manifest.
-- `share/qfw/config/services/service-runtime.yaml`: MPI/service runtime
-  policy.
+- `share/qfw/config/services/local-services.yaml`: allocation-owned simulator
+  services, placement, and provider launch settings.
+- `share/qfw/config/services/site-services.yaml`: operator-started hardware
+  QPM implementations.
 
 `qfw-activate` exports `QFW_PREFIX`, `QFW_SHARE_DIR`, `QFW_SITE_CONFIG`,
 `QFW_RUN_BASE_DIR`, `DEFW_PREFIX`, `DEFW_EXTERNAL_SERVICES_PATH`, and
@@ -476,11 +477,12 @@ flowchart LR
     QPM -. direct service path .-> Target
 ```
 
-The default service manifest,
-`share/qfw/config/services/qfw_services.yaml`, describes the configured
-QPM services. The NWQ-Sim and TNQVM services launch simulator runners
-through MPI and pass MPI the DVM URI. Other services may use a different
-path, such as calling hardware APIs directly.
+The local service manifest,
+`share/qfw/config/services/local-services.yaml`, describes allocation-owned
+simulators and their provider launch settings. The site service manifest,
+`share/qfw/config/services/site-services.yaml`, describes operator-started
+hardware QPM implementations. `site.yaml` selects the active site manifest,
+device-access configuration, and common QPM retention settings.
 
 QFw-specific services and APIs are loaded into DEFw through:
 

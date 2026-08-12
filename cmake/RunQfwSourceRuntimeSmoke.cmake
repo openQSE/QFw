@@ -90,8 +90,8 @@ execute_process(
 		"${QFW_PYTHON}" -m qfw_runtime.commands qfw-service-start
 			--dry-run
 			--service-id nwqsim
-			--service-manifest
-				"${QFW_SOURCE_DIR}/share/qfw/config/services/qfw_services.yaml"
+			--module svc_nwqsim_qpm
+			--load-modules svc_nwqsim_qpm,api_launcher
 			--run-dir "${qfw_run_base}/source-smoke"
 			--pid-file "${qfw_run_base}/source-smoke/state/nwqsim.pid"
 			--ready-file "${qfw_run_base}/source-smoke/state/nwqsim-ready.json"

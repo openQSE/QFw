@@ -115,10 +115,10 @@ qfw_example_default_service_manifest() {
 	if [[ -n "${QFW_EXAMPLE_SERVICE_MANIFEST:-}" ]]; then
 		printf "%s\n" "${QFW_EXAMPLE_SERVICE_MANIFEST}"
 	elif [[ -n "${QFW_SHARE_DIR:-}" &&
-	        -r "${QFW_SHARE_DIR%/}/config/services/qfw_services.yaml" ]]; then
-		printf "%s\n" "${QFW_SHARE_DIR%/}/config/services/qfw_services.yaml"
+	        -r "${QFW_SHARE_DIR%/}/config/services/local-services.yaml" ]]; then
+		printf "%s\n" "${QFW_SHARE_DIR%/}/config/services/local-services.yaml"
 	else
-		qfw_example_path "../setup/qfw_services.yaml"
+		qfw_example_path "../share/qfw/config/services/local-services.yaml"
 	fi
 }
 

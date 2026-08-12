@@ -242,9 +242,12 @@ are visible to all nodes.
   --base /workspace/qfw-container-base \
   --qfw-prefix /workspace/qfw-container-base/qfw-install-dev \
   --venv /workspace/qfw-container-base/qfw-shared-test-venv \
-  --device-access-config /workspace/qfw-container-base/qfw-install-dev/lib/qfw/services/dev-config/config.yaml \
   --chem-app-dir /workspace/qfw-container-base/chemistry_example_aim2
 ```
+
+The wrapper creates one `site.yaml` that selects the site service manifest,
+device-access configuration, and common QPM settings. Provider credentials
+remain service-side and are not passed as command-line options.
 
 By default the wrapper uses `1000` shots and estimator precision `0.031623`,
 which maps QFwEstimator submissions to `num_shots: 1000`. Override with

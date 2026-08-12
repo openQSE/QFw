@@ -184,6 +184,16 @@ install(DIRECTORY service-apis/
 		PATTERN "__pycache__" EXCLUDE)
 install(DIRECTORY share/qfw/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw")
+install(CODE
+	"file(REMOVE
+		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/qfw_services.yaml\"
+		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/service-runtime.yaml\"
+		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/device/device-access.yaml\")")
+install(CODE
+	"file(REMOVE_RECURSE
+		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/templates\"
+		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/device\"
+		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/services/config\")")
 install(FILES
 	share/qfw/service-manager/env.sh
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/service-manager")
@@ -222,10 +232,6 @@ install(PROGRAMS
 	examples/qfw_supermarq.sh
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/examples")
 
-install(FILES
-	services/config/container.yaml
-	services/config/frontier.yaml
-	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/config/services/templates")
 install(DIRECTORY "${QFW_EXTERNAL_STAGE_DIR}/"
 	DESTINATION "."
 	USE_SOURCE_PERMISSIONS)

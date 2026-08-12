@@ -452,7 +452,6 @@ cp "$QFW_SRC/services/dev-config/config.yaml" "$QFW_IQM_DEVICE_DIR/config.yaml"
 cp "$QFW_SRC/services/dev-config/qpu_users.json" "$QFW_IQM_DEVICE_DIR/qpu_users.json"
 chmod 600 "$QFW_IQM_DEVICE_DIR/qpu_users.json"
 
-export QFW_DEVICE_ACCESS_CFG="$QFW_IQM_DEVICE_DIR/config.yaml"
 export QFW_QPU_DEVICE_ID=ornl-iqm-20q
 ```
 
@@ -472,6 +471,19 @@ directory:
     name: qfw-docker-iqm-dirsvc
     endpoint: <docker-service-node-host>:8090
     connect-timeout-seconds: 300
+
+service:
+  manifest: $QFW_PREFIX/share/qfw/config/services/site-services.yaml
+  device-access-config: $QFW_IQM_DEVICE_DIR/config.yaml
+
+qpm:
+  completion-queues:
+    retention:
+      completion-ttl-seconds: 3600
+      terminal-reservation-retention-seconds: 3600
+      max-records-per-reservation: 1024
+      max-bytes-per-reservation: 67108864
+      purge-interval-seconds: 60
 EOF
 ```
 
@@ -491,8 +503,6 @@ qfw-dirsvc-start --site-config "$QFW_SITE_CONFIG" \
 
 qfw-service-start --service-id iqm-ornl-20q \
   --site-config "$QFW_SITE_CONFIG" \
-  --service-manifest "$QFW_SHARE_DIR/config/services/qfw_services.yaml" \
-  --device-access-config "$QFW_DEVICE_ACCESS_CFG" \
   --run-dir "$QFW_IQM_RUN_DIR" \
   --background --timeout 120
 ```
@@ -527,9 +537,9 @@ pattern used by the admission and scheduler fixture:
   long-running IQM QPM, runs telemetry preflight, records service logs, and
   leaves services running until explicitly stopped.
 - `examples/qfw_iqm_chem_smoke.sh` accepts `--target-device`,
-  `--device-access-config`, `--site-config`, `--qfw-src`, `--build-dir`,
-  `--install-prefix`, `--shared-venv`, `--chem-app-dir`, `--partition`,
-  `--nodes`, `--nodelist`, `--time`, `--shots`, and `--max-output-bytes`;
+  `--site-config`, `--qfw-src`, `--build-dir`, `--install-prefix`,
+  `--shared-venv`, `--chem-app-dir`, `--partition`, `--nodes`, `--nodelist`,
+  `--time`, `--shots`, and `--max-output-bytes`;
   captures stdout and stderr; embeds bounded output in a JSONL result record;
   and verifies that app-side teardown does not stop the Docker-hosted
   site-style services.

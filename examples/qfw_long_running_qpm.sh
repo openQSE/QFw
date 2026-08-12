@@ -258,22 +258,6 @@ qfw_lrq_het_group_for_node() {
 	done
 }
 
-qfw_lrq_service_runtime_config() {
-	local candidate
-	for candidate in \
-		"${QFW_SERVICE_RUNTIME_CONFIG:-}" \
-		"${QFW_SHARE_DIR:-}/config/services/service-runtime.yaml" \
-		"${QFW_SHARE_DIR:-}/config/services/templates/container.yaml" \
-		"${QFW_PREFIX:-}/services/config/container.yaml"; do
-		if [[ -n "${candidate}" && -r "${candidate}" ]]; then
-			printf "%s\n" "${candidate}"
-			return 0
-		fi
-	done
-	echo "ERROR: no service runtime config found" >&2
-	return 1
-}
-
 qfw_lrq_backend_module() {
 	local value="$1"
 	case "${value}" in
@@ -347,6 +331,19 @@ directory:
     name: qfw-site-dirsvc
     endpoint: ${service_node}:${dirsvc_port}
     connect-timeout-seconds: ${startup_timeout}
+
+service:
+  manifest: ${service_manifest}
+  device-access-config: ${QFW_PREFIX}/lib/qfw/services/dev-config/config.yaml
+
+qpm:
+  completion-queues:
+    retention:
+      completion-ttl-seconds: 3600
+      terminal-reservation-retention-seconds: 3600
+      max-records-per-reservation: 1024
+      max-bytes-per-reservation: 67108864
+      purge-interval-seconds: 60
 EOF
 	cat >"${runtime_config}" <<EOF
 resolver:
@@ -354,14 +351,20 @@ resolver:
     - site
 EOF
 	cat >"${service_manifest}" <<EOF
+mpi-launch:
+  launcher: mpirun
+  allow-run-as-root: auto
+  export-env:
+    - LD_LIBRARY_PATH
+
 services:
   - name: ${backend}
     module: ${backend_module}
     load-modules: ${backend_module},api_launcher
     agent-prefix: ${backend_agent_prefix}
-    target: ${service_node}
-    assigned-hosts: ${service_node}
-    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    provider-launch:
+      type: $([[ "${backend}" == "fake-iqm" ]] && printf internal || printf mpi)
+      wrapper: null
 EOF
 }
 
@@ -410,19 +413,17 @@ qfw_lrq_start_dvm() {
 qfw_lrq_start_qpm() {
 	echo "Starting long-running ${backend} QPM on ${service_node}"
 	(
+		export QFW_SERVICE_SCOPE="site"
 		export QFW_DVM_URI_PATH="${dvm_uri}"
 		export QFW_QPM_ASSIGNED_HOSTS="${service_node}"
 		export QFW_SITE_DIRSVC_ENDPOINTS="${service_node}:${dirsvc_port}"
 		export QFW_SITE_DIRSVC_NAME="qfw-site-dirsvc"
-		export QFW_SERVICE_RUNTIME_CONFIG="${service_runtime_config}"
 		qfw_lrq_on_node "${service_node}" \
 			qfw-service-start \
 				--background \
 				--run-dir "${run_dir}" \
 				--service-id "${backend}" \
-				--service-manifest "${service_manifest}" \
 				--site-config "${site_config}" \
-				--service-runtime-config "${service_runtime_config}" \
 				--operation-mode long-running \
 				--listen-port "${qpm_port}" \
 				--telnet-port "${qpm_telnet_port}" \
@@ -784,14 +785,12 @@ cleanup_started=0
 mkdir -p "${run_dir}/state" "${run_dir}/logs"
 : >"${summary_file}"
 
-service_runtime_config="$(qfw_lrq_service_runtime_config)"
 qfw_lrq_write_configs
 
 echo "Run directory: ${run_dir}"
 echo "Service node: ${service_node}"
 echo "Application nodes: ${app_nodes[*]}"
 echo "Site directory: ${service_node}:${dirsvc_port}"
-echo "Service runtime config: ${service_runtime_config}"
 echo "Backend module: ${backend_module}"
 if [[ -n "${target_device}" ]]; then
 	echo "Target device: ${target_device}"

@@ -310,7 +310,7 @@ implementation to evaluate the shim against.
   timing/metadata lookups) always goes to the library that holds the
   reservation; otherwise, when more than one library can serve the call, a
   configurable preference picks one. Registered as a peer in
-  `setup/qfw_services.yaml`
+  `share/qfw/config/services/site-services.yaml`
   (`shim-ornl-20q`), selectable instead of the native `iqm-ornl-20q`.
   - `descriptor.py` — the per-resource descriptor (Section 5) and
     `resolve_descriptor(device_id)`. Returns a built-in default today; intended

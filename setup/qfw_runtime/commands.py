@@ -237,10 +237,7 @@ def qfw_dirsvc_start(argv):
 def qfw_service_start(argv):
     parser = argparse.ArgumentParser(prog="qfw-service-start")
     parser.add_argument("--service-id", required=True)
-    parser.add_argument("--service-manifest")
     parser.add_argument("--site-config")
-    parser.add_argument("--service-runtime-config")
-    parser.add_argument("--device-access-config")
     parser.add_argument("--module")
     parser.add_argument("--load-modules")
     parser.add_argument("--operation-mode", default="long-running")
@@ -254,7 +251,6 @@ def qfw_service_start(argv):
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    service = _resolve_service(args)
     service_id = args.service_id
     run_dir = _service_run_dir(args.run_dir, service_id)
     log_dir = run_dir / "logs"
@@ -270,6 +266,7 @@ def qfw_service_start(argv):
     site_dir = qfw_config.site_directory(site) if site else {}
     site_service = qfw_config.site_service_config(
         site, site_config_path=site_config_path) if site else {}
+    service, service_config_path = _resolve_service(args, site_service)
     startup_timeout = (
         args.timeout if args.timeout is not None else
         int(site_dir.get("connect_timeout_seconds", 40))
@@ -299,11 +296,15 @@ def qfw_service_start(argv):
         site_dir.get("name", "qfw-site-dirsvc")
     )
     allocation = _allocation_context_from_env()
-    target = (
-        os.environ.get("QFW_LOCAL_SERVICE_TARGET") or
-        _resolve_node_policy(service.get("target"), allocation) or
-        ""
-    )
+    service_scope = os.environ.get("QFW_SERVICE_SCOPE", "site").strip().lower()
+    if service_scope == "allocation-local":
+        target = (
+            os.environ.get("QFW_LOCAL_SERVICE_TARGET") or
+            _resolve_node_policy(service.get("target"), allocation) or
+            ""
+        )
+    else:
+        target = str(service.get("host", ""))
     service_host = str(service.get(
         "bind-host", service.get("host", target or "127.0.0.1")))
     service_port = int(service.get("listen-port", args.listen_port))
@@ -334,6 +335,8 @@ def qfw_service_start(argv):
         "QFW_STARTUP_TIMEOUT": str(startup_timeout),
         "QFW_SERVICE_READY_FILE": str(service_ready_file),
     })
+    if service_config_path is not None:
+        env["QFW_SERVICE_CONFIG"] = str(service_config_path)
     if target:
         env["QFW_LOCAL_SERVICE_TARGET"] = target
     if assigned_hosts:
@@ -343,22 +346,15 @@ def qfw_service_start(argv):
             env[str(assigned_hosts_env)] = assigned_hosts
     if site_dir.get("endpoint"):
         env["QFW_SITE_DIRSVC_ENDPOINTS"] = site_dir["endpoint"]
-    service_runtime_config = (
-        args.service_runtime_config or
-        os.environ.get("QFW_SERVICE_RUNTIME_CONFIG") or
-        site_service.get("runtime_config")
-    )
-    if service_runtime_config:
-        env["QFW_SERVICE_RUNTIME_CONFIG"] = str(qfw_config.resolve_path(
-            service_runtime_config))
-    device_access_config = (
-        args.device_access_config or
-        os.environ.get("QFW_DEVICE_ACCESS_CFG") or
-        site_service.get("device_access_config")
-    )
+    device_access_config = site_service.get("device_access_config")
+    env.pop("QFW_DEVICE_ACCESS_CFG", None)
     if device_access_config:
         env["QFW_DEVICE_ACCESS_CFG"] = str(qfw_config.resolve_path(
             device_access_config))
+    elif service.get("device-id"):
+        raise SystemExit(
+            "device-backed services require "
+            "service.device-access-config in site.yaml")
     if service.get("device-id"):
         env["QFW_QPU_DEVICE_ID"] = str(service["device-id"])
     if service.get("direct-qpm-endpoint"):
@@ -464,7 +460,6 @@ def _start_job_local_services(state):
                 "--background",
                 "--run-dir", state["run_dir"],
                 "--service-id", service_id,
-                "--service-manifest", str(manifest_path),
                 "--site-config", state["site_config"],
                 "--timeout", str(local_timeout),
                 "--pid-file", str(pid_file),
@@ -1270,17 +1265,34 @@ def _as_list(value):
     return [value]
 
 
-def _resolve_service(args):
-    if args.service_manifest:
-        manifest_path = qfw_config.resolve_path(args.service_manifest)
-        services = qfw_config.load_service_manifest(manifest_path)
-        return qfw_config.service_by_name(services, args.service_id)
-    return {
-        "name": args.service_id,
-        "module": args.module,
-        "load-modules": args.load_modules or args.module,
-        "operation-mode": args.operation_mode,
-    }
+def _resolve_service(args, site_service):
+    if args.module:
+        manifest = os.environ.get("QFW_LOCAL_SERVICE_CONFIG", "").strip()
+        return ({
+            "name": args.service_id,
+            "module": args.module,
+            "load-modules": args.load_modules or args.module,
+            "operation-mode": args.operation_mode,
+        }, qfw_config.resolve_path(manifest) if manifest else None)
+
+    scope = os.environ.get("QFW_SERVICE_SCOPE", "site").strip().lower()
+    if scope == "allocation-local":
+        manifest = os.environ.get("QFW_LOCAL_SERVICE_CONFIG", "").strip()
+        if not manifest:
+            raise ValueError(
+                "allocation-local service startup requires prepared QFw "
+                "runtime state")
+    elif scope == "site":
+        manifest = site_service.get("manifest")
+        if not manifest:
+            raise ValueError(
+                "site service startup requires service.manifest in site.yaml")
+    else:
+        raise ValueError(f"unsupported QFw service scope: {scope}")
+
+    manifest_path = qfw_config.resolve_path(manifest)
+    services = qfw_config.load_service_manifest(manifest_path)
+    return qfw_config.service_by_name(services, args.service_id), manifest_path
 
 
 def _allocation_context_from_env(env=None):

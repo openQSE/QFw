@@ -256,15 +256,7 @@ def _setup(monkeypatch):
 	FakeAdmissionContext.expires_at_ns = 0
 	FakeAdmissionContext.estimate_response = None
 	for env_name in (
-			"QFW_SERVICE_RUNTIME_CONFIG",
-			"QFW_QPM_COMPLETION_TTL_SECONDS",
-			"QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS",
-			"QFW_QPM_COMPLETION_TERMINAL_RESERVATION_RETENTION_SECONDS",
-			"QFW_QPM_COMPLETION_MAX_RECORDS",
-			"QFW_QPM_COMPLETION_MAX_RECORDS_PER_RESERVATION",
-			"QFW_QPM_COMPLETION_MAX_BYTES",
-			"QFW_QPM_COMPLETION_MAX_BYTES_PER_RESERVATION",
-			"QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS"):
+			"QFW_SITE_CONFIG",):
 		monkeypatch.delenv(env_name, raising=False)
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
@@ -404,10 +396,10 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 	assert "alice-provider-api-key" not in str(metadata)
 
 
-def test_completion_retention_loads_service_runtime_config(
+def test_completion_retention_loads_site_config(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)
-	config = tmp_path / "service-runtime.yaml"
+	config = tmp_path / "site.yaml"
 	config.write_text(
 		"qpm:\n"
 		"  completion-queues:\n"
@@ -418,7 +410,7 @@ def test_completion_retention_loads_service_runtime_config(
 		"      max-bytes-per-reservation: 6\n"
 		"      purge-interval-seconds: 5\n",
 		encoding="utf-8")
-	monkeypatch.setenv("QFW_SERVICE_RUNTIME_CONFIG", str(config))
+	monkeypatch.setenv("QFW_SITE_CONFIG", str(config))
 
 	qpm = AdmissionQPM(target_id="admission-retention-config")
 	retention = qpm.controller.completion_retention
@@ -430,42 +422,10 @@ def test_completion_retention_loads_service_runtime_config(
 	assert retention["purge_interval_seconds"] == 5
 
 
-def test_completion_retention_accepts_documented_environment_overrides(
-		monkeypatch):
-	_setup(monkeypatch)
-	monkeypatch.setenv("QFW_QPM_COMPLETION_TTL_SECONDS", "19")
-	monkeypatch.setenv(
-		"QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS", "18")
-	monkeypatch.setenv("QFW_QPM_COMPLETION_MAX_RECORDS", "17")
-	monkeypatch.setenv("QFW_QPM_COMPLETION_MAX_BYTES", "16")
-	monkeypatch.setenv("QFW_QPM_COMPLETION_PURGE_INTERVAL_SECONDS", "15")
-
-	qpm = AdmissionQPM(target_id="admission-retention-env")
-	retention = qpm.controller.completion_retention
-
-	assert retention["completion_ttl_seconds"] == 19
-	assert retention["terminal_reservation_retention_seconds"] == 18
-	assert retention["max_records_per_reservation"] == 17
-	assert retention["max_bytes_per_reservation"] == 16
-	assert retention["purge_interval_seconds"] == 15
-
-
-def test_completion_retention_rejects_invalid_environment_overrides(
-		monkeypatch):
-	for env_name, value in (
-			("QFW_QPM_COMPLETION_TTL_SECONDS", "0"),
-			("QFW_QPM_COMPLETION_TERMINAL_RETENTION_SECONDS", "-1"),
-			("QFW_QPM_COMPLETION_MAX_RECORDS", "many")):
-		_setup(monkeypatch)
-		monkeypatch.setenv(env_name, value)
-		with pytest.raises(ValueError, match="completion retention"):
-			AdmissionQPM(target_id=f"admission-retention-invalid-{env_name}")
-
-
-def test_completion_retention_rejects_invalid_service_runtime_config(
+def test_completion_retention_rejects_invalid_site_config(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)
-	config = tmp_path / "service-runtime.yaml"
+	config = tmp_path / "site.yaml"
 	config.write_text(
 		"qpm:\n"
 		"  completion-queues:\n"
@@ -476,7 +436,7 @@ def test_completion_retention_rejects_invalid_service_runtime_config(
 		"      max-bytes-per-reservation: 2\n"
 		"      purge-interval-seconds: never\n",
 		encoding="utf-8")
-	monkeypatch.setenv("QFW_SERVICE_RUNTIME_CONFIG", str(config))
+	monkeypatch.setenv("QFW_SITE_CONFIG", str(config))
 
 	with pytest.raises(ValueError, match="purge-interval-seconds"):
 		AdmissionQPM(target_id="admission-retention-invalid-config")
