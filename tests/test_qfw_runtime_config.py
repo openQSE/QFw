@@ -1,9 +1,39 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
 
 from qfw_runtime import config as qfw_config
+
+
+def test_site_service_config_resolves_site_owned_paths(tmp_path):
+    site_path = tmp_path / "config" / "site.yaml"
+    site = {
+        "install": {
+            "qfw-prefix": str(tmp_path / "qfw"),
+            "defw-prefix": str(tmp_path / "defw"),
+        },
+        "service": {
+            "runtime-config": "service-runtime.yaml",
+            "device-access-config": "<prefix>/etc/device-access.yaml",
+        },
+    }
+
+    selected = qfw_config.site_service_config(
+        site, site_config_path=site_path)
+
+    assert selected == {
+        "runtime_config": site_path.parent / "service-runtime.yaml",
+        "device_access_config": tmp_path / "qfw" / "etc" /
+        "device-access.yaml",
+    }
+
+
+def test_site_service_config_requires_mapping():
+    with pytest.raises(ValueError, match="service must be a mapping"):
+        qfw_config.site_service_config({"service": "invalid"})
 
 
 def test_prepare_run_state_persists_resolver_environment_overrides(

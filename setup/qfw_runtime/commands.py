@@ -265,8 +265,11 @@ def qfw_service_start(argv):
     pid_file = Path(args.pid_file) if args.pid_file else run_dir / "pid"
     ready_file = (
         Path(args.ready_file) if args.ready_file else run_dir / "ready.json")
+    site_config_path = qfw_config.resolve_site_config(args.site_config)
     site = _load_optional_site(args.site_config)
     site_dir = qfw_config.site_directory(site) if site else {}
+    site_service = qfw_config.site_service_config(
+        site, site_config_path=site_config_path) if site else {}
     startup_timeout = (
         args.timeout if args.timeout is not None else
         int(site_dir.get("connect_timeout_seconds", 40))
@@ -340,19 +343,27 @@ def qfw_service_start(argv):
             env[str(assigned_hosts_env)] = assigned_hosts
     if site_dir.get("endpoint"):
         env["QFW_SITE_DIRSVC_ENDPOINTS"] = site_dir["endpoint"]
-    if args.service_runtime_config:
-        env["QFW_SERVICE_RUNTIME_CONFIG"] = str(Path(
-            args.service_runtime_config).expanduser().resolve())
-    if args.device_access_config:
-        env["QFW_DEVICE_ACCESS_CFG"] = str(Path(
-            args.device_access_config).expanduser().resolve())
+    service_runtime_config = (
+        args.service_runtime_config or
+        os.environ.get("QFW_SERVICE_RUNTIME_CONFIG") or
+        site_service.get("runtime_config")
+    )
+    if service_runtime_config:
+        env["QFW_SERVICE_RUNTIME_CONFIG"] = str(qfw_config.resolve_path(
+            service_runtime_config))
+    device_access_config = (
+        args.device_access_config or
+        os.environ.get("QFW_DEVICE_ACCESS_CFG") or
+        site_service.get("device_access_config")
+    )
+    if device_access_config:
+        env["QFW_DEVICE_ACCESS_CFG"] = str(qfw_config.resolve_path(
+            device_access_config))
     if service.get("device-id"):
         env["QFW_QPU_DEVICE_ID"] = str(service["device-id"])
     if service.get("direct-qpm-endpoint"):
         env["QFW_DIRECT_QPM_ENDPOINT"] = str(service["direct-qpm-endpoint"])
-    if args.site_config:
-        env["QFW_SITE_CONFIG"] = str(qfw_config.resolve_site_config(
-            args.site_config))
+    env["QFW_SITE_CONFIG"] = str(site_config_path)
     return _start_defw_owned_process(
         service_id,
         env,

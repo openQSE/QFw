@@ -31,6 +31,89 @@ def hetero_allocation():
     }
 
 
+def test_qfw_service_start_loads_service_paths_from_site(
+        tmp_path, monkeypatch):
+    runtime_path = tmp_path / "service-runtime.yaml"
+    device_path = tmp_path / "device-access.yaml"
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(
+        "\n".join([
+            "directory:",
+            "  site:",
+            "    endpoint: 127.0.0.1:8090",
+            "service:",
+            f"  runtime-config: {runtime_path}",
+            f"  device-access-config: {device_path}",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_start(name, env, *args):
+        captured["name"] = name
+        captured["env"] = dict(env)
+        return 0
+
+    monkeypatch.delenv("QFW_SERVICE_RUNTIME_CONFIG", raising=False)
+    monkeypatch.delenv("QFW_DEVICE_ACCESS_CFG", raising=False)
+    monkeypatch.setattr(commands, "_start_defw_owned_process", fake_start)
+
+    rc = commands.qfw_service_start([
+        "--service-id", "iqm",
+        "--module", "svc_iqm_qpm",
+        "--site-config", str(site_path),
+        "--run-dir", str(tmp_path / "run"),
+        "--operation-mode", "direct",
+    ])
+
+    assert rc == 0
+    assert captured["name"] == "iqm"
+    assert captured["env"]["QFW_SERVICE_RUNTIME_CONFIG"] == str(
+        runtime_path)
+    assert captured["env"]["QFW_DEVICE_ACCESS_CFG"] == str(device_path)
+    assert captured["env"]["QFW_SITE_CONFIG"] == str(site_path)
+
+
+def test_qfw_service_start_explicit_config_precedence(tmp_path, monkeypatch):
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(
+        "\n".join([
+            "service:",
+            "  runtime-config: site-runtime.yaml",
+            "  device-access-config: site-device.yaml",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_start(name, env, *args):
+        captured["env"] = dict(env)
+        return 0
+
+    monkeypatch.setenv(
+        "QFW_SERVICE_RUNTIME_CONFIG", str(tmp_path / "env-runtime.yaml"))
+    monkeypatch.setenv(
+        "QFW_DEVICE_ACCESS_CFG", str(tmp_path / "env-device.yaml"))
+    monkeypatch.setattr(commands, "_start_defw_owned_process", fake_start)
+
+    commands.qfw_service_start([
+        "--service-id", "iqm",
+        "--module", "svc_iqm_qpm",
+        "--site-config", str(site_path),
+        "--service-runtime-config", str(tmp_path / "cli-runtime.yaml"),
+        "--device-access-config", str(tmp_path / "cli-device.yaml"),
+        "--run-dir", str(tmp_path / "run"),
+        "--operation-mode", "direct",
+    ])
+
+    assert captured["env"]["QFW_SERVICE_RUNTIME_CONFIG"] == str(
+        tmp_path / "cli-runtime.yaml")
+    assert captured["env"]["QFW_DEVICE_ACCESS_CFG"] == str(
+        tmp_path / "cli-device.yaml")
+
+
 def test_local_service_launch_specs_allocate_distinct_default_ports():
     services = [
         {"name": "nwqsim", "module": "svc_nwqsim_qpm"},

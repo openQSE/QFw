@@ -210,6 +210,41 @@ def site_directory(site_config):
     }
 
 
+def site_service_config(site_config, site_config_path=None):
+    service = site_config.get("service") or {}
+    if not isinstance(service, dict):
+        raise ValueError("service must be a mapping")
+    prefixes = site_install_prefixes(site_config)
+    base = None
+    if site_config_path is not None:
+        base = Path(site_config_path).expanduser().resolve().parent
+
+    result = {}
+    for canonical, aliases in {
+            "runtime_config": (
+                "runtime-config",
+                "runtime_config",
+                "service-runtime-config",
+                "service_runtime_config",
+            ),
+            "device_access_config": (
+                "device-access-config",
+                "device_access_config",
+            ),
+    }.items():
+        value = next((service.get(name) for name in aliases
+                      if service.get(name) is not None), None)
+        if value is None:
+            continue
+        result[canonical] = resolve_path(
+            value,
+            base=base,
+            qfw_prefix_value=prefixes["qfw_prefix"],
+            defw_prefix_value=prefixes["defw_prefix"],
+        )
+    return result
+
+
 def resolver_scope_order(runtime_config):
     resolver = runtime_config.get("resolver") or {}
     scopes = resolver.get("scope-order") or ["site"]

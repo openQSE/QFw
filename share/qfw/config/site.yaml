@@ -7,3 +7,6 @@ directory:
     name: qfw-site-dirsvc
     endpoint: 127.0.0.1:8090
     connect-timeout-seconds: 300
+
+service:
+  runtime-config: <prefix>/share/qfw/config/services/service-runtime.yaml

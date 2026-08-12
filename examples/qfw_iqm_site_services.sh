@@ -504,6 +504,10 @@ directory:
     name: qfw-docker-iqm-dirsvc
     endpoint: ${service_node}:${dirsvc_port}
     connect-timeout-seconds: ${startup_timeout}
+
+service:
+  runtime-config: ${service_runtime_config}
+  device-access-config: ${device_access_config}
 EOF
 }
 
@@ -659,10 +663,8 @@ qfw_iqm_start_qpm() {
 	echo "Starting long-running IQM QPM ${service_id} for ${target_device}"
 	(
 		export QFW_QPU_DEVICE_ID="${target_device}"
-		export QFW_DEVICE_ACCESS_CFG="${device_access_config}"
 		export QFW_SITE_DIRSVC_ENDPOINTS="${service_node}:${dirsvc_port}"
 		export QFW_SITE_DIRSVC_NAME="qfw-docker-iqm-dirsvc"
-		export QFW_SERVICE_RUNTIME_CONFIG="${service_runtime_config}"
 		export QFW_QPM_ASSIGNED_HOSTS="${service_node}"
 		local command=(
 			qfw-service-start \
@@ -671,8 +673,6 @@ qfw_iqm_start_qpm() {
 				--service-id "${service_id}" \
 				--service-manifest "${service_manifest}" \
 				--site-config "${site_config}" \
-				--service-runtime-config "${service_runtime_config}" \
-				--device-access-config "${device_access_config}" \
 				--operation-mode long-running \
 				--listen-port "${qpm_port}" \
 				--telnet-port "${qpm_telnet_port}" \
