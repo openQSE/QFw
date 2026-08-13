@@ -3,6 +3,7 @@
 ## Table Of Contents
 
 - [Purpose](#purpose)
+- [Implementation Status](#implementation-status)
 - [Current Transport](#current-transport)
 - [Existing Groundwork](#existing-groundwork)
 - [Goals And Non-Goals](#goals-and-non-goals)
@@ -33,6 +34,35 @@ The design keeps the Python service and API layers unchanged. Libfabric is
 introduced inside the DEFw C layer behind a transport abstraction, so every
 QFw service (QPM, QRC, DEFw-resmgr, the QRMI/QDMI shim) inherits the new
 transport without modification.
+
+## Implementation Status
+
+Phases 0, 1 and 3 are implemented and validated in the QFw-SLURM-Cluster
+container over the `tcp` and `sm2` providers. Phase 2 (Slingshot bring-up)
+has not started.
+
+This document was written before any of it was built, and several decisions
+changed once the code met real providers. It has since been reconciled with
+what exists: the sections below describe the implemented behavior in the
+present tense, and phase 2 remains a plan. Where the original design was
+revised, the reason is recorded, because the reasons tend to be provider
+behavior that the next person will also run into.
+
+The changes worth knowing about, if you read an earlier revision of this
+document:
+
+- Tagged messaging was dropped. Messages carry a header that already
+  identifies the type, so `FI_MSG` with `fi_send`/`fi_recv` is used rather
+  than `FI_TAGGED` with `fi_tsend`.
+- Eager receive buffers are a fixed-size pool, not `FI_MULTI_RECV`, and a
+  message too large for one is **truncated**, not carried by a provider
+  rendezvous. Oversized messages are sent over TCP instead.
+- The RMA descriptor addresses a region by virtual address *or* by offset
+  depending on what the provider negotiates, and the memory-registration key
+  is not always the provider's to choose.
+- Attachments are detected transparently rather than passed as an explicit
+  argument, so no service code changes to benefit.
+- Memory-registration caching is not implemented.
 
 ## Current Transport
 
@@ -88,14 +118,14 @@ Several pieces of libfabric groundwork already exist in the tree:
 Goals:
 
 - Move the DEFw RPC data path onto libfabric so QFw can use Slingshot
-  (`cxi`), InfiniBand (`verbs;ofi_rxm`), intra-node shared memory (`shm`),
+  (`cxi`), InfiniBand (`verbs;ofi_rxm`), intra-node shared memory (`sm2`),
   and linked multi-provider configurations (`lnx`).
 - Keep TCP fully working as the default transport and as a runtime
   fallback when no usable OFI provider exists.
 - Keep the Python infrastructure (`defw_workers.py`, `defw_agent.py`,
   `defw_remote.py`) and all service code unchanged.
-- Provide an explicit RDMA path for large binary payloads that bypasses
-  YAML serialization.
+- Provide an RDMA path for large binary payloads that bypasses YAML
+  serialization, without service code having to ask for it.
 
 Non-goals (for this effort):
 
@@ -138,14 +168,20 @@ channel remains the bootstrap and control plane:
   to TCP for RPC traffic as well. Mixed clusters and development
   containers keep working.
 
-### Reliable datagram endpoints with tagged messaging
+### Reliable datagram endpoints
 
-One `FI_EP_RDM` endpoint per DEFw process, with peers addressed through
-an address vector, replaces per-peer sockets. Tagged send/receive
-(`fi_tsend`/`fi_trecv`) with the channel and message type encoded in the
-tag replaces the two-socket CTRL/RPC split for fabric traffic. This
-matches how the relevant providers (`cxi`, `verbs;ofi_rxm`, `shm`, `lnx`,
-`tcp`) are designed to be used and avoids connection-management state.
+One `FI_EP_RDM` endpoint per DEFw process, with peers addressed through an
+address vector, replaces per-peer sockets for fabric traffic. This matches
+how the relevant providers (`cxi`, `verbs;ofi_rxm`, `sm2`, `lnx`, `tcp`)
+are designed to be used and avoids connection-management state.
+
+This was originally specified with tagged messaging, the channel and
+message type encoded in the tag standing in for the two-socket CTRL/RPC
+split. Tagging was dropped during implementation: the framed header already
+carries the message type and the sender's uuid, so a tag would have been a
+second copy of information the receive path has to read anyway, and
+dispatching on the header lets the fabric and socket paths share one
+dispatch table.
 
 ## Transport Abstraction
 
@@ -187,12 +223,17 @@ typedef struct defw_transport_ops_s {
 
 Supporting changes:
 
-- `defw_agent_blk_t` gains a transport-opaque connection handle: a union
-  of the TCP fds (`iFileDesc`, `iRpcFd`) and the OFI peer address
-  (`fi_addr_t`) plus per-peer transport state.
-- The listener thread body becomes `while (!shutdown) transport->progress();`.
-  For TCP, `progress()` is the existing `select()` + accept + dispatch
-  logic. For OFI it is a completion-queue read + dispatch.
+- `defw_agent_blk_t` carries the peer's `fi_addr_t` (as a `uint64_t`, so
+  the header needs no libfabric include) alongside the existing TCP fds,
+  guarded by a `DEFW_AGENT_OFI_ADDR_VALID` state bit. A union was
+  considered and rejected: both are live at once, because the control
+  channel stays on TCP while RPC traffic uses the fabric.
+- The `progress()` op is declared but unused. The intent was to reduce the
+  listener thread to `while (!shutdown) transport->progress();` but the
+  TCP listener keeps its `select()` loop and OFI drains its receive CQ on
+  its own thread, since the two need to run concurrently in a process that
+  is on the fabric for RPC and on TCP for heartbeats. Unifying them is
+  possible but has no caller today.
 - Message dispatch (`msg_process_tbl`, `process_msg_py_request()`, and
   friends) is shared by both transports and does not change.
 - Header identity check: `defw_message_hdr_t` drops the `struct in_addr`
@@ -205,40 +246,54 @@ Supporting changes:
 ## Libfabric Mapping
 
 - Endpoint type: `FI_EP_RDM` (reliable, unconnected, datagram-oriented).
-  Capabilities requested in `fi_getinfo()` hints: `FI_MSG | FI_TAGGED`
-  initially, plus `FI_RMA | FI_READ | FI_REMOTE_READ` when the RDMA
-  attachment path lands (phase 3).
+  Capabilities requested in `fi_getinfo()` hints: `FI_MSG | FI_RMA |
+  FI_READ | FI_REMOTE_READ`, falling back to `FI_MSG` alone when the
+  provider offers no RMA. See
+  [Large Payloads And RDMA](#large-payloads-and-rdma) for what that costs.
 - Addressing: `FI_AV_MAP` address vector. Each peer's `fi_getname()` blob
   is exchanged over the TCP session handshake and inserted with
   `fi_av_insert()`; the resulting `fi_addr_t` is stored in the agent
   block.
-- Tag layout (64 bits): `[channel:8][msg_type:8][reserved:48]`. Receives
-  are posted with wildcard tags and demultiplexed on completion; the tag
-  replaces the "which socket did this arrive on" information.
-- Message framing: the (revised) `defw_message_hdr_t` is sent as a prefix
-  in the same buffer as the payload, one `fi_tsend()` per message. RDM
-  messages are atomic units, so the header/body split reads that the TCP
-  code needs do not apply.
-- Receive buffers: a pool of pre-registered eager buffers posted with
-  `FI_MULTI_RECV`. Messages larger than the eager size are handled by the
-  provider's internal rendezvous protocol (on `cxi` this is governed by
-  the `FI_CXI_RDZV_*` variables already set in
-  `environment/qfw_libfabric_env.sh`), so moderately large YAML RPCs work
-  before any explicit RMA support exists.
-- Progress: the transport requests `FI_PROGRESS_AUTO` data progress and
-  falls back to manual progress driven by the progress thread. The
-  progress thread blocks in `fi_cq_sread()` with a timeout equal to the
-  heartbeat interval so the existing HB bookkeeping in the listener loop
-  keeps its cadence.
-- Threading: `fi_tsend()` is called from Python worker threads while the
-  progress thread polls the CQ. The domain is opened with
-  `FI_THREAD_SAFE`. If profiling later shows lock contention, sends can
-  be funneled through the progress thread; that is an optimization, not a
-  correctness requirement.
-- Completion handling: send completions are counted (with an error path
-  that marks the peer dead, mirroring `EN_DEFW_RC_SOCKET_FAIL` handling
-  in `defw_send()` today); receive completions carry the buffer to the
-  shared dispatch table.
+- Message framing: `defw_message_hdr_t` is sent as a prefix in the same
+  buffer as the payload, one `fi_send()` per message. RDM messages are
+  atomic units, so the header/body split reads that the TCP code needs do
+  not apply.
+- Messaging is untagged. An earlier revision of this design demultiplexed
+  on a tag encoding `[channel:8][msg_type:8][reserved:48]`, but the framed
+  header already carries the message type and the sender's uuid, so the
+  receive path dispatches on the header exactly as the TCP path does and
+  shares its dispatch table. The tag helpers remain in `defw_transport.h`
+  for a future transport that wants them. Nothing uses them today.
+- Receive buffers: a fixed pool of pre-posted eager buffers (8 of 256 KiB),
+  each re-posted as soon as its message has been copied out.
+  `FI_MULTI_RECV` is not used.
+- **A message larger than one eager buffer is truncated**, and the sender
+  is not told: it shows up at the far end as a request that never arrives.
+  The transport therefore sends any framed message that would exceed the
+  eager buffer over TCP instead, which is a stream and has no such limit.
+  Large payloads normally travel as RMA attachments and never approach
+  this, so the TCP path is the fallback for payloads that stay inline.
+  Note that this is a property of DEFw's own buffers, not of the provider:
+  a provider-internal rendezvous protocol (`FI_CXI_RDZV_*` on `cxi`) does
+  not rescue a receive that was posted with too small a buffer.
+- Progress: the progress thread blocks in `fi_cq_sread()` with a one second
+  timeout, short enough to notice shutdown promptly. Data progress is left
+  to the provider rather than requested in the hints. The `tcp` provider
+  reports `FI_PROGRESS_AUTO`, which is why an RMA read completes without
+  the target being inside a libfabric call.
+- Threading: `fi_send()` is called from Python worker threads while the
+  progress thread polls the receive CQ. The domain is opened with
+  `FI_THREAD_SAFE`.
+- Completion handling: transmit and receive completions go to separate
+  CQs, so a blocking send does not consume a completion the progress
+  thread is waiting for. A send issues one operation and waits for its own
+  completion under a lock, which keeps exactly one completion outstanding
+  on the transmit CQ. The RMA read path takes the same lock for the same
+  reason. Receive completions carry the buffer to the shared dispatch
+  table.
+- Completion errors are reported with both libfabric's own error code and
+  the provider's. The provider code alone is zero for anything the library
+  detects itself, which renders a truncated receive as "Success".
 
 A side benefit: the current `select()` loop is limited by `FD_SETSIZE`
 (1024 descriptors, two per peer). The OFI path has no equivalent
@@ -258,9 +313,9 @@ both OFI-capable:
    block, and returns its own session info (existing behavior) including
    its OFI address.
 3. A inserts B's address into its AV. Both sides now mark the peer
-   `DEFW_AGENT_OFI_CONNECTED`.
+   `DEFW_AGENT_OFI_ADDR_VALID`.
 4. RPC traffic (`EN_MSG_TYPE_PY_REQUEST` / `PY_RESPONSE` / `PY_EVENT`)
-   for that peer is sent with `fi_tsend()` from then on. Heartbeats and
+   for that peer is sent with `fi_send()` from then on. Heartbeats and
    session messages stay on the TCP CTRL socket.
 5. If either side advertised an empty OFI address, the pair keeps using
    the TCP RPC channel (today's second socket). This is the fallback and
@@ -268,9 +323,12 @@ both OFI-capable:
 
 Notes:
 
-- The separate TCP RPC socket is only established when the pair operates
-  in fallback mode, so the fabric path reduces socket count per peer from
-  two to one.
+- The separate TCP RPC socket is established for every peer, including
+  peers reached over the fabric. The original intent was to open it only
+  in fallback mode and so halve the sockets per peer, and that saving is
+  still available, but the socket is now load-bearing: it is what carries
+  a message too large for the eager receive buffer. Removing it would
+  need the oversized-message path handled some other way first.
 - DEFw-resmgr needs no changes: it already brokers agent discovery, and
   the OFI address rides inside the existing per-pair handshake, not
   through the resmgr. This is deliberately simpler than the
@@ -282,52 +340,132 @@ Notes:
 
 Two separate problems have to be solved for very large data:
 
-1. Serialization. Today a large result is YAML-encoded in Python, copied
+1. Serialization. A large result used to be YAML-encoded in Python, copied
    into a C string, sent, and parsed back into Python objects. RDMA
-   underneath that encoding would gain little. The design therefore adds
-   a binary attachment mechanism to the RPC layer: an RPC can carry, in
-   addition to its YAML body, a list of binary buffers. On the Python
-   side any object supporting the buffer protocol (NumPy arrays, bytes,
-   bytearray) can be attached; the receiving side gets them back as
-   buffers alongside the decoded YAML message.
-2. Transfer. For the OFI transport, attachments use an explicit
-   RMA-read rendezvous:
-   - The sender registers the buffer (`fi_mr_reg`) and places a
-     descriptor `{rkey, base address, length}` for each attachment into
-     the message header extension.
-   - The receiver allocates and registers a destination buffer, pulls
-     the data with `fi_read()` (RDMA GET), and sends a short completion
-     ack (a new message type) so the sender can deregister and release
-     the buffer.
-   - A memory-registration cache keeps repeated registration of the same
-     buffers cheap; `FI_MR_CACHE_*` tuning already exists in
-     `environment/qfw_libfabric_env.sh`.
+   underneath that encoding would gain little. Large buffer-protocol
+   objects (NumPy arrays, and `bytes`/`bytearray` above a threshold) are
+   therefore lifted out of the message before it is serialized, leaving a
+   marker recording enough to reconstruct the object, and restored on the
+   receiving side.
 
-On the TCP fallback path the same attachment API simply streams the
-buffers over the socket after the YAML body, preserving one API for both
-transports.
+   This is transparent rather than an opt-in argument. A service that
+   returns a NumPy array keeps returning a NumPy array and needs no
+   change. The framework notices the payload. The alternative considered
+   was an explicit attachments argument on `send_req()`, which was
+   rejected because it makes every bulk-data call site opt in by hand for
+   no gain in expressiveness.
 
-The attachment API is additive: `send_req()` and the worker plumbing gain
-an optional attachments argument, and existing call sites are untouched.
-Service APIs that move bulk data (for example statevector retrieval in
-the QPM/QRC path) can adopt attachments incrementally.
+2. Transfer. Each payload travels one of two ways, chosen per payload:
+
+   - **Inline.** The payload is base64-encoded into the YAML body. This
+     works on every transport and is the right choice below the size where
+     an extra round trip costs more than the encoding.
+   - **RMA read.** The sender registers the buffer (`fi_mr_reg`) and puts a
+     descriptor in the message in place of the data. The receiver pulls it
+     with `fi_read()` and sends a short acknowledgement (a new message
+     type) so the sender can deregister.
+
+   A message can carry both, so a small array riding along with a large one
+   does not pay for a registration and a round trip.
+
+### What the descriptor has to absorb
+
+The descriptor is `{handle, key, addr, len}`. `key`, `addr` and `len` are
+what the peer needs. `handle` is the sender's own registration id, echoed
+back in the acknowledgement so it knows what to release.
+
+`addr` is **not** simply the buffer's base address, and this is the part
+most likely to catch someone out. What a peer must pass to `fi_read()`
+depends on the memory-registration mode the provider negotiates:
+
+- With `FI_MR_VIRT_ADDR`, the region is named by the sender's virtual
+  address.
+- Without it, the region is named by an **offset** from the start of the
+  region, so a whole-buffer read passes zero.
+
+The container's `tcp` provider negotiates `mr_mode = 0` and so wants
+offsets. Naming the region by its virtual address fails the read with
+`ENOENT`. The registering side resolves this into `addr` at registration
+time, so the reading peer needs no knowledge of the provider at all.
+
+Keys have a matching subtlety. With `FI_MR_PROV_KEY` the provider invents
+the key and ignores the requested one. Without it the key is ours to choose
+and must be unique among live registrations. Passing a fresh key from a
+counter and then reading back `fi_mr_key()` is correct either way, and a
+collision is not silent (`fi_mr_reg` fails with `FI_ENOKEY`).
+
+### Providers that cannot do this
+
+Two cases fall back to inline rather than failing:
+
+- The provider offers no `FI_RMA` at all. The `sm2` shared-memory provider
+  is one. `fi_getinfo()` returns `ENODATA` for the RMA hints, so the
+  endpoint is opened message-only.
+- The provider requires `FI_MR_LOCAL`, meaning the *receiver's* destination
+  buffer must also be registered and passed as a descriptor. DEFw does not
+  do that yet, so it disables RMA and logs why rather than issuing reads
+  the provider will reject. This is the likely situation on `cxi`, and is
+  where phase 2 will have to pick it up.
+
+Because the fallback is inline, and inline payloads can exceed the eager
+receive buffer, a large payload on a non-RMA provider ends up on the TCP
+path described in [Libfabric Mapping](#libfabric-mapping). That is slower
+but correct, and it is the reason the per-peer TCP RPC socket still exists.
+
+### Not implemented
+
+A memory-registration cache. `fi_mr_reg` is inexpensive on the `tcp`
+provider, so caching would pay off only on a NIC provider, where it should
+be decided with phase 2 measurements in hand rather than guessed at now.
+`FI_MR_CACHE_*` tuning already exists in
+`environment/qfw_libfabric_env.sh` for whatever libfabric itself caches.
+
+Zero-copy publishing. A payload is currently copied twice, once into
+`bytes` and once into the registered region. Registering the Python
+object's memory in place needs a buffer-protocol typemap and a way to keep
+the object alive until the acknowledgement arrives.
 
 ## Configuration
 
 - Install configuration (`setup/config/*.yaml`): the existing
   `libfabric-install` key locates the libfabric installation.
-- Service/DEFw runtime configuration gains:
-  - `transport: tcp | ofi` (default `tcp`). With `ofi`, agents attempt
-    OFI and fall back to TCP per peer as described above.
-  - `ofi-provider:` optional provider constraint (`tcp`, `shm`, `cxi`,
-    `lnx`, `verbs`); empty means take `fi_getinfo()`'s best match.
-- Environment overrides, following the existing pattern of `DEFW_*`
-  variables: `DEFW_TRANSPORT`, `DEFW_OFI_PROVIDER`. The standard
-  libfabric `FI_PROVIDER` filter also works, since provider selection
-  flows through `fi_getinfo()`.
-- Slingshot tuning stays where it is today, in
-  `environment/qfw_libfabric_env.sh` (`FI_LNX_PROV_LINKS`,
-  `FI_CXI_RDZV_*`, and related variables).
+Configuration is by environment variable, following the existing `DEFW_*`
+pattern. The `transport:` and `ofi-provider:` service-YAML keys originally
+proposed here were deferred: the DEFw YAML files interpolate the
+environment anyway, so the variable has to reach the agent regardless, and
+adding a second place to say the same thing earns nothing until there is a
+reason to vary it per service.
+
+- `DEFW_TRANSPORT` - `tcp` (default) or `ofi`. With `ofi`, agents attempt
+  OFI and fall back to TCP per peer as described above.
+- `DEFW_OFI_PROVIDER` - optional provider constraint (`tcp`, `sm2`, `cxi`,
+  `lnx`, `verbs`); empty means take `fi_getinfo()`'s best match. The
+  standard libfabric `FI_PROVIDER` filter also works, since provider
+  selection flows through `fi_getinfo()`.
+- `DEFW_RMA_ATTACHMENTS` - set to `0` to keep every payload inline
+  regardless of size. RMA is used by default wherever it is available, so
+  nothing has to be switched on.
+- `DEFW_RMA_THRESHOLD` - payload size in bytes at which RMA takes over from
+  inline. The default is 64 KiB. Setting it to `0` sends every attachment by RMA,
+  which is how the RMA path is exercised with small payloads.
+- `DEFW_OFI_RMA_SELFTEST` - set to `1` to run a loopback `fi_read` against
+  the process's own endpoint at startup. Diagnostic, and off by default.
+
+The 64 KiB default is a judgement, not a measurement. Base64 inflates a
+payload by a third and the eager receive buffer is 256 KiB, so an inline
+payload much above 192 KiB leaves the eager path regardless. 64 KiB sits
+well below that and well above the small arrays that ride along with
+ordinary RPCs. It is worth revisiting with numbers when a bulk-data path
+adopts attachments.
+
+Because RMA is on by default, no new variable has to be threaded through
+the QFw launcher's curated environment (`get_external_defw_env()` in
+`setup/qfw_setup.py`) to reach the resmgr and service agents.
+`DEFW_TRANSPORT` and `DEFW_OFI_PROVIDER` do, and are already listed there.
+
+Slingshot tuning stays where it is today, in
+`environment/qfw_libfabric_env.sh` (`FI_LNX_PROV_LINKS`, `FI_CXI_RDZV_*`,
+and related variables).
 
 ## Build Integration
 
@@ -339,52 +477,79 @@ the QPM/QRC path) can adopt attachments incrementally.
 - A TCP-only build and an OFI-enabled build are wire-compatible with
   each other (the OFI-enabled build simply advertises an OFI address
   when it has one, and a TCP-only peer advertises none).
-- The stale `swigify` externals entry in `defw_build.yaml` (absolute
-  paths into a private libfabric tree) is removed.
-- No SWIG changes: the Python/C interface is unchanged.
+- The stale `swigify` externals entry in `defw_build.yaml` (absolute paths
+  into a private libfabric tree) is still there and still wants removing.
+- SWIG changes were needed after all, for the RMA attachment path only.
+  Phases 0 to 2 leave the Python/C interface alone, but moving a binary
+  payload across it needs typemaps: the generic `char*` mapping produces a
+  NUL-terminated string and truncates binary data at the first zero byte.
+  `uint64_t` is also avoided in the wrapped prototypes, because SWIG wraps
+  it as an opaque pointer object rather than a Python integer.
 
 ## Phased Implementation Plan
 
 Each phase is independently mergeable, and phases 1-3 are opt-in behind
-the `transport` configuration knob.
+`DEFW_TRANSPORT`. Phase 3 was taken before phase 2, so that the RMA path
+was in hand before Slingshot bring-up rather than after it.
 
-- Phase 0 - transport abstraction (no behavior change):
+- Phase 0 - transport abstraction (no behavior change). **Done.**
   - Introduce `defw_transport.h` and move the existing TCP code behind
     it (`defw_transport_tcp.c`).
   - Replace the header IP identity check with the UUID identity check;
     bump `DEFW_VERSION_NUMBER`.
   - Exit criteria: existing smoke tests and examples pass unchanged.
-- Phase 1 - OFI transport, commodity providers:
-  - `defw_transport_ofi.c`: RDM endpoint, AV, tagged send/receive,
-    multi-recv eager buffers, CQ progress thread, per-peer TCP fallback.
+- Phase 1 - OFI transport, commodity providers. **Done.**
+  - `defw_transport_ofi.c`: RDM endpoint, AV, send/receive, eager receive
+    buffer pool, CQ progress thread, per-peer TCP fallback.
   - Session-info extension carrying the OFI endpoint address.
   - Exit criteria: full QFw workflow in the QFw-SLURM-Cluster container
-    with `FI_PROVIDER=tcp` and `FI_PROVIDER=shm` (same-node).
-- Phase 2 - HPC provider bring-up:
+    over the `tcp` and `sm2` providers. Note `sm2`, not `shm`: see
+    [Risks And Open Questions](#risks-and-open-questions).
+- Phase 2 - HPC provider bring-up. **Not started.**
   - Validate `cxi` and `lnx` (shm+cxi) on a Slingshot system using the
     existing environment tuning; validate multi-NIC via
     `FI_LNX_PROV_LINKS`.
+  - Expect `cxi` to require `FI_MR_LOCAL`, which currently disables the
+    RMA attachment path. Registering the read's destination buffer and
+    passing `fi_mr_desc()` is the work that unblocks it.
   - Measure RPC latency/throughput against the TCP baseline.
-  - Exit criteria: QFw examples run on Slingshot with `transport: ofi`.
-- Phase 3 - large payloads:
-  - Binary attachment API through the Python worker layer.
-  - Explicit RMA-read rendezvous for attachments plus MR caching on the
-    OFI path; socket streaming on the TCP path.
-  - Adopt attachments in one bulk-data service path (statevector
-    retrieval) as the proving case.
+  - Exit criteria: QFw examples run on Slingshot with `DEFW_TRANSPORT=ofi`.
+- Phase 3 - large payloads. **Transfer path done. Adoption and benchmark
+  outstanding.**
+  - Transparent attachment detection in the Python worker layer.
+  - Explicit RMA-read rendezvous on the OFI path, inline base64 otherwise,
+    chosen per payload by size.
+  - Memory-registration caching: deferred, see
+    [Large Payloads And RDMA](#large-payloads-and-rdma).
+  - Still to do: adopt attachments in one bulk-data service path
+    (statevector retrieval) as the proving case.
   - Exit criteria: large-payload transfer benchmark showing RDMA-path
     scaling on Slingshot, and identical results through both transports.
+    The second half holds in the container today. The first is gated on
+    phase 2 hardware, so phase 3 cannot formally close before phase 2
+    even though the transfer path is complete.
 
 ## Testing Strategy
 
-- Unit/loopback: a C-level transport test that sends framed messages
-  between two endpoints in one process (both transports), exercising
-  eager, provider-rendezvous, and (phase 3) RMA paths.
+- Loopback: `DEFW_OFI_RMA_SELFTEST=1` registers a buffer and reads it back
+  out of the process's own endpoint through the real registration and read
+  paths, so a provider whose addressing or registration rules were misread
+  fails at startup with a clear message instead of corrupting a payload
+  later. The broader C-level two-endpoint test originally planned here does
+  not exist. The container integration below covers the same ground with
+  real agents.
 - Container integration: QFw-SLURM-Cluster already builds libfabric with
-  the commodity providers, so the OFI transport is exercised end-to-end
-  in CI-like conditions with `FI_PROVIDER=tcp`/`shm` before touching real
-  hardware. The existing shim smoke test (`qfw_shim_smoke.sh`) runs
-  under both `transport: tcp` and `transport: ofi`.
+  the commodity providers, so the OFI transport is exercised end-to-end in
+  CI-like conditions over `tcp` and `sm2` before touching real hardware.
+- Attachment routing: the choice between inline and RMA is decided in pure
+  Python, so it is covered by a standalone test against a stubbed C layer
+  that needs neither libfabric nor a peer. The transfer itself is covered
+  in the container by round-tripping an array through a real two-process
+  RPC, with the receiving side reporting a checksum of what arrived so a
+  failure in the request direction is distinguishable from one in the
+  response direction. The matrix worth keeping: large payload with and
+  without RMA, small payload, both in one message, a provider with no RMA,
+  and the threshold forced to zero.
 - Fallback matrix: OFI-enabled client against TCP-only service and vice
   versa; provider-unavailable startup; peer death detection under OFI
   (heartbeat path).
@@ -402,13 +567,29 @@ the `transport` configuration knob.
   domain, can exhaust hardware resources. The `lnx` shm+cxi
   configuration mitigates intra-node traffic; needs validation in
   phase 2.
-- Send-side buffer lifetime: `fi_tsend()` completion is asynchronous, so
-  the transport must hold the message buffer until the send completion
-  (today's blocking `write()` loop has no such window). Bounce buffers
-  for small messages, completion-tracked buffers for large ones.
-- Container provider set: confirm the image's libfabric build enables
-  `shm` (built with default providers, so it should; verify with
-  `fi_info` in the container).
+- Send-side buffer lifetime: resolved by blocking. A send waits for its own
+  completion before returning, so the message buffer is safe to free and
+  there is no window to manage. That costs concurrency, which the separate
+  transmit CQ and the send lock make safe rather than fast. Funnelling
+  sends through the progress thread remains the optimization if profiling
+  ever asks for it.
+- Operation context lifetime: a context passed to `fi_send()` or
+  `fi_read()` must stay valid until the operation completes, which a
+  *timeout* does not guarantee. The operation is still outstanding and
+  the provider may write the completion afterwards. Contexts therefore live
+  in the transport state, not on the caller's stack. The destination buffer
+  of a timed-out read has the same exposure and is not yet handled.
+  Cancelling the operation would be the correct fix.
+- Container provider set: resolved, and the answer was a name. The image's
+  libfabric 2.3.1 does build `shm`, but the legacy `shm` provider
+  advertises nothing on this version. `fi_info -p shm` returns `ENODATA`
+  even with no other hints. The gen-2 shared-memory provider is **`sm2`**,
+  which accepts the RDM and `FI_MSG` hints. Use `DEFW_OFI_PROVIDER=sm2`.
+  `sm2` offers no `FI_RMA`, so it exercises the non-RMA fallback.
+- Reading `fi_info` output: provider records go to **stderr** while the
+  environment-variable help goes to stdout, so redirect both. `-c` takes a
+  single capability. A comma-separated list is an argument error rather
+  than a no-match, which reads like a negative result but is not one.
 - Header versioning: the UUID identity change breaks wire compatibility
   with existing builds once, in phase 0. Acceptable for a framework
   deployed as a unit; called out so it lands in a coordinated release.
