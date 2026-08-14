@@ -304,8 +304,10 @@ job. Applications receive execution context and select the workload they run.
 | User or launcher | Runtime profile and Python environment | Select discovery order and job-owned services |
 | Application | Backend requirements and workload inputs | Select a registered service and submit reserved work |
 
-Five configuration file types participate in a complete deployment. The
-runtime profile is separate from the four site and service files.
+Across the supported local, hybrid, and site deployments, QFw uses five
+configuration file types. The runtime profile is separate from the four site
+and service files. A particular deployment does not necessarily read all five;
+for example, a site-only job does not use the local service manifest.
 
 <details>
 <summary><strong><code>$QFW_SHARE_DIR/config/site.yaml</code></strong></summary>
@@ -337,12 +339,12 @@ qpm:
 
 | Owner | Used by and when | Purpose |
 | --- | --- | --- |
-| Site administrator | `qfw-setup` reads it while preparing runtime state. `qfw-service-start` uses its service-side file selections when starting a QPM. | Select the installation, site directory, and service-side files. |
+| Site administrator | `qfw-setup` reads it while preparing runtime state. `qfw-service-start` resolves its service-side file selections and passes the selected site path to the QPM. | Select the installation, site directory, service-side files, and common QPM settings. |
 
 </details>
 
 <details>
-<summary><strong>Runtime configuration files</strong></summary>
+<summary><strong><code>Runtime configuration files</code></strong></summary>
 
 `$QFW_SHARE_DIR/config/runtime.yaml`
 
@@ -392,6 +394,10 @@ local-services:
 | Owner | Used by and when | Purpose |
 | --- | --- | --- |
 | User or launcher | `qfw-setup` reads one runtime file for each job. | Select directory discovery order and whether the allocation starts PRTE, a directory service, and QPM services. |
+
+When `start-prte` is absent, QFw uses the value of `start-qpm` as its default.
+This allows a small local runtime file to request QPM startup without repeating
+the PRTE setting.
 
 </details>
 
@@ -452,6 +458,12 @@ services:
 | --- | --- | --- |
 | QFw package | `qfw-setup` reads it when planning allocation-owned services. `qfw-service-start` reads the selected entry when launching a QPM. | Define local simulator services, allocation placement, and provider launch settings. |
 
+The current launcher consumes the service name, module, loaded modules,
+placement, assigned-host fields, ports, and device ID. Simulator launch code
+also consumes `provider-launch.wrapper`. The packaged `agent-prefix` and
+`provider-launch.type` fields are reserved metadata and do not currently alter
+launch behavior.
+
 </details>
 
 <details>
@@ -503,8 +515,10 @@ qpus:
 ### Site Configuration
 
 The site administrator owns the shared QFw installation, site directory, and
-long-running QPM services. Four site and service files describe a production
-service deployment.
+long-running QPM services. A site-only service plane directly uses three
+site-owned files: `site.yaml`, the site service manifest, and the device-access
+file. Jobs additionally select a runtime file. The local service manifest is
+used only when a local or hybrid runtime starts allocation-owned services.
 
 #### Site File
 
@@ -584,8 +598,9 @@ device-access configuration.
 
 #### Common QPM Configuration
 
-The `qpm` section of `site.yaml` defines startup behavior shared by simulator
-and hardware QPMs:
+The `qpm` section of `site.yaml` defines runtime behavior shared by simulator
+and hardware QPMs. Each QPM reads this section from the path in
+`QFW_SITE_CONFIG` during initialization:
 
 ```yaml
 qpm:
@@ -682,14 +697,15 @@ qfw-service-start \
   --site-config /etc/openqse/qfw/site.yaml
 ```
 
-`qfw-service-start` resolves the site service manifest, device-access file, and
-common QPM settings only through `site.yaml`. It does not accept separate
-configuration-path overrides for those resources.
+`qfw-service-start` resolves the site service manifest and device-access path
+through `site.yaml`. It does not accept separate configuration-path overrides
+for those resources. The launched QPM receives `QFW_SITE_CONFIG` and reads the
+common QPM settings from that site file itself.
 
-The service launcher reads the protected files and passes their paths only to
-the QPM process. Applications use the client-readable directory information
-from `site.yaml`; they do not receive the device-access file or its credential
-contents.
+The service launcher passes the protected device-access path only to the QPM
+process. The QPM reads that file and its referenced credential database.
+Applications use the client-readable directory information from `site.yaml`;
+they do not receive the device-access path or its credential contents.
 
 ### User Configuration
 
@@ -771,6 +787,16 @@ Runtime selection uses this order:
 
 Command-line selections take precedence over environment variables.
 
+The runtime parser also accepts the `direct` resolver scope for low-level
+integration paths. `QFW_QPM_RESOLVER_SCOPE_ORDER` can override the configured
+scope order, and `QFW_SITE_DIRSVC_ENDPOINTS` can override the site directory
+endpoint list. Normal local and production runs should use the packaged
+profiles and site configuration instead of these integration overrides.
+
+Configuration validation is section-specific rather than schema-wide. Invalid
+values used by QFw are rejected, but unknown keys are generally ignored. Use
+the canonical key spelling shown in the installed templates.
+
 For a normal local run, the user selects the packaged local profile:
 
 ```bash
@@ -789,8 +815,10 @@ source /opt/openqse/qfw/current/bin/qfw-activate \
 qfw-setup
 ```
 
-Users do not configure provider API keys, directory internals, QPM listener
-ports, or long-running service launch policy.
+Normal users do not configure provider API keys, directory internals, or
+long-running service launch policy. Packaged profiles also provide listener
+port defaults. Integrators who create custom runtime files or service manifests
+can set local service port bases and per-service listener ports.
 
 ### Application Configuration
 
