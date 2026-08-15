@@ -3,4 +3,8 @@ qpus:
     provider: iqm
     provider-device-id: default
     url: https://qccsw.ccs.ornl.gov/
-    credential-db: qfw-shim-no-credentials.json
+    credential-provider: shim-no-secret
+
+credential-providers:
+  shim-no-secret:
+    type: no-secret

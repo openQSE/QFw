@@ -13,6 +13,8 @@ import importlib.util
 import pathlib
 import sys
 
+import yaml
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SERVICES = str(REPO_ROOT / "services")
@@ -56,6 +58,18 @@ def _load_descriptor():
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
+
+
+def test_shim_example_uses_no_secret_credential_provider():
+	config_path = REPO_ROOT / "examples" / "qfw_shim_device_access.yaml"
+	config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+	device = config["qpus"]["ornl-iqm-20q"]
+
+	assert device["credential-provider"] == "shim-no-secret"
+	assert "credential-db" not in device
+	assert config["credential-providers"]["shim-no-secret"] == {
+		"type": "no-secret",
+	}
 
 
 # --- select_qpu(): the fix site --------------------------------------------
