@@ -420,6 +420,7 @@ def _start_job_local_services(state):
             "--name", local["name"],
             "--host", local["host"],
             "--listen-port", str(local["port"]),
+            "--telnet-port", str(local.get("telnet_port", 8091)),
             "--timeout", str(local_timeout),
             "--pid-file", str(pid_file),
             "--ready-file", str(ready_file),

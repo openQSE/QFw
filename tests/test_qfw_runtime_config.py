@@ -146,6 +146,36 @@ def test_prepare_run_state_persists_local_dvm_uri(tmp_path):
 
     assert state["environment"]["QFW_DVM_URI_PATH"] == str(
         tmp_path / "run" / "prte_dvm" / "dvm-uri")
+    assert state["local_dirsvc"]["telnet_port"] == 0
+
+
+def test_local_directory_rejects_duplicate_listen_and_telnet_ports():
+    local = {
+        "dirsvc": {
+            "port": 8100,
+            "telnet-port": 8100,
+        },
+    }
+
+    with pytest.raises(ValueError, match="listen and telnet ports must differ"):
+        qfw_config.allocate_local_telnet_port(local, "127.0.0.1", 8100)
+
+
+def test_local_directory_allocates_distinct_telnet_port(monkeypatch):
+    ports = iter([8100, 8101])
+    monkeypatch.setattr(
+        qfw_config,
+        "_free_tcp_port",
+        lambda _host: next(ports),
+    )
+
+    port = qfw_config.allocate_local_telnet_port(
+        {"dirsvc": {"telnet-port": "auto"}},
+        "127.0.0.1",
+        8100,
+    )
+
+    assert port == 8101
 
 
 def test_prepare_run_state_persists_user_python_environment(

@@ -382,6 +382,7 @@ def test_start_job_local_services_places_heterogeneous_stack_on_group1(
             "name": "qfw-local-dirsvc",
             "host": "127.0.0.1",
             "port": 8090,
+            "telnet_port": 8092,
             "endpoint": "127.0.0.1:8090",
         },
         "environment": {
@@ -428,6 +429,7 @@ def test_start_job_local_services_places_heterogeneous_stack_on_group1(
         "/usr/bin/qfw-dirsvc-start",
     ]
     assert calls[1][0][calls[1][0].index("--host") + 1] == "svc-a"
+    assert calls[1][0][calls[1][0].index("--telnet-port") + 1] == "8092"
     assert calls[2][0][:7] == [
         "srun",
         "--het-group=1",

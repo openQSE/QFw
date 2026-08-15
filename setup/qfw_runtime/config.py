@@ -320,6 +320,27 @@ def allocate_local_endpoint(local_config, dry_run=False):
     return name, host, port, f"{host}:{port}"
 
 
+def allocate_local_telnet_port(local_config, host, listen_port,
+                               dry_run=False):
+    dirsvc = local_config.get("dirsvc") or {}
+    configured_port = dirsvc.get("telnet-port", "auto")
+    if str(configured_port).strip().lower() == "auto" and dry_run:
+        port = 0
+    elif str(configured_port).strip().lower() == "auto":
+        port = _free_tcp_port(host)
+        while port == listen_port:
+            port = _free_tcp_port(host)
+    else:
+        port = int(configured_port)
+    if port == 0 and dry_run:
+        return port
+    if port <= 0 or port > 65535:
+        raise ValueError(f"invalid local directory telnet port: {port}")
+    if port == listen_port:
+        raise ValueError("local directory listen and telnet ports must differ")
+    return port
+
+
 def service_manifest_path(local_config, qfw_prefix_value=None,
                           defw_prefix_value=None):
     manifest = local_config.get(
@@ -394,11 +415,18 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
     local_endpoint = ""
     local_name = ""
     local_port = None
+    local_telnet_port = None
     local_host = ""
     manifest_path = None
     if local_config:
         local_name, local_host, local_port, local_endpoint = (
             allocate_local_endpoint(local_config, dry_run=dry_run))
+        local_telnet_port = allocate_local_telnet_port(
+            local_config,
+            local_host,
+            local_port,
+            dry_run=dry_run,
+        )
         manifest_path = service_manifest_path(
             local_config,
             qfw_prefix_value=qfw_install_prefix,
@@ -477,6 +505,7 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
             "name": local_name,
             "host": local_host,
             "port": local_port,
+            "telnet_port": local_telnet_port,
             "endpoint": local_endpoint,
         },
         "service_manifest": str(manifest_path) if manifest_path else "",
