@@ -47,6 +47,7 @@ EOF
 backend="${QFW_CHEM_BACKEND:-iqm}"
 target_device="${QFW_QPU_DEVICE_ID:-ornl-iqm-20q}"
 site_config="${QFW_SITE_CONFIG:-}"
+site_config_explicit="no"
 service_run_dir="${QFW_IQM_RUN_DIR:-}"
 device_access_config=""
 chem_app_dir="${QFW_CHEM_APP_DIR:-}"
@@ -325,6 +326,7 @@ while [[ $# -gt 0 ]]; do
 		--site-config)
 			qfw_chem_driver_need_value "$@"
 			site_config="$2"
+			site_config_explicit="yes"
 			shift 2
 			;;
 		--service-run-dir)
@@ -509,7 +511,8 @@ if [[ -z "${run_dir}" ]]; then
 fi
 mkdir -p "${run_dir}/config" "${run_dir}/logs"
 
-if [[ -z "${site_config}" && -n "${service_run_dir}" &&
+if ! qfw_chem_driver_bool_enabled "${site_config_explicit}" &&
+   [[ -n "${service_run_dir}" &&
       -r "${service_run_dir}/env/iqm-site.env" ]]; then
 	# shellcheck source=/dev/null
 	source "${service_run_dir}/env/iqm-site.env"
