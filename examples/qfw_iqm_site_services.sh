@@ -20,6 +20,7 @@ Options:
   --run-dir DIR                 Run directory for configs, pids, and logs
   --service-node NODE           Node that hosts dirsvc and QPM
   --dirsvc-port PORT            Site directory listen port (default: 8090)
+  --dirsvc-telnet-port PORT     Site directory telnet port (default: RPC port + 1)
   --qpm-port PORT               IQM QPM listen port (default: 8290)
   --qpm-telnet-port PORT        IQM QPM telnet port (default: 8291)
   --timeout SEC                 Startup and preflight timeout (default: 120)
@@ -47,6 +48,7 @@ device_access_config="${QFW_IQM_DEVICE_ACCESS_CONFIG:-}"
 run_dir="${QFW_IQM_RUN_DIR:-}"
 service_node="${QFW_IQM_SERVICE_NODE:-}"
 dirsvc_port="${QFW_IQM_DIRSVC_PORT:-8090}"
+dirsvc_telnet_port="${QFW_IQM_DIRSVC_TELNET_PORT:-}"
 qpm_port="${QFW_IQM_QPM_PORT:-8290}"
 qpm_telnet_port="${QFW_IQM_QPM_TELNET_PORT:-8291}"
 startup_timeout="${QFW_IQM_TIMEOUT:-120}"
@@ -107,6 +109,11 @@ while [[ $# -gt 0 ]]; do
 		--dirsvc-port)
 			qfw_iqm_need_value "$@"
 			dirsvc_port="$2"
+			shift 2
+			;;
+		--dirsvc-telnet-port)
+			qfw_iqm_need_value "$@"
+			dirsvc_telnet_port="$2"
 			shift 2
 			;;
 		--qpm-port)
@@ -391,6 +398,11 @@ qfw_iqm_install_deps() {
 
 qfw_iqm_prepare_defaults() {
 	qfw_iqm_require_positive_int "--dirsvc-port" "${dirsvc_port}"
+	if [[ -z "${dirsvc_telnet_port}" ]]; then
+		dirsvc_telnet_port=$((dirsvc_port + 1))
+	fi
+	qfw_iqm_require_positive_int \
+		"--dirsvc-telnet-port" "${dirsvc_telnet_port}"
 	qfw_iqm_require_positive_int "--qpm-port" "${qpm_port}"
 	qfw_iqm_require_positive_int "--qpm-telnet-port" "${qpm_telnet_port}"
 	qfw_iqm_require_positive_int "--timeout" "${startup_timeout}"
@@ -572,6 +584,7 @@ qfw_iqm_start_dirsvc() {
 			--name qfw-docker-iqm-dirsvc \
 			--host "${service_node}" \
 			--listen-port "${dirsvc_port}" \
+			--telnet-port "${dirsvc_telnet_port}" \
 			--timeout "${startup_timeout}" \
 			--pid-file "${dirsvc_pid_file}" \
 			--ready-file "${dirsvc_ready_file}"
