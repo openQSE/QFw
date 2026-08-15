@@ -393,16 +393,19 @@ file(CHMOD
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
+		export DEFW_LOAD_NO_INIT=api_existing_helper
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
 		test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 		test \"\${QFW_BIN_PATH}\" = '${QFW_INSTALL_PREFIX}/bin'
 		test \"\${QFW_LIBEXEC_DIR}\" = '${QFW_INSTALL_PREFIX}/libexec/qfw'
 		test \"\${QFW_SHARE_DIR}\" = '${QFW_INSTALL_PREFIX}/share/qfw'
 		test \"\${DEFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
+		test \"\${DEFW_LOAD_NO_INIT}\" = 'api_existing_helper,api_qpm_common'
 		command -v qfw-setup >/dev/null
-		'${QFW_PYTHON}' -c 'import qfw_runtime, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None'
+		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None'
 		qfw_deactivate
-		test -z \"\${QFW_PREFIX+x}\""
+		test -z \"\${QFW_PREFIX+x}\"
+		test \"\${DEFW_LOAD_NO_INIT}\" = api_existing_helper"
 	RESULT_VARIABLE activation_rc)
 	if(NOT activation_rc EQUAL 0)
 		message(FATAL_ERROR "QFw install activation smoke failed")
