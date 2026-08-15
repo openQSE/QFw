@@ -33,13 +33,14 @@ class QRC:
 		if self.push_info:
 			event = Event(self.push_info['evtype'], result)
 			try:
-				self.push_info['class'].put(event)
+				delivered = self.push_info['class'].put(event)
 			except Exception as e:
 				logging.critical(
 					"Failed to push event to client. "
 					f"Exception encountered {e}")
 				raise e
-			return
+			if delivered is not False:
+				return
 
 		with self.circuit_results_lock:
 			self.circuit_results.append(result)
@@ -66,10 +67,13 @@ class QRC:
 			return self._result_dict(circ, output, -1)
 
 	def _async_runner(self, circ):
+		result = None
 		try:
 			result = self._run_circuit(circ, raise_on_error=False)
 		finally:
-			circ.free_resources(circ)
+			circ.free_resources(circ, result=result)
+		if result is None:
+			return
 		self._push_or_store_result(result)
 
 	def sync_run(self, circ):
@@ -117,11 +121,11 @@ class QRC:
 	def get_coupling_graph(self, calibration_set_id=None):
 		return self.iqm.get_coupling_graph(calibration_set_id)
 
-	def get_last_job_timing(self, cid=None):
-		return self.iqm.get_last_job_timing(cid)
+	def get_task_timing(self, cid=None):
+		return self.iqm.get_task_timing(cid)
 
-	def get_last_job_metadata(self, cid=None):
-		return self.iqm.get_last_job_metadata(cid)
+	def get_task_metadata(self, cid=None):
+		return self.iqm.get_task_metadata(cid)
 
 	def shutdown(self):
 		self.shutdown_workers = True

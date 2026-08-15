@@ -30,6 +30,13 @@ class MPISmoke:
 			self.__class__.__module__,
 			cap,
 			-1,
+			properties={
+				"binding_name": "default",
+				"client_module": "api_mpi_smoke",
+				"client_class": "MPISmoke",
+				"service_module": self.__class__.__module__,
+				"service_class": self.__class__.__name__,
+			},
 		)
 
 	def reserve(self, svc, client_ep, *args, **kwargs):

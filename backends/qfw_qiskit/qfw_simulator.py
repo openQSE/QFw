@@ -7,24 +7,23 @@ from collections import deque
 
 from qiskit.providers import BackendV2, Options
 
-from .qfw_job import QFwJob
+from .qfw_job import QFwJob, normalize_reservation_id
 from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
 from .qfw_target import QFW_NUM_QUBITS, build_qfw_target, qfw_basis_gates
 from defw_exception import DEFwDumper
 from defw import me
 from .qfw_lookup_service import get_qpm
-from enum import IntFlag
-from api_qpm import QPMType, QPMCapability
+from .qpm_selection import qpm_selection_for_provider
+from api_qpm_common import QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 
-# This is a mirror of QPMType and QPMCapability. And they always need to
-# match. The point here is not to expose QPM specific information to the
-# application as they should always be abstracted away by the backend.
-_qfw_type_names = {name.replace("QPM_", "QFW_"): m for name, m in QPMType.__members__.items()}
-QFwBackendType = IntFlag('QFwBackendType', _qfw_type_names)
-_qfw_cap_names = {name.replace("QPM_", "QFW_"): m for name, m in QPMCapability.__members__.items()}
-QFwBackendCapability = IntFlag('QFwBackendCapability', _qfw_cap_names)
+QFW_RUN_CONTEXT_OPTIONS = (
+	"reservation_id",
+	"token",
+	"timeout",
+	"cancel_on_timeout",
+)
 
 
 class CircuitMetrics:
@@ -76,15 +75,31 @@ class QFwBackend(BackendV2):
 	COMPLETION_TIMEOUT_SEC = 200
 
 	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
-				 num_qubits=QFW_NUM_QUBITS):
+				 num_qubits=QFW_NUM_QUBITS, lookup_timeout=None,
+				 provider=None, backend=None):
 		self.log_time = time.time()
+		self._provider = None
+		selector = provider if provider is not None else backend
+		if selector is not None:
+			selection = qpm_selection_for_provider(selector)
+			self._provider = selection["provider"]
+			if betype in (-1, None):
+				betype = selection["qpm_type"]
+			if capability in (-1, None):
+				capability = selection["qpm_capability"]
 		self._capability = capability
-		self.qpm = get_qpm(betype, capability)
-		# register for events with the qpm
+		lookup_kwargs = {}
+		if lookup_timeout is not None:
+			lookup_kwargs["timeout"] = lookup_timeout
+		if self._provider is not None:
+			lookup_kwargs["provider"] = self._provider
+		self.qpm = get_qpm(betype, capability, **lookup_kwargs)
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
-		self.qpm.register_event_notification(
-			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, self.event_api.class_id())
+		self._event_endpoint = me.my_endpoint()
+		self._event_registration_lock = threading.Lock()
+		self._completion_event_registered = False
+		self._completion_event_registration = None
 
 		super().__init__(name=self.my_name())
 		self._target = target
@@ -98,6 +113,7 @@ class QFwBackend(BackendV2):
 		self.options.set_validator("shots", (1, 65536))
 		self.options.set_validator("seed_simulator", int)
 		self.options.set_validator("seed", int)
+		self.register_completion_events()
 
 	def __copy__(self):
 		return self
@@ -108,7 +124,8 @@ class QFwBackend(BackendV2):
 	def returns_statevector(self):
 		if self._capability == -1:
 			return False
-		return bool(self._capability & QFwBackendCapability.QFW_CAP_STATEVECTOR)
+		return bool(int(self._capability) & int(
+			QPMCapability.QPM_CAP_STATEVECTOR))
 
 	def set_qubit_mapping(self, circuit, mapping):
 		return set_qubit_mapping(circuit, mapping)
@@ -116,11 +133,8 @@ class QFwBackend(BackendV2):
 	def get_qubit_mapping(self, circuit):
 		return get_qubit_mapping(circuit)
 
-	# This is unique to the QFw backend. We need to cleanly shutdown the
-	# QFw infrastructure.
 	def shutdown(self):
 		g_circ_metrics.dump()
-		self.qpm.shutdown()
 		me.exit()
 
 	def configuration(self):
@@ -162,20 +176,52 @@ class QFwBackend(BackendV2):
 
 	@classmethod
 	def _default_options(cls):
-		return Options(shots=1024, seed=334, seed_simulator=334)
+		return Options(
+			shots=1024,
+			seed=334,
+			seed_simulator=334,
+			reservation_id=None,
+			token=None,
+			timeout=None,
+			cancel_on_timeout=False,
+		)
 
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:
-			if not hasattr(self.options, kwarg):
+			if (not hasattr(self.options, kwarg) and
+				kwarg not in QFW_RUN_CONTEXT_OPTIONS):
 				print("Option ", kwarg, " is not used by this backend")
 		options = {
 			"seed_simulator": kwargs.get("seed_simulator", self.options.seed_simulator),
 			"shots": kwargs.get("shots", self.options.shots),
 			"seed": kwargs.get("seed", self.options.seed),
 		}
+		for key in QFW_RUN_CONTEXT_OPTIONS:
+			if key in kwargs:
+				options[key] = kwargs[key]
+				continue
+			value = getattr(self.options, key, None)
+			if value is not None and (
+					key != "cancel_on_timeout" or value is not False):
+				options[key] = value
+		if "reservation_id" in options:
+			options["reservation_id"] = normalize_reservation_id(
+				options["reservation_id"])
 		self._qfw_job = QFwJob(self, self.qpm, self.event_api, circuits, options)
 		self._qfw_job.submit()
 		return self._qfw_job
+
+	def register_completion_events(self):
+		with self._event_registration_lock:
+			if self._completion_event_registered:
+				return self._completion_event_registration
+			self._completion_event_registration = \
+				self.qpm.register_event_notification(
+					self._event_endpoint,
+					EVENT_TYPE_CIRC_RESULT,
+					self.event_api.class_id())
+			self._completion_event_registered = True
+			return self._completion_event_registration
 
 	def log_statistics(self, res):
 		g_circ_metrics.add_time(res['creation_time'], res['launch_time'], "creation->launch")

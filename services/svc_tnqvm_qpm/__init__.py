@@ -1,10 +1,6 @@
 from .svc_qpm import QPM
 import defw
-import os
-import threading
-import logging
-from time import sleep
-import util.qpm.util_qpm as uq
+import util.qpm.startup as qpm_startup
 
 SERVICE_NAME = 'QPM'
 SERVICE_DESC = 'Quantum Platform Manager for TNQVM'
@@ -28,42 +24,12 @@ svc_info = {
 service_classes = [QPM]
 
 
-def qpm_complete_init():
-	uq.qpm_initialized = True
-	logging.debug("QPM Initialized Successfully")
-
-
-def qpm_wait_resmgr():
-	while not defw.resmgr and not uq.qpm_shutdown:
-		logging.debug("still waiting for resmgr to come up")
-		sleep(1)
-	if not uq.qpm_shutdown:
-		qpm_complete_init()
-
-
 def initialize():
-	global g_timeout
-
-	if uq.qpm_initialized:
-		return
-
-	try:
-		g_timeout = int(os.environ['QFW_STARTUP_TIMEOUT'])
-	except (KeyError, ValueError):
-		g_timeout = 40
-
-	if not defw.resmgr:
-		# we haven't connected to the resmgr yet. Spin up a thread and
-		# wait for it to connect before finishing up the initialization
-		svc_qpm_thr = threading.Thread(target=qpm_wait_resmgr, args=())
-		svc_qpm_thr.daemon = True
-		svc_qpm_thr.start()
-		return
-
-	qpm_complete_init()
+	qpm_startup.initialize_qpm_service(
+		defw,
+		"QPM Initialized Successfully",
+	)
 
 
 def uninitialize():
-	uq.qpm_shutdown = True
-
-	logging.debug("QPM shutdown")
+	qpm_startup.uninitialize_qpm_service("QPM shutdown")

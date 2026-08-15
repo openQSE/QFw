@@ -3,9 +3,9 @@
 import json
 import os
 import sys
-import time
 
-from defw_app_util import defw_get_resource_mgr, defw_reserve_service_by_name
+from defw_app_util import defw_connect_service_by_name, defw_get_directory_service
+from qfw_example_report import emit_result
 
 
 def validate_result(result, expected_np):
@@ -36,16 +36,13 @@ def validate_result(result, expected_np):
 	return records
 
 
-def reserve_mpi_smoke(resmgr, timeout):
-	deadline = time.time() + timeout
-	last_error = None
-	while time.time() < deadline:
-		try:
-			return defw_reserve_service_by_name(resmgr, 'MPISmoke')[0]
-		except Exception as err:
-			last_error = err
-			time.sleep(1)
-	raise RuntimeError(f"MPISmoke service was not available: {last_error}")
+def bind_mpi_smoke(dirsvc, timeout):
+	return defw_connect_service_by_name(
+		dirsvc,
+		'MPISmoke',
+		timeout=timeout,
+		binding_name='default',
+	)[0]
 
 
 def main():
@@ -54,16 +51,22 @@ def main():
 	api = None
 
 	try:
-		resmgr = defw_get_resource_mgr(timeout=timeout)
-		api = reserve_mpi_smoke(resmgr, timeout)
+		dirsvc = defw_get_directory_service(timeout=timeout)
+		api = bind_mpi_smoke(dirsvc, timeout)
 		result = api.run_pid_hello(np)
 		records = validate_result(result, np)
-		print(json.dumps({
+		summary = {
 			'status': 'ok',
 			'service_host': result.get('service_host'),
 			'service_pid': result.get('service_pid'),
 			'mpi_records': records,
-		}, sort_keys=True))
+		}
+		print(json.dumps(summary, sort_keys=True))
+		emit_result(
+			"mpi-smoke",
+			parameters={"np": np, "timeout": timeout},
+			metrics=summary,
+		)
 		return 0
 	finally:
 		if api is not None:

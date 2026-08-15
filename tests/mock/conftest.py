@@ -2,6 +2,7 @@ import pathlib
 import sys
 import types
 import logging
+import ast
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -10,6 +11,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 def _add_repo_paths():
 	paths = [
 		REPO_ROOT / "backends",
+		REPO_ROOT / "services",
 		REPO_ROOT / "service-apis",
 		REPO_ROOT / "DEFw" / "python" / "infra",
 	]
@@ -75,11 +77,101 @@ def _install_yaml_stub():
 	class Dumper:
 		pass
 
+	class SafeLoader:
+		@classmethod
+		def add_constructor(cls, *args, **kwargs):
+			return None
+
+	class FullLoader(SafeLoader):
+		pass
+
 	def dump(data, **kwargs):
 		return repr(data)
 
+	def load(data, Loader=None):
+		return safe_load(data)
+
+	def safe_load(data):
+		if hasattr(data, "read"):
+			data = data.read()
+		text = str(data or "")
+		if not text.strip():
+			return {}
+		try:
+			return ast.literal_eval(text)
+		except (SyntaxError, ValueError):
+			return _parse_simple_yaml(text)
+
+	def _parse_simple_yaml(text):
+		root = {}
+		stack = [(-1, root)]
+		lines = []
+		for raw_line in text.splitlines():
+			stripped = raw_line.strip()
+			if not stripped or stripped.startswith("#"):
+				continue
+			indent = len(raw_line) - len(raw_line.lstrip(" "))
+			lines.append((indent, stripped))
+		for index, (indent, line) in enumerate(lines):
+			while stack and indent <= stack[-1][0]:
+				stack.pop()
+			parent = stack[-1][1]
+			next_line = lines[index + 1] if index + 1 < len(lines) else None
+			if line.startswith("- "):
+				item = line[2:].strip()
+				if ":" not in item:
+					parent.append(_yaml_scalar(item))
+					continue
+				entry = {}
+				parent.append(entry)
+				key, value = _yaml_key_value(item, indent, next_line)
+				entry[key] = value
+				if value in ({}, []):
+					stack.append((indent, value))
+				else:
+					entry[key] = value
+					stack.append((indent, entry))
+				continue
+			key, value = _yaml_key_value(line, indent, next_line)
+			if not isinstance(parent, dict):
+				continue
+			parent[key] = value
+			if value in ({}, []):
+				stack.append((indent, value))
+		return root
+
+	def _yaml_key_value(line, indent=0, next_line=None):
+		key, _, raw_value = line.partition(":")
+		key = key.strip()
+		raw_value = raw_value.strip()
+		if not raw_value:
+			return key, _yaml_container(indent, next_line)
+		return key, _yaml_scalar(raw_value)
+
+	def _yaml_container(indent, next_line):
+		if next_line and next_line[0] > indent and next_line[1].startswith("- "):
+			return []
+		return {}
+
+	def _yaml_scalar(value):
+		value = value.strip()
+		if value in {"{}", "[]"}:
+			return ast.literal_eval(value)
+		if value.lower() in {"true", "false"}:
+			return value.lower() == "true"
+		if value.lower() in {"null", "none"}:
+			return None
+		try:
+			return int(value)
+		except ValueError:
+			return value.strip("\"'")
+
 	yaml.Dumper = Dumper
+	yaml.SafeLoader = SafeLoader
+	yaml.FullLoader = FullLoader
 	yaml.dump = dump
+	yaml.load = load
+	yaml.safe_load = safe_load
 	sys.modules["yaml"] = yaml
 
 
@@ -99,13 +191,13 @@ def _install_defw_stubs():
 		class DEFwNotFound(DEFwError):
 			pass
 
-		class DEFwAgentNotFound(DEFwError):
+		class DEFwReserveError(DEFwError):
 			pass
 
 		class DEFwExecutionError(DEFwError):
 			pass
 
-		class DEFwReserveError(DEFwError):
+		class DEFwAgentNotFound(DEFwError):
 			pass
 
 		class DEFwOutOfResources(DEFwError):
@@ -118,12 +210,55 @@ def _install_defw_stubs():
 		defw_exception.DEFwNotReady = DEFwNotReady
 		defw_exception.DEFwInProgress = DEFwInProgress
 		defw_exception.DEFwNotFound = DEFwNotFound
-		defw_exception.DEFwAgentNotFound = DEFwAgentNotFound
-		defw_exception.DEFwExecutionError = DEFwExecutionError
 		defw_exception.DEFwReserveError = DEFwReserveError
+		defw_exception.DEFwExecutionError = DEFwExecutionError
+		defw_exception.DEFwAgentNotFound = DEFwAgentNotFound
 		defw_exception.DEFwOutOfResources = DEFwOutOfResources
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
+
+	if "defw_agent_info" not in sys.modules:
+		sys.modules["defw_agent_info"] = types.ModuleType("defw_agent_info")
+
+	if "api_events" not in sys.modules:
+		api_events = types.ModuleType("api_events")
+
+		class BaseEventAPI:
+			pass
+
+		class Event:
+			pass
+
+		api_events.BaseEventAPI = BaseEventAPI
+		api_events.Event = Event
+		sys.modules["api_events"] = api_events
+
+	if "defw_util" not in sys.modules:
+		defw_util = types.ModuleType("defw_util")
+
+		def expand_host_list(value):
+			if not value:
+				return []
+			return str(value).split(",")
+
+		def round_half_up(value):
+			return int(value + 0.5)
+
+		def round_to_nearest_power_of_two(value):
+			power = 1
+			while power < value:
+				power *= 2
+			return power
+
+		def print_thread_stack_trace_to_logger(level=None):
+			return None
+
+		defw_util.expand_host_list = expand_host_list
+		defw_util.print_thread_stack_trace_to_logger = (
+			print_thread_stack_trace_to_logger)
+		defw_util.round_half_up = round_half_up
+		defw_util.round_to_nearest_power_of_two = round_to_nearest_power_of_two
+		sys.modules["defw_util"] = defw_util
 
 	if "defw_remote" not in sys.modules:
 		defw_remote = types.ModuleType("defw_remote")
@@ -139,15 +274,18 @@ def _install_defw_stubs():
 	if "defw_app_util" not in sys.modules:
 		defw_app_util = types.ModuleType("defw_app_util")
 
-		def defw_get_resource_mgr():
-			raise AssertionError("defw_get_resource_mgr must be patched in tests")
+		def defw_get_directory_service():
+			raise AssertionError(
+				"defw_get_directory_service must be patched in tests")
 
-		def defw_reserve_service_by_name(*args, **kwargs):
-			raise AssertionError("defw_reserve_service_by_name must be patched in tests")
+		def defw_connect_service_by_name(*args, **kwargs):
+			raise AssertionError(
+				"defw_connect_service_by_name must be patched in tests")
 
-		defw_app_util.defw_get_resource_mgr = defw_get_resource_mgr
-		defw_app_util.defw_reserve_service_by_name = defw_reserve_service_by_name
-		defw_app_util.SYSTEM_UP_TIMEOUT = 40
+		defw_app_util.SYSTEM_UP_TIMEOUT = 1
+		defw_app_util.defw_get_directory_service = defw_get_directory_service
+		defw_app_util.defw_connect_service_by_name = (
+			defw_connect_service_by_name)
 		sys.modules["defw_app_util"] = defw_app_util
 
 	if "defw_event_baseapi" not in sys.modules:
@@ -207,48 +345,23 @@ def _install_defw_stubs():
 		defw.connect_to_resource = connect_to_resource
 		sys.modules["defw"] = defw
 
-	if "api_events" not in sys.modules:
-		api_events = types.ModuleType("api_events")
+	if "svc_launcher" not in sys.modules:
+		svc_launcher = types.ModuleType("svc_launcher")
 
-		class Event:
-			def __init__(self, evtype, payload):
-				self.evtype = evtype
-				self.payload = payload
+		class Launcher:
+			def status(self, pid):
+				raise AssertionError("Launcher.status must be patched in tests")
 
-		class BaseEventAPI:
-			def __init__(self, *args, **kwargs):
-				self.args = args
-				self.kwargs = kwargs
+		svc_launcher.Launcher = Launcher
+		sys.modules["svc_launcher"] = svc_launcher
 
-		api_events.Event = Event
-		api_events.BaseEventAPI = BaseEventAPI
-		sys.modules["api_events"] = api_events
+	if "cdefw_global" not in sys.modules:
+		sys.modules["cdefw_global"] = types.ModuleType("cdefw_global")
 
-	if "defw_util" not in sys.modules:
-		# The real defw_util pulls in the defw_cmd/native stack; stub only the
-		# helpers the QPM utility modules import at load time. They are not
-		# exercised by the mock tests (which drive individual methods), so simple
-		# reference implementations are enough.
-		defw_util = types.ModuleType("defw_util")
-
-		def expand_host_list(host_spec):
-			if not host_spec:
-				return []
-			return [h for h in str(host_spec).split(",") if h]
-
-		def round_half_up(value):
-			return int(value + 0.5)
-
-		def round_to_nearest_power_of_two(value):
-			power = 1
-			while power < value:
-				power *= 2
-			return power
-
-		defw_util.expand_host_list = expand_host_list
-		defw_util.round_half_up = round_half_up
-		defw_util.round_to_nearest_power_of_two = round_to_nearest_power_of_two
-		sys.modules["defw_util"] = defw_util
+	if "psutil" not in sys.modules:
+		psutil = types.ModuleType("psutil")
+		psutil.cpu_count = lambda logical=False: 1
+		sys.modules["psutil"] = psutil
 
 
 def _install_qiskit_stubs():

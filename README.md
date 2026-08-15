@@ -9,8 +9,8 @@ QFw service APIs, and provides QPM services for execution targets such as
 
 A QPM is a Quantum Platform Manager. In QFw, a QPM service represents one
 execution target, advertises its type and capabilities, accepts circuit
-submissions through the `api_qpm` interface, and returns backend,
-device, and job information to applications.
+submissions through `api_qpm_execution`, and exposes separate admission,
+policy, scheduler, telemetry, and service-control bindings.
 
 The same QFw application workflow can run on a local node, in a Slurm
 allocation, or inside the containerized
@@ -33,156 +33,82 @@ those launch modes.
 
 ## Build QFw
 
-Clone QFw with its submodules. This pulls
-[DEFw](https://github.com/openQSE/DEFw),
-[qhw-data](https://github.com/openQSE/qhw-data), and
-[qhw-iqm](https://github.com/openQSE/qhw-iqm):
+Clone QFw with its submodules:
 
 ```bash
 git clone --recursive git@github.com:openQSE/QFw.git
 cd QFw
 ```
 
-For an existing checkout that was not cloned with `--recursive`, initialize
-or update submodules before building:
+The submodules provide DEFw and the QHW Python/runtime packages used by
+QFw services. For an existing checkout that was not cloned with
+`--recursive`, initialize or update them before building:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-Create or activate the Python environment that QFw should use:
+Create or activate the shared Python environment that QFw should use:
 
 ```bash
 python3 -m venv /path/to/qfw-venv
 source /path/to/qfw-venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r setup/build-requirements.txt
+python -m pip install -r setup/requirements.txt
 ```
 
-Choose one of the existing install configurations under `setup/config/`:
-
-- `qfw_config_sample_container.yaml`: container or QFw-SLURM-Cluster use.
-- `qfw_config_sample.yaml`: module-based cluster use.
-- `qfw_config_sample_nomod.yaml`: explicit path cluster use without modules.
-
-For a same-node run or a normal local computer, start from
-`qfw_config_sample_nomod.yaml` and replace the paths with local paths.
-There is no separate `runtime-mode: local`. Local execution is detected at
-launch time. For most local installs, use `services/config/container.yaml`
-as the service runtime policy and `mpi-transport-mode: auto`, because the
-Frontier runtime policy contains system-specific MPI assumptions.
-
-Configure QFw from the selected file:
+Install QFw with the CMake-backed installer. Use `--with-defw` when this
+install prefix should also build and install the bundled DEFw tree:
 
 ```bash
-cd setup
-./qfw_configure -c config/qfw_config_sample_container.yaml
+./setup/qfw_install.sh --prefix /path/to/qfw-install --with-defw
 ```
 
-Build the QFw pieces required by your environment:
+The same flow can be run manually:
 
 ```bash
-./qfw_build.sh --python --defw
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/path/to/qfw-install \
+  -DQFW_BUILD_BUNDLED_DEFW=ON
+cmake --build build
+cmake --install build
 ```
 
-Use `--python --defw` when simulator runners are already available, such
-as inside the QFw-SLURM-Cluster image. The `--python` target installs
-`qhw-data` and `qhw-iqm` from the `external/` submodules before installing
-the remaining QFw Python requirements. Build simulator dependencies only
-when this checkout must provide them:
+The install places public commands in `/path/to/qfw-install/bin`,
+including `qfw-activate`, `defw-python`, `qfw-setup`, `qfw-srun`,
+`qfw-teardown`, `qfw-dirsvc-start`, and `qfw-service-start`.
 
-```bash
-./qfw_build.sh --tnqvm --nwqsim
-```
-
-QRMI and QDMI-on-IQM are optional developer builds. They are not included
-in the default no-argument build, and they are not built by `--python`.
-Build them only when the local QFw venv needs to import `qrmi` or
-`iqm.qdmi.qiskit`, for example when testing `svc_lib_qpm`:
-
-```bash
-./qfw_build.sh --qpu-libs
-```
-
-`--qpu-libs` is equivalent to running both optional targets:
-
-```bash
-./qfw_build.sh --qrmi
-./qfw_build.sh --qdmi
-```
-
-The QRMI target clones QRMI, builds `libqrmi.so`, installs the QRMI native
-library under the QFw install tree, and installs the QRMI Python package
-into the active QFw venv. The QDMI target clones and installs MQT Core,
-then clones and installs QDMI-on-IQM with its Qiskit extra into the same
-venv. The QRMI SPANK plugin is still provided by the Slurm/container image;
-the QFw build target only installs what QFw services need at runtime.
-
-The generated build scripts use upstream repositories and release tags by
-default:
-
-```bash
-export QFW_QRMI_REPO=https://github.com/qiskit-community/qrmi.git
-export QFW_QRMI_REF=0.17.2
-export QFW_MQT_CORE_REPO=https://github.com/munich-quantum-toolkit/core.git
-export QFW_MQT_CORE_REF=v3.6.1
-export QFW_IQM_QDMI_REPO=https://github.com/iqm-finland/QDMI-on-IQM.git
-export QFW_IQM_QDMI_REF=v1.1.1
-```
-
-Override these before running `qfw_build.sh` when testing local branches,
-forks, or a different release.
-
-QRMI/QDMI build variables:
-
-| Variable | Purpose |
-| --- | --- |
-| `QFW_QPU_LIB_BUILD_DIR` | Parent directory for QRMI, MQT Core, and QDMI-on-IQM source checkouts. |
-| `QFW_QRMI_REPO` | Git repository used for QRMI source. |
-| `QFW_QRMI_REF` | QRMI git ref to check out. This can be a tag, branch, or SHA. |
-| `QFW_QRMI_SRC_DIR` | Local QRMI source checkout path. |
-| `QFW_QRMI_PREFIX` | QFw-local install prefix for QRMI native headers and libraries. |
-| `QFW_QRMI_PYTHON_PACKAGE` | Fallback pip package spec for QRMI Python bindings. Defaults to `qrmi==${QFW_QRMI_REF}`. |
-| `QRMI_PREFIX` | Runtime QRMI prefix exported by `qfw_activate`. Defaults to `QFW_QRMI_PREFIX`. |
-| `QFW_MQT_CORE_REPO` | Git repository used for MQT Core source. |
-| `QFW_MQT_CORE_REF` | MQT Core git ref to check out. This can be a tag, branch, or SHA. |
-| `QFW_MQT_CORE_SRC_DIR` | Local MQT Core source checkout path. |
-| `QFW_MQT_CORE_PRETEND_VERSION` | Optional `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MQT_CORE` value for unreleased fork commits. Empty by default. |
-| `QFW_IQM_QDMI_REPO` | Git repository used for QDMI-on-IQM source. |
-| `QFW_IQM_QDMI_REF` | QDMI-on-IQM git ref to check out. This can be a tag, branch, or SHA. |
-| `QFW_IQM_QDMI_SRC_DIR` | Local QDMI-on-IQM source checkout path. |
-
-The configurator generates `setup/qfw_activate` and `setup/qfw_build.sh`.
-It does not run the build script automatically.
+Simulator runners and optional hardware client libraries must be available
+through the activated environment or site image. The QFw install packages
+the QFw service APIs, service modules, examples, QHW submodules, and
+runtime configuration templates; it does not build TNQVM, NWQ-Sim, QRMI,
+or QDMI-on-IQM from source.
 
 ## Run QFw Locally
 
-Activate QFw and run one of the example wrappers. When QFw is not inside a
-Slurm allocation, the launcher scripts use the local node for both the
+Activate QFw and run one of the example wrappers. When QFw is not inside
+a Slurm allocation, the launcher uses the local node for both the
 application and the services.
 
-Use a locally edited copy of `setup/config/qfw_config_sample_nomod.yaml`
-for this mode. The allocation detector will set both QFw groups to the
-current hostname.
-
 ```bash
-source /path/to/QFw/setup/qfw_activate
-cd "$QFW_PATH/examples"
+source /path/to/qfw-install/bin/qfw-activate
+cd "$QFW_SHARE_DIR/examples"
 ./qfw_mpi_smoke.sh
 qfw_deactivate
 ```
 
-The example wrappers call `qfw_setup.sh`, run one application through the
-QFw launch path, and then call `qfw_teardown.sh`. Do not call
-`qfw_deactivate` until the wrapper completes.
+The example wrappers call `qfw-setup`, run one application through
+`qfw-srun`, and then call `qfw-teardown`. Do not call `qfw_deactivate`
+until the wrapper completes.
 
 ## Run Examples
 
-Activate QFw first, then run examples from the `examples/` directory:
+Activate QFw first, then run examples from the installed examples
+directory:
 
 ```bash
-source /path/to/QFw/setup/qfw_activate
-cd "$QFW_PATH/examples"
+source /path/to/qfw-install/bin/qfw-activate
+cd "$QFW_SHARE_DIR/examples"
 ```
 
 Validate framework startup and Qiskit backend construction:
@@ -260,6 +186,36 @@ QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
 QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
 ```
 
+Examples that need a managed reservation should be launched through
+`qfw_slurm_driver.sh`. This script is the test stand-in for the future
+Slurm/SPANK integration: it reserves capacity, exports only
+`QFW_RESERVATION_ID` to the application step, runs the application through
+`qfw-srun`, and releases the reservation afterward.
+
+The driver request carries the standardized reservation shape used by QPM
+and qhw-admission: target device, workload kind, walltime, qtask count,
+qubits, depth, one-qubit gate count, two-qubit gate count, shots, and
+measurement count. It also carries trusted launcher context such as user,
+job/allocation, and scope. Hardware runs may add a non-secret credential
+hint or opaque credential handle; provider API keys stay in the site-owned
+QPM environment and are not exported to the application.
+
+```bash
+./qfw_slurm_driver.sh \
+  --backend nwqsim \
+  --example supermarq \
+  --qubits 4 \
+  --depth 8 \
+  --one-q-gates 4 \
+  --two-q-gates 3 \
+  --shots 128 \
+  --count 1 \
+  --workload-kind quantum \
+  --operation async_run \
+  --analytics-json '{"application":"supermarq"}' \
+  -- ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
+```
+
 `qfw_supermarq.batch` is a Frontier-oriented batch template. Edit the
 account, node counts, paths, and arguments before submitting it with
 `sbatch`:
@@ -276,30 +232,23 @@ For per-wrapper argument details, see
 <details>
 <summary>Cluster workflow</summary>
 
-Use the same build and example commands from the earlier sections. The
-cluster-specific work is selecting the right install configuration and
-taking the right allocation before running examples.
+Use the same installed QFw prefix and example commands from the earlier
+sections. The cluster-specific work is taking the right allocation and
+selecting the site/runtime configuration used by `qfw-setup`.
 
-Start from one of these configuration files:
-
-- `setup/config/qfw_config_sample.yaml` for a module-based cluster setup.
-- `setup/config/qfw_config_sample_nomod.yaml` for explicit cluster paths.
-- `services/config/frontier.yaml` as the bundled Frontier runtime policy.
-
-For other systems, create a site runtime policy under `services/config/`
-or another site-controlled path and point the install configuration at it.
-
-After configuring, building, and activating QFw, take the cluster
-allocation required by the site. On Frontier-style systems this is usually
-a two-component heterogeneous allocation:
+On Frontier-style systems this is usually a two-component heterogeneous
+allocation:
 
 ```bash
 salloc -N 1 -t 4:00:00 -A <project> --network=single_node_vni: \
   -N 1 -t 4:00:00 -A <project> --network=single_node_vni
 ```
 
-Then run the wrappers from [Run Examples](#run-examples). The example
-commands are the same as the local workflow.
+Then source `qfw-activate` from the installed prefix and run the wrappers
+from [Run Examples](#run-examples). The example commands are the same as
+the local workflow. Site defaults are read from `$QFW_SITE_CONFIG`, and
+per-job runtime overrides can be passed to `qfw-setup` by custom wrappers
+with `--runtime-config`.
 
 </details>
 
@@ -319,19 +268,14 @@ Inside the container, QFw normally lives at:
 /workspace/qfw-container-base/QFw
 ```
 
-Use the container configuration files when building a development checkout
-inside that environment:
-
-- `setup/config/qfw_config_sample_container.yaml`
-- `services/config/container.yaml`
-
 The QFw-SLURM-Cluster image already contains the simulator runners, so a
-development checkout normally only needs:
+development checkout normally only needs a QFw install prefix:
 
 ```bash
-cd /workspace/qfw-container-base/QFw/setup
-./qfw_configure -c config/qfw_config_sample_container.yaml
-./qfw_build.sh --python --defw
+cd /workspace/qfw-container-base/QFw
+./setup/qfw_install.sh --prefix /workspace/qfw-container-base/qfw-install-dev \
+  --with-defw
+source /workspace/qfw-container-base/qfw-install-dev/bin/qfw-activate
 ```
 
 After activation, run the wrappers from [Run Examples](#run-examples).
@@ -342,59 +286,75 @@ The example commands are the same as the local workflow.
 ## Install Configuration Reference
 
 <details>
-<summary>Configuration files and generated scripts</summary>
+<summary>Installed layout and runtime configuration</summary>
 
-`qfw_configure` reads an install configuration and generates:
+QFw installation is CMake-backed. `setup/qfw_install.sh` is a convenience
+wrapper around:
 
-- `setup/qfw_activate`: activates the QFw runtime environment.
-- `setup/qfw_build.sh`: installs Python requirements and builds requested
-  components.
+```bash
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=<prefix>
+cmake --build build
+cmake --install build
+```
 
-The most important install configuration keys are:
+Important CMake options:
 
-- `base-dir`: base directory for QFw runtime files, builds, and installs.
-- `runtime-mode`: `container` or `cluster`.
-- `service-runtime-config`: service runtime policy YAML.
-- `mpi-transport-mode`: `auto` or `ofi`.
-- `python-venv-activate`: Python virtual environment activation script.
-- `libfabric-install`: Libfabric install prefix.
-- `mpi-install`: Open MPI install prefix.
-- `dev-install`: accelerator development root, such as ROCm.
-- `qfw-dep-build-version`: dependency build version used for paths.
-- `generate-dep-build-version`: generate a new timestamped build version.
+- `CMAKE_INSTALL_PREFIX`: install prefix for QFw commands, Python modules,
+  service APIs, examples, and configuration templates.
+- `QFW_BUILD_BUNDLED_DEFW`: build and install the bundled DEFw tree.
+- `QFW_DEFAULT_DEFW_PREFIX`: default DEFw prefix encoded into
+  `qfw-activate`; use `self` when DEFw is installed into the same prefix.
+- `QFW_PYTHON_INSTALL_DIR`: relative Python site-packages destination.
 
-Optional build and runtime keys include:
+The installed prefix contains:
 
-- `cc`, `cxx`, `fc`
-- `hip-arch`
-- `tmp-dir`
-- `mpi-env`
-- `openblas-root`, `cmake-root`, `gcc-root`
-- `qpu-lib-build-dir`
-- `qrmi-repo`, `qrmi-ref`, `qrmi-prefix`, `qrmi-src-dir`
-- `mqt-core-repo`, `mqt-core-ref`, `mqt-core-src-dir`
-- `mqt-core-pretend-version`
-- `iqm-qdmi-repo`, `iqm-qdmi-ref`, `iqm-qdmi-src-dir`
+- `bin/qfw-activate`: prepares QFw, DEFw, Python, and library paths.
+- `bin/defw-python`: runs Python through the DEFw executor bridge.
+- `bin/qfw-setup`: creates runtime state and starts allocation-local
+  services when requested.
+- `bin/qfw-srun`: launches applications with the active QFw runtime state.
+- `bin/qfw-teardown`: stops QFw-owned runtime processes and removes run
+  state.
+- `bin/qfw-dirsvc-start`: starts a long-running or allocation-local DEFw
+  directory service.
+- `bin/qfw-service-start`: starts a long-running or allocation-local QFw
+  service.
+- `share/qfw/config`: site, runtime, service, and device configuration
+  templates.
+- `share/qfw/examples`: installed example wrappers and application tests.
 
-`runtime-mode` controls allocation and temp-path behavior:
+The default runtime configuration files are:
 
-- `container`: use the mounted workspace layout used by QFw-SLURM-Cluster.
-- `cluster`: use the cluster-oriented runtime layout.
+- `share/qfw/config/site.yaml`: site directory and install-prefix defaults.
+- `share/qfw/config/runtime.yaml`: site-only resolver defaults.
+- `share/qfw/config/runtime/local.yaml`: allocation-local directory and QPM
+  startup.
+- `share/qfw/config/runtime/hybrid.yaml`: allocation-local startup with
+  site fallback.
+- `share/qfw/config/services/local-services.yaml`: allocation-owned simulator
+  services, placement, and provider launch settings.
+- `share/qfw/config/services/site-services.yaml`: operator-started hardware
+  QPM implementations.
 
-`service-runtime-config` controls service-level MPI launch policy. QFw
-ships two examples:
+`qfw-activate` exports `QFW_PREFIX`, `QFW_SHARE_DIR`, `QFW_SITE_CONFIG`,
+`QFW_RUN_BASE_DIR`, `DEFW_PREFIX`, `DEFW_EXTERNAL_SERVICES_PATH`, and
+`DEFW_EXTERNAL_SERVICE_APIS_PATH`. It can also activate a shared Python virtual
+environment before layering QFw paths:
 
-- `services/config/container.yaml`
-- `services/config/frontier.yaml`
+```bash
+source /path/to/qfw-install/bin/qfw-activate --venv /path/to/shared-venv
+```
 
-`mpi-transport-mode` controls whether QFw forces Open MPI onto the OFI
-path:
+Without `--venv`, activation still works with the default installed
+environment. If a user virtual environment is already active, it is preserved
+and its site-packages are prepended to `PYTHONPATH` so services started through
+`defw-python` see the same Python package set as the application. When
+`--venv` is provided and a different virtual environment is already active, the
+explicit `--venv` path takes precedence and `qfw-activate` switches to it.
 
-- `ofi`: export the existing OFI-focused MCA environment settings.
-- `auto`: leave transport selection to the Open MPI installation.
-
-Add `mpi-env` to the install configuration when a site needs explicit MPI
-or MCA environment variables after activation.
+Simulator and hardware-provider dependencies are site/image concerns.
+Install them into the shared user environment or make them available
+through the site module stack before sourcing `qfw-activate`.
 
 The IQM service does not return `_raw_iqm` as a separate result field.
 Instead, it embeds the full native IQM result payload in
@@ -423,7 +383,7 @@ on each node before writing logs or startup artifacts there.
 This means the QFw infrastructure can operate with node-local temp
 directories for startup logs, service logs, pid files, and the PRTE DVM
 URI as long as the producer and consumer of each file run on the same
-node. In the current startup model, the resource manager, QPM services,
+node. In the current startup model, the directory service, QPM services,
 and DVM startup run on the group-1 head node, so those local files do not
 require a cluster-wide shared directory.
 
@@ -478,11 +438,12 @@ execution paths, installation helpers, and example applications.
 
 The repository is organized around:
 
-- `setup/`: activation, installation, allocation handling, and startup
-  scripts.
+- `setup/`: the CMake install helper, runtime command implementation, and
+  default service manifest.
 - `services/`: QFw-owned DEFw services such as `svc_tnqvm_qpm` and
   `svc_nwqsim_qpm`.
-- `service-apis/`: QFw-owned DEFw service APIs such as `api_qpm`.
+- `service-apis/`: independent QFw-owned DEFw service APIs for QPM execution,
+  admission, policy, scheduler, telemetry, and privileged control.
 - `DEFw/`: the distributed runtime submodule.
 - `bin/`: simulator runner binaries copied from dependency builds.
 - `examples/`: runnable examples and integration-style tests.
@@ -499,7 +460,7 @@ flowchart LR
     end
 
     subgraph G1["Service and execution role"]
-        RM["DEFw resource manager"]
+        DirSvc["DEFw directory service"]
         DVM["PRTE DVM"]
         QPM["QPM services"]
         MPI["MPI launch path"]
@@ -507,20 +468,21 @@ flowchart LR
     end
 
     App --> API
-    API <--> RM
+    API <--> DirSvc
     API <--> QPM
-    RM <--> QPM
+    DirSvc <--> QPM
     QPM --> MPI
     MPI --> DVM
     MPI --> Target
     QPM -. direct service path .-> Target
 ```
 
-The default service configuration, `setup/qfw_services.yaml`, starts the
-configured QPM services on the service node. The NWQ-Sim and TNQVM
-services launch simulator runners through MPI and pass MPI the DVM URI.
-Other services may use a different path, such as calling hardware APIs
-directly.
+The local service manifest,
+`share/qfw/config/services/local-services.yaml`, describes allocation-owned
+simulators and their provider launch settings. The site service manifest,
+`share/qfw/config/services/site-services.yaml`, describes operator-started
+hardware QPM implementations. `site.yaml` selects the active site manifest,
+device-access configuration, and common QPM retention settings.
 
 QFw-specific services and APIs are loaded into DEFw through:
 

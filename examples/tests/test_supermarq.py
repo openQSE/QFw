@@ -2,17 +2,23 @@
 import logging
 import yaml
 import threading
+from types import SimpleNamespace
 import select
 import traceback
 import sys
+import os
 import supermarq
 import getopt
 from defw import me
 from defw_exception import DEFwInProgress, DEFwNotReady, DEFwError
 from defw_util import prformat, fg
-from defw_app_util import defw_get_resource_mgr, defw_reserve_service_by_name
+from defw_app_util import defw_get_directory_service
 from time import sleep, time
 from defw_event_baseapi import BaseEventAPI
+from qfw_qiskit.qpm_resolver import QPMResolver
+from qfw_qiskit.qpm_selection import qpm_selection_for_provider
+from qfw_example_context import qfw_reservation_options
+from qfw_example_report import emit_result, parse_bool
 
 req_timeout = 20
 system_up_timeout = 40
@@ -35,12 +41,16 @@ def create_ghz(start_qubits=2, itr=1):
 	return [qasm]
 
 
-def async_wait_read_cq(api, total_circ):
+def async_wait_read_cq(api, total_circ, reservation_id):
 	total_circuits_completed = 0
 	start = time()
 	while time() - start < circuit_run_timeout and total_circuits_completed != total_circ:
 		try:
-			r = api.read_cq()
+			r = api.read_cq(reservation_id=reservation_id)
+			if isinstance(r, dict) and not r.get("completion_ready", True):
+				prformat(fg.red + fg.bold, "waiting on circuit completion")
+				sleep(1)
+				continue
 			prformat(fg.green + fg.bold, f"finished {r['cid']}:")
 			prformat(fg.green + fg.bold, f"{yaml.dump(r['result'])}")
 			#prformat(fg.green+fg.bold, f"{r['result'].decode('utf-8')}")
@@ -52,9 +62,10 @@ def async_wait_read_cq(api, total_circ):
 				continue
 			else:
 				raise e
+	return total_circuits_completed
 
 
-def result_reader(total_circ, event_api):
+def result_reader(total_circ, event_api, result_state):
 	total_circuits_completed = 0
 	results = []
 
@@ -75,86 +86,136 @@ def result_reader(total_circ, event_api):
 		f" Expected: {total_circ}. Time: {time()}")
 	for r in results:
 		logging.defw_app(f"{yaml.dump(r.get_event())}")
+	result_state["completed"] = total_circuits_completed
+	result_state["results"] = results
 
 
 EVENT_TYPE_CIRC_RESULT = 1
 
 
-def async_run_circuit(api, cb, start_qubits=20, num_shots=1, itr=30, increase=True, read_cq=True):
+def build_circuit_plan(cb, start_qubits, num_shots, itr, increase):
+	circuit_plan = []
+	nqubits = start_qubits
+	for iteration in range(0, itr):
+		for qasm in cb(nqubits, 1):
+			circuit_plan.append({
+				"iteration": iteration,
+				"num_qubits": nqubits,
+				"info": {
+					"qasm": qasm,
+					"num_qubits": nqubits,
+					"num_shots": num_shots,
+					"compiler": "staq",
+				},
+			})
+		if increase:
+			nqubits += 1
+	return circuit_plan
+
+
+def resolve_qpm(backend, timeout):
+	selection = qpm_selection_for_provider(
+		backend, default_provider="tnqvm")
+	dirsvc = defw_get_directory_service()
+	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
+	request = dict(
+		service_type="qfw.qpm",
+		qpm_type=selection["qpm_type"],
+		qpm_capabilities=selection["qpm_capabilities"],
+		provider=selection["provider"],
+		timeout=timeout,
+	)
+	execution = resolver.connect(binding_name="execution", **request)
+	control = resolver.connect(binding_name="control", **request)
+	qpm = SimpleNamespace(
+		sync_run=execution.sync_run,
+		async_run=execution.async_run,
+		read_cq=execution.read_cq,
+		register_event_notification=execution.register_event_notification,
+		test=control.test,
+		is_ready=control.is_ready,
+		shutdown=control.shutdown,
+	)
+	return selection["provider"], qpm
+
+
+def async_run_circuit(api, circuit_plan, reservation_id, read_cq=True):
 	start_time = time()
 
 	logging.defw_app(f"Application start: {start_time}")
 
-	total_circ = itr
-
-	qasm = []
-	qubits = []
-
-	for x in range(0, itr):
-		circs = cb(start_qubits, 1)
-		for i in range(0, len(circs)):
-			qubits.append(start_qubits)
-		qasm += circs
-
-		if increase:
-			start_qubits += 1
+	total_circ = len(circuit_plan)
 
 	runner = None
 	event_api = None
+	result_state = {"completed": 0, "results": []}
 	if not read_cq:
 		event_api = BaseEventAPI()
 		event_api.register_external()
 		logging.defw_app(f"Registering Event: {time()}")
 		api.register_event_notification(
-			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id())
-		runner = threading.Thread(target=result_reader, args=(len(qasm), event_api,))
+			me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id(),
+			reservation_id=reservation_id)
+		runner = threading.Thread(
+			target=result_reader, args=(total_circ, event_api, result_state,))
 		runner.start()
 
-	i = 0
-	for q in qasm:
-		info = {}
-		info['qasm'] = q
-		info['num_qubits'] = qubits[i]
-		info['num_shots'] = num_shots
-		info['compiler'] = 'staq'
+	for record in circuit_plan:
 		try:
-			api.async_run(info)
+			api.async_run(record["info"], reservation_id=reservation_id)
 		except Exception as e:
 			logging.defw_app(f"Got an exception {e} of type: {type(e)}")
 			logging.defw_app(e)
 			raise e
-		i += 1
 
 	if read_cq:
-		async_wait_read_cq(api, total_circ)
+		completed = async_wait_read_cq(api, total_circ, reservation_id)
 	else:
 		runner.join()
+		completed = result_state["completed"]
+
+	if completed != total_circ:
+		raise DEFwError(
+			f"only received {completed} of {total_circ} circuit completions")
 
 	logging.defw_app(f'thread joined at {time()}')
 
-	prformat(fg.orange + fg.bold, f"****{itr} {start_qubits} qubit circuits completed in {time() - start_time}")
+	duration = time() - start_time
+	max_qubits = max(record["num_qubits"] for record in circuit_plan)
+	prformat(fg.orange + fg.bold,
+		 f"****{total_circ} {max_qubits} qubit circuits completed in {duration}")
+	return {
+		"mode": "async",
+		"submitted_circuits": total_circ,
+		"completed_circuits": completed,
+		"duration_sec": duration,
+		"read_cq": read_cq,
+	}
 
 
-def run_circuit(api, cb, start, itr, num_shots, increase):
-	nqubits = start
-	for x in range(0, itr):
-		qasm = cb(nqubits, 1)
-
-		for q in qasm:
-			info = {}
-			info['qasm'] = q
-			info['num_qubits'] = x
-			info['num_shots'] = num_shots
-			info['compiler'] = 'staq'
-			try:
-				circ_result = api.sync_run(info)
-				logging.debug(yaml.dump(circ_result, sort_keys=False))
-				prformat(fg.green + fg.bold, yaml.dump(circ_result, sort_keys=False))
-			except Exception as e:
-				logging.defw_app(f"Got an exception {e} of type: {type(e)}")
-				logging.defw_app(e)
-				raise e
-		nqubits += increase
+def run_circuit(api, circuit_plan, reservation_id):
+	records = []
+	start_time = time()
+	for record in circuit_plan:
+		try:
+			circ_result = api.sync_run(
+				record["info"], reservation_id=reservation_id)
+			records.append({
+				"iteration": record["iteration"],
+				"num_qubits": record["num_qubits"],
+				"result": circ_result,
+			})
+			logging.debug(yaml.dump(circ_result, sort_keys=False))
+			prformat(fg.green + fg.bold, yaml.dump(circ_result, sort_keys=False))
+		except Exception as e:
+			logging.defw_app(f"Got an exception {e} of type: {type(e)}")
+			logging.defw_app(e)
+			raise e
+	return {
+		"mode": "sync",
+		"iterations": records,
+		"duration_sec": time() - start_time,
+	}
 
 
 # This will throw an exception if there is a problem
@@ -206,7 +267,7 @@ if __name__ == "__main__":
 			elif name in ['-o', '--shots']:
 				num_shots = int(value)
 			elif name in ['-s', '--increase']:
-				increase = int(value)
+				increase = parse_bool(value)
 			elif name in ['-y', '--run']:
 				runtype = value.lower()
 			elif name in ['-m', '--method']:
@@ -222,47 +283,64 @@ if __name__ == "__main__":
 				prformat(fg.red + fg.bold, f"Unknown parameters {name}:{value}")
 				me.exit()
 
-	from api_qpm import QPMType
-	# Grab a qpm if one exists
-	if not backend or backend == "tnqvm":
-		svc_type = QPMType.QPM_TYPE_TNQVM
-	elif backend == 'nwqsim':
-		svc_type = QPMType.QPM_TYPE_NWQSIM
-	elif backend == 'qb':
-		svc_type = QPMType.QPM_TYPE_QB
-	else:
-		raise DEFwError(f"Provided backend '{backend}' not supported")
-
-	rmgr = defw_get_resource_mgr()
-	qpm = defw_reserve_service_by_name(rmgr, 'QPM', svc_type=svc_type)[0]
-
-	wait = 0
-	while wait < system_up_timeout:
-		try:
-			qpm.is_ready()
-			break
-		except Exception as e:
-			if isinstance(e, DEFwNotReady):
-				logging.debug("QPM not ready yet")
-				wait += 1
-				sleep(1)
-			else:
-				raise e
-
+	qpm = None
+	reservation_id = None
+	resolved_backend = backend or "tnqvm"
 	try:
+		exit_rc = 0
+		resolved_backend, qpm = resolve_qpm(backend, system_up_timeout)
+
+		wait = 0
+		while wait < system_up_timeout:
+			try:
+				if qpm.is_ready().get("ready"):
+					break
+				wait += 1
+				time.sleep(1)
+			except Exception as e:
+				if isinstance(e, DEFwNotReady):
+					logging.debug("QPM not ready yet")
+					wait += 1
+					sleep(1)
+				else:
+					raise e
+
 		test_qpm(qpm)
+		method_name = getattr(op, "__name__", str(op))
+		circuit_plan = build_circuit_plan(
+			op, startqbit, num_shots, iterations, increase)
+		reservation_options = qfw_reservation_options(required=True)
+		reservation_id = reservation_options.get("reservation_id")
 
 		if runtype == "sync":
-			run_circuit(qpm, op, startqbit, iterations, num_shots, increase)
+			metrics = run_circuit(qpm, circuit_plan, reservation_id)
 		elif runtype == "async":
-			async_run_circuit(
-				qpm, op, start_qubits=startqbit, num_shots=num_shots,
-				itr=iterations, increase=increase, read_cq=False)
+			metrics = async_run_circuit(
+				qpm, circuit_plan, reservation_id, read_cq=False)
 		else:
 			raise ValueError(f"Unknown run type {runtype}. Expect: async, sync")
-		qpm.shutdown()
+		metrics["reservation_id"] = reservation_id
+		emit_result(
+			"supermarq",
+			parameters={
+				"run": runtype,
+				"iterations": iterations,
+				"startqbit": startqbit,
+				"shots": num_shots,
+				"increase": increase,
+				"method": method_name,
+				"backend": resolved_backend,
+			},
+			metrics=metrics,
+		)
 	except Exception as e:
 		logging.defw_app(f"QTM ran into an exception {e}")
 		traceback.print_exc()
-		qpm.shutdown()
+		exit_rc = 1
+	finally:
+		if qpm is not None:
+			if parse_bool(os.environ.get("QFW_SUPERMARQ_SHUTDOWN_QPM", "yes")):
+				qpm.shutdown()
+	if exit_rc:
+		sys.exit(exit_rc)
 	me.exit()

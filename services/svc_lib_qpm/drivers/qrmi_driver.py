@@ -50,8 +50,8 @@ class QrmiDriver(BaseDriver):
 		"get_dynamic_backend_info",  # target() -> dynamic architecture
 		"get_backend_info",          # target() -> native composite + qhw device
 		"run_circuit",
-		"get_last_job_timing",
-		"get_last_job_metadata",
+		"get_task_timing",
+		"get_task_metadata",
 	})
 
 	def __init__(self, descriptor=None):
@@ -59,8 +59,8 @@ class QrmiDriver(BaseDriver):
 		# binding/creds and, later, dynamic capability discovery.
 		self._descriptor = descriptor or {}
 		self._qrmi = None
-		self._resource_obj = None
-		self._target_cache = None
+		self._resource_objs = {}
+		self._target_cache = {}
 		self._last_job = None
 
 	def _resource(self):
@@ -79,14 +79,17 @@ class QrmiDriver(BaseDriver):
 
 	# --- QRMI resource binding ------------------------------------------
 
-	def _qc_alias(self):
+	def _qc_alias(self, credential=None):
+		credential = dict(credential or {})
 		value = (
-			self._descriptor.get("provider_device_id")
+			credential.get("provider_device_id")
+			or credential.get("quantum_computer")
+			or self._descriptor.get("provider_device_id")
 			or self._descriptor.get("provider-device-id"))
 		if value:
 			return value
 		try:
-			access = self._access()
+			access = self._access(credential=credential)
 		except Exception:
 			return self._descriptor.get("id")
 		return (
@@ -94,20 +97,31 @@ class QrmiDriver(BaseDriver):
 			or access.get("quantum_computer")
 			or self._descriptor.get("id"))
 
-	def _access(self):
+	def _access(self, credential=None):
 		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
 		# env vars the native svc_iqm_qpm uses, then fall back to the shared
 		# device-access config (util.device_access). Mirrors QdmiDriver._access.
+		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", "iqm")
-		base_url = os.environ.get("QFW_QC_URL")
-		token = os.environ.get("QFW_API_KEY")
+		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
+		token = (
+			credential.get("api_key") or
+			credential.get("token") or
+			os.environ.get("QFW_API_KEY"))
 		provider_device_id = (
-			self._descriptor.get("provider_device_id")
+			credential.get("provider_device_id")
+			or credential.get("quantum_computer")
+			or self._descriptor.get("provider_device_id")
 			or self._descriptor.get("provider-device-id"))
 		if not (base_url and token):
 			try:
 				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(provider=provider)
+				cfg = resolve_device_access(
+					provider=provider,
+					device_id=credential.get("device_id"),
+					user=credential.get("user"),
+					credential_hint=credential.get("credential_hint"),
+					credential_handle=credential.get("credential_handle"))
 			except Exception as exc:
 				raise DEFwExecutionError(
 					"QRMI driver could not resolve IQM device access for "
@@ -131,7 +145,7 @@ class QrmiDriver(BaseDriver):
 			"quantum_computer": provider_device_id,
 		}
 
-	def _ensure_iqm_isa_env(self, alias):
+	def _ensure_iqm_isa_env(self, alias, credential=None):
 		# QRMI's IQM resource reads its endpoint/token from
 		# {backend}_QRMI_IQM_ISA_ENDPOINT / {backend}_QRMI_IQM_ISA_TOKEN at
 		# construction (IQMServer::new). Inside a SLURM reservation the SPANK
@@ -144,6 +158,13 @@ class QrmiDriver(BaseDriver):
 		backend = alias.split(",")[0]
 		endpoint_var = f"{backend}_QRMI_IQM_ISA_ENDPOINT"
 		token_var = f"{backend}_QRMI_IQM_ISA_TOKEN"
+		if credential:
+			access = self._access(credential=credential)
+			if access.get("base_url"):
+				os.environ[endpoint_var] = access["base_url"]
+			if access.get("token"):
+				os.environ[token_var] = access["token"]
+			return
 		if os.environ.get(endpoint_var) and os.environ.get(token_var):
 			return
 		access = self._access()
@@ -160,42 +181,58 @@ class QrmiDriver(BaseDriver):
 				"device access (these are normally injected by the SPANK "
 				"plugin inside a reservation)")
 
-	def _qpu(self):
+	def _qpu(self, credential=None):
 		# Lazy: open the QRMI QuantumResource for this resource's IQM server.
 		# QRMI reads its credentials/config from the environment; target() is not
 		# reservation-bound, so introspection works without acquire() as long as
 		# the endpoint/token env vars are present (_ensure_iqm_isa_env supplies
 		# them from device-access config when no reservation has).
-		if self._resource_obj is not None:
-			return self._resource_obj
+		cache_key = self._credential_cache_key(credential)
+		if cache_key in self._resource_objs:
+			return self._resource_objs[cache_key]
 		qrmi = self._resource()
-		alias = self._qc_alias()
+		alias = self._qc_alias(credential=credential)
 		if not alias:
 			raise DEFwExecutionError(
 				"QRMI introspection needs a QFw device id; set "
 				"QFW_QPU_DEVICE_ID or configure a device descriptor")
-		self._ensure_iqm_isa_env(alias)
+		self._ensure_iqm_isa_env(alias, credential=credential)
 		try:
-			self._resource_obj = qrmi.QuantumResource(
+			resource_obj = qrmi.QuantumResource(
 					alias, qrmi.ResourceType.IQMServer)
 		except Exception as exc:
 			raise DEFwExecutionError(
 				f"failed to open QRMI IQM resource {alias!r}: {exc}") from exc
+		self._resource_objs[cache_key] = resource_obj
 		logging.debug("shim: QRMI IQM resource opened (%s)", alias)
-		return self._resource_obj
+		return resource_obj
 
-	def _target(self):
+	def _credential_cache_key(self, credential=None):
+		credential = dict(credential or {})
+		if not credential:
+			return ("default",)
+		return (
+			credential.get("url"),
+			credential.get("provider_device_id"),
+			credential.get("device_id"),
+			credential.get("user"),
+			credential.get("api_key") or credential.get("token"),
+		)
+
+	def _target(self, credential=None):
 		# QRMI target() is a remote call returning raw IQM JSON (dynamic
 		# architecture / calibration_set / quality_metrics). Parse it once per
 		# driver instance and serve every introspection call from the cache, so
 		# the four calls don't each re-fetch the same payload.
-		if self._target_cache is None:
+		cache_key = self._credential_cache_key(credential)
+		if cache_key not in self._target_cache:
 			try:
-				self._target_cache = json.loads(self._qpu().target().value)
+				self._target_cache[cache_key] = json.loads(
+					self._qpu(credential=credential).target().value)
 			except Exception as exc:
 				raise DEFwExecutionError(
 					f"failed to read QRMI target(): {exc}") from exc
-		return self._target_cache
+		return self._target_cache[cache_key]
 
 	def _arch_raw(self):
 		# Map target() to the {static_architecture, dynamic_architecture} shape
@@ -276,6 +313,7 @@ class QrmiDriver(BaseDriver):
 		# acquire/release, so there is no reservation step.
 		qrmi = self._resource()
 		info = getattr(circuit, "info", None) or {}
+		credential = getattr(circuit, "provider_credential", None)
 		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
 		qasm = info.get("qasm")
 		if not qasm:
@@ -287,7 +325,7 @@ class QrmiDriver(BaseDriver):
 		timeout = float(info.get("timeout", 300.0))
 		poll = float(info.get("poll_interval", 1.0))
 
-		target = self._target()
+		target = self._target(credential=credential)
 		dynamic = target.get("dynamic_quantum_architecture") or {}
 		calibration_set_id = (
 			info.get("calibration_set_id")
@@ -306,13 +344,13 @@ class QrmiDriver(BaseDriver):
 		timing = {}
 		start = time.monotonic()
 		try:
-			job_id = self._qpu().task_start(payload)
+			job_id = self._qpu(credential=credential).task_start(payload)
 		except Exception as exc:
 			raise DEFwExecutionError(
 				f"QRMI task_start failed: {exc}") from exc
 		timing["submit_seconds"] = time.monotonic() - start
 
-		status = self._poll_task(job_id, timeout, poll)
+		status = self._poll_task(job_id, timeout, poll, credential=credential)
 		timing["wait_seconds"] = (
 			time.monotonic() - start - timing["submit_seconds"])
 		if status != "completed":
@@ -324,7 +362,8 @@ class QrmiDriver(BaseDriver):
 
 		result_started = time.monotonic()
 		try:
-			result_json = json.loads(self._qpu().task_result(job_id).value)
+			result_json = json.loads(
+				self._qpu(credential=credential).task_result(job_id).value)
 		except Exception as exc:
 			raise DEFwExecutionError(
 				f"QRMI task_result failed: {exc}") from exc
@@ -381,13 +420,13 @@ class QrmiDriver(BaseDriver):
 				from exc
 		return iqmjson, json.loads(iqmjson)
 
-	def _poll_task(self, job_id, timeout, poll):
+	def _poll_task(self, job_id, timeout, poll, credential=None):
 		# Poll QRMI task_status until a terminal state; returns
 		# completed/failed/cancelled (or raises on timeout).
 		deadline = time.monotonic() + max(timeout, 0.0)
 		while True:
 			try:
-				raw = self._qpu().task_status(job_id)
+				raw = self._qpu(credential=credential).task_status(job_id)
 			except Exception as exc:
 				raise DEFwExecutionError(
 					f"QRMI task_status failed: {exc}") from exc
@@ -416,7 +455,7 @@ class QrmiDriver(BaseDriver):
 				f"{job.get('cid')!r})")
 		return job
 
-	def get_last_job_timing(self, cid=None):
+	def get_task_timing(self, cid=None):
 		job = self._last_job_for(cid)
 		return {
 			"cid": job.get("cid"),
@@ -424,7 +463,7 @@ class QrmiDriver(BaseDriver):
 			"status": job.get("status"),
 			"timing": job.get("timing") or {}}
 
-	def get_last_job_metadata(self, cid=None):
+	def get_task_metadata(self, cid=None):
 		job = self._last_job_for(cid)
 		return {
 			"cid": job.get("cid"),

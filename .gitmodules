@@ -8,3 +8,9 @@
 [submodule "external/qhw-iqm"]
 	path = external/qhw-iqm
 	url = git@github.com:openQSE/qhw-iqm.git
+[submodule "external/qhw-admission"]
+	path = external/qhw-admission
+	url = git@github.com:openQSE/qhw-admission.git
+[submodule "external/qhw-scheduler"]
+	path = external/qhw-scheduler
+	url = git@github.com:openQSE/qhw-scheduler.git

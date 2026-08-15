@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import select
 import sys
 import traceback
+from types import SimpleNamespace
 from time import sleep, time
 
 import yaml
-from api_qpm import QPM, QPMCapability, QPMType
-import defw
+from api_qpm_admission_control import QPMAdmissionControl
+from api_qpm_admission_policy_config import QPMAdmissionPolicyConfig
+from api_qpm_common import QPMCapability, QPMType
+from api_qpm_control import QPMControl
+from api_qpm_execution import QPMExecution
+from api_qpm_scheduler_control import QPMSchedulerControl
+from api_qpm_telemetry import QPMTelemetry
 from defw import me
-from defw_app_util import defw_get_resource_mgr
+from defw_app_util import defw_get_directory_service
 from defw_event_baseapi import BaseEventAPI
 from defw_exception import DEFwError, DEFwNotReady
 from defw_util import fg, prformat
+from qfw_example_context import qfw_reservation_options
+from qfw_example_report import emit_result, parse_bool
+from qfw_qiskit.qpm_resolver import QPMResolver
 
 EVENT_TYPE_CIRC_RESULT = 1
 DEFAULT_CALL_SEQUENCE = (
@@ -23,7 +33,7 @@ DEFAULT_CALL_SEQUENCE = (
 	"get_coupling_graph",
 	"get_calibration_snapshot",
 	"async_run",
-	"get_last_job_metadata",
+	"get_task_metadata",
 )
 # The composable device-introspection facet. Each of these can be routed to a
 # specific shim library from the client (lib=...), so --libs fans them out
@@ -38,7 +48,16 @@ INTROSPECTION_CALLS = (
 
 def exposed_qpm_api_names():
 	return {
-		name for name, value in vars(QPM).items()
+		name
+		for api_class in (
+			QPMExecution,
+			QPMAdmissionControl,
+			QPMAdmissionPolicyConfig,
+			QPMSchedulerControl,
+			QPMTelemetry,
+			QPMControl,
+		)
+		for name, value in vars(api_class).items()
 		if callable(value) and not name.startswith("_")
 	}
 
@@ -50,7 +69,7 @@ def validate_call_name(call):
 	if call not in api_names:
 		valid = sorted(api_names)
 		raise SystemExit(
-			f"unsupported --call {call!r}. Expected api_qpm QPM API "
+			f"unsupported --call {call!r}. Expected a category QPM API "
 			f"name. Valid APIs: {', '.join(valid)}")
 	return call
 
@@ -125,21 +144,6 @@ def introspection_api(call, qpm):
 	}[call]
 
 
-def fetch_capability_map(qpm):
-	# Best-effort per-resource gap map {call: [libs]}, used only to skip an
-	# introspection call a library does not serve during a --libs comparison.
-	# If unavailable, the fan-out simply attempts every requested library.
-	try:
-		cap_map = qpm.capability_map()
-		dump_result("capability_map", cap_map)
-		return cap_map
-	except Exception as exc:
-		prformat(
-			fg.red + fg.bold,
-			f"[shim-smoke] capability_map unavailable: {exc}")
-		return {}
-
-
 def run_introspection(call, qpm, libs, cap_map, failures):
 	# Run one introspection call once per requested library, in order, so the
 	# results can be compared back-to-back (e.g. QDMI then QRMI). In fan-out
@@ -158,42 +162,48 @@ def run_introspection(call, qpm, libs, cap_map, failures):
 		call_api(label, func, failures, **kwargs)
 
 
+def _binding_properties(binding):
+	service_record = binding.get("service_record", binding)
+	return dict(service_record.get("properties") or {})
+
+
 def reserve_shim_qpm(device_id, timeout):
-	rmgr = defw_get_resource_mgr()
-	svc_type = QPMType.QPM_TYPE_IQM | QPMType.QPM_TYPE_HARDWARE
-	svc_cap = QPMCapability.QPM_CAP_SUPERCONDUCTING
-	start = time()
-
-	while time() - start < timeout:
-		infos = rmgr.get_services("QPM", svc_type, svc_cap)
-		matches = []
-		for info in infos:
-			props = info.get_properties()
-			if props.get("provider") != "shim":
-				continue
-			if device_id and props.get("device_id") != device_id:
-				continue
-			matches.append(info)
-
-		if matches:
-			prformat(
-				fg.green + fg.bold,
-				f"selected shim QPM: {matches[0].get_properties()}")
-			return defw.connect_to_resource(matches, "QPM")[0]
-
-		sleep(1)
-
-	raise DEFwError(
-		f"failed to find shim QPM for device_id={device_id!r} "
-		f"within {timeout} seconds")
+	dirsvc = defw_get_directory_service()
+	qpm_type = QPMType.QPM_TYPE_HARDWARE
+	qpm_capability = QPMCapability.QPM_CAP_SUPERCONDUCTING
+	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
+	request = {
+		"service_type": "qfw.qpm",
+		"selector_resource": device_id,
+		"qpm_type": qpm_type,
+		"qpm_capabilities": qpm_capability,
+		"provider": "shim",
+		"timeout": timeout,
+	}
+	execution = resolver.connect(binding_name="execution", **request)
+	telemetry = resolver.connect(binding_name="telemetry", **request)
+	control = resolver.connect(binding_name="control", **request)
+	return SimpleNamespace(
+		async_run=execution.async_run,
+		get_task_metadata=execution.get_task_metadata,
+		register_event_notification=execution.register_event_notification,
+		get_backend_info=telemetry.get_backend_info,
+		get_device_info=telemetry.get_device_info,
+		get_coupling_graph=telemetry.get_coupling_graph,
+		get_calibration_snapshot=telemetry.get_calibration_snapshot,
+		test=control.test,
+		is_ready=control.is_ready,
+		shutdown=control.shutdown,
+	)
 
 
 def wait_ready(qpm, timeout):
 	start = time()
 	while time() - start < timeout:
 		try:
-			qpm.is_ready()
-			return
+			if qpm.is_ready().get("ready"):
+				return
+			sleep(1)
 		except Exception as exc:
 			if isinstance(exc, DEFwNotReady):
 				sleep(1)
@@ -213,6 +223,10 @@ def call_api(label, func, failures, **kwargs):
 		dump_result(label, result)
 		return result
 	except Exception as exc:
+		if can_skip_qrmi_device_access(kwargs.get("lib"), exc):
+			print(f"[shim-smoke] {label}: SKIPPED "
+			      "(QRMI device access is not configured)")
+			return None
 		failures.append((label, exc))
 		prformat(fg.red + fg.bold, f"[shim-smoke] {label}: FAILED: {exc}")
 		traceback.print_exc()
@@ -253,11 +267,68 @@ def wait_for_async_result(event_api, expected_cid, timeout):
 		f"timed out waiting for circuit result cid={expected_cid!r}")
 
 
-def run_circuit(qpm, lib, shots, timeout):
+def require_provider_completion():
+	value = os.environ.get("QFW_SHIM_SMOKE_REQUIRE_PROVIDER", "")
+	return value.lower() in ("1", "true", "yes", "on")
+
+
+def live_qrmi_token_present():
+	token = os.environ.get("QFW_API_KEY")
+	if token and token != "dummy-api-key":
+		return True
+	for name, value in os.environ.items():
+		if name.endswith("_QRMI_IQM_ISA_TOKEN") and value and (
+				value != "dummy-api-key"):
+			return True
+	return False
+
+
+def missing_device_access_error(exc):
+	text = str(exc)
+	return (
+		"QPU credential DB was not found" in text or
+		"QRMI driver could not resolve IQM device access" in text or
+		"set QFW_QC_URL/QFW_API_KEY" in text)
+
+
+def can_skip_qrmi_device_access(lib, exc):
+	if require_provider_completion() or live_qrmi_token_present():
+		return False
+	if lib not in (None, "qrmi"):
+		return False
+	return missing_device_access_error(exc)
+
+
+def can_skip_qrmi_provider_completion(qpm, lib):
+	if require_provider_completion() or live_qrmi_token_present():
+		return False
+	if lib not in (None, "qrmi"):
+		return False
+	try:
+		backend_info = qpm.get_backend_info(lib="qrmi")
+	except Exception as exc:
+		if can_skip_qrmi_device_access("qrmi", exc):
+			print("[shim-smoke] run_circuit: SKIPPED provider completion "
+			      "(QRMI device access is not configured)")
+			return True
+		prformat(
+			fg.red + fg.bold,
+			f"[shim-smoke] QRMI provider preflight unavailable: {exc}")
+		return False
+	active_qubits = backend_info.get("active_qubits") or []
+	if active_qubits:
+		return False
+	print("[shim-smoke] run_circuit: SKIPPED provider completion "
+	      "(QRMI target has no active qubits and no live token is present)")
+	return True
+
+
+def run_circuit(qpm, lib, shots, timeout, reservation_id):
 	event_api = BaseEventAPI()
 	event_api.register_external()
 	qpm.register_event_notification(
-		me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id())
+		me.my_endpoint(), EVENT_TYPE_CIRC_RESULT, event_api.class_id(),
+		reservation_id=reservation_id)
 
 	info = {
 		"qasm": smoke_qasm(),
@@ -268,36 +339,53 @@ def run_circuit(qpm, lib, shots, timeout):
 	if lib:
 		info["lib"] = lib
 
-	cid = qpm.async_run(info)
+	response = qpm.async_run(info, reservation_id)
+	dump_result("async_run", response)
+	cid = response.get("cid") if isinstance(response, dict) else response
+	if not cid:
+		raise DEFwError(f"async_run did not return a circuit id: {response}")
 	result = wait_for_async_result(event_api, cid, timeout)
 	dump_result("run_circuit", result)
 	if result.get("rc") != 0:
+		if can_skip_qrmi_provider_completion(qpm, lib):
+			return cid, result, False
 		raise DEFwError(f"run_circuit failed for cid={cid}: {result}")
-	return cid, result
+	return cid, result, True
 
 
-def run_named_call(call, qpm, libs, cap_map, failures, args, cid=None):
+def run_named_call(call, qpm, libs, cap_map, failures, args,
+		   cid=None, reservation_id=None):
 	if call == "test":
 		call_api("test", qpm.test, failures)
 		return cid
 	if call in INTROSPECTION_CALLS:
 		run_introspection(call, qpm, libs, cap_map, failures)
 		return cid
-	if call == "get_last_job_metadata":
+	if call == "get_task_metadata":
 		# Execution-facet call: stays with the single --lib selection (bound to
 		# the execution owner), not the introspection preference list.
-		exec_lib = requested_lib(args)
-		kwargs = {"lib": exec_lib} if exec_lib else {}
+		if cid is None and args.call != "get_task_metadata":
+			print("[shim-smoke] get_task_metadata: SKIPPED "
+			      "(async_run did not complete on the provider)")
+			return cid
 		call_api(
-			"get_last_job_metadata", qpm.get_last_job_metadata,
-			failures, cid=cid, **kwargs)
+			"get_task_metadata", qpm.get_task_metadata,
+			failures, task_id=cid,
+			reservation_id=reservation_id)
 		return cid
+
 	if call == "async_run":
 		try:
-			cid, _ = run_circuit(
+			cid, _, completed = run_circuit(
 				qpm, requested_lib(args), args.shots,
-				args.circuit_run_timeout)
+				args.circuit_run_timeout, reservation_id)
+			if not completed:
+				cid = None
 		except Exception as exc:
+			if can_skip_qrmi_device_access(requested_lib(args), exc):
+				print("[shim-smoke] async_run: SKIPPED "
+				      "(QRMI device access is not configured)")
+				return None
 			failures.append(("async_run", exc))
 			prformat(
 				fg.red + fg.bold,
@@ -306,7 +394,7 @@ def run_named_call(call, qpm, libs, cap_map, failures, args, cid=None):
 		return cid
 
 	raise DEFwError(
-		f"{call!r} is an api_qpm API, but this smoke test does not have "
+		f"{call!r} is a QPM category API, but this smoke test does not have "
 		"a fixture for it")
 
 
@@ -330,19 +418,47 @@ def main():
 	qpm = reserve_shim_qpm(args.device_id, args.system_up_timeout)
 	try:
 		wait_ready(qpm, args.system_up_timeout)
-		# Only needed to skip unsupported libraries during a --libs comparison.
-		cap_map = fetch_capability_map(qpm) if len(libs) > 1 else {}
+		cap_map = {}
 		cid = None
 		calls = (args.call,) if args.call else DEFAULT_CALL_SEQUENCE
+		reservation_id = qfw_reservation_options(
+			required="async_run" in calls).get("reservation_id")
+		if "async_run" in calls:
+			dump_result("reservation_context", {
+				"reservation_id": reservation_id,
+			})
 		for call in calls:
-			cid = run_named_call(call, qpm, libs, cap_map, failures, args, cid)
+			cid = run_named_call(
+				call, qpm, libs, cap_map, failures, args, cid,
+				reservation_id=reservation_id)
 	finally:
 		try:
-			qpm.shutdown()
+			if parse_bool(os.environ.get(
+					"QFW_SHIM_SMOKE_SHUTDOWN_QPM", "yes")):
+				qpm.shutdown()
 		except Exception:
 			pass
 
-	return summarize_failures(failures)
+	rc = summarize_failures(failures)
+	emit_result(
+		"shim-smoke",
+		status="ok" if rc == 0 else "error",
+		parameters={
+			"lib": args.lib,
+			"libs": libs,
+			"call": args.call,
+			"device_id": args.device_id,
+			"shots": args.shots,
+		},
+		metrics={
+			"failed_call_count": len(failures),
+			"failed_calls": [
+				{"label": label, "error": f"{type(exc).__name__}: {exc}"}
+				for label, exc in failures
+			],
+		},
+	)
+	return rc
 
 
 if __name__ == "__main__":
@@ -352,5 +468,8 @@ if __name__ == "__main__":
 	except Exception:
 		traceback.print_exc()
 	finally:
-		me.exit()
+		try:
+			me.exit()
+		except SystemExit:
+			pass
 	sys.exit(rc)

@@ -1,0 +1,330 @@
+#!/usr/bin/env bash
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	echo "qfw-activate must be sourced" >&2
+	exit 2
+fi
+
+_qfw_requested_venv=""
+_qfw_parse_args=0
+case "${1:-}" in
+	--qfw-no-args|--venv|--venv=*|-h|--help) _qfw_parse_args=1 ;;
+esac
+
+if [[ "${_qfw_parse_args}" == "1" ]]; then
+	while [[ "$#" -gt 0 ]]; do
+		case "$1" in
+			--qfw-no-args)
+				shift
+				break
+				;;
+			--venv)
+				if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
+					echo "qfw-activate: --venv requires a path" >&2
+					unset _qfw_requested_venv _qfw_parse_args
+					return 2
+				fi
+				_qfw_requested_venv="$2"
+				shift 2
+				;;
+			--venv=*)
+				_qfw_requested_venv="${1#--venv=}"
+				if [[ -z "${_qfw_requested_venv}" ]]; then
+					echo "qfw-activate: --venv requires a path" >&2
+					unset _qfw_requested_venv _qfw_parse_args
+					return 2
+				fi
+				shift
+				;;
+			-h|--help)
+				cat <<'EOF'
+Usage: source qfw-activate [--venv PATH]
+
+Options:
+  --venv PATH  Activate PATH first, then layer QFw and DEFw paths on top.
+  -h, --help   Show this help text.
+EOF
+				unset _qfw_requested_venv _qfw_parse_args
+				return 0
+				;;
+			*)
+				echo "qfw-activate: unsupported argument: $1" >&2
+				unset _qfw_requested_venv _qfw_parse_args
+				return 2
+				;;
+		esac
+	done
+fi
+
+if [[ -n "${_QFW_ACTIVE:-}" ]]; then
+	if [[ -z "${_qfw_requested_venv}" ]]; then
+		unset _qfw_requested_venv _qfw_parse_args
+		return 0
+	fi
+	if declare -F qfw_deactivate >/dev/null 2>&1; then
+		qfw_deactivate
+	else
+		unset _QFW_ACTIVE
+	fi
+fi
+
+_qfw_resolve_script_dir() {
+	local source="$1"
+	local dir
+
+	while [[ -L "${source}" ]]; do
+		dir="$(cd -P "$(dirname "${source}")" && pwd)"
+		source="$(readlink "${source}")"
+		[[ "${source}" == /* ]] || source="${dir}/${source}"
+	done
+
+	cd -P "$(dirname "${source}")" && pwd
+}
+
+_qfw_prepend_path() {
+	local var_name="$1"
+	local path_value="$2"
+	local current_value="${!var_name:-}"
+
+	[[ -d "${path_value}" ]] || return 0
+	case ":${current_value}:" in
+		*":${path_value}:"*) return 0 ;;
+	esac
+	if [[ -n "${current_value}" ]]; then
+		export "${var_name}=${path_value}:${current_value}"
+	else
+		export "${var_name}=${path_value}"
+	fi
+}
+
+_qfw_save_var() {
+	local var_name="$1"
+	local old_name="_QFW_OLD_${var_name}"
+	local set_name="_QFW_OLD_${var_name}_SET"
+
+	if [[ -v "${var_name}" ]]; then
+		export "${old_name}=${!var_name}"
+		export "${set_name}=1"
+	else
+		export "${old_name}="
+		unset "${set_name}"
+	fi
+}
+
+_qfw_restore_var() {
+	local var_name="$1"
+	local old_name="_QFW_OLD_${var_name}"
+	local set_name="_QFW_OLD_${var_name}_SET"
+
+	if [[ "${!set_name:-}" == "1" ]]; then
+		export "${var_name}=${!old_name}"
+	else
+		unset "${var_name}"
+	fi
+	unset "${old_name}" "${set_name}"
+}
+
+_qfw_active_venv_python_paths() {
+	if [[ -z "${VIRTUAL_ENV:-}" || ! -x "${VIRTUAL_ENV}/bin/python" ]]; then
+		return 0
+	fi
+
+	"${VIRTUAL_ENV}/bin/python" - <<'PY'
+import site
+import sys
+
+expected = "@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@"
+actual = f"{sys.version_info[0]}.{sys.version_info[1]}"
+if actual != expected:
+    raise SystemExit(0)
+
+paths = []
+try:
+    paths.extend(site.getsitepackages())
+except Exception:
+    pass
+try:
+    paths.append(site.getusersitepackages())
+except Exception:
+    pass
+for item in sys.path:
+    if item and ("site-packages" in item or "dist-packages" in item):
+        paths.append(item)
+seen = set()
+for item in paths:
+    if item and item not in seen:
+        seen.add(item)
+        print(item)
+PY
+}
+
+_qfw_activate_requested_venv() {
+	local requested_venv="$1"
+	local resolved_venv
+	local active_venv=""
+
+	[[ -n "${requested_venv}" ]] || return 0
+	if [[ ! -d "${requested_venv}" ]]; then
+		echo "qfw-activate: virtual environment not found: ${requested_venv}" >&2
+		return 2
+	fi
+	resolved_venv="$(cd "${requested_venv}" && pwd)"
+	if [[ ! -r "${resolved_venv}/bin/activate" ||
+	      ! -x "${resolved_venv}/bin/python" ]]; then
+		echo "qfw-activate: invalid virtual environment: ${resolved_venv}" >&2
+		return 2
+	fi
+	if [[ -n "${VIRTUAL_ENV:-}" && -d "${VIRTUAL_ENV}" ]]; then
+		active_venv="$(cd "${VIRTUAL_ENV}" && pwd)"
+	fi
+	if [[ -n "${active_venv}" && "${active_venv}" != "${resolved_venv}" ]]; then
+		echo "qfw-activate: switching virtual environment from ${VIRTUAL_ENV} to ${resolved_venv}" >&2
+	fi
+	if [[ "${active_venv}" != "${resolved_venv}" ]]; then
+		# shellcheck source=/dev/null
+		source "${resolved_venv}/bin/activate"
+	fi
+}
+
+_qfw_activate_requested_venv "${_qfw_requested_venv}"
+_qfw_activate_rc=$?
+if [[ "${_qfw_activate_rc}" -ne 0 ]]; then
+	unset _qfw_requested_venv _qfw_parse_args _qfw_activate_rc
+	unset -f _qfw_active_venv_python_paths
+	unset -f _qfw_resolve_script_dir
+	unset -f _qfw_prepend_path
+	unset -f _qfw_save_var
+	unset -f _qfw_restore_var
+	unset -f _qfw_activate_requested_venv
+	return 2
+fi
+unset _qfw_activate_rc
+
+_qfw_script_dir="$(_qfw_resolve_script_dir "${BASH_SOURCE[0]}")"
+_qfw_script_prefix="$(cd "${_qfw_script_dir}/.." && pwd)"
+_qfw_cmake_source_prefix="@CMAKE_CURRENT_SOURCE_DIR@"
+_qfw_cmake_generated_prefix="@QFW_GENERATED_DIR@"
+if [[ -d "${_qfw_cmake_source_prefix}/share/qfw" ]]; then
+	_qfw_cmake_source_prefix="$(
+		cd "${_qfw_cmake_source_prefix}" && pwd
+	)"
+fi
+if [[ -d "${_qfw_cmake_generated_prefix}" ]]; then
+	_qfw_cmake_generated_prefix="$(
+		cd "${_qfw_cmake_generated_prefix}" && pwd
+	)"
+fi
+
+for _qfw_var in \
+	PATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
+	QFW_LIBEXEC_DIR QFW_SHARE_DIR QFW_CONFIG_DIR QFW_SITE_CONFIG \
+	QFW_RUN_BASE_DIR DEFW_PREFIX DEFW_PATH DEFW_CONFIG_PATH \
+	DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH; do
+	_qfw_save_var "${_qfw_var}"
+done
+unset _qfw_var
+
+export _QFW_ACTIVE=1
+if [[ -z "${QFW_PREFIX:-}" &&
+      "${_qfw_script_prefix}" == "${_qfw_cmake_generated_prefix}" &&
+      -d "${_qfw_cmake_source_prefix}/share/qfw" ]]; then
+	export QFW_PREFIX="${_qfw_cmake_source_prefix}"
+else
+	export QFW_PREFIX="${QFW_PREFIX:-${_qfw_script_prefix}}"
+fi
+if [[ -x "${_qfw_script_dir}/qfw-setup" && "${_qfw_script_dir}" != "${QFW_PREFIX}/bin" ]]; then
+	export QFW_BIN_PATH="${_qfw_script_dir}"
+elif [[ -n "${QFW_BIN_PATH:-}" ]]; then
+	export QFW_BIN_PATH
+else
+	export QFW_BIN_PATH="${QFW_PREFIX}/bin"
+fi
+if [[ -x "${_qfw_script_dir}/../libexec/qfw/qfw-setup-driver" ]]; then
+	export QFW_LIBEXEC_DIR="$(cd "${_qfw_script_dir}/../libexec/qfw" && pwd)"
+elif [[ -d "${QFW_PREFIX}/libexec/qfw" ]]; then
+	export QFW_LIBEXEC_DIR="${QFW_PREFIX}/libexec/qfw"
+else
+	export QFW_LIBEXEC_DIR="${QFW_PREFIX}/setup"
+fi
+export QFW_SHARE_DIR="${QFW_PREFIX}/share/qfw"
+export QFW_CONFIG_DIR="${QFW_CONFIG_DIR:-/etc/openqse/qfw}"
+export QFW_SITE_CONFIG="${QFW_SITE_CONFIG:-${QFW_SHARE_DIR}/config/site.yaml}"
+export QFW_RUN_BASE_DIR="${QFW_RUN_BASE_DIR:-${TMPDIR:-/tmp}/qfw-runs}"
+
+if [[ -z "${DEFW_PREFIX:-}" ]]; then
+	if [[ "@QFW_DEFAULT_DEFW_PREFIX@" != "" && "@QFW_DEFAULT_DEFW_PREFIX@" != "self" ]]; then
+		export DEFW_PREFIX="@QFW_DEFAULT_DEFW_PREFIX@"
+	elif [[ -d "${QFW_PREFIX}/DEFw" && ! -x "${QFW_PREFIX}/bin/defwp" ]]; then
+		export DEFW_PREFIX="${QFW_PREFIX}/DEFw"
+	else
+		export DEFW_PREFIX="${QFW_PREFIX}"
+	fi
+fi
+export DEFW_PATH="${DEFW_PATH:-${DEFW_PREFIX}}"
+if [[ -z "${DEFW_CONFIG_PATH:-}" ]]; then
+	if [[ -r "${DEFW_PREFIX}/share/defw/config/defw_generic.yaml" ]]; then
+		export DEFW_CONFIG_PATH="${DEFW_PREFIX}/share/defw/config/defw_generic.yaml"
+	else
+		export DEFW_CONFIG_PATH="${DEFW_PREFIX}/python/config/defw_generic.yaml"
+	fi
+fi
+
+_qfw_prepend_path PATH "${QFW_BIN_PATH}"
+_qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/lib"
+_qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/src"
+while IFS= read -r _qfw_venv_path; do
+	[[ -n "${_qfw_venv_path}" ]] || continue
+	_qfw_prepend_path PYTHONPATH "${_qfw_venv_path}"
+done < <(_qfw_active_venv_python_paths)
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/lib64/python@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@/site-packages"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/lib64/python@Python3_VERSION_MAJOR@.@Python3_VERSION_MINOR@/site-packages"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/@QFW_PYTHON_INSTALL_DIR@"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/lib/qfw/services"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/lib/qfw/service-apis"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/setup"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/backends"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/services"
+_qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/service-apis"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/python"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/src"
+
+if [[ -d "${QFW_PREFIX}/lib/qfw/services" ]]; then
+	export DEFW_EXTERNAL_SERVICES_PATH="${DEFW_EXTERNAL_SERVICES_PATH:-${QFW_PREFIX}/lib/qfw/services}"
+else
+	export DEFW_EXTERNAL_SERVICES_PATH="${DEFW_EXTERNAL_SERVICES_PATH:-${QFW_PREFIX}/services}"
+fi
+if [[ -d "${QFW_PREFIX}/lib/qfw/service-apis" ]]; then
+	export DEFW_EXTERNAL_SERVICE_APIS_PATH="${DEFW_EXTERNAL_SERVICE_APIS_PATH:-${QFW_PREFIX}/lib/qfw/service-apis}"
+else
+	export DEFW_EXTERNAL_SERVICE_APIS_PATH="${DEFW_EXTERNAL_SERVICE_APIS_PATH:-${QFW_PREFIX}/service-apis}"
+fi
+
+qfw_deactivate() {
+	if [[ -z "${_QFW_ACTIVE:-}" ]]; then
+		return 0
+	fi
+
+	local _qfw_var
+	for _qfw_var in \
+		PATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
+		QFW_LIBEXEC_DIR QFW_SHARE_DIR QFW_CONFIG_DIR QFW_SITE_CONFIG \
+		QFW_RUN_BASE_DIR DEFW_PREFIX DEFW_PATH DEFW_CONFIG_PATH \
+		DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH; do
+		_qfw_restore_var "${_qfw_var}"
+	done
+	unset _qfw_var
+	unset _QFW_ACTIVE
+	unset -f qfw_deactivate
+	unset -f _qfw_active_venv_python_paths
+	unset -f _qfw_resolve_script_dir
+	unset -f _qfw_prepend_path
+	unset -f _qfw_save_var
+	unset -f _qfw_restore_var
+	unset -f _qfw_activate_requested_venv
+}
+
+unset _qfw_script_dir _qfw_script_prefix
+unset _qfw_cmake_source_prefix _qfw_cmake_generated_prefix
+unset _qfw_venv_path
+unset _qfw_requested_venv _qfw_parse_args

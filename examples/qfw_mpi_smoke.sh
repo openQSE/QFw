@@ -1,15 +1,14 @@
 #!/bin/bash
 
-set -xe
+set -euo pipefail
+set -x
 
-cleanup() {
-	qfw_teardown.sh || true
-}
-trap cleanup EXIT
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
 
-qfw_setup.sh --services-config "$QFW_PATH/examples/qfw_mpi_smoke_services.yaml"
-qfw_srun.sh --load-modules api_mpi_smoke \
-	"$QFW_PATH/examples/tests/test_mpi_smoke.py"
-
-trap - EXIT
-qfw_teardown.sh
+qfw_example_begin "mpi-smoke" "$@"
+qfw_example_setup_local_services qfw_mpi_smoke_services.yaml mpi-smoke
+qfw_example_srun_with_modules api_mpi_smoke \
+	--nodes 1 \
+	--ntasks 1 \
+	"$(qfw_example_path tests/test_mpi_smoke.py)"

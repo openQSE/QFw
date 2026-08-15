@@ -1,6 +1,9 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
 
 usage() {
 	cat <<EOF
@@ -17,7 +20,7 @@ Optional:
                        Useful calls include test, get_backend_info,
                        get_device_info, get_coupling_graph,
                        get_calibration_snapshot, async_run, and
-                       get_last_job_metadata.
+                       get_task_metadata.
 
 The server validates whether the selected library supports each requested API.
 EOF
@@ -25,15 +28,21 @@ EOF
 
 lib=""
 libs=""
+shots=100
+device_id="ornl-iqm-20q"
 capture=""
 for arg in "$@"; do
 	case "${capture}" in
 		lib)  lib="${arg}";  capture=""; continue ;;
 		libs) libs="${arg}"; capture=""; continue ;;
+		shots) shots="${arg}"; capture=""; continue ;;
+		device_id) device_id="${arg}"; capture=""; continue ;;
 	esac
 	case "${arg}" in
 		--lib)  capture="lib" ;;
 		--libs) capture="libs" ;;
+		--shots) capture="shots" ;;
+		--device-id) capture="device_id" ;;
 	esac
 done
 
@@ -52,16 +61,21 @@ if [[ -n "${lib}" && "${lib}" != "qrmi" && "${lib}" != "qdmi" ]]; then
 	exit 1
 fi
 
-cleanup() {
-	qfw_teardown.sh >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 echo "Starting QFw shim smoke test with ${libs:+libs=${libs} }${lib:+lib=${lib}}"
-qfw_setup.sh --services-config "$QFW_PATH/examples/qfw_shim_smoke_services.yaml"
-qfw_srun.sh --load-modules api_qpm \
-	"$QFW_PATH/examples/tests/test_shim_smoke.py" "$@"
+qfw_example_begin "shim-smoke" "$@"
+qfw_example_setup_local_services qfw_shim_smoke_services.yaml shim-ornl-20q
+DEFW_ONLY_LOAD_MODULE=api_qpm_execution,api_qpm_telemetry,api_qpm_control \
+	QFW_SHIM_SMOKE_SHUTDOWN_QPM=no \
+	qfw_example_slurm_driver \
+		--backend shim \
+		--example qfw_shim_smoke \
+		--qubits 1 \
+		--shots "${shots}" \
+		--count 1 \
+		--operation async_run \
+		--nodes 1 \
+		--ntasks 1 \
+		--target-device "${device_id}" \
+		-- "$(qfw_example_path tests/test_shim_smoke.py)" "$@"
 
-trap - EXIT
 echo "Stopping QFw shim smoke test"
-qfw_teardown.sh

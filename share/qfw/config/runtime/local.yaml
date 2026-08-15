@@ -1,0 +1,13 @@
+resolver:
+  scope-order:
+    - local
+
+local-services:
+  start-prte: true
+  start-dirsvc: true
+  start-qpm: true
+  dirsvc:
+    name: qfw-local-dirsvc
+    bind-host: 127.0.0.1
+    port: auto
+  service-manifest: <prefix>/share/qfw/config/services/local-services.yaml

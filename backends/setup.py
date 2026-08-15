@@ -4,7 +4,7 @@
 
 # It has the QTM which gets trigerred when a sbatch job is received.
 # This QTM then starts up the DVM environment (phase 1) and starts up
-# different components of the QFw framework like resource manager, QPM
+# different components of the QFw framework like the directory service, QPM
 # (which trigers QRCs start using config that sbatch passes).
 
 from setuptools import find_packages, setup

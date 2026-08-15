@@ -12,6 +12,37 @@ from defw_exception import DEFwError, DEFwInProgress, DEFwNotFound
 from .qfw_metadata import get_qubit_mapping
 
 
+EXECUTION_CONTEXT_KEYS = (
+	"reservation_id",
+	"token",
+	"timeout",
+	"cancel_on_timeout",
+)
+
+
+def normalize_reservation_id(value):
+	if value is None:
+		return None
+	if isinstance(value, str):
+		value = value.strip()
+		if not value:
+			raise DEFwError("reservation_id must not be empty")
+		try:
+			value = int(value, 0)
+		except ValueError as exc:
+			raise DEFwError(
+				f"reservation_id must be an unsigned 64-bit integer: "
+				f"{value!r}") from exc
+	if isinstance(value, bool) or not isinstance(value, int):
+		raise DEFwError(
+			f"reservation_id must be an unsigned 64-bit integer: "
+			f"{value!r}")
+	if value < 0 or value > 0xffffffffffffffff:
+		raise DEFwError(
+			f"reservation_id must fit in uint64_t: {value!r}")
+	return value
+
+
 class QFwJob(Job):
 	def __init__(self, backend, qpm, event_api, qobj, options):
 		self._job_id = str(uuid.uuid4())
@@ -50,12 +81,27 @@ class QFwJob(Job):
 			info["return_statevector"] = True
 
 		try:
-			cid = self._qpm.async_run(info)
+			context = self._execution_context()
+			response = self._qpm.async_run(info, **context)
+			cid = _async_response_cid(response)
 			return cid
 		except Exception as e:
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
+
+	def _execution_context(self):
+		context = {
+			key: self._options[key]
+			for key in EXECUTION_CONTEXT_KEYS
+			if key in self._options
+		}
+		if "reservation_id" in context:
+			context["reservation_id"] = normalize_reservation_id(
+				context["reservation_id"])
+		if not context.get("reservation_id"):
+			raise DEFwError("reservation_id is required for QPM execution")
+		return context
 
 	def submit(self):
 		if isinstance(self._qobj, QuantumCircuit):
@@ -80,14 +126,21 @@ class QFwJob(Job):
 		start = time.time()
 		logging.defw_app(f"result reader start time: {start}")
 		event_fd = self._qpm_event_api.fileno()
+		expected_cids = {list(entry.keys())[0] for entry in cid_list}
+		completed_cids = set()
 		while time.time() - start < circuit_run_timeout and total_circuits_completed != total_circ:
 			readable, _, _ = select.select([event_fd], [], [], 1)
 			if len(readable) > 0 and event_fd not in readable:
 				raise DEFwError("Something wrong with select")
 			if len(readable) > 0:
-				r = self._qpm_event_api.get()
-				results += r
-				total_circuits_completed += len(r)
+				for event in self._qpm_event_api.get():
+					payload = event.get_event()
+					cid = payload.get("cid") if isinstance(payload, dict) else None
+					if cid not in expected_cids or cid in completed_cids:
+						continue
+					results.append(event)
+					completed_cids.add(cid)
+					total_circuits_completed += 1
 
 		logging.defw_app(
 			f"Result reader thread ending. Events: {total_circuits_completed}."
@@ -167,6 +220,8 @@ class QFwJob(Job):
 		res_wait_start = time.time()
 		qpm_results = self._result_reader(self._cid_list)
 		self._result_wait_time = time.time() - res_wait_start
+		if not qpm_results:
+			raise DEFwError("no QPM circuit results were received")
 
 		if not qpm_results:
 			# _result_reader returns early when it times out; with no completed
@@ -194,7 +249,8 @@ class QFwJob(Job):
 
 			circuit = qr['exp']
 			# Extract metadata directly from circuit
-			creg_sizes = [[creg.name, creg.size] for creg in circuit.cregs]
+			creg_sizes = [
+				[creg.name, creg.size] for creg in circuit.cregs]
 			result_dict = {
 				"header": {
 					"name": circuit.name if circuit.name else "circuit",
@@ -224,16 +280,20 @@ class QFwJob(Job):
 			"results": result_list,
 			"status": "COMPLETED",
 			"success": True,
-			"overall_time_taken": (self._submission_time + self._result_wait_time),
+			"overall_time_taken": (
+				self._submission_time + self._result_wait_time),
 			"time_taken": out["time_taken"],
 			"memory": True,
 		}
 
-		logging.defw_app(f"INDIVIDUAL CIRCUIT Time Taken by QFwBackend = {out['time_taken']}")
-		logging.defw_app(f"overall_time_taken: {self._submission_time}+{self._result_wait_time}")
+		logging.defw_app(
+			f"INDIVIDUAL CIRCUIT Time Taken by QFwBackend = "
+			f"{out['time_taken']}")
+		logging.defw_app(
+			f"overall_time_taken: {self._submission_time}+"
+			f"{self._result_wait_time}")
 
 		self._backend.dump_statistics()
-
 		return Result.from_dict(result)
 
 	def status(self):
@@ -271,3 +331,9 @@ class QFwJob(Job):
 
 	def options(self):
 		return self._options
+
+
+def _async_response_cid(response):
+	if isinstance(response, dict):
+		return response["cid"]
+	return response

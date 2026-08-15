@@ -104,6 +104,51 @@ def load_qiskit_circuit(qasm):
 			f"failed to parse OpenQASM through qiskit: {exc}") from exc
 
 
+def _iqm_backend_calibration_set_id(backend):
+	calibration_set_id = getattr(backend, "_calibration_set_id", None)
+	return str(calibration_set_id) if calibration_set_id is not None else None
+
+
+def transpile_qiskit_to_iqm(qasm, client, calibration_set_id=None, mapping=None):
+	Circuit, _ = load_iqm_pulse_module()
+	try:
+		from iqm.qiskit_iqm import IQMBackend, transpile_to_IQM
+	except Exception as exc:
+		raise DEFwExecutionError(
+			"iqm.qiskit_iqm is required to transpile qiskit circuits "
+			f"for IQM execution: {exc}") from exc
+
+	qiskit_circuit = load_qiskit_circuit(qasm)
+	try:
+		backend = IQMBackend(client, calibration_set_id=calibration_set_id)
+		restrict_to_qubits = None
+		if mapping:
+			index_to_name = logical_to_physical_qubits(
+				qiskit_circuit, backend.architecture, mapping)
+			restrict_to_qubits = list(index_to_name.values())
+		transpiled = transpile_to_IQM(
+			qiskit_circuit,
+			backend,
+			restrict_to_qubits=restrict_to_qubits,
+		)
+		iqm_circuit = backend.serialize_circuit(transpiled)
+	except Exception as exc:
+		raise DEFwExecutionError(
+			"IQM could not transpile the circuit to native operations. "
+			f"Error: {exc}") from exc
+
+	metadata = dict(getattr(iqm_circuit, "metadata", None) or {})
+	metadata["qfw_transpiled_to_iqm"] = True
+	effective_calibration_set_id = _iqm_backend_calibration_set_id(backend)
+	if effective_calibration_set_id is not None:
+		metadata["iqm_calibration_set_id"] = effective_calibration_set_id
+	return Circuit(
+		name=iqm_circuit.name or qiskit_circuit.name or "qfw_iqm_circuit",
+		instructions=tuple(iqm_circuit.instructions),
+		metadata=metadata,
+	)
+
+
 def serialize_qiskit_to_iqm(qasm, dynamic_architecture, mapping):
 	Circuit, _ = load_iqm_pulse_module()
 	try:
@@ -256,7 +301,19 @@ def build_manual_iqm_circuit(qasm, dynamic_architecture, mapping):
 	)
 
 
-def build_iqm_circuit(qasm, dynamic_architecture, mapping):
+def build_iqm_circuit(qasm, dynamic_architecture, mapping,
+		      client=None, calibration_set_id=None):
+	if client is not None:
+		try:
+			return transpile_qiskit_to_iqm(
+				qasm,
+				client,
+				calibration_set_id=calibration_set_id,
+				mapping=mapping,
+			)
+		except DEFwExecutionError as exc:
+			logging.debug(
+				f"falling back to direct IQM QASM serialization: {exc}")
 	try:
 		return serialize_qiskit_to_iqm(qasm, dynamic_architecture, mapping)
 	except DEFwExecutionError as exc:

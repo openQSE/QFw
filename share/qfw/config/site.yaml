@@ -1,0 +1,22 @@
+install:
+  qfw-prefix: <prefix>
+  defw-prefix: <defw-prefix>
+
+directory:
+  site:
+    name: qfw-site-dirsvc
+    endpoint: 127.0.0.1:8090
+    connect-timeout-seconds: 300
+
+service:
+  manifest: <prefix>/share/qfw/config/services/site-services.yaml
+  device-access-config: <prefix>/lib/qfw/services/dev-config/config.yaml
+
+qpm:
+  completion-queues:
+    retention:
+      completion-ttl-seconds: 3600
+      terminal-reservation-retention-seconds: 3600
+      max-records-per-reservation: 1024
+      max-bytes-per-reservation: 67108864
+      purge-interval-seconds: 60

@@ -1,0 +1,16 @@
+services:
+  - name: iqm-ornl-20q
+    module: svc_iqm_qpm
+    load-modules: svc_iqm_qpm,api_launcher
+    agent-prefix: qpm_iqm
+    device-id: ornl-iqm-20q
+    provider-launch:
+      type: remote-api
+
+  - name: shim-ornl-20q
+    module: svc_lib_qpm
+    load-modules: svc_lib_qpm,api_launcher
+    agent-prefix: qpm_shim
+    device-id: ornl-iqm-20q
+    provider-launch:
+      type: qrmi-qdmi

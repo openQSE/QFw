@@ -36,16 +36,16 @@ CONTRACT_CALLS = (
 	"get_calibration_snapshot",
 	"get_coupling_graph",
 	"run_circuit",
-	"get_last_job_timing",
-	"get_last_job_metadata",
+	"get_task_timing",
+	"get_task_metadata",
 )
 
 # Execution-family calls share backend state and must stay within one library
 # — the reservation/execution owner — never split by per-call preference.
 EXECUTION_CALLS = frozenset({
 	"run_circuit",
-	"get_last_job_timing",
-	"get_last_job_metadata",
+	"get_task_timing",
+	"get_task_metadata",
 })
 
 
@@ -163,8 +163,8 @@ class Frontend:
 	def run_circuit(self, circuit, lib=None):
 		return self._dispatch("run_circuit", circuit, lib=lib)
 
-	def get_last_job_timing(self, cid=None, lib=None):
-		return self._dispatch("get_last_job_timing", cid, lib=lib)
+	def get_task_timing(self, cid=None, lib=None):
+		return self._dispatch("get_task_timing", cid, lib=lib)
 
-	def get_last_job_metadata(self, cid=None, lib=None):
-		return self._dispatch("get_last_job_metadata", cid, lib=lib)
+	def get_task_metadata(self, cid=None, lib=None):
+		return self._dispatch("get_task_metadata", cid, lib=lib)

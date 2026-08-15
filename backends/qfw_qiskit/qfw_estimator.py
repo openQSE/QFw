@@ -8,6 +8,7 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -25,7 +26,7 @@ from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.estimator_pub import EstimatorPub
 from qiskit.primitives.primitive_job import PrimitiveJob
 
-from .qfw_simulator import QFwBackend, QFwBackendType, QFwBackendCapability
+from .qfw_simulator import QFwBackend
 
 
 def _run_circuits(
@@ -143,6 +144,11 @@ class Options:
 	Default: None.
 	"""
 
+	run_options: dict[str, Any] | None = None
+	"""A dictionary of options to pass to the backend's ``run()`` method.
+	Default: None (no option passed to backend's ``run`` method)
+	"""
+
 
 @dataclass
 class _PreprocessedData:
@@ -207,8 +213,9 @@ class QFwEstimatorV2(BaseEstimatorV2):
 		self,
 		*,
 		backend: BackendV2 | None = None,
-		betype: QFwBackendType | int = -1,
-		becap: QFwBackendCapability | int = -1,
+		betype: int = -1,
+		becap: int = -1,
+		provider: str | None = None,
 		options: dict | None = None,
 	):
 		"""
@@ -219,7 +226,8 @@ class QFwEstimatorV2(BaseEstimatorV2):
 				the random seed for the simulator (``seed_simulator``).
 		"""
 		if backend is None:
-			backend = QFwBackend(betype=betype, capability=becap)
+			backend = QFwBackend(
+				betype=betype, capability=becap, provider=provider)
 		self._backend = backend
 		self._options = Options(**options) if options else Options()
 
@@ -287,8 +295,13 @@ class QFwEstimatorV2(BaseEstimatorV2):
 			preprocessed_data.append(data)
 			flat_circuits.extend(data.circuits)
 
+		run_opts = self._options.run_options or {}
 		run_result, metadata = _run_circuits(
-			flat_circuits, self._backend, shots=shots, seed_simulator=self._options.seed_simulator
+			flat_circuits,
+			self._backend,
+			shots=shots,
+			seed_simulator=self._options.seed_simulator,
+			**run_opts,
 		)
 		counts = _prepare_counts(run_result)
 

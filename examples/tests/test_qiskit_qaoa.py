@@ -10,12 +10,12 @@ from qiskit_optimization.applications.max_cut import Maxcut
 try:
     from qfw_qiskit import (
         QFwBackend,
-        QFwBackendCapability,
-        QFwBackendType,
         QFwSamplerV2,
     )
 except ImportError as exc:
     raise RuntimeError("test_qiskit_qaoa.py only runs against Qiskit V2 primitives") from exc
+from qfw_example_context import qfw_reservation_options
+from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
 import sys
@@ -46,19 +46,19 @@ plt.savefig('max_cut_graph.png')
 # --------------------------------------------------- #
 # ------------------ QFW simulator ------------------ #
 if sim_type.lower() == "nwqsim":
-    simulator_obj = QFwBackend(
-        betype=QFwBackendType.QFW_TYPE_NWQSIM,
-        capability=QFwBackendCapability.QFW_CAP_STATEVECTOR)
+    simulator_obj = QFwBackend(provider="nwqsim")
 elif sim_type.lower() == "tnqvm":
-    simulator_obj = QFwBackend(betype=QFwBackendType.QFW_TYPE_TNQVM)
+    simulator_obj = QFwBackend(provider="tnqvm")
 else:
     raise ValueError(f"Unsupported simulator type: {sim_type}")
 # --------------------------------------------------- #
 
-
 backend_sampler = QFwSamplerV2(
     backend=simulator_obj,
-    options={"default_shots": 1024}
+    options={
+        "default_shots": 1024,
+        "run_options": qfw_reservation_options(),
+    }
 )
 
 # Define QAOA
@@ -78,3 +78,13 @@ end_time = time.time()
 print("Time Taken: ", (end_time - start_time) * 1000, " ms")
 print("Objective value:", qaoa_result.fval)
 print("Optimal solution:", qaoa_result.x)
+emit_result(
+    "qaoa",
+    parameters={"backend": sim_type, "shots": 1024},
+    metrics={
+        "duration_ms": (end_time - start_time) * 1000,
+        "objective_value": qaoa_result.fval,
+        "optimal_solution": qaoa_result.x,
+    },
+    artifacts={"graph": "max_cut_graph.png"},
+)

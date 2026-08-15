@@ -4,73 +4,68 @@ from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
 
 MAX_NWQSIM_QUBITS = 32
+MAX_NWQSIM_SHOTS = 1_000_000
 
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), start=start)
 		set_max_qubits_pp(MAX_NWQSIM_QUBITS)
+		self.configure_device_profile(
+			max_qubits=MAX_NWQSIM_QUBITS,
+			max_shots=MAX_NWQSIM_SHOTS)
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC
-		from api_qpm import QPMType, QPMCapability
+		from api_qpm_common import QPMType, QPMCapability
 		info = self.query_helper(
-			QPMType.QPM_TYPE_NWQSIM | QPMType.QPM_TYPE_SIMULATOR,
+			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_STATEVECTOR,
-			SERVICE_NAME, SERVICE_DESC)
+			SERVICE_NAME, SERVICE_DESC,
+			properties={
+				"provider": "nwqsim",
+				"num_qubits": MAX_NWQSIM_QUBITS,
+				"max_shots": MAX_NWQSIM_SHOTS,
+			})
 		logging.debug(f"NWQSIM {SERVICE_DESC}: {info}")
 		return info
 
-	def create_circuit(self, info):
+	def prepare_circuit(self, info):
 		info['qfw_backend'] = 'circuit_runner.nwqsim'
-		return super().create_circuit(info)
+		return info
 
-	def get_backend_info(self):
+	def get_backend_info(self, lib=None, token=None):
 		return {
 			'backend': 'nwqsim',
 			'metadata_supported': False,
 		}
 
-	def get_device_info(self):
+	def get_device_info(self, lib=None, token=None):
 		return {
 			'backend': 'nwqsim',
 			'metadata_supported': False,
 		}
 
-	def get_dynamic_backend_info(self, calibration_set_id=None):
-		return {
-			'backend': 'nwqsim',
-			'calibration_set_id': calibration_set_id,
-			'metadata_supported': False,
-		}
-
-	def get_calibration_snapshot(self, calibration_set_id=None):
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
+				     token=None):
 		return {
 			'backend': 'nwqsim',
 			'calibration_set_id': calibration_set_id,
 			'metadata_supported': False,
 		}
 
-	def get_coupling_graph(self, calibration_set_id=None):
+	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,
+				     token=None):
 		return {
 			'backend': 'nwqsim',
 			'calibration_set_id': calibration_set_id,
 			'metadata_supported': False,
 		}
 
-	def get_last_job_timing(self, cid=None):
+	def get_coupling_graph(self, calibration_set_id=None, lib=None,
+			       token=None):
 		return {
 			'backend': 'nwqsim',
-			'cid': cid,
+			'calibration_set_id': calibration_set_id,
 			'metadata_supported': False,
 		}
-
-	def get_last_job_metadata(self, cid=None):
-		return {
-			'backend': 'nwqsim',
-			'cid': cid,
-			'metadata_supported': False,
-		}
-
-	def test(self):
-		return "****NWQSIM QPM Test Successful****"

@@ -48,25 +48,69 @@ class QPM(UTIL_QPM):
 	def __init__(self, start=True):
 		set_max_qubits_pp(MAX_VQPU_QUBITS)
 
-		super().__init__(QRC(), max_ppn=MAX_VQPU_PPN, start=start)
-		# start the QB vQPUs
-		self.start_vqpus()
+		self.vqpu_hosts = []
+		self.vqpu_cfgs = {}
+		self.launcher = None
+		super().__init__(QRC(start=start), max_ppn=MAX_VQPU_PPN, start=start)
+		self.configure_device_profile(max_qubits=MAX_VQPU_QUBITS)
+		if start:
+			self.start_vqpus()
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC
-		from api_qpm import QPMType, QPMCapability
+		from api_qpm_common import QPMType, QPMCapability
 		info = self.query_helper(
-			QPMType.QPM_TYPE_QB | QPMType.QPM_TYPE_SIMULATOR,
+			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_STATEVECTOR,
-			SERVICE_NAME, SERVICE_DESC)
+			SERVICE_NAME, SERVICE_DESC,
+			properties={
+				"provider": "qb",
+				"num_qubits": MAX_VQPU_QUBITS,
+			})
 		logging.debug(f"QB {SERVICE_DESC}: {info}")
 		return info
 
-	def create_circuit(self, info):
+	def prepare_circuit(self, info):
 		if info['num_qubits'] > MAX_VQPU_QUBITS:
 			raise DEFwOutOfResources(f"Max supported qubits {MAX_VQPU_QUBITS}. Requested {info['num_qubits']}")
 		info['qfw_backend'] = 'circuit_runner.qb'
-		return super().create_circuit(info)
+		return info
+
+	def get_backend_info(self, lib=None, token=None):
+		return {
+			'backend': 'qb',
+			'metadata_supported': False,
+		}
+
+	def get_device_info(self, lib=None, token=None):
+		return {
+			'backend': 'qb',
+			'metadata_supported': False,
+		}
+
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
+				     token=None):
+		return {
+			'backend': 'qb',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,
+				     token=None):
+		return {
+			'backend': 'qb',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
+
+	def get_coupling_graph(self, calibration_set_id=None, lib=None,
+			       token=None):
+		return {
+			'backend': 'qb',
+			'calibration_set_id': calibration_set_id,
+			'metadata_supported': False,
+		}
 
 	def start_vqpus(self):
 		cfg_template = os.path.join(
@@ -110,21 +154,14 @@ class QPM(UTIL_QPM):
 				self.launcher.shutdown()
 				raise DEFwNotFound(f"Failed to start vQPU on {k}")
 
-	def qb_common_run(self, cid):
-		circuit = self.circuits[cid]
-		self.consume_resources(circuit)
-		logging.debug(f"Running {cid}\n{circuit.info}\n{self.vqpu_cfgs}")
+	def prepare_provider_submission(self, circuit):
+		logging.debug(
+			f"Running {circuit.get_cid()}\n{circuit.info}\n{self.vqpu_cfgs}")
 		h = list(circuit.info['hosts'].keys())[0]
 		circuit.info['vqpu_url'] = self.vqpu_cfgs[h]['cfg']
 		return circuit
 
-	def sync_run(self, cid):
-		return super().sync_run(cid, common_run=self.qb_common_run)
-
-	def async_run(self, cid):
-		return super().async_run(cid, common_run=self.qb_common_run)
-
-	def shutdown(self):
+	def shutdown_provider(self):
 		for host in self.vqpu_hosts:
 			os.remove(self.vqpu_cfgs[host]['cfg'])
 			logging.debug(f"Killing vqpu.sh on {host}")
@@ -133,8 +170,6 @@ class QPM(UTIL_QPM):
 			logging.debug(f"Killing qcstack on {host}")
 			defw_exec_remote_cmd("pkill -9 qcstack", host=host)
 			#self.launcher.launch("pkill -9 qcstack", target=host)
-			self.launcher.shutdown()
-		super().shutdown()
-
-	def test(self):
-		return "****QB QPM Test Successful****"
+			if self.launcher:
+				self.launcher.shutdown()
+		super().shutdown_provider()

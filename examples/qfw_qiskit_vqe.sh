@@ -1,11 +1,16 @@
 #!/bin/bash
 
-set -xe
+set -euo pipefail
+set -x
 
-qfw_setup.sh
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
+
+qfw_example_begin "qiskit-vqe" "$@"
+qfw_example_setup_backend_service nwqsim
 
 # takes the number of VQE iterations
-qfw_srun.sh "$QFW_PATH/examples/tests/test_qiskit_vqe.py" $1
-
-qfw_teardown.sh
-
+max_iter="${1:-50}"
+qfw_example_srun_with_backend_reservation \
+	nwqsim qiskit-vqe 4 1024 "${max_iter}" async_run \
+	"$(qfw_example_path tests/test_qiskit_vqe.py)" "${max_iter}"

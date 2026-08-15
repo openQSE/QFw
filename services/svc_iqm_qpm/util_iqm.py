@@ -236,14 +236,54 @@ def get_required_env():
 	}
 
 
-def load_iqm_service_config():
+def load_iqm_service_config(credential=None):
+	credential = dict(credential or {})
+	if credential:
+		config = {
+			"url": credential.get("url") or os.environ.get("QFW_QC_URL"),
+			"api_key": (
+				credential.get("api_key") or
+				credential.get("token") or
+				os.environ.get("QFW_API_KEY")),
+			"quantum_computer": (
+				credential.get("quantum_computer") or
+				credential.get("provider_device_id") or
+				os.environ.get("QFW_IQM_QUANTUM_COMPUTER")),
+			"device_id": (
+				credential.get("device_id") or
+				os.environ.get(QPU_DEVICE_ENV, "credential")),
+			"user": credential.get("user") or resolve_qpu_user(),
+		}
+		if config["url"] and config["api_key"]:
+			return config
+
 	if all(os.environ.get(name) for name in REQUIRED_ENV):
 		config = get_required_env()
 		config["device_id"] = os.environ.get(QPU_DEVICE_ENV, "env")
 		config["user"] = resolve_qpu_user()
 		return config
 
-	config = resolve_device_access(provider="iqm")
+	config = resolve_device_access(
+		provider="iqm",
+		device_id=credential.get("device_id"),
+		user=credential.get("user"),
+		credential_hint=credential.get("credential_hint"),
+		credential_handle=credential.get("credential_handle"))
+	if credential:
+		config.update({
+			key: value
+			for key, value in {
+				"url": credential.get("url"),
+				"api_key": (
+					credential.get("api_key") or credential.get("token")),
+				"quantum_computer": (
+					credential.get("quantum_computer") or
+					credential.get("provider_device_id")),
+				"device_id": credential.get("device_id"),
+				"user": credential.get("user"),
+			}.items()
+			if value
+		})
 	if not config.get("quantum_computer"):
 		config["quantum_computer"] = os.environ.get(
 			"QFW_IQM_QUANTUM_COMPUTER")
@@ -399,7 +439,7 @@ def build_coupling_graph(static_arch, dynamic_arch):
 
 class IQMServiceClient:
 	def __init__(self):
-		self._client = None
+		self._clients = {}
 		self._client_lock = threading.Lock()
 		self._request_timeout = get_env_float(
 			"QFW_IQM_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
@@ -412,18 +452,32 @@ class IQMServiceClient:
 		self._latest_cid = None
 		self._config = None
 
-	def client(self):
+	def client(self, credential=None):
+		cache_key = self._credential_cache_key(credential)
 		with self._client_lock:
-			if self._client is not None:
-				return self._client
-			config = load_iqm_service_config()
+			if cache_key in self._clients:
+				return self._clients[cache_key]
+			config = load_iqm_service_config(credential=credential)
 			client_type = load_iqm_client_module()
-			self._client = create_iqm_client(client_type, config)
+			client = create_iqm_client(client_type, config)
+			self._clients[cache_key] = client
 			self._config = config
 			logging.debug(
 				"created IQM client for "
 				f"{sanitize_url(config['url'])} as {config['user']}")
-			return self._client
+			return client
+
+	def _credential_cache_key(self, credential=None):
+		credential = dict(credential or {})
+		if not credential:
+			return ("default",)
+		return (
+			credential.get("url"),
+			credential.get("provider_device_id"),
+			credential.get("device_id"),
+			credential.get("user"),
+			credential.get("api_key") or credential.get("token"),
+		)
 
 	def device_id(self):
 		if self._config is None:
@@ -437,15 +491,16 @@ class IQMServiceClient:
 			kind, raw_payload, device_id=self.device_id(),
 			include_raw=include_raw)
 
-	def get_static_architecture(self):
+	def get_static_architecture(self, credential=None):
 		return call_iqm_method(
-			self.client().get_static_quantum_architecture,
+			self.client(credential=credential).get_static_quantum_architecture,
 			self._request_timeout)
 
-	def get_dynamic_architecture(self, calibration_set_id=None):
+	def get_dynamic_architecture(self, calibration_set_id=None,
+				     credential=None):
 		calibration_set_id = parse_calibration_set_id(calibration_set_id)
 		return call_iqm_method(
-			self.client().get_dynamic_quantum_architecture,
+			self.client(credential=credential).get_dynamic_quantum_architecture,
 			self._request_timeout,
 			calibration_set_id)
 
@@ -525,7 +580,7 @@ class IQMServiceClient:
 		}
 		return self.normalize_qhw("coupling", raw_payload)
 
-	def get_last_job_timing(self, cid=None):
+	def get_task_timing(self, cid=None):
 		if cid is None:
 			cid = self._latest_cid
 		return self._last_timing.get(cid, {
@@ -535,7 +590,7 @@ class IQMServiceClient:
 			"timing_available": False,
 		})
 
-	def get_last_job_metadata(self, cid=None):
+	def get_task_metadata(self, cid=None):
 		if cid is None:
 			cid = self._latest_cid
 		return self._last_metadata.get(cid, {
@@ -548,6 +603,8 @@ class IQMServiceClient:
 	def run_circuit(self, circ):
 		info = circ.info
 		cid = circ.get_cid()
+		credential = getattr(circ, "provider_credential", None)
+		client = self.client(credential=credential)
 		calibration_set_id = parse_calibration_set_id(
 			info.get("calibration_set_id")
 			or info.get("iqm_calibration_set_id"))
@@ -558,15 +615,28 @@ class IQMServiceClient:
 
 		timing = {}
 		start = time.monotonic()
-		dynamic = self.get_dynamic_architecture(calibration_set_id)
-		iqm_circuit = build_iqm_circuit(info["qasm"], dynamic, mapping)
-		run_request = self.client().create_run_request(
-			[iqm_circuit],
+		dynamic = self.get_dynamic_architecture(
+			calibration_set_id, credential=credential)
+		iqm_circuit = build_iqm_circuit(
+			info["qasm"],
+			dynamic,
+			mapping,
+			client=client,
 			calibration_set_id=calibration_set_id,
+		)
+		effective_calibration_set_id = calibration_set_id
+		circuit_metadata = getattr(iqm_circuit, "metadata", None)
+		if (effective_calibration_set_id is None and
+				isinstance(circuit_metadata, dict)):
+			effective_calibration_set_id = circuit_metadata.get(
+				"iqm_calibration_set_id")
+		run_request = client.create_run_request(
+			[iqm_circuit],
+			calibration_set_id=effective_calibration_set_id,
 			shots=shots)
 
 		submit_started = time.monotonic()
-		job = submit_run_request(self.client(), run_request, use_timeslot)
+		job = submit_run_request(client, run_request, use_timeslot)
 		if not hasattr(job, "wait_for_completion"):
 			raise DEFwExecutionError(
 				"iqm-client returned only a job id from submit_run_request. "
@@ -583,8 +653,7 @@ class IQMServiceClient:
 				f"IQM job {job.job_id} completed with status {status}")
 
 		result_started = time.monotonic()
-		measurement_counts = self.client().get_job_measurement_counts(
-			job.job_id)
+		measurement_counts = client.get_job_measurement_counts(job.job_id)
 		timing["result_fetch_seconds"] = time.monotonic() - result_started
 		timing["total_wall_seconds"] = time.monotonic() - start
 
