@@ -3,7 +3,7 @@ import time
 import math
 from mpi4py import MPI
 from qiskit import transpile
-from qiskit.quantum_info import SparsePauliOp
+from qiskit.quantum_info import SparsePauliOp, Statevector
 from qiskit.circuit.library import TwoLocal
 from qiskit_nature.second_q.drivers import PySCFDriver
 from qiskit_nature.second_q.transformers import FreezeCoreTransformer
@@ -78,7 +78,7 @@ def run_vqe(params):
 	job = backend.run(transpiled_circuit, **run_options)
 	result = job.result()
 	# get the statevector and try compute expectation value
-	statevector = result.get_statevector(transpiled_circuit)
+	statevector = Statevector(result.get_statevector(transpiled_circuit))
 	ex = statevector.expectation_value(sub_hamiltonian)
 	if np.iscomplexobj(ex):
 		ex = np.real(ex)
