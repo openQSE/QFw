@@ -402,6 +402,7 @@ execute_process(
 		test \"\${DEFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 		test \"\${DEFW_LOAD_NO_INIT}\" = 'api_existing_helper,api_qpm_common'
 		command -v qfw-setup >/dev/null
+		export DEFW_ONLY_LOAD_MODULE=api_qpm_common
 		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None'
 		qfw_deactivate
 		test -z \"\${QFW_PREFIX+x}\"
