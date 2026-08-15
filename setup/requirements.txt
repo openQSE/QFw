@@ -19,3 +19,7 @@ numpy
 scipy
 pyscf
 PyYAML
+netifaces
+psutil
+paramiko
+rich
