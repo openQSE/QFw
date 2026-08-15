@@ -74,14 +74,18 @@ def run_vqe(params):
 	# Transpile the circuit for the given backend
 	transpiled_circuit = transpile(circuit, backend)
 	total_itr += 1
-	# run the transpiled circuit
 	job = backend.run(transpiled_circuit, **run_options)
 	result = job.result()
-	# get the statevector and try compute expectation value
 	raw_statevector = result.get_statevector(transpiled_circuit)
+	amplitudes = np.asarray(raw_statevector, dtype=complex).reshape(-1)
+	expected_amplitudes = 1 << sub_hamiltonian.num_qubits
+	if amplitudes.size != expected_amplitudes:
+		raise ValueError(
+			f"Expected {expected_amplitudes} statevector amplitudes, "
+			f"received {amplitudes.size}")
 	statevector = Statevector(
-		np.asarray(raw_statevector, dtype=complex).reshape(-1),
-		dims=(2,) * transpiled_circuit.num_qubits,
+		amplitudes,
+		dims=(2,) * sub_hamiltonian.num_qubits,
 	)
 	ex = statevector.expectation_value(sub_hamiltonian)
 	if np.iscomplexobj(ex):

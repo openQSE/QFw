@@ -22,6 +22,7 @@ services:
     provider-launch:
       type: mpi
       wrapper: null
+      use-dvm: false
 
   - name: tnqvm
     module: svc_tnqvm_qpm

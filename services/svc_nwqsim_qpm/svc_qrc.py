@@ -3,7 +3,7 @@ import sys
 import os
 import numpy as np
 from defw_exception import DEFwError, DEFwExecutionError
-from util.mpi import backend_wrapper, build_mpi_command_string
+from util.mpi import backend_config, backend_wrapper, build_mpi_command_string
 from util.qpm.util_qrc import UTIL_QRC
 from util.qpm.statevector import QFwStatevector
 
@@ -41,10 +41,18 @@ class QRC(UTIL_QRC):
 			return {"Error": str(e)}
 
 	def parse_task_result(self, out, circ, task_info):
-		counts = self.parse_result(out)
 		info = circ.info
 		if not info.get("return_statevector", False):
-			return counts
+			return self.parse_result(out)
+
+		try:
+			out_str = out.decode("utf-8")
+		except Exception as e:
+			raise DEFwError({"Error": str(e)})
+
+		counts = {}
+		if "===============  Measurement" in out_str:
+			counts = self.parse_result(out)
 
 		dump_file = info.get("_qfw_statevector_dump", None)
 		if not dump_file or not os.path.exists(dump_file):
@@ -79,7 +87,10 @@ class QRC(UTIL_QRC):
 		if not nwqsim_executable:
 			raise DEFwExecutionError("Couldn't find nwqsim_executable. Check paths")
 
-		dvm = os.environ.get("QFW_DVM_URI_PATH", "").strip()
+		launch_config = backend_config("nwqsim")
+		use_dvm = launch_config.get("use-dvm", True)
+		dvm = (os.environ.get("QFW_DVM_URI_PATH", "").strip()
+		       if use_dvm else "")
 		if dvm and not os.path.exists(dvm):
 			raise DEFwExecutionError(f"dvm-uri {dvm} doesn't exist")
 

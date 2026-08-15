@@ -64,7 +64,7 @@ def _as_list(value):
 
 
 def _normalize_dvm_uri(dvm_uri):
-	if not dvm_uri:
+	if dvm_uri is None:
 		dvm_uri = os.environ.get('QFW_DVM_URI_PATH', '').strip()
 	if not dvm_uri:
 		return None
