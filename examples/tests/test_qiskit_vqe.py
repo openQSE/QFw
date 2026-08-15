@@ -78,7 +78,11 @@ def run_vqe(params):
 	job = backend.run(transpiled_circuit, **run_options)
 	result = job.result()
 	# get the statevector and try compute expectation value
-	statevector = Statevector(result.get_statevector(transpiled_circuit))
+	raw_statevector = result.get_statevector(transpiled_circuit)
+	statevector = Statevector(
+		np.asarray(raw_statevector, dtype=complex).reshape(-1),
+		dims=(2,) * transpiled_circuit.num_qubits,
+	)
 	ex = statevector.expectation_value(sub_hamiltonian)
 	if np.iscomplexobj(ex):
 		ex = np.real(ex)
