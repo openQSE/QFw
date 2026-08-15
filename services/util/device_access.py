@@ -154,10 +154,13 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 		or device.get("credential_db")
 		or device_config.get("credential-db")
 		or device_config.get("credential_db"))
-	if not credential_db:
+	credential_provider = (
+		device.get("credential-provider")
+		or device.get("credential_provider"))
+	if not credential_db and not credential_provider:
 		raise DEFwExecutionError(
 			f"QPU device {device_id!r} in {path} does not define "
-			"credential-db")
+			"credential-db or credential-provider")
 
 	provider_device_id = (
 		device.get("provider-device-id")
@@ -171,11 +174,13 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 		"provider_device_id": str(provider_device_id).strip(),
 		"provider": device_provider or (provider.lower() if provider else ""),
 		"url": str(url).strip(),
-		"credential_db": resolve_relative_path(str(credential_db), path),
 		"quantum_computer": str(provider_device_id).strip(),
 		"credential-provider": device.get("credential-provider"),
 		"credential_provider": device.get("credential_provider"),
 	}
+	if credential_db:
+		selected["credential_db"] = resolve_relative_path(
+			str(credential_db), path)
 
 	# Pass through the optional shim descriptor fields (svc_lib_qpm's
 	# resolve_descriptor reads these off the selected device; see

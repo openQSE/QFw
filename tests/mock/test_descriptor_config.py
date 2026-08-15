@@ -108,6 +108,22 @@ def test_select_qpu_preserves_native_fields(monkeypatch):
 	assert selected["credential_db"].endswith("creds.json")
 
 
+def test_select_qpu_accepts_named_provider_without_credential_file(
+		monkeypatch):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	device = {
+		"provider": "iqm",
+		"provider-device-id": "default",
+		"url": "https://example.org/",
+		"credential-provider": "shim-no-secret",
+	}
+	selected = device_access.select_qpu(
+		_config(device), "cfg.yaml", provider="iqm")
+
+	assert selected["credential-provider"] == "shim-no-secret"
+	assert "credential_db" not in selected
+
+
 def test_select_qpu_accepts_execution_owner_underscore(monkeypatch):
 	# Both spellings are honored; libraries pass through raw (resolve_descriptor
 	# splits a comma string via _as_list).
