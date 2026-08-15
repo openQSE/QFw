@@ -19,6 +19,8 @@ Options:
   --qfw-prefix DIR           Installed QFw prefix
   --backend NAME             QPM provider/backend (default: iqm)
   --target-device DEVICE     QFw device id (default: ornl-iqm-20q)
+  --device-access-config PATH
+                             Device map used by the IQM site service
   --owner USER               Trusted launcher user (default: root)
   --shots N                  Reservation and estimator shots (default: 1000)
   --estimator-precision VAL  Estimator precision (default maps to 1000 shots)
@@ -91,6 +93,7 @@ BASE="${QFW_BASE:-/workspace/qfw-container-base}"
 VENV="${QFW_VENV:-${QFW_SHARED_VENV:-${BASE}/qfw-shared-test-venv}}"
 QFW_PREFIX="${QFW_PREFIX:-}"
 DEVICE="${QFW_DEVICE:-${QFW_QPU_DEVICE_ID:-ornl-iqm-20q}}"
+DEVICE_ACCESS_CONFIG="${QFW_DEVICE_ACCESS_CONFIG:-${QFW_IQM_DEVICE_ACCESS_CONFIG:-}}"
 BACKEND="${QFW_BACKEND:-${QFW_CHEM_BACKEND:-iqm}}"
 OWNER="${QFW_OWNER:-${QFW_CHEM_OWNER:-root}}"
 SHOTS="${QFW_SHOTS:-${QFW_CHEM_SHOTS:-1000}}"
@@ -130,6 +133,11 @@ while [[ $# -gt 0 ]]; do
 		--target-device)
 			need_value "$@"
 			DEVICE="$2"
+			shift 2
+			;;
+		--device-access-config)
+			need_value "$@"
+			DEVICE_ACCESS_CONFIG="$2"
 			shift 2
 			;;
 		--owner)
@@ -252,6 +260,9 @@ echo "QFW_CHEM_SHOTS=${SHOTS}"
 echo "QFW_CHEM_ESTIMATOR_PRECISION=${ESTIMATOR_PRECISION}"
 
 export QFW_QPU_DEVICE_ID="${DEVICE}"
+if [[ -n "${DEVICE_ACCESS_CONFIG}" ]]; then
+	export QFW_IQM_DEVICE_ACCESS_CONFIG="${DEVICE_ACCESS_CONFIG}"
+fi
 
 service_started=0
 cleanup() {

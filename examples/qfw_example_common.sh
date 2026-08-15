@@ -29,6 +29,7 @@ qfw_example_begin() {
 	QFW_EXAMPLE_SETUP_STARTED=0
 	QFW_EXAMPLE_TEARDOWN_DONE=0
 	QFW_EXAMPLE_RUNTIME_CONFIG=""
+	QFW_EXAMPLE_SITE_CONFIG=""
 	export QFW_EXAMPLE_NAME
 	trap 'qfw_example_exit "$?"' EXIT
 	qfw_example_emit "start" "running" 0 0
@@ -98,6 +99,32 @@ with open(runtime_path, "w", encoding="utf-8") as stream:
 			stream.write(f"    - {json.dumps(service)}\n")
 PY
 	printf "%s\n" "${runtime_config}"
+}
+
+qfw_example_make_site_config() {
+	if [[ $# -ne 1 || ! -r "$1" ]]; then
+		echo "ERROR: qfw_example_make_site_config requires a readable device-access config" >&2
+		return 2
+	fi
+	local runtime_base runtime_dir site_config
+	runtime_base="${QFW_RUN_BASE_DIR:-${TMPDIR:-/tmp}/qfw-runs}"
+	runtime_dir="${runtime_base%/}/example-runtime"
+	mkdir -p "${runtime_dir}"
+	site_config="$(mktemp \
+		"${runtime_dir}/${QFW_EXAMPLE_NAME:-qfw}-site.XXXXXX.yaml")"
+	python3 - "${QFW_SITE_CONFIG}" "$1" "${site_config}" <<'PY'
+import sys
+
+import yaml
+
+source_path, device_path, output_path = sys.argv[1:]
+with open(source_path, "r", encoding="utf-8") as stream:
+    site = yaml.safe_load(stream) or {}
+site.setdefault("service", {})["device-access-config"] = device_path
+with open(output_path, "w", encoding="utf-8") as stream:
+    yaml.safe_dump(site, stream, sort_keys=False)
+PY
+	printf "%s\n" "${site_config}"
 }
 
 qfw_example_setup_local_services() {
@@ -224,6 +251,10 @@ qfw_example_finish() {
 	if [[ -n "${QFW_EXAMPLE_RUNTIME_CONFIG:-}" &&
 	      -f "${QFW_EXAMPLE_RUNTIME_CONFIG}" ]]; then
 		rm -f "${QFW_EXAMPLE_RUNTIME_CONFIG}"
+	fi
+	if [[ -n "${QFW_EXAMPLE_SITE_CONFIG:-}" &&
+	      -f "${QFW_EXAMPLE_SITE_CONFIG}" ]]; then
+		rm -f "${QFW_EXAMPLE_SITE_CONFIG}"
 	fi
 	local now duration status
 	now="$(date +%s)"

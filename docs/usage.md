@@ -106,7 +106,6 @@ recipe. Installation provides these defaults:
 $QFW_SHARE_DIR/config/site.yaml
 $QFW_SHARE_DIR/config/services/local-services.yaml
 $QFW_SHARE_DIR/config/services/site-services.yaml
-$QFW_PREFIX/lib/qfw/services/dev-config/config.yaml
 ```
 
 The example generates a local runtime file that selects only the NWQ-Sim
@@ -325,7 +324,7 @@ directory:
 
 service:
   manifest: <prefix>/share/qfw/config/services/site-services.yaml
-  device-access-config: <prefix>/lib/qfw/services/dev-config/config.yaml
+  device-access-config: /etc/openqse/qfw/device/device-access.yaml
 
 qpm:
   completion-queues:
@@ -495,7 +494,7 @@ services:
 </details>
 
 <details>
-<summary><strong><code>$QFW_PREFIX/lib/qfw/services/dev-config/config.yaml</code></strong></summary>
+<summary><strong><code>/etc/openqse/qfw/device/device-access.yaml</code></strong></summary>
 
 ```yaml
 qpus:

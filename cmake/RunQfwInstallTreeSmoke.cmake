@@ -136,6 +136,7 @@ foreach(example_file
 		examples/qfw_mpi_smoke_services.yaml
 		examples/qfw_qiskit_simple.sh
 		examples/qfw_shim_smoke.sh
+		examples/qfw_shim_device_access.yaml
 		examples/qfw_shim_smoke_services.yaml
 		examples/qfw_slurm_driver.sh
 		examples/qfw_supermarq.batch

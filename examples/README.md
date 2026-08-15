@@ -278,6 +278,10 @@ The wrapper creates one `site.yaml` that selects the site service manifest,
 device-access configuration, and common QPM settings. Provider credentials
 remain service-side and are not passed as command-line options.
 
+Use `--device-access-config PATH` to select a site-owned device map. The
+installed default is `/etc/openqse/qfw/device/device-access.yaml`; development
+credential files are not installed with QFw.
+
 By default the wrapper uses `1000` shots and estimator precision `0.031623`,
 which maps QFwEstimator submissions to `num_shots: 1000`. Override with
 `--shots` and `--estimator-precision` when a different chemistry sampling

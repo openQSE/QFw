@@ -16,6 +16,7 @@ Options:
   --target-device DEVICE        QFw device id (default: QFW_QPU_DEVICE_ID or ornl-iqm-20q)
   --service-id ID               QPM service id (default: iqm-ornl-20q)
   --site-config PATH            Site config to use or generate
+  --device-access-config PATH   Device map to reference from generated config
   --run-dir DIR                 Run directory for configs, pids, and logs
   --service-node NODE           Node that hosts dirsvc and QPM
   --dirsvc-port PORT            Site directory listen port (default: 8090)
@@ -42,6 +43,7 @@ action=""
 target_device="${QFW_QPU_DEVICE_ID:-ornl-iqm-20q}"
 service_id="${QFW_IQM_SERVICE_ID:-iqm-ornl-20q}"
 site_config="${QFW_IQM_SITE_CONFIG:-}"
+device_access_config="${QFW_IQM_DEVICE_ACCESS_CONFIG:-}"
 run_dir="${QFW_IQM_RUN_DIR:-}"
 service_node="${QFW_IQM_SERVICE_NODE:-}"
 dirsvc_port="${QFW_IQM_DIRSVC_PORT:-8090}"
@@ -85,6 +87,11 @@ while [[ $# -gt 0 ]]; do
 		--site-config)
 			qfw_iqm_need_value "$@"
 			site_config="$2"
+			shift 2
+			;;
+		--device-access-config)
+			qfw_iqm_need_value "$@"
+			device_access_config="$2"
 			shift 2
 			;;
 		--run-dir)
@@ -409,7 +416,9 @@ qfw_iqm_prepare_defaults() {
 		site_config="${run_dir}/config/iqm-site.yaml"
 	fi
 	service_manifest="${QFW_SHARE_DIR%/}/config/services/site-services.yaml"
-	device_access_config="${QFW_PREFIX%/}/lib/qfw/services/dev-config/config.yaml"
+	if [[ -z "${device_access_config}" ]]; then
+		device_access_config="/etc/openqse/qfw/device/device-access.yaml"
+	fi
 	dirsvc_pid_file="${run_dir}/state/dirsvc.pid"
 	dirsvc_ready_file="${run_dir}/state/dirsvc-ready.json"
 	qpm_pid_file="${run_dir}/state/${service_id}.pid"

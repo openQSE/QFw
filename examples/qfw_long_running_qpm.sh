@@ -334,7 +334,7 @@ directory:
 
 service:
   manifest: ${service_manifest}
-  device-access-config: ${QFW_PREFIX}/lib/qfw/services/dev-config/config.yaml
+  device-access-config: /etc/openqse/qfw/device/device-access.yaml
 
 qpm:
   completion-queues:

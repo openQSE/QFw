@@ -629,7 +629,7 @@ directory:
 
 service:
   manifest: <prefix>/share/qfw/config/services/site-services.yaml
-  device-access-config: <prefix>/lib/qfw/services/dev-config/config.yaml
+  device-access-config: /etc/openqse/qfw/device/device-access.yaml
 ```
 
 Local and hybrid profiles create a separate job-local endpoint from runtime

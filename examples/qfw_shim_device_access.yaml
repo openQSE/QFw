@@ -1,0 +1,6 @@
+qpus:
+  ornl-iqm-20q:
+    provider: iqm
+    provider-device-id: default
+    url: https://qccsw.ccs.ornl.gov/
+    credential-db: qfw-shim-no-credentials.json
