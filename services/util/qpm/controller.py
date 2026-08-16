@@ -1815,12 +1815,29 @@ class QPMTargetController:
 
 	def _dispatch_completion_deliveries(self, deliveries):
 		delivered = False
+		stale_registration_ids = set()
 		for delivery in deliveries:
 			if delivery is None:
 				continue
 			for registration in delivery["matches"]:
-				registration["class"].put(delivery["event"])
+				try:
+					registration["class"].put(delivery["event"])
+				except Exception:
+					stale_registration_ids.add(id(registration))
+					continue
 				delivered = True
+		if stale_registration_ids:
+			with self.lock:
+				for class_id in list(self.event_endpoints):
+					registrations = [
+						registration
+						for registration in self.event_endpoints[class_id]
+						if id(registration) not in stale_registration_ids
+					]
+					if registrations:
+						self.event_endpoints[class_id] = registrations
+					else:
+						self.event_endpoints.pop(class_id, None)
 		return delivered
 
 	def _enqueue_completion_record_locked(self, queue, record):

@@ -32,6 +32,12 @@ class CapturingEventAPI:
 		return True
 
 
+class FailingEventAPI(CapturingEventAPI):
+	def put(self, event):
+		del event
+		raise RuntimeError("event endpoint is no longer reachable")
+
+
 class CompletionEvent:
 	def __init__(self, evtype, payload):
 		self.evtype = evtype
@@ -460,6 +466,46 @@ def test_event_notifications_are_isolated_by_reservation_and_filters(monkeypatch
 		"qpm-completion-event-dispatcher")
 	assert len(qpm.controller.event_endpoints["class-a"]) == 1
 	assert len(qpm.controller.event_endpoints["class-b"]) == 1
+
+
+def test_stale_event_endpoint_does_not_block_live_delivery(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM(target_id="ops-stale-events")
+	sinks = {}
+
+	def event_api_factory(class_id=None, target=None):
+		if class_id == "class-stale":
+			sink = FailingEventAPI(class_id=class_id, target=target)
+		else:
+			sink = CapturingEventAPI(class_id=class_id, target=target)
+		sinks[class_id] = sink
+		return sink
+
+	monkeypatch.setattr(util_qpm, "BaseEventAPI", event_api_factory)
+	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	qpm.register_event_notification(
+		"endpoint-stale", "circ-result", "class-stale",
+		reservation_id=reservation_id)
+	qpm.register_event_notification(
+		"endpoint-live", "circ-result", "class-live",
+		reservation_id=reservation_id)
+	payload = {
+		"cid": response["cid"],
+		"qtask_id": response["qtask_id"],
+	}
+
+	delivered = qpm.controller.dispatch_completion_event(
+		CompletionEvent("circ-result", payload))
+
+	assert delivered is True
+	assert sinks["class-live"].events == [payload]
+	assert "class-stale" not in qpm.controller.event_endpoints
+	assert len(qpm.controller.event_endpoints["class-live"]) == 1
 
 
 def test_completion_events_keep_reservation_scope_after_cleanup(monkeypatch):
