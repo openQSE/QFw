@@ -425,8 +425,12 @@ def _install_qiskit_stubs():
 			self._backend = backend
 			self._job_id = job_id
 
+	class JobError(QiskitError):
+		pass
+
 	providers.Options = Options
 	providers.BackendV2 = BackendV2
+	providers.JobError = JobError
 	providers.JobV1 = JobV1
 	qiskit.providers = providers
 	sys.modules["qiskit.providers"] = providers
@@ -440,7 +444,9 @@ def _install_qiskit_stubs():
 		"JobStatus",
 		(),
 		{
+			"INITIALIZING": "INITIALIZING",
 			"RUNNING": "RUNNING",
+			"DONE": "DONE",
 			"ERROR": "ERROR",
 		},
 	)

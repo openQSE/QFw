@@ -4,11 +4,11 @@ import time
 import select
 
 from qiskit import qasm2, QuantumCircuit
-from qiskit.providers import JobV1 as Job
+from qiskit.providers import JobError, JobV1 as Job
 from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
-from defw_exception import DEFwError, DEFwInProgress, DEFwNotFound
+from defw_exception import DEFwError
 from .qfw_metadata import get_qubit_mapping
 
 
@@ -60,6 +60,7 @@ class QFwJob(Job):
 
 		self._result_time = 0
 		self._submission_time = 0
+		self._status = JobStatus.INITIALIZING
 
 	def _run_experiment_async(self, circuit):
 		self.start_time = time.time()
@@ -110,10 +111,15 @@ class QFwJob(Job):
 			circuits = self._qobj
 
 		start = time.time()
-		for circuit in circuits:
-			cid = self._run_experiment_async(circuit)
-			self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
+		try:
+			for circuit in circuits:
+				cid = self._run_experiment_async(circuit)
+				self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
+		except Exception:
+			self._status = JobStatus.ERROR
+			raise
 		self._submission_time = time.time() - start
+		self._status = JobStatus.RUNNING
 		return
 
 	def _result_reader(self, cid_list):
@@ -200,6 +206,47 @@ class QFwJob(Job):
 			metadata["qhw_result"] = qhw_result
 		return metadata
 
+	def _failure_message(self, result):
+		cid = result.get("cid", "unknown")
+		rc = result.get("rc")
+		output = result.get("result", {})
+		provider = None
+		error_type = None
+		message = None
+
+		if isinstance(output, dict):
+			for key, value in output.items():
+				if not isinstance(value, dict) or not value.get("error"):
+					continue
+				provider = str(key).upper()
+				error_type = value.get("error_type")
+				message = value.get("error")
+				break
+			if message is None:
+				message = output.get("error") or output.get("Error")
+
+		details = [f"QFw circuit {cid} failed (rc={rc}"]
+		if provider:
+			details.append(f", provider={provider}")
+		if error_type:
+			details.append(f", error_type={error_type}")
+		details.append(")")
+		if message:
+			details.append(f": {message}")
+		return "".join(details)
+
+	def _raise_for_failed_results(self, qpm_results):
+		failures = [
+			qr["res"] for qr in qpm_results
+			if qr["res"].get("rc") not in (None, 0)
+		]
+		if not failures:
+			return
+
+		self._status = JobStatus.ERROR
+		messages = [self._failure_message(result) for result in failures]
+		raise JobError("; ".join(messages))
+
 	def _build_statevector(self, payload):
 		if not payload:
 			return []
@@ -234,8 +281,15 @@ class QFwJob(Job):
 				f"(expected {len(self._cid_list)} circuit(s))")
 
 		for qr in qpm_results:
+			self._backend.log_statistics(qr['res'])
+		try:
+			self._raise_for_failed_results(qpm_results)
+		except JobError:
+			self._backend.dump_statistics()
+			raise
+
+		for qr in qpm_results:
 			res = qr['res']
-			self._backend.log_statistics(res)
 			output = res.get("result", {})
 			counts, statevector, metadata = self._split_result_payload(output)
 
@@ -293,35 +347,13 @@ class QFwJob(Job):
 			f"overall_time_taken: {self._submission_time}+"
 			f"{self._result_wait_time}")
 
+		qiskit_result = Result.from_dict(result)
+		self._status = JobStatus.DONE
 		self._backend.dump_statistics()
-		return Result.from_dict(result)
+		return qiskit_result
 
 	def status(self):
-		# TODO: Add a new API in the qpm which takes a list of CIDs and
-		# does a onetime check to see if any of them is active. The API
-		# returns true or false. true if any of the CIDs are still active.
-		# false if all of them are complete.
-		# This is better than having to call peek_cq() on every cid, which
-		# will be too much communication with the backend.
-		return NotImplementedError
-		# query job_id and return one of -
-		# JobStatus.INITIALIZING
-		# JobStatus.QUEUED
-		# JobStatus.VALIDATING
-		# JobStatus.RUNNING
-		# JobStatus.CANCELLED
-		# JobStatus.DONE
-		# JobStatus.ERROR
-		# checking self._qfw_job_id
-		try:
-			self._qpm.read_cq(self._qfw_job_id)
-		except Exception as e:
-			if isinstance(e, DEFwInProgress):
-				return JobStatus.RUNNING
-			elif isinstance(e, DEFwError):
-				return JobStatus.ERROR
-			elif isinstance(e, DEFwNotFound):
-				return JobStatus.ERROR
+		return self._status
 
 	def backend(self):
 		return self._backend

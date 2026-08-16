@@ -245,10 +245,13 @@ class FakeClassicalRegister:
 		self.size = size
 
 
-def make_result_event(cid, counts, *, offset=0.0):
+def make_result_event(cid, counts=None, *, offset=0.0, rc=0, result=None):
+	if result is None:
+		result = counts
 	return FakeEvent(
 		{
 			"cid": cid,
+			"rc": rc,
 			"creation_time": 1.0 + offset,
 			"launch_time": 2.0 + offset,
 			"resources_consumed_time": 3.0 + offset,
@@ -256,6 +259,6 @@ def make_result_event(cid, counts, *, offset=0.0):
 			"completion_time": 5.0 + offset,
 			"cq_enqueue_time": 1.5 + offset,
 			"cq_dequeue_time": 2.5 + offset,
-			"result": counts,
+			"result": result,
 		}
 	)

@@ -146,7 +146,100 @@ def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
 	result = job.result()
 
 	assert result.get_counts(circuit) == {"11": 2}
+	assert job.status() == qfw_job.JobStatus.DONE
 	assert len(backend.logged_results) == 1
+
+
+def test_qfw_job_result_raises_job_error_for_provider_failure(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	fake_qpm = FakeQPM(cids=["cid-failed"])
+	circuit = qfw_job.QuantumCircuit(1, name="provider-failure")
+	backend = FakeBackend()
+	event_api = FakeEventAPI(events=[make_result_event(
+		"cid-failed",
+		rc=-1,
+		result={
+			"counts": {},
+			"iqm": {
+				"error": "invalid CZ locus",
+				"error_type": "DEFwError",
+			},
+		},
+	)], fd=44)
+	options = _driver_options(shots=2, seed=7, seed_simulator=13)
+
+	monkeypatch.setattr(
+		qfw_job.select, "select", lambda readable, *_: (readable, [], []))
+	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
+	job.submit()
+
+	with pytest.raises(qfw_job.JobError) as exc_info:
+		job.result()
+
+	message = str(exc_info.value)
+	assert "cid-failed" in message
+	assert "rc=-1" in message
+	assert "provider=IQM" in message
+	assert "error_type=DEFwError" in message
+	assert "invalid CZ locus" in message
+	assert job.status() == qfw_job.JobStatus.ERROR
+	assert backend.dump_called is True
+	assert len(backend.logged_results) == 1
+
+
+def test_qfw_job_result_reports_every_failed_circuit(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	fake_qpm = FakeQPM(cids=["cid-ok", "cid-iqm", "cid-generic"])
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="ok"),
+		qfw_job.QuantumCircuit(1, name="iqm-failure"),
+		qfw_job.QuantumCircuit(1, name="generic-failure"),
+	]
+	backend = FakeBackend()
+	event_api = FakeEventAPI(events=[
+		make_result_event("cid-ok", {"0": 2}),
+		make_result_event(
+			"cid-iqm",
+			rc=-1,
+			result={
+				"counts": {},
+				"iqm": {
+					"error": "delay translation failed",
+					"error_type": "DEFwExecutionError",
+				},
+			},
+		),
+		make_result_event(
+			"cid-generic",
+			rc=3,
+			result={"Error": "worker exited unexpectedly"},
+		),
+	], fd=45)
+	options = _driver_options(shots=2, seed=7, seed_simulator=13)
+
+	monkeypatch.setattr(
+		qfw_job.select, "select", lambda readable, *_: (readable, [], []))
+	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuits, options)
+	job.submit()
+
+	with pytest.raises(qfw_job.JobError) as exc_info:
+		job.result()
+
+	message = str(exc_info.value)
+	assert "cid-iqm" in message
+	assert "delay translation failed" in message
+	assert "cid-generic" in message
+	assert "worker exited unexpectedly" in message
+	assert "cid-ok failed" not in message
+	assert job.status() == qfw_job.JobStatus.ERROR
+	assert backend.dump_called is True
+	assert len(backend.logged_results) == 3
 
 
 def test_qfw_job_does_not_register_per_task_completion_event(monkeypatch):
@@ -207,6 +300,7 @@ def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):
 		assert str(exc) == "qpm submit failed"
 	else:
 		raise AssertionError("expected async_run failure to propagate")
+	assert job.status() == qfw_job.JobStatus.ERROR
 
 
 def test_qfw_job_submit_requires_driver_reservation(monkeypatch):
