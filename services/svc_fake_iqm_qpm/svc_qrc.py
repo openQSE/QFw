@@ -89,6 +89,7 @@ class QRC:
 
 	def _execute(self, circuit, cancel_event=None):
 		info = circuit.info
+		circuit.set_launching()
 		start_ns = time.time_ns()
 		circuit.set_running()
 		sleep_seconds = self._sleep_seconds(info)
@@ -141,6 +142,13 @@ class QRC:
 			"cid": cid,
 			"qtask_id": qtask_id,
 			"reservation_id": info.get("reservation_id"),
+			"creation_time": circuit.creation_time,
+			"launch_time": circuit.launch_time,
+			"resources_consumed_time": circuit.resources_consumed_time,
+			"exec_time": circuit.exec_time,
+			"completion_time": circuit.completion_time,
+			"cq_enqueue_time": time.time(),
+			"cq_dequeue_time": -1,
 			"outcome": "FAILED" if cancelled else "COMPLETED",
 			"rc": 1 if cancelled else 0,
 			"result": {} if cancelled else {state: shots},
@@ -173,6 +181,14 @@ class QRC:
 			"cid": cid,
 			"qtask_id": result.get("qtask_id"),
 			"reservation_id": result.get("reservation_id"),
+			"creation_time": result.get("creation_time"),
+			"launch_time": result.get("launch_time"),
+			"resources_consumed_time": result.get(
+				"resources_consumed_time"),
+			"exec_time": result.get("exec_time"),
+			"completion_time": result.get("completion_time"),
+			"cq_enqueue_time": result.get("cq_enqueue_time"),
+			"cq_dequeue_time": result.get("cq_dequeue_time"),
 			"estimated_device_ns": result.get("estimated_device_ns"),
 			"observed_fake_runtime_ns": result.get(
 				"observed_fake_runtime_ns"),

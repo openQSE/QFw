@@ -175,6 +175,13 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 
 	assert response["outcome"] == "ACCEPTED"
 	assert completion["outcome"] == "COMPLETED"
+	assert completion["creation_time"] > 0
+	assert completion["creation_time"] <= completion["launch_time"]
+	assert completion["launch_time"] <= completion["exec_time"]
+	assert completion["resources_consumed_time"] <= completion["exec_time"]
+	assert completion["exec_time"] <= completion["completion_time"]
+	assert completion["completion_time"] <= completion["cq_enqueue_time"]
+	assert completion["cq_dequeue_time"] > completion["cq_enqueue_time"]
 	assert completion["baseline_units"] == 4
 	assert completion["estimated_device_ns"] == 48_500
 	assert completion["requested_timing_metadata"] == {
@@ -191,6 +198,15 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 	assert admission.actual[-1][1]["actual_baseline_units"] == 4
 	assert qpm.controller.scheduler_context.completed == [response["qtask_id"]]
 	assert qpm.get_scheduler_queue_state()["provider_inflight_qtask_ids"] == []
+	timing = qpm.get_task_timing(
+		reservation_id=decision["reservation_id"],
+		task_id=response["qtask_id"])["timing"]
+	assert timing["creation_time"] == completion["creation_time"]
+	assert timing["launch_time"] == completion["launch_time"]
+	assert timing["exec_time"] == completion["exec_time"]
+	assert timing["completion_time"] == completion["completion_time"]
+	assert timing["cq_enqueue_time"] == completion["cq_enqueue_time"]
+	assert timing["cq_dequeue_time"] == -1
 
 
 def test_fake_iqm_qpm_uses_reservation_provider_credential(
