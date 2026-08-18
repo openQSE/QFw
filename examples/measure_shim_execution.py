@@ -140,7 +140,7 @@ def measure_library(library, device_id, args, count_port=None):
 		# The drivers time submit/wait/fetch from their own clock, started just
 		# before submission. Anything before that -- transcode and payload
 		# assembly -- is the difference against the total measured here.
-		driver_timing = (driver.get_last_job_timing() or {}).get("timing") or {}
+		driver_timing = (driver.get_task_timing() or {}).get("timing") or {}
 		submit = driver_timing.get("submit_seconds")
 		wait = driver_timing.get("wait_seconds")
 		fetch = driver_timing.get("result_fetch_seconds")

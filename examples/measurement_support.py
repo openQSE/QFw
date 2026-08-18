@@ -10,6 +10,10 @@ import sys
 import time
 from urllib.parse import urlsplit
 
+# DEFw's bootstrap is what puts its python/service-apis on sys.path. Anything
+# under svc_lib_qpm reaches api_events on import, so this has to come first.
+import defw  # noqa: E402,F401
+
 
 class MeasurementError(Exception):
 	"""A sample was taken but cannot be trusted."""
@@ -229,13 +233,13 @@ class NativeAdapter:
 
 	`svc_iqm_qpm.util_iqm.IQMServiceClient` already exposes get_device_info,
 	get_coupling_graph, get_calibration_snapshot, run_circuit and
-	get_last_job_timing. Two return shapes differ, so they are adapted here
+	get_task_timing. Two return shapes differ, so they are adapted here
 	rather than by touching the native service, which is deliberately
 	unmodified by the shim work:
 
 	  run_circuit          returns {"counts", "qhw_result"}; the drivers return
 	                       the qhw record directly.
-	  get_last_job_timing  returns an iqm-timing-summary-v1 record whose
+	  get_task_timing      returns an iqm-timing-summary-v1 record whose
 	                       client-side spans live under "client_wall_seconds".
 
 	That second difference is worth more than the adaptation. The native record
@@ -271,8 +275,8 @@ class NativeAdapter:
 			return out["qhw_result"]
 		return out
 
-	def get_last_job_timing(self, cid=None):
-		summary = self._client.get_last_job_timing(cid) or {}
+	def get_task_timing(self, cid=None):
+		summary = self._client.get_task_timing(cid) or {}
 		self._last_summary = summary
 		wall = summary.get("client_wall_seconds") or {}
 		return {"timing": {
