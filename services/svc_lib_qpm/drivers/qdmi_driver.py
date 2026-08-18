@@ -42,8 +42,8 @@ class QdmiDriver(BaseDriver):
 		"get_coupling_graph",
 		"get_calibration_snapshot",
 		"run_circuit",
-		"get_last_job_timing",
-		"get_last_job_metadata",
+		"get_task_timing",
+		"get_task_metadata",
 	})
 
 	def __init__(self, descriptor=None):
@@ -298,7 +298,7 @@ class QdmiDriver(BaseDriver):
 					f"QDMI job timed out after {timeout}s (status {state!r})")
 			time.sleep(max(poll, 0.0))
 
-	# --- last-job timing / metadata (from the cached run_circuit job) ----
+	# --- task timing / metadata (from the cached run_circuit job) -------
 
 	def _last_job_for(self, cid):
 		job = self._last_job
@@ -310,7 +310,7 @@ class QdmiDriver(BaseDriver):
 				f"{job.get('cid')!r})")
 		return job
 
-	def get_last_job_timing(self, cid=None):
+	def get_task_timing(self, cid=None):
 		job = self._last_job_for(cid)
 		return {
 			"cid": job.get("cid"),
@@ -318,7 +318,7 @@ class QdmiDriver(BaseDriver):
 			"status": job.get("status"),
 			"timing": job.get("timing") or {}}
 
-	def get_last_job_metadata(self, cid=None):
+	def get_task_metadata(self, cid=None):
 		job = self._last_job_for(cid)
 		return {
 			"cid": job.get("cid"),
