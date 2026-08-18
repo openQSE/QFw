@@ -20,6 +20,9 @@ class QPMTelemetry(QPMRemoteBase):
 			       token=None):
 		pass
 
+	def capability_map(self, token=None):
+		pass
+
 	def get_telemetry_access_model(self, token=None):
 		pass
 
