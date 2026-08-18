@@ -176,13 +176,13 @@ install(DIRECTORY services/
 		PATTERN "*.in"
 		PATTERN "dev-config" EXCLUDE
 		PATTERN "__pycache__" EXCLUDE)
-install(CODE
-	"file(REMOVE_RECURSE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/service-apis/api_qpm\")")
 install(DIRECTORY service-apis/
 	DESTINATION "${CMAKE_INSTALL_LIBDIR}/qfw/service-apis"
 	FILES_MATCHING
 		PATTERN "*.py"
 		PATTERN "__pycache__" EXCLUDE)
+install(CODE
+	"file(REMOVE_RECURSE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/service-apis/api_qpm\")")
 install(DIRECTORY share/qfw/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw")
 install(CODE
