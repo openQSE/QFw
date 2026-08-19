@@ -38,7 +38,7 @@ class QPM(UTIL_QPM):
 		info['qfw_backend'] = 'iqm'
 		return info
 
-	def capability_map(self):
+	def capability_map(self, token=None):
 		return self.qrc.capability_map()
 
 	def get_backend_info(self, lib=None, token=None):
