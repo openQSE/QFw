@@ -79,7 +79,10 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install pytest
-      run: python -m pip install --upgrade pip pytest
+      # PyYAML is needed as well: the mock suite drives example scripts whose
+      # preflight parses the site and device-access YAML, so without it
+      # tests/mock/test_iqm_chem_driver_script.py fails on a missing module.
+      run: python -m pip install --upgrade pip pytest pyyaml
 
     - name: Run ci-mock
       # The ci-mock helper mirrors the CI-safe mock pytest suite.
