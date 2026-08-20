@@ -106,7 +106,11 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
+try:
+	import yaml
+except ImportError as exc:
+	raise SystemExit(
+		f"ERROR: PyYAML is required to read the site configuration: {exc}")
 
 site_path = Path(sys.argv[1]).expanduser().resolve()
 prefix = sys.argv[2]
