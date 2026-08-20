@@ -1,12 +1,32 @@
 # QFw Benchmarking and Profiling Design (Proposal)
 
-Status: **draft, revision 2 — request for community input**
+Status: **draft, revision 3 — request for community input**
 
 This document proposes adding benchmarking and profiling support to QFw. It
 is intended as a starting point for discussion: the semantic conventions and
 suite-integration plans in particular are initial proposals, and community
 members are encouraged to suggest additions, removals, or changes. See
 [Open Questions and Community Input](#open-questions-and-community-input).
+
+Revision 3 incorporates the second round of review feedback (PR #30):
+
+- **Span names now follow one rule**, `qfw.<subsystem>.<operation>`. This
+  removes the depth inconsistency between the root span and its children.
+  `qfw.client.*` becomes `qfw.backend.*`, `qfw.qrc.dispatch` becomes
+  `qfw.qpm.dispatch`, and `qfw.app.serialize` becomes `qfw.app.prepare`.
+- **`qfw.backend.collect` replaces `qfw.client.poll`** as the complement of
+  `qfw.backend.submit`. Individual polls become span events rather than
+  spans, which also removes an unbounded span-rate problem.
+- A **sampling and signal-tier policy** is added. Traces may be sampled or
+  switched off, so every measurement that must survive that is backed by a
+  metric. The metric set gains per-hop duration histograms for the QPM and
+  the back end.
+- **Transport profiling moves to an optional extension** outside conventions
+  v1, renamed `qfw.transport.rpc`.
+- **The collector is the storage boundary.** QFw emits OTLP and does not
+  implement storage, archival, or columnar conversion. The site-specific
+  streaming detail moves to an appendix.
+- Open questions are updated. Four are resolved by this revision.
 
 Revision 2 incorporates the first round of review feedback (PR #30):
 
@@ -35,8 +55,11 @@ Revision 2 incorporates the first round of review feedback (PR #30):
   - [Instrumentation Points](#instrumentation-points)
   - [Trace-Context Propagation Through DEFw RPC](#trace-context-propagation-through-defw-rpc)
   - [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)
+  - [Sampling and Signal Tiers](#sampling-and-signal-tiers)
 - [Semantic Conventions (Initial Proposal)](#semantic-conventions-initial-proposal)
+  - [Naming Rule](#naming-rule)
   - [Span Vocabulary](#span-vocabulary)
+  - [Optional Extension: Transport Profiling](#optional-extension-transport-profiling)
   - [Context Attributes](#context-attributes)
     - [Cardinality Classes](#cardinality-classes)
   - [Metrics](#metrics)
@@ -53,6 +76,7 @@ Revision 2 incorporates the first round of review feedback (PR #30):
 - [Licensing](#licensing)
 - [Implementation Phases](#implementation-phases)
 - [Open Questions and Community Input](#open-questions-and-community-input)
+- [Appendix: Streaming Profile Reference Topology](#appendix-streaming-profile-reference-topology)
 
 ## Motivation
 
@@ -106,11 +130,11 @@ OpenTelemetry traces (below) are its natural vehicle.
 
 | Measurement | Why it matters |
 | --- | --- |
-| Orchestration latency per hop (submit → QPM → QRC → back-end client) | Locates where time goes inside the framework |
+| Orchestration latency per hop (submit → QPM → dispatch → back end) | Locates where time goes inside the framework |
 | Serialization / canonicalization cost (circuit → OpenQASM3) | Fixed per-job overhead |
 | Hybrid-loop round-trip latency | For VQE/QAOA, per-iteration framework latency often dominates user-visible runtime |
 | Job throughput under load | Concurrent jobs, batching behavior, scheduler interaction |
-| DEFw RPC / transport cost | Baseline for the libfabric (TCP vs OFI) transport work, which will consume this same instrumentation |
+| DEFw RPC / transport cost | Baseline for the libfabric (TCP vs OFI) transport work, which will consume this same instrumentation. Optional extension, off by default. See [Optional Extension: Transport Profiling](#optional-extension-transport-profiling) |
 
 Both types share the same telemetry pipeline and report tooling. Type B
 spans are recorded during every Type A run: a vendor comparison report
@@ -139,7 +163,7 @@ automatically includes the framework-overhead breakdown.
 4. **Low perturbation.** Instrumentation must not meaningfully disturb what
    it measures: batched span export, node-local telemetry files, and
    sampling controls for high-rate signals (see
-   [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)).
+   [Sampling and Signal Tiers](#sampling-and-signal-tiers)).
 5. **Versioned semantics.** OTLP handles envelope evolution; the QFw
    semantic conventions and the JSON report schema carry explicit versions
    so old data remains interpretable as conventions evolve.
@@ -204,84 +228,37 @@ above slots in here.
 **Profile 3 — streaming to site telemetry infrastructure (optional).**
 Sites that already operate a telemetry pipeline can receive QFw's signals
 into it rather than running a QFw-specific stack. Adopting OTel does not
-conflict with such a pipeline: OTel governs what QFw *emits*, while the
-site's bus and stores handle transport and storage.
+conflict with such a pipeline. OTel governs what QFw *emits*. The site's bus
+and stores handle transport, storage, and retention.
 
-The motivating case is ORNL, whose operational analytics pipeline collects
-from systems, storage, SLURM, telemetry sources, and users; ingests through
-**Apache Kafka** as a common message bus (roughly 4 TB/day); stores in
-**VictoriaMetrics**, **Druid**, **Elasticsearch**, and **MinIO**;
-visualizes with **Grafana**; and archives to MinIO/Parquet for long-term
-research. ORNL does not use OpenTelemetry natively today. Even so, every
-signal QFw emits has a destination in that stack, reachable with stock
-components:
+**The collector is the storage boundary.** QFw emits OTLP and stops there.
+It does not implement storage, archival, retention, or columnar conversion,
+and it does not target any particular store. Everything past the collector
+is an operator decision, served by stock collector components. Where a site
+archives to object storage or converts to a columnar format, that step is
+the site's existing one, and QFw's OTLP joins it.
 
-```
-QFw (OTel SDK) → Collector agent ──[kafka exporter]──► site Kafka topic
-                                                            │
-                            ┌───────────────────────────────┘
-                            ▼
-        [kafka receiver] → Collector → VictoriaMetrics  (metrics, OTLP native)
-                                     → Elasticsearch    (traces + logs)
-                                     → MinIO            (archive, object storage)
-                                              │
-                                        Grafana queries both stores
-```
+A worked reference topology for a site that already runs Kafka,
+VictoriaMetrics, Elasticsearch, and MinIO is given in
+[Appendix: Streaming Profile Reference Topology](#appendix-streaming-profile-reference-topology).
+Two consequences of that walkthrough belong here, because they constrain the
+conventions rather than the deployment:
 
-- The OTel Collector's **Kafka exporter and receiver** are OSS
-  (collector-contrib), defaulting to `otlp_proto` encoding, so QFw needs no
-  Kafka-specific code.
-- **VictoriaMetrics ingests OTLP metrics natively** at
-  `/opentelemetry/v1/metrics` in the OSS release, and promotes OTel resource
-  attributes to labels — so the `qfw.*` conventions become directly
-  queryable (see [Cardinality Classes](#cardinality-classes), which exists
-  precisely because of this promotion).
-- The **Elasticsearch exporter** (collector-contrib, OSS) sends traces,
-  logs, and metrics to Elasticsearch 7.17.x/8.x/9.x, routing each signal to
-  its own index.
-- The **S3 exporter** (`awss3exporter`) writes to any S3-compatible object
-  store including MinIO (`endpoint` plus `s3_force_path_style`, credentials
-  from the standard AWS environment variables).
-- Sites whose Kafka pipeline already has consumers may only need QFw to land
-  OTLP-encoded messages on a topic and route them with existing tooling.
+- **Metric labels must stay low cardinality.** Stores that promote OTel
+  resource attributes to labels key one time series per label set, so a
+  high-cardinality label multiplies stored series. This is why the
+  conventions classify every `qfw.*` attribute. See
+  [Cardinality Classes](#cardinality-classes). Spans have no such
+  constraint, because each span is an independent record.
+- **Traces need a trace-capable store.** A metrics database alone cannot
+  hold QFw's Type B per-hop profiling, which is fundamentally traces. A site
+  without a trace store can instead derive rate, error, and duration metrics
+  from spans using the collector's spanmetrics connector, and keep full
+  traces node-local under profile 1.
 
-Practical notes for this profile:
-
-- **Traces need a trace-capable store, and sites often already have one.**
-  A metrics database alone cannot hold QFw's Type B per-hop profiling,
-  which is fundamentally traces. Where a site runs Elasticsearch (as ORNL
-  does), the Elasticsearch exporter covers traces directly. Otherwise, in
-  rough order of preference: add a trace store (VictoriaTraces — same
-  vendor as VictoriaMetrics, OTLP ingestion, Jaeger-compatible query APIs,
-  though newer, built on VictoriaLogs, minimum retention one day, and
-  without per-tenant authorization — or Tempo, or Jaeger); or, if the site
-  prefers not to index spans at all, use the Collector's **spanmetrics
-  connector** to derive rate/error/duration metrics from spans, sending
-  aggregates to the metrics store while full traces stay node-local under
-  profile 1.
-- **Object-storage archiving aligns with the report pipeline.** A site
-  archive such as MinIO/Parquet is the natural home for the archivable
-  artifacts this design calls for, and makes longitudinal comparison a
-  query against data researchers already hold rather than a bespoke
-  exercise. One caveat: `awss3exporter`'s marshalers are `otlp_json` and
-  `otlp_proto` — **not Parquet** — so columnar conversion is a separate
-  step. Sites already landing Parquet in object storage typically have such
-  a step; whether QFw's OTLP joins it, or the report tooling writes its own
-  artifacts to the archive, is a per-site decision.
-- **Volume is not a concern.** Benchmark instrumentation emits on the order
-  of tens of spans per job, so a full campaign is megabytes against a
-  pipeline already carrying terabytes per day. The one discipline to keep
-  is leaving high-rate sources (`qfw.rpc`) off unless the transport itself
-  is under study.
-- **Licensing of the Kafka path.** `vmagent`'s own Kafka consumer is a
-  VictoriaMetrics *Enterprise* feature, but the OSS OTel Collector Kafka
-  receiver covers the same ground, so no license is required for this
-  topology.
-
-Because VictoriaMetrics is Prometheus-compatible, SLURM's OpenMetrics data
-lands in the same store, keeping scheduler and framework telemetry
-queryable together — and under this profile Grafana, already deployed at
-such sites, serves both the metric dashboards and the trace views.
+Volume is not a concern under any profile. Benchmark instrumentation emits
+on the order of tens of spans per job, so a full campaign is megabytes
+against a pipeline already carrying terabytes per day.
 
 The report pipeline (below) consumes profile 1's files directly; under
 profiles 2 and 3 the same reports can be generated from the backing store.
@@ -295,22 +272,28 @@ one job (span names from the [Span Vocabulary](#span-vocabulary)):
 
 ```
 qfw.bench.run                      (root: one benchmark run)
-└── qfw.job                        (one circuit/job, end to end)
-    ├── qfw.app.serialize          (circuit → canonical OpenQASM3)
-    ├── qfw.qpm.receive
-    ├── qfw.qpm.transpile          (if QFw-side transpilation)
-    ├── qfw.qpm.queue              (time queued inside QFw)
-    ├── qfw.qrc.dispatch
-    └── qfw.client.execute         (back-end client: IQM | QRMI | QDMI | simulator)
-        ├── qfw.client.acquire     (session/resource acquisition)
-        ├── qfw.client.submit
-        └── qfw.client.poll        (per poll; count derivable)
+└── qfw.bench.iter                 (one hybrid iteration, hybrid workloads only)
+    └── qfw.app.job                (one circuit/job, end to end)
+        ├── qfw.app.prepare        (circuit → canonical OpenQASM3)
+        ├── qfw.qpm.receive
+        ├── qfw.qpm.transpile      (if QFw-side transpilation)
+        ├── qfw.qpm.queue          (time queued inside QFw)
+        ├── qfw.qpm.dispatch       (hand-off to the back-end driver)
+        └── qfw.backend.execute    (back end: IQM | QRMI | QDMI | simulator)
+            ├── qfw.backend.acquire   (session/resource acquisition)
+            ├── qfw.backend.submit
+            └── qfw.backend.collect   (result retrieval; polls are span events)
 ```
 
-Hybrid workloads wrap each iteration in a `qfw.iter` span (child of
-`qfw.bench.run`, parent of that iteration's `qfw.job` spans). DEFw RPC
-round-trips can be recorded as `qfw.rpc` spans — off by default, enabled
-for transport work (libfabric TCP vs OFI).
+The nesting is one run to many iterations to many jobs. A non-hybrid
+workload omits `qfw.bench.iter` and attaches `qfw.app.job` directly to the
+run. A run is not the same thing as one application invocation: a sweep
+across qubit counts, or the same circuit across `native`, `qrmi`, and
+`qdmi`, is one run and many jobs.
+
+DEFw RPC round-trips can additionally be recorded as `qfw.transport.rpc`
+spans. That is an optional extension, off by default. See
+[Optional Extension: Transport Profiling](#optional-extension-transport-profiling).
 
 ### Trace-Context Propagation Through DEFw RPC
 
@@ -333,14 +316,60 @@ transport.
   cross-node clock sync, or where distributions matter (e.g. per-iteration
   latency percentiles at scale), duration histograms measured with a
   monotonic clock inside one process are the right signal, complementing
-  the trace view.
+  the trace view. This is one of two reasons the design carries metrics
+  alongside traces. The other is availability, covered in
+  [Sampling and Signal Tiers](#sampling-and-signal-tiers).
 - **Overhead.** The SDKs' batch span processors move export off the hot
   path, and expected span rates are modest (tens of spans per job; order
   ten per iteration in hybrid loops with ≥100 ms iterations) —
   perturbation well below run-to-run noise. Deployment rules: export to
   node-local storage, never a shared filesystem; leave high-rate span
-  sources (`qfw.rpc`) off unless the transport itself is under study; do
-  not run benchmarks with verbose DEFw debug logging enabled.
+  sources (`qfw.transport.rpc`) off unless the transport itself is under
+  study; do not run benchmarks with verbose DEFw debug logging enabled.
+- **Span rates must stay bounded per job.** The "tens of spans per job"
+  budget only holds if no span is emitted per unit of waiting. A job that
+  sits in a vendor queue for ten minutes behind a one-second poll interval
+  would emit roughly 600 spans if each poll were a span. This is why
+  `qfw.backend.collect` is one span per job covering result retrieval, with
+  individual polls recorded as span events carrying a poll count and
+  interval. Poll-level spans remain available as an opt-in for diagnosing
+  the polling loop itself.
+
+### Sampling and Signal Tiers
+
+Traces and metrics are not interchangeable, and the difference is not only
+precision. Trace collection has a real per-span cost, so in a long-lived
+deployment traces are sampled or switched off entirely. Metric collection is
+aggregated and always on. Any measurement that must remain available when
+traces are not is therefore backed by a metric as well as a span.
+
+Sampling policy:
+
+- **Benchmark runs sample at 100%.** A benchmark run is a bounded,
+  deliberate activity, and a partially sampled run is not a usable
+  measurement. The scenario driver sets the sampling decision at the root
+  span.
+- **Production traffic samples at a configured ratio**, default off. Sites
+  that want continuous per-hop visibility turn it on at a ratio they choose.
+- **Sampling is parent-based.** The decision is made once at the root and
+  propagates with `traceparent`, so a sampled trace is complete across every
+  node rather than sampled independently per service.
+- **High-rate optional spans stay off** unless what they measure is the
+  subject of the run.
+
+Signal tiers per instrumentation point:
+
+| Instrumentation point | Trace | Metric | Rationale |
+| --- | --- | --- | --- |
+| `qfw.bench.run`, `qfw.bench.iter` | yes | iteration histogram | Per-iteration latency is a headline hybrid-loop number |
+| `qfw.app.job` | yes | duration histogram, counters | End-to-end latency and throughput must survive with traces off |
+| `qfw.app.prepare` | yes | no | Per-job fixed cost, adequately characterized from sampled runs |
+| `qfw.qpm.*` | yes | duration histogram by op | Framework overhead attribution is the Type B headline, so it must not depend on sampling |
+| `qfw.backend.*` | yes | duration histogram by op | Same, and it carries the Type A API-path comparison |
+| `qfw.transport.rpc` | opt-in | opt-in | Only meaningful while the transport is under study |
+
+Attributes used as metric labels are restricted to the dimensional class.
+See [Cardinality Classes](#cardinality-classes).
 
 ## Semantic Conventions (Initial Proposal)
 
@@ -354,33 +383,99 @@ semantic conventions could outlive QFw itself.
 Conventions are versioned via the standard OTel `schema_url` / attribute
 `qfw.conventions.version` (starting at `1`).
 
+### Naming Rule
+
+Every span name is `qfw.<subsystem>.<operation>`, with no exceptions. The
+subsystem segment names the component that emits the span, so the emitter is
+readable from the name rather than only from the table below. The rule
+governs span and metric names. Attributes follow OTel attribute namespacing
+instead, so `qfw.job.id` and `qfw.device.name` stay as they are.
+
+| Subsystem | Emitter |
+| --- | --- |
+| `bench` | The driving harness. A benchmark scenario driver, or the application driving a hybrid loop |
+| `app` | The client-side front end (`qfw_qiskit`) |
+| `qpm` | The QPM service, including its in-process resource controller (QRC) |
+| `backend` | The back-end driver that talks to a vendor, a shim, or a simulator |
+| `transport` | DEFw transport internals. Optional extension only |
+
+Two naming decisions follow from the rule and are worth stating outright,
+because revision 2 got both wrong:
+
+- **The root span is not shallower than its children.** Revision 2 had a
+  three-segment root (`qfw.bench.run`) over two-segment children (`qfw.job`,
+  `qfw.iter`), which read as a hierarchy that does not exist. Dot depth is
+  not tree depth. Every span is at depth three, and the parent/child
+  relationship lives in the trace, not in the name.
+- **There is no `qrc` subsystem.** QRC is an in-process object owned by the
+  QPM service and constructed in its initializer, not a separate service or
+  node. Giving it a top-level namespace implied a network hop that does not
+  exist. Its hand-off to the back-end driver is `qfw.qpm.dispatch`.
+
 ### Span Vocabulary
 
 | Span | Emitted by | Measures |
 | --- | --- | --- |
-| `qfw.bench.run` | front-end / scenario driver | The whole benchmark run; carries run label and workload attributes |
-| `qfw.iter` | front-end | One hybrid-algorithm iteration; attribute `qfw.iter.index` |
-| `qfw.job` | front-end (`qfw_qiskit`) | One circuit/job end to end, submission to result delivery |
-| `qfw.app.serialize` | `qfw_qiskit` | Circuit → canonical OpenQASM3 conversion; payload size attribute |
+| `qfw.bench.run` | scenario driver | The whole benchmark run; carries run label and workload attributes |
+| `qfw.bench.iter` | scenario driver | One hybrid-algorithm iteration; attribute `qfw.bench.iter.index` |
+| `qfw.app.job` | front end (`qfw_qiskit`) | One circuit/job end to end, submission to result delivery |
+| `qfw.app.prepare` | `qfw_qiskit` | Getting the circuit into canonical submittable form: conversion to OpenQASM 3 and encoding. Payload size attribute |
 | `qfw.qpm.receive` | QPM service | Job arrival and admission at the QPM |
 | `qfw.qpm.transpile` | QPM service | QFw-side transpilation; pre/post circuit-statistics attributes |
 | `qfw.qpm.queue` | QPM service | Time queued inside QFw before dispatch |
-| `qfw.qrc.dispatch` | QRC | Hand-off to the back-end client |
-| `qfw.client.execute` | back-end client | Full back-end interaction; attribute `qfw.stack.api_path` = `native` \| `qrmi` \| `qdmi` \| `simulator` |
-| `qfw.client.acquire` | back-end client | Resource/session acquisition (QRMI `acquire`, QDMI session open, vendor connect) |
-| `qfw.client.submit` | back-end client | The submission call to the vendor/simulator |
-| `qfw.client.poll` | back-end client | Each result poll |
-| `qfw.rpc` | DEFw | One DEFw RPC round-trip; bytes attributes; off by default |
+| `qfw.qpm.dispatch` | QPM service (QRC) | In-process hand-off from the QPM's resource controller to the back-end driver |
+| `qfw.backend.execute` | back-end driver | Full back-end interaction; attribute `qfw.stack.api_path` = `native` \| `qrmi` \| `qdmi` \| `simulator` |
+| `qfw.backend.acquire` | back-end driver | Resource/session acquisition (QRMI `acquire`, QDMI session open, vendor connect) |
+| `qfw.backend.submit` | back-end driver | The submission call to the vendor/simulator |
+| `qfw.backend.collect` | back-end driver | Result retrieval, the complement of `qfw.backend.submit`. One span per job. Attributes `qfw.backend.poll_count` and `qfw.backend.poll_interval_s`; each poll is a span event |
+
+`qfw.app.job` sits under `app` because the front end is what emits it and
+what its duration is measured against. It is the application's view of the
+job, which is also the number a user experiences.
+
+`qfw.app.prepare` is named for the outcome rather than the mechanism.
+Revision 2 called it `qfw.app.serialize`, which named one implementation
+step and would have had to be renamed the moment canonicalization stopped
+being a single serialization call. If the internal breakdown is later worth
+separating, it belongs in span events on `qfw.app.prepare`, not in a
+deeper name.
 
 Vendor-reported timings that did not happen under QFw's clocks (server-side
 queue time, execution time) are recorded as *attributes* on
-`qfw.client.execute` (`qfw.vendor.queue_time_s`, `qfw.vendor.exec_time_s`),
+`qfw.backend.execute` (`qfw.vendor.queue_time_s`, `qfw.vendor.exec_time_s`),
 not as spans.
 
 Derived by report tooling (not emitted): end-to-end latency, per-hop
-breakdown, framework overhead = (`qfw.job` duration) − (back-end-reported
+breakdown, framework overhead = (`qfw.app.job` duration) − (back-end-reported
 execution time), throughput, iteration statistics (min / max / mean / p50 /
 p95).
+
+### Optional Extension: Transport Profiling
+
+DEFw RPC instrumentation is **outside conventions v1**. It is defined here
+as a named optional extension so that the transport work has a stable
+vocabulary, and so that adopters of the core conventions are not asked to
+implement it.
+
+| Span | Emitted by | Measures |
+| --- | --- | --- |
+| `qfw.transport.rpc` | DEFw | One RPC round-trip. Attributes: byte counts, and `qfw.transport.kind` = `tcp` \| `ofi` |
+
+Rationale for keeping it out of the core set. It is the only span in the
+vocabulary that describes a QFw implementation detail rather than a stage of
+a quantum job, so a non-QFw adopter of these conventions has nothing to map
+it onto. It is also the only unbounded-rate span source, which makes it the
+one span that can violate the perturbation budget.
+
+Rationale for defining it now rather than later. It has a named consumer:
+the libfabric transport work compares TCP against OFI, and that comparison
+is exactly this measurement. Defining it as an extension costs nothing,
+because OTel conventions extend backward-compatibly, and it avoids the
+transport work inventing a second, divergent vocabulary in the meantime.
+
+Deployment rules: off by default, enabled only when the transport itself is
+the subject of the run, and never enabled for a Type A comparison where it
+would perturb the numbers being compared.
 
 ### Context Attributes
 
@@ -420,7 +515,7 @@ Initial classification:
 
 | Class | Attributes |
 | --- | --- |
-| Dimensional | `qfw.stack.api_path` (`native`/`qrmi`/`qdmi`/`simulator`), `qfw.device.name`, `qfw.backend.kind`, `qfw.suite.name`, `qfw.circuit.num_qubits`, `service.name`, `service.version`, status/outcome |
+| Dimensional | `qfw.stack.api_path` (`native`/`qrmi`/`qdmi`/`simulator`), `qfw.device.name`, `qfw.backend.kind`, `qfw.qpm.op`, `qfw.backend.op`, `qfw.transport.kind`, `qfw.suite.name`, `qfw.circuit.num_qubits`, `service.name`, `service.version`, status/outcome |
 | Descriptive | trace and span IDs, `qfw.job.id`, vendor job IDs, SLURM job ID, `qfw.device.calibration_set_id`, calibration snapshots, coupling maps, `target()` payload digests, circuit hashes, OpenQASM payloads, package-version maps, container image digests |
 
 Two judgment calls worth community scrutiny (see open questions):
@@ -440,12 +535,23 @@ ID that links an aggregate back to a representative trace.
 Initial metric set (OTel instruments). Metric labels are drawn only from
 the **dimensional** class above:
 
-| Metric | Instrument | Purpose |
-| --- | --- | --- |
-| `qfw.iter.duration` | histogram | Per-iteration latency distribution for hybrid loops |
-| `qfw.job.duration` | histogram | End-to-end job latency distribution under load |
-| `qfw.jobs.completed` / `qfw.jobs.failed` | counter | Throughput and reliability under load |
-| `qfw.rpc.duration`, `qfw.rpc.bytes` | histogram | Transport characterization (libfabric work); off by default |
+| Metric | Instrument | Labels | Purpose |
+| --- | --- | --- | --- |
+| `qfw.bench.iter.duration` | histogram | run label, api path | Per-iteration latency distribution for hybrid loops |
+| `qfw.app.job.duration` | histogram | api path, device, backend kind | End-to-end job latency distribution under load |
+| `qfw.app.job.count` | counter | outcome, api path, device | Throughput and reliability under load |
+| `qfw.qpm.duration` | histogram | `qfw.qpm.op` = `receive` \| `transpile` \| `queue` \| `dispatch` | Framework overhead attribution per QPM stage, without depending on trace sampling |
+| `qfw.backend.duration` | histogram | `qfw.backend.op` = `acquire` \| `submit` \| `collect`, plus api path and device | Back-end cost per stage. Carries the Type A API-path comparison when traces are sampled off |
+| `qfw.transport.rpc.duration`, `qfw.transport.rpc.bytes` | histogram | `qfw.transport.kind` | Transport characterization (libfabric work). Optional extension, off by default |
+
+Two conventions hold for this set. Metric names mirror the span they
+aggregate, so moving between a trace view and a dashboard needs no
+translation table. Per-hop timings use one instrument per subsystem with an
+`op` label rather than one instrument per operation, which keeps the
+instrument count small and lets a dashboard sum or break out stages without
+knowing the vocabulary in advance. The cost is that each stage multiplies
+the series count for that instrument, which is acceptable because `op` is
+a small closed set.
 
 ### Result and Quality Data
 
@@ -537,9 +643,16 @@ and measures them.
   custom metadata), so report tooling can join suite scores with QFw traces
   without heuristics.
 - **Circuit language.** SupermarQ's QASM export and QStone's core language
-  are OpenQASM 2.0, while QFw's canonical form is OpenQASM 3. QFw's
-  canonicalization accepts 2.0 input; raising QASM 3 support upstream in
-  the suites is worthwhile but not a blocker.
+  are OpenQASM 2.0, while QFw's canonical form is OpenQASM 3. Accepting 2.0
+  is a one-way import at the canonicalization boundary and nothing more.
+  QFw does not become bilingual. Nothing downstream of `qfw.app.prepare`
+  sees 2.0, no QFw component is asked to understand two languages, and the
+  canonical form stays OpenQASM 3. Dropping 2.0 acceptance would not
+  simplify QFw. It would remove SupermarQ and QStone, which are the first
+  two suites in the proposed order and include the pilot, so it would cost
+  the whole first wave. Raising QASM 3 support upstream in the suites is
+  worthwhile and is the right long-term fix, but it is upstream work on
+  someone else's schedule and cannot gate QFw's own measurement rig.
 - **Suggested order.** SupermarQ first (pilot; proves the measurement rig
   end to end at minimal cost), QStone second (Type B synergy and the
   ORNL collaboration), mqssbench alongside or after (cheap adapter, strong
@@ -554,7 +667,8 @@ with no off-the-shelf equivalent: turning one run's telemetry plus suite
 results into a **reproducible, archivable comparison artifact** — a report
 you can attach to a PR, a paper, or a regression bisect.
 
-Two tools plus a comparator (proposed home: `bin/`, see open questions),
+Two tools plus a comparator, living in a top-level `benchmarking/`
+directory (see [Implementation Phases](#implementation-phases)),
 consuming profile 1's OTLP files directly (or a collector's store under
 profile 2):
 
@@ -601,7 +715,7 @@ Report schema sketch (`report_schema: 2`):
   },
   "device": {"name": "…", "qubits": 20, "calibration": {"set_id": "…", "snapshot": {"…": "…"}}},
   "environment": {"image": "…", "python": "3.12.x", "packages": {"…": "…"}, "slurm": {"job_id": "…"}},
-  "spans": [ {"name": "qfw.job", "start": "…", "duration_s": 4.31, "attributes": {"…": "…"}} ],
+  "spans": [ {"name": "qfw.app.job", "start": "…", "duration_s": 4.31, "attributes": {"…": "…"}} ],
   "metrics": {
     "end_to_end_s": 4.31,
     "hops": {"serialize_s": 0.02, "qpm_queue_s": 0.4, "client_submit_s": 0.05, "backend_exec_s": 3.1},
@@ -662,52 +776,145 @@ candidates here is copyleft.
 
 | Phase | Deliverable |
 | --- | --- |
-| 1 | OTel SDK integration in the Python components; `traceparent` propagation through DEFw RPC; file-export profile; core span vocabulary (`qfw.job` path); `qfw_bench_extract` producing schema-v2 JSON from OTLP files |
+| 1 | OTel SDK integration in the Python components; `traceparent` propagation through DEFw RPC; file-export profile; core span vocabulary (`qfw.app.job` path) and the sampling policy; `qfw_bench_extract` producing schema-v2 JSON from OTLP files. Tooling lands in a top-level `benchmarking/` directory with its own CODEOWNERS entry |
 | 2 | Context attributes from Qiskit, QRMI, QDMI/FoMaC, SLURM, environment; `qfw_bench_render`; **SupermarQ pilot** — extend the in-tree example with `score()` and conventions, run across back-ends |
-| 3 | `qfw_bench_compare`; hybrid-loop spans and metric histograms; **QStone integration** (QFw connector or gateway) with trace-ID correlation |
+| 3 | `qfw_bench_compare`; hybrid-loop spans and the per-hop metric histograms; **QStone integration** (QFw connector or gateway) with trace-ID correlation |
 | 4 | **mqssbench `DeviceAdapter`** (brings MQT Bench, QV, RB); suite-run automation; collector-profile reference deployment (Docker Compose) with the SLURM processor; streaming-profile validation against a site pipeline (Kafka → VictoriaMetrics) |
-| 5 | `qfw.rpc` spans/metrics shared with the libfabric TCP-vs-OFI work; instrumentation below the shim via the Rust (QRMI) and C (QDMI) SDKs; report archiving and longitudinal comparison |
+| 5 | `qfw.transport.rpc` extension spans/metrics shared with the libfabric TCP-vs-OFI work; instrumentation below the shim via the Rust (QRMI) and C (QDMI) SDKs; report archiving and longitudinal comparison |
 
 Phase 1 alone is already useful: it produces the framework-overhead
 breakdown (Type B) and the measurement rig everything else builds on.
 
 ## Open Questions and Community Input
 
-Concrete questions where feedback is sought — plus anything not listed here:
+### Resolved in Revision 3
 
-1. **Semantic conventions** are the highest-value feedback target: are the
-   span names and `qfw.*` attribute namespaces right? What context is
-   missing to make cross-vendor comparisons honest? Should the conventions
-   aim for a home beyond QFw?
-2. **Suite integration order:** SupermarQ pilot → QStone → mqssbench is
-   proposed above. Agree? Other suites (QED-C, Benchpress) that should be
-   in the first wave?
-3. **Quality metrics:** is a distribution-distance metric for small
-   circuits worth QFw computing itself, or should quality always be
-   delegated to suites?
-4. **Precision:** which measurements need metric histograms (monotonic,
-   distribution-bearing) rather than spans — is the split proposed in
-   [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)
-   drawn in the right place?
-5. **Cardinality classes:** is the dimensional/descriptive split in
-   [Cardinality Classes](#cardinality-classes) right — particularly
-   `qfw.circuit.num_qubits` (dimensional only if sweeps stay bounded) and
-   `qfw.device.calibration_set_id` (classed descriptive despite grouping by
-   calibration being an obvious analysis axis)? Sites running a shared
-   metrics store have the most direct stake here.
-6. **Streaming profile:** for sites with existing telemetry pipelines,
-   which stores should QFw target by default for each signal — and where a
-   site archives to object storage (e.g. MinIO/Parquet), should QFw's OTLP
-   feed the site's existing columnar conversion, or should the report
-   tooling write its own artifacts to the archive? Operators of such
-   pipelines are the right people to answer both.
-7. **Result storage:** counts inline in the JSON report vs referenced
-   external files — where is the size cutoff? How long are OTLP files
-   retained per run?
-8. **Where should the tooling live** — `bin/`, a new top-level
-   `benchmarks/` directory, or a separate repository?
-9. **Upstream QASM 3:** should we push OpenQASM 3 support into QStone and
-   SupermarQ, or keep accepting 2.0 at the canonicalization boundary
-   indefinitely?
+These were open in revision 2 and are settled unless someone objects.
+
+| # | Question | Resolution |
+| --- | --- | --- |
+| Suite order | SupermarQ → QStone → mqssbench | Kept. Reviewer preference was "easiest to integrate first", which is the same order |
+| Streaming stores | Which stores should QFw target per signal | Not QFw's decision. The collector is the storage boundary and everything past it is an operator choice |
+| OTLP retention | How long OTLP files are kept per run | Operator policy under profiles 2 and 3. Under profile 1, kept as long as the run's report artifacts are |
+| Tooling home | `bin/`, `benchmarks/`, or a separate repo | A top-level `benchmarking/` directory in the QFw tree, with a CODEOWNERS entry. QFw has a small contributor set, so keeping core instrumentation and the tooling that consumes it side by side is worth more than repository separation. Splitting it out later stays available |
+
+Separate release versioning for the benchmarking tooling (for example via
+release-please) was suggested alongside the tooling-home question. It is
+deliberately not decided here, because it changes QFw's release process
+rather than this design, and it deserves its own discussion.
+
+### Still Open
+
+1. **Semantic conventions** remain the highest-value feedback target. The
+   [Naming Rule](#naming-rule) and [Span Vocabulary](#span-vocabulary) are
+   revised, but the questions stand: what context is missing to make
+   cross-vendor comparisons honest, and should the conventions aim for a
+   home beyond QFw?
+2. **Cardinality classes.** This is the least-answered question in the
+   document and the one with the most operational consequence, because
+   revision 3 adds per-hop metrics that make label choices bite sooner. Is
+   the dimensional/descriptive split in
+   [Cardinality Classes](#cardinality-classes) right? Two calls in
+   particular: `qfw.circuit.num_qubits` is dimensional only while sweeps
+   stay bounded, and `qfw.device.calibration_set_id` is classed descriptive
+   even though grouping by calibration is an obvious analysis axis. Anyone
+   operating a shared metrics store is the right person to answer.
+3. **Sampling policy.** Is the split in
+   [Sampling and Signal Tiers](#sampling-and-signal-tiers) drawn in the
+   right place? Specifically, is every measurement that a site would want
+   with traces sampled off actually backed by a metric, and is
+   parent-based sampling at the run root the right default for production
+   traffic as well as for benchmark runs?
+4. **Quality metrics.** For a small circuit whose ideal output distribution
+   is classically computable, QFw could compute a distribution-distance
+   score (for example Hellinger fidelity) directly from the returned
+   counts, without any suite involved. The question is whether it should.
+   Computing it makes result quality available on every run, including
+   bare circuits that belong to no suite, which matters because a latency
+   comparison between two devices is not meaningful if one of them was
+   returning worse results. Against that, quality scoring is exactly what
+   the established suites exist to do, and a QFw-defined score risks being
+   a fourth definition nobody asked for. The narrow version of the
+   question: is a distribution-distance number computed on bare circuits
+   worth having, given that anything running under a suite will use the
+   suite's score instead?
+5. **Result storage.** Counts inline in the JSON report versus referenced
+   external files. Where is the size cutoff?
+6. **Upstream QASM 3.** The document now treats 2.0 acceptance as a one-way
+   import at the canonicalization boundary, kept indefinitely, on the
+   grounds that dropping it would cost SupermarQ and QStone and therefore
+   the entire first integration wave. See
+   [Common Integration Notes](#common-integration-notes). The open part is
+   whether anyone wants to drive QASM 3 support upstream into those suites,
+   which would make the question moot.
 
 Please open an issue or PR against this document with suggestions.
+
+## Appendix: Streaming Profile Reference Topology
+
+This appendix works one site's pipeline end to end, to show that profile 3
+needs no QFw-specific code. It is an example, not a requirement, and nothing
+in it is part of the QFw design surface.
+
+The motivating case is ORNL, whose operational analytics pipeline collects
+from systems, storage, SLURM, telemetry sources, and users; ingests through
+**Apache Kafka** as a common message bus (roughly 4 TB/day); stores in
+**VictoriaMetrics**, **Druid**, **Elasticsearch**, and **MinIO**;
+visualizes with **Grafana**; and archives to MinIO/Parquet for long-term
+research. ORNL does not use OpenTelemetry natively today. Even so, every
+signal QFw emits has a destination in that stack, reachable with stock
+components:
+
+```
+QFw (OTel SDK) → Collector agent ──[kafka exporter]──► site Kafka topic
+                                                            │
+                            ┌───────────────────────────────┘
+                            ▼
+        [kafka receiver] → Collector → VictoriaMetrics  (metrics, OTLP native)
+                                     → Elasticsearch    (traces + logs)
+                                     → MinIO            (archive, object storage)
+                                              │
+                                        Grafana queries both stores
+```
+
+- The OTel Collector's **Kafka exporter and receiver** are OSS
+  (collector-contrib), defaulting to `otlp_proto` encoding, so QFw needs no
+  Kafka-specific code.
+- **VictoriaMetrics ingests OTLP metrics natively** at
+  `/opentelemetry/v1/metrics` in the OSS release, and promotes OTel resource
+  attributes to labels — so the `qfw.*` conventions become directly
+  queryable (see [Cardinality Classes](#cardinality-classes), which exists
+  precisely because of this promotion).
+- The **Elasticsearch exporter** (collector-contrib, OSS) sends traces,
+  logs, and metrics to Elasticsearch 7.17.x/8.x/9.x, routing each signal to
+  its own index.
+- The **S3 exporter** (`awss3exporter`) writes to any S3-compatible object
+  store including MinIO (`endpoint` plus `s3_force_path_style`, credentials
+  from the standard AWS environment variables).
+- Sites whose Kafka pipeline already has consumers may only need QFw to land
+  OTLP-encoded messages on a topic and route them with existing tooling.
+
+Practical notes:
+
+- **Trace stores.** Where a site runs Elasticsearch, the Elasticsearch
+  exporter covers traces directly. Otherwise, in rough order of preference:
+  add a trace store (VictoriaTraces, same vendor as VictoriaMetrics, OTLP
+  ingestion, Jaeger-compatible query APIs, though newer, built on
+  VictoriaLogs, minimum retention one day, and without per-tenant
+  authorization; or Tempo; or Jaeger), or use the collector's spanmetrics
+  connector and keep full traces node-local.
+- **Object-storage archiving.** A site archive such as MinIO/Parquet is a
+  natural home for the archivable artifacts this design calls for, and makes
+  longitudinal comparison a query against data researchers already hold. One
+  caveat: `awss3exporter`'s marshalers are `otlp_json` and `otlp_proto`, not
+  Parquet, so columnar conversion is a separate step. That step is the
+  site's, not QFw's.
+- **Licensing of the Kafka path.** `vmagent`'s own Kafka consumer is a
+  VictoriaMetrics *Enterprise* feature, but the OSS OTel Collector Kafka
+  receiver covers the same ground, so no license is required for this
+  topology.
+
+Because VictoriaMetrics is Prometheus-compatible, SLURM's OpenMetrics data
+lands in the same store, keeping scheduler and framework telemetry queryable
+together. Under this profile Grafana, already deployed at such sites, serves
+both the metric dashboards and the trace views.
