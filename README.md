@@ -94,11 +94,11 @@ application and the services.
 source /path/to/qfw-install/bin/qfw-activate
 cd "$QFW_SHARE_DIR/examples"
 ./qfw_mpi_smoke.sh
-qfw_deactivate
+qfw-deactivate
 ```
 
 The example wrappers call `qfw-setup`, run one application through
-`qfw-srun`, and then call `qfw-teardown`. Do not call `qfw_deactivate`
+`qfw-srun`, and then call `qfw-teardown`. Do not call `qfw-deactivate`
 until the wrapper completes.
 
 ## Run Examples
@@ -344,6 +344,12 @@ environment before layering QFw paths:
 ```bash
 source /path/to/qfw-install/bin/qfw-activate --venv /path/to/shared-venv
 ```
+
+Activation prepends `(qfw) ` to the existing shell prompt independently of the
+virtual environment prompt. Existing prompt behavior, including working
+directory expansion, remains intact. Run `qfw-deactivate` to restore the
+previous prompt and QFw environment variables. A virtual environment selected
+with `--venv` remains active until its own `deactivate` command is run.
 
 Without `--venv`, activation still works with the default installed
 environment. If a user virtual environment is already active, it is preserved

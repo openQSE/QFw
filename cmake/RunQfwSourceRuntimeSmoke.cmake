@@ -17,7 +17,11 @@ file(REMOVE_RECURSE "${qfw_run_base}")
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
+		export PS1='source \\W> '
 		source '${qfw_generated_bin}/qfw-activate'
+		test \"\${PS1}\" = '(qfw) source \\W> '
+		declare -F qfw-deactivate >/dev/null
+		! declare -F qfw_deactivate >/dev/null
 		test \"\${QFW_PREFIX}\" = '${QFW_SOURCE_DIR}'
 		test \"\${QFW_BIN_PATH}\" = '${qfw_generated_bin}'
 		test \"\${QFW_LIBEXEC_DIR}\" = '${QFW_BINARY_DIR}/generated/libexec/qfw'
@@ -25,7 +29,8 @@ execute_process(
 		test \"\${QFW_SITE_CONFIG}\" = '${QFW_SOURCE_DIR}/share/qfw/config/site.yaml'
 		command -v qfw-setup >/dev/null
 		'${QFW_PYTHON}' -c 'import qfw_runtime; print(\"source activation import ok\")'
-		qfw_deactivate
+		qfw-deactivate
+		test \"\${PS1}\" = 'source \\W> '
 		test -z \"\${QFW_PREFIX+x}\"
 		test -z \"\${DEFW_PREFIX+x}\"
 		test -z \"\${_QFW_ACTIVE+x}\""

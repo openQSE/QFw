@@ -394,8 +394,12 @@ file(CHMOD
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
+		export PS1='original> '
 		export DEFW_LOAD_NO_INIT=api_existing_helper
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
+		test \"\${PS1}\" = '(qfw) original> '
+		declare -F qfw-deactivate >/dev/null
+		! declare -F qfw_deactivate >/dev/null
 		test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 		test \"\${QFW_BIN_PATH}\" = '${QFW_INSTALL_PREFIX}/bin'
 		test \"\${QFW_LIBEXEC_DIR}\" = '${QFW_INSTALL_PREFIX}/libexec/qfw'
@@ -405,7 +409,8 @@ execute_process(
 		command -v qfw-setup >/dev/null
 		export DEFW_ONLY_LOAD_MODULE=api_qpm_common
 		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None'
-		qfw_deactivate
+		qfw-deactivate
+		test \"\${PS1}\" = 'original> '
 		test -z \"\${QFW_PREFIX+x}\"
 		test \"\${DEFW_LOAD_NO_INIT}\" = api_existing_helper"
 	RESULT_VARIABLE activation_rc)
@@ -430,13 +435,21 @@ execute_process(
 			"\t\tunset _OLD_VIRTUAL_PATH\n"
 			"\tfi\n"
 			"\tunset VIRTUAL_ENV\n"
+			"\tif [[ -n \"\${_OLD_VIRTUAL_PS1+x}\" ]]; then\n"
+			"\t\tPS1=\"\${_OLD_VIRTUAL_PS1}\"\n"
+			"\t\tunset _OLD_VIRTUAL_PS1\n"
+			"\tfi\n"
 			"\tif [[ \"\${1:-}\" != \"nondestructive\" ]]; then\n"
 			"\t\tunset -f deactivate\n"
 			"\tfi\n"
 			"}\n"
 			"_OLD_VIRTUAL_PATH=\"\${PATH:-}\"\n"
 			"export VIRTUAL_ENV='${qfw_fake_venv}'\n"
-			"export PATH=\"\${VIRTUAL_ENV}/bin:\${PATH:-}\"\n")
+			"export PATH=\"\${VIRTUAL_ENV}/bin:\${PATH:-}\"\n"
+			"if [[ -z \"\${VIRTUAL_ENV_DISABLE_PROMPT:-}\" ]]; then\n"
+			"\t_OLD_VIRTUAL_PS1=\"\${PS1-}\"\n"
+			"\tPS1=\"(fake-venv) \${PS1-}\"\n"
+			"fi\n")
 		file(WRITE "${qfw_fake_venv}/bin/python"
 			"#!/usr/bin/env bash\n"
 			"exec '${QFW_PYTHON}' \"\$@\"\n")
@@ -452,35 +465,57 @@ execute_process(
 	execute_process(
 		COMMAND "${QFW_BASH}" -c
 			"set -e
+			export PS1='original> '
 			source '${qfw_activation_venv}/bin/activate'
+			test \"\${PS1}\" = '(fake-venv) original> '
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
+			test \"\${PS1}\" = '(qfw) (fake-venv) original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
 			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
 			test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
-			qfw_deactivate
+			qfw-deactivate
+			test \"\${PS1}\" = '(fake-venv) original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+
+			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_switch_venv}' 2> '${qfw_run_base}/qfw-activate-prompt-switch.err'
+			test \"\${PS1}\" = '(qfw) original> '
+			test -z \"\${_OLD_VIRTUAL_PS1+x}\"
+			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
+			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-prompt-switch.err'
+			qfw-deactivate
+			test \"\${PS1}\" = 'original> '
+			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
 			deactivate
+			test \"\${PS1}\" = 'original> '
 			test -z \"\${VIRTUAL_ENV+x}\"
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_activation_venv}'
+			test \"\${PS1}\" = '(qfw) original> '
+			test -z \"\${_OLD_VIRTUAL_PS1+x}\"
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
 			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
 			test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
-			qfw_deactivate
+			qfw-deactivate
+			test \"\${PS1}\" = 'original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_switch_venv}' 2> '${qfw_run_base}/qfw-activate-switch.err'
+			test \"\${PS1}\" = '(qfw) original> '
+			test -z \"\${_OLD_VIRTUAL_PS1+x}\"
 			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
 			test \"\$(command -v python)\" = '${qfw_switch_venv}/bin/python'
 			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-switch.err'
-			qfw_deactivate
+			qfw-deactivate
+			test \"\${PS1}\" = 'original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
 			deactivate
 			test -z \"\${VIRTUAL_ENV+x}\"
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv='${qfw_activation_venv}'
+			test \"\${PS1}\" = '(qfw) original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
-			qfw_deactivate
+			qfw-deactivate
+			test \"\${PS1}\" = 'original> '
 			deactivate"
 		RESULT_VARIABLE activation_venv_rc)
 	if(NOT activation_venv_rc EQUAL 0)
@@ -500,7 +535,7 @@ execute_process(
 		export QFW_RUN_BASE_DIR='${qfw_run_base}'
 		qfw_example_setup --profile local --dry-run --run-id install-example-helper
 		qfw_example_teardown
-		qfw_deactivate"
+		qfw-deactivate"
 	RESULT_VARIABLE example_helper_rc)
 if(NOT example_helper_rc EQUAL 0)
 	message(FATAL_ERROR "QFw installed example helper smoke failed")
@@ -520,7 +555,7 @@ execute_process(
 		grep -q 'qfw_mpi_smoke_services.yaml' '${qfw_run_base}/custom-manifest-example/state/runtime-state.json'
 		grep -q 'mpi-smoke' '${qfw_run_base}/custom-manifest-example/state/runtime-state.json'
 		qfw-teardown --run-dir '${qfw_run_base}/custom-manifest-example'
-		qfw_deactivate"
+		qfw-deactivate"
 	RESULT_VARIABLE custom_manifest_example_rc)
 if(NOT custom_manifest_example_rc EQUAL 0)
 	message(FATAL_ERROR

@@ -252,7 +252,12 @@ source "$QFW_PREFIX/bin/qfw-activate"
 If a virtual environment is already active, QFw preserves it. An explicit
 `--venv` argument takes precedence over a different active environment.
 
-Activation prepares paths and commands. It does not start QFw services.
+Activation prepares paths and commands and prepends `(qfw) ` to the existing
+prompt. The prefix is supplied by QFw rather than the virtual environment, and
+existing prompt behavior such as working-directory expansion remains intact.
+Run `qfw-deactivate` to restore the previous QFw environment and prompt. The
+selected virtual environment remains active until its own `deactivate` command
+is run. Activation does not start QFw services.
 
 ### Installed Paths And Environment Variables
 
@@ -1178,7 +1183,7 @@ and firewall policy before retrying.
 When finished, restore the shell environment with:
 
 ```bash
-qfw_deactivate
+qfw-deactivate
 ```
 
 </details>

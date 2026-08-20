@@ -61,7 +61,10 @@ if [[ -n "${_QFW_ACTIVE:-}" ]]; then
 		unset _qfw_requested_venv _qfw_parse_args
 		return 0
 	fi
-	if declare -F qfw_deactivate >/dev/null 2>&1; then
+	if declare -F qfw-deactivate >/dev/null 2>&1; then
+		qfw-deactivate
+	elif declare -F qfw_deactivate >/dev/null 2>&1; then
+		# Clean up shells activated by an older QFw installation.
 		qfw_deactivate
 	else
 		unset _QFW_ACTIVE
@@ -124,6 +127,25 @@ _qfw_restore_var() {
 	unset "${old_name}" "${set_name}"
 }
 
+_qfw_save_prompt() {
+	if [[ -v PS1 ]]; then
+		_QFW_OLD_PS1="${PS1}"
+		_QFW_OLD_PS1_SET=1
+	else
+		_QFW_OLD_PS1=""
+		unset _QFW_OLD_PS1_SET
+	fi
+}
+
+_qfw_restore_prompt() {
+	if [[ "${_QFW_OLD_PS1_SET:-}" == "1" ]]; then
+		PS1="${_QFW_OLD_PS1}"
+	else
+		unset PS1
+	fi
+	unset _QFW_OLD_PS1 _QFW_OLD_PS1_SET
+}
+
 _qfw_active_venv_python_paths() {
 	if [[ -z "${VIRTUAL_ENV:-}" || ! -x "${VIRTUAL_ENV}/bin/python" ]]; then
 		return 0
@@ -162,6 +184,7 @@ _qfw_activate_requested_venv() {
 	local requested_venv="$1"
 	local resolved_venv
 	local active_venv=""
+	local VIRTUAL_ENV_DISABLE_PROMPT=1
 
 	[[ -n "${requested_venv}" ]] || return 0
 	if [[ ! -d "${requested_venv}" ]]; then
@@ -195,10 +218,13 @@ if [[ "${_qfw_activate_rc}" -ne 0 ]]; then
 	unset -f _qfw_prepend_path
 	unset -f _qfw_save_var
 	unset -f _qfw_restore_var
+	unset -f _qfw_save_prompt
+	unset -f _qfw_restore_prompt
 	unset -f _qfw_activate_requested_venv
 	return 2
 fi
 unset _qfw_activate_rc
+_qfw_save_prompt
 
 _qfw_script_dir="$(_qfw_resolve_script_dir "${BASH_SOURCE[0]}")"
 _qfw_script_prefix="$(cd "${_qfw_script_dir}/.." && pwd)"
@@ -307,7 +333,7 @@ case ",${DEFW_LOAD_NO_INIT:-}," in
 	*) export DEFW_LOAD_NO_INIT="${DEFW_LOAD_NO_INIT},api_qpm_common" ;;
 esac
 
-qfw_deactivate() {
+qfw-deactivate() {
 	if [[ -z "${_QFW_ACTIVE:-}" ]]; then
 		return 0
 	fi
@@ -322,15 +348,20 @@ qfw_deactivate() {
 		_qfw_restore_var "${_qfw_var}"
 	done
 	unset _qfw_var
+	_qfw_restore_prompt
 	unset _QFW_ACTIVE
-	unset -f qfw_deactivate
+	unset -f qfw-deactivate
 	unset -f _qfw_active_venv_python_paths
 	unset -f _qfw_resolve_script_dir
 	unset -f _qfw_prepend_path
 	unset -f _qfw_save_var
 	unset -f _qfw_restore_var
+	unset -f _qfw_save_prompt
+	unset -f _qfw_restore_prompt
 	unset -f _qfw_activate_requested_venv
 }
+
+PS1="(qfw) ${PS1-}"
 
 unset _qfw_script_dir _qfw_script_prefix
 unset _qfw_cmake_source_prefix _qfw_cmake_generated_prefix

@@ -69,4 +69,4 @@ echo "#########"
 
 echo "# END-TIME: $(date)"
 
-qfw_deactivate
+qfw-deactivate

@@ -11,7 +11,7 @@ cd "$QFW_SHARE_DIR/examples"
 
 Each wrapper starts QFw with `qfw-setup`, runs one application through
 `qfw-srun`, and tears QFw down even when the application fails. Do not call
-`qfw_deactivate` until the wrapper has completed.
+`qfw-deactivate` until the wrapper has completed.
 
 Each wrapper and example emits machine-readable result records as JSON lines.
 Records are printed with a `QFW_EXAMPLE_RESULT ` prefix in the log. When

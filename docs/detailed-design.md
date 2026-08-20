@@ -298,8 +298,11 @@ copy it to `/etc/openqse/qfw`.
 ### Activation
 
 `qfw-activate` is an environment bootstrap step. It makes QFw commands and
-runtime paths visible in the current shell and defines `qfw_deactivate` to
-restore the previous environment. Activation does not start a directory
+runtime paths visible in the current shell, prepends `(qfw) ` to the existing
+prompt, and defines `qfw-deactivate` to restore the previous environment and
+prompt. Existing prompt escapes and dynamic behavior remain intact. The QFw
+activation layer owns this prefix; virtual-environment activation does not
+supply it. Activation does not start a directory
 service, start QPM, register a service, connect to a directory service, or
 replace the user's Python executable.
 
