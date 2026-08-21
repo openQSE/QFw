@@ -489,7 +489,7 @@ system looks at report time.
 | QFw / DEFw | `service.name`, `service.version`, QFw git revision, component role (`qpm`, `qrc`, …), hostname |
 | Qiskit | `qfw.qiskit.version`; transpiler settings (`qfw.transpile.optimization_level`, seed, basis gates); circuit statistics before/after (`qfw.circuit.num_qubits`, `qfw.circuit.depth`, `qfw.circuit.depth_transpiled`, gate counts, two-qubit gate count); OpenQASM payload size |
 | QRMI | `qfw.qrmi.version`, resource type, `target()` payload digest, acquisition/session identifiers |
-| QDMI / FoMaC | `qfw.device.name`, `qfw.device.version`, qubit count, coupling map, gate set; calibration snapshot (gate fidelities, readout errors, T1/T2 where exposed); `qfw.device.calibration_set_id` once the FoMaC Python binding exposes it — the key to knowing *which* calibration a result was obtained under |
+| QDMI / FoMaC | `qfw.device.name`, `qfw.device.version`, qubit count, coupling map, gate set; calibration snapshot (gate fidelities, readout errors, T1/T2 where exposed); `qfw.device.calibration_set_id`, read from the device's `CUSTOM1` property — the key to knowing *which* calibration a result was obtained under |
 | Vendor (e.g. IQM) | Server-side job ID, vendor-reported queue/execution times, vendor calibration identifier |
 | Simulators (NWQ-Sim, TNQVM, …) | Simulator name/version, method/configuration, node and rank count, peak memory where obtainable |
 | SLURM | Job ID, partition, node list, allocated resources (also scrapeable via OpenMetrics in the collector profile) |
@@ -741,8 +741,8 @@ telemetry files and never queries live systems; it is a pure function of
 the JSON report. Layout: header (run label, workload, one-line stack
 description), context tables, latency breakdown with framework overhead
 called out, iteration statistics, results/quality with suite scores, and
-auto-generated caveats (e.g. "calibration set ID unavailable: FoMaC binding
-does not expose it yet"). Under the collector profile, interactive trace
+auto-generated caveats (e.g. "calibration set ID unavailable: this device
+publishes no calibration identity"). Under the collector profile, interactive trace
 views (e.g. Grafana's trace visualization) complement these reports.
 
 ### Comparison Reports

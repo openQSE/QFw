@@ -19,6 +19,14 @@
 
 _COUPLING_SOURCE = "qdmi.fomac.coupling_map"
 
+# QDMI's custom device-property slots are vendor-defined: the neutral model
+# declares CUSTOM1..CUSTOM5 with no assigned meaning, so reading one means
+# knowing the provider's convention. QDMI-on-IQM publishes the active
+# calibration set's UUID in CUSTOM1 -- verified equal to QRMI's
+# dynamic_quantum_architecture.calibration_set_id on the same q20. Point this
+# at a different slot for a provider that uses one.
+_CALIBRATION_SET_ID_SLOT = "CUSTOM1"
+
 
 def extract_topology(device):
 	"""Read a provider-neutral topology dict off a FoMaC Device.
@@ -53,6 +61,7 @@ def extract_calibration(device):
 	  gate_metrics:  list[dict] -- {operation, locus, fidelity?, duration?} per
 	                               operation locus that reports one
 	  duration_unit: str | None -- unit for the duration values
+	  calibration_set_id: str | None -- provider calibration set identity
 
 	QDMI exposes coherence (QDMI_SITE_PROPERTY_T1/T2) per site and fidelity /
 	duration per operation locus; this reads them vendor-neutrally. Like
@@ -75,6 +84,7 @@ def extract_calibration(device):
 		"qubit_metrics": qubit_metrics,
 		"gate_metrics": _operation_metrics(device),
 		"duration_unit": _device_duration_unit(device),
+		"calibration_set_id": _calibration_set_id(device),
 	}
 
 
@@ -127,10 +137,13 @@ def to_calibration_record(cal, provider, device_id, include_raw=False,
 	QDMI (via FoMaC) reports the current per-qubit coherence and per-gate
 	fidelity rather than IQM's calibration/quality observation sets, so the
 	record carries counts + summaries in the core fields and the measured
-	values under the `qdmi.fomac.v1` extension. The output still validates as
-	`qhw-calibration-v1`, so a consumer sees one calibration shape regardless of
-	which library served the call (QRMI populates the IQM observation identity;
-	QDMI populates the measured metrics).
+	values under the `qdmi.fomac.v1` extension. It also carries the provider's
+	calibration_set_id when the device publishes one, so a QDMI snapshot says
+	which calibration it was taken under -- the identity a measured value is
+	worthless without. The output still validates as `qhw-calibration-v1`, so a
+	consumer sees one calibration shape regardless of which library served the
+	call (QRMI populates the full IQM observation identity; QDMI populates the
+	set id plus the measured metrics).
 	"""
 	from qhw_data import new_calibration
 	qubits = cal.get("qubits") or []
@@ -143,6 +156,7 @@ def to_calibration_record(cal, provider, device_id, include_raw=False,
 	builder = (
 		new_calibration(provider, device_id, num_qubits=len(qubits) or None)
 		.calibration(
+			calibration_set_id=cal.get("calibration_set_id"),
 			observation_count=coherence_qubits,
 			quality_metric_count=len(gate_metrics))
 		.summaries({
@@ -329,6 +343,26 @@ def _op_metric(op, attr, locus_sites):
 		return getter()
 	except Exception:
 		return None
+
+
+def _calibration_set_id(device):
+	# Read the provider's calibration set identifier out of the vendor custom
+	# property slot (see _CALIBRATION_SET_ID_SLOT). Needs MQT Core >= 3.8 for
+	# the typed custom-property query; imported lazily, as qhw_data is, so this
+	# module stays importable where mqt-core is absent. None whenever the
+	# library, the query, or the slot is unavailable: the id is provenance and
+	# must never be the reason an introspection call fails. The typed query
+	# raises rather than returning None when the slot holds another type, so
+	# the guard has to cover exceptions, not just a falsy result.
+	query = getattr(device, "query_custom_property", None)
+	if query is None:
+		return None
+	try:
+		from mqt.core.qdmi import CustomProperty
+		value = query(getattr(CustomProperty, _CALIBRATION_SET_ID_SLOT), str)
+	except Exception:
+		return None
+	return str(value) if value else None
 
 
 def _device_duration_unit(device):

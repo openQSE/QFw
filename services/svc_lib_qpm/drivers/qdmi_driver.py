@@ -171,9 +171,10 @@ class QdmiDriver(BaseDriver):
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
 		# FoMaC exposes the device's live per-qubit coherence (T1/T2) and
-		# per-gate fidelity; normalize them to qhw-calibration-v1. The device
-		# session already reflects the active calibration set, so selecting a
-		# specific calibration_set_id is a follow-up.
+		# per-gate fidelity; normalize them to qhw-calibration-v1. The record
+		# names the calibration set it was read under when the device publishes
+		# one. Selecting a *different* set is still a follow-up: the device
+		# session always reflects the active one, so the argument is a no-op.
 		provider, device_id = self._ids()
 		cal = fomac_normalize.extract_calibration(self._device())
 		return fomac_normalize.to_calibration_record(cal, provider, device_id)
