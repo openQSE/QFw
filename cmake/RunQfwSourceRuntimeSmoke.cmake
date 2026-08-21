@@ -18,6 +18,7 @@ execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
 		export PS1='source \\W> '
+		export MANPATH='/qfw-test-man'
 		source '${qfw_generated_bin}/qfw-activate'
 		test \"\${PS1}\" = '(qfw) source \\W> '
 		declare -F qfw-deactivate >/dev/null
@@ -27,11 +28,13 @@ execute_process(
 		test \"\${QFW_LIBEXEC_DIR}\" = '${QFW_BINARY_DIR}/generated/libexec/qfw'
 		test \"\${QFW_SHARE_DIR}\" = '${QFW_SOURCE_DIR}/share/qfw'
 		test \"\${QFW_SITE_CONFIG}\" = '${QFW_SOURCE_DIR}/share/qfw/config/site.yaml'
+		test \"\${MANPATH}\" = '${QFW_SOURCE_DIR}/man:/qfw-test-man'
 		command -v qfw-setup >/dev/null
 		'${QFW_PYTHON}' -c 'import qfw_runtime; print(\"source activation import ok\")'
 		qfw-deactivate
 		test \"\${PS1}\" = 'source \\W> '
 		test -z \"\${QFW_PREFIX+x}\"
+		test \"\${MANPATH}\" = '/qfw-test-man'
 		test -z \"\${DEFW_PREFIX+x}\"
 		test -z \"\${_QFW_ACTIVE+x}\""
 	RESULT_VARIABLE activation_rc)

@@ -19,6 +19,8 @@ endif()
 include(GNUInstallDirs)
 include(ExternalProject)
 
+add_subdirectory(man)
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(QFW_BUILD_BUNDLED_DEFW
@@ -283,6 +285,7 @@ add_test(NAME qfw_install_tree_smoke
 		"${CMAKE_COMMAND}"
 		-DQFW_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
 		-DQFW_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test-install
+		-DQFW_INSTALL_MANDIR=${CMAKE_INSTALL_MANDIR}
 		-DQFW_PYTHON=${Python3_EXECUTABLE}
 		-DQFW_PYTHON_INSTALL_DIR=${QFW_PYTHON_INSTALL_DIR}
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunQfwInstallTreeSmoke.cmake")

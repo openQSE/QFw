@@ -4,6 +4,9 @@ endif()
 if(NOT QFW_INSTALL_PREFIX)
 	message(FATAL_ERROR "QFW_INSTALL_PREFIX is required")
 endif()
+if(NOT QFW_INSTALL_MANDIR)
+	message(FATAL_ERROR "QFW_INSTALL_MANDIR is required")
+endif()
 if(NOT QFW_PYTHON)
 	message(FATAL_ERROR "QFW_PYTHON is required")
 endif()
@@ -90,7 +93,7 @@ endif()
 foreach(command_name
 			qfw-activate
 			defw-python
-		qfw-setup
+			qfw-setup
 			qfw-srun
 			qfw-teardown
 			qfw-dirsvc-start
@@ -102,6 +105,38 @@ foreach(command_name
 		message(FATAL_ERROR "missing installed command: ${command_name}")
 	endif()
 endforeach()
+
+set(qfw_man_root "${QFW_INSTALL_PREFIX}/${QFW_INSTALL_MANDIR}")
+foreach(man_page
+		man1/qfw-dir-svc.1
+		man1/qfw-qpm-svc.1
+		man1/qfw-service-plane.1
+		man5/qfw-runtime.yaml.5
+		man5/qfw-services.yaml.5
+		man5/qfw-site.yaml.5
+		man7/qfw.7
+		man7/qfw-service-plane.7)
+	if(NOT EXISTS "${qfw_man_root}/${man_page}")
+		message(FATAL_ERROR "missing installed manual page: ${man_page}")
+	endif()
+endforeach()
+
+find_program(QFW_MAN man)
+if(QFW_MAN)
+	execute_process(
+		COMMAND "${CMAKE_COMMAND}" -E env
+			"MANPATH=${qfw_man_root}"
+			"${QFW_MAN}" -w qfw-service-plane
+		RESULT_VARIABLE man_lookup_rc
+		OUTPUT_VARIABLE man_lookup_out
+		ERROR_VARIABLE man_lookup_err)
+	if(NOT man_lookup_rc EQUAL 0)
+		message(FATAL_ERROR
+			"installed QFw manual lookup failed\n"
+			"stdout:\n${man_lookup_out}\n"
+			"stderr:\n${man_lookup_err}")
+	endif()
+endif()
 
 foreach(service_manager_file
 		service-manager/env.sh
@@ -399,6 +434,7 @@ execute_process(
 		"set -e
 		export PS1='original> '
 		export DEFW_LOAD_NO_INIT=api_existing_helper
+		unset MANPATH
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
 		test \"\${PS1}\" = '(qfw) original> '
 		declare -F qfw-deactivate >/dev/null
@@ -407,6 +443,7 @@ execute_process(
 		test \"\${QFW_BIN_PATH}\" = '${QFW_INSTALL_PREFIX}/bin'
 		test \"\${QFW_LIBEXEC_DIR}\" = '${QFW_INSTALL_PREFIX}/libexec/qfw'
 		test \"\${QFW_SHARE_DIR}\" = '${QFW_INSTALL_PREFIX}/share/qfw'
+		test \"\${MANPATH}\" = '${qfw_man_root}:'
 		test \"\${DEFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 		test \"\${DEFW_LOAD_NO_INIT}\" = 'api_existing_helper,api_qpm_common'
 		command -v qfw-setup >/dev/null
@@ -415,6 +452,7 @@ execute_process(
 		qfw-deactivate
 		test \"\${PS1}\" = 'original> '
 		test -z \"\${QFW_PREFIX+x}\"
+		test -z \"\${MANPATH+x}\"
 		test \"\${DEFW_LOAD_NO_INIT}\" = api_existing_helper"
 	RESULT_VARIABLE activation_rc)
 	if(NOT activation_rc EQUAL 0)

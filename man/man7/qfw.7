@@ -1,0 +1,32 @@
+.TH QFW 7 "August 2026" "QFw 0.1.0" "QFw Concepts"
+.SH NAME
+qfw \- runtime framework for quantum service discovery and execution
+.SH DESCRIPTION
+QFw connects applications to quantum processing managers through DEFw service
+discovery. A deployment may use site-owned services that outlive applications
+or application-owned services created inside a scheduler allocation.
+.PP
+Applications prepare runtime state with
+.BR qfw-setup (1),
+launch through
+.BR qfw-srun (1),
+and release application-owned state with
+.BR qfw-teardown (1).
+Persistent directory, DVM, and QPM components are managed by
+.BR qfw-service-plane (1).
+.SH CONFIGURATION
+Site installation and shared endpoints are described by
+.BR qfw-site.yaml (5).
+Resolver order and application-launch behavior are described by
+.BR qfw-runtime.yaml (5).
+Available QPM implementations are described by
+.BR qfw-services.yaml (5).
+.SH MANUAL SECTIONS
+Commands are documented in section 1. Configuration formats use section 5.
+Architecture and operational concepts use section 7.
+.SH SEE ALSO
+.BR qfw-service-plane (1),
+.BR qfw-service-plane (7),
+.BR qfw-runtime.yaml (5),
+.BR qfw-services.yaml (5),
+.BR qfw-site.yaml (5)

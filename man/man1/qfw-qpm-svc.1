@@ -1,0 +1,62 @@
+.TH QFW-QPM-SVC 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-qpm-svc \- manage one QFw QPM service instance
+.SH SYNOPSIS
+.B qfw-qpm-svc
+.I start|run
+.B --run-dir
+.I path
+.B --service-id
+.I id
+[
+.I options
+]
+.PP
+.B qfw-qpm-svc
+.I status|stop
+.B --run-dir
+.I path
+.SH DESCRIPTION
+.B qfw-qpm-svc
+starts, supervises, inspects, or stops exactly one QPM and its optional PRTE
+DVM. It reads directory connection information automatically from the site
+configuration or from
+.BR --directory-service-info .
+.PP
+In application scope QPMd and the PRTE DVM master run on the head of
+allocation group 1. In site scope
+.B --node
+selects the QPM node. Remote placement requires a Slurm allocation.
+.SH OPTIONS
+.TP
+.BI --run-dir " path"
+Private lifecycle state, PID, readiness, DVM URI, and log directory.
+.TP
+.BI --service-id " id"
+The single service manifest entry managed by this instance. The option may be
+specified only once.
+.TP
+.BI --directory-service-info " path"
+Override the client-readable directory connection record. Site scope normally
+obtains this path from
+.BR qfw-site.yaml (5).
+.TP
+.BI --site-config " path"
+Site configuration.
+.TP
+.BI --runtime-config " path"
+Runtime configuration.
+.TP
+.BI --scope " application|site"
+Select application-owned or site-owned lifetime and placement rules.
+.TP
+.BI --node " node"
+Site-scope QPM node. This option is rejected in application scope.
+.TP
+.B --dry-run
+Resolve and record the plan without starting processes.
+.SH SEE ALSO
+.BR qfw-dir-svc (1),
+.BR qfw-site.yaml (5),
+.BR qfw-services.yaml (5),
+.BR qfw-service-plane (7)

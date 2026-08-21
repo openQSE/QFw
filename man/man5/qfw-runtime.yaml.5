@@ -1,0 +1,87 @@
+.TH QFW-RUNTIME.YAML 5 "August 2026" "QFw 0.1.0" "QFw File Formats"
+.SH NAME
+qfw-runtime.yaml \- select QFw resolver and local service behavior
+.SH DESCRIPTION
+The runtime configuration selects QPM discovery scopes and describes
+components that QFw may launch. It is YAML with
+.B resolver
+and optional
+.B local-services
+mappings.
+.PP
+A command may select this file with
+.BR --runtime-config ,
+.BR QFW_RUNTIME_CONFIG ,
+or an installed profile.
+.SH RESOLVER MAPPING
+.TP
+.B scope-order
+Ordered list of QPM discovery scopes. Supported values are
+.BR direct ,
+.BR site ,
+and
+.BR local .
+The value
+.B local
+is normalized to the allocation-local scope.
+.SH LOCAL-SERVICES MAPPING
+.TP
+.B start-prte
+Start a PRTE DVM when true.
+.TP
+.B start-dirsvc
+Start a DEFw directory service when true.
+.TP
+.B start-qpm
+Start the selected QPM services when true.
+.TP
+.B services
+Service names selected from the referenced manifest. A string selects one
+service. A YAML sequence selects several services.
+.TP
+.B service-manifest
+Path to the application-scope service manifest. The installed default is
+.IR prefix/share/qfw/config/services/local-services.yaml .
+.TP
+.B service-listen-port-base
+First automatically assigned QPM listen port.
+.TP
+.B service-telnet-port-base
+First automatically assigned QPM telnet port.
+.TP
+.B service-port-stride
+Spacing between automatically assigned ports for multiple QPMs.
+.TP
+.B dirsvc
+Directory launch settings. Common keys are
+.BR name ,
+.BR bind-host ,
+.BR port ,
+and
+.BR telnet-port .
+The value
+.B auto
+selects an available port during a live application-scope launch.
+.TP
+.B prte
+PRTE launch settings. A
+.B hosts
+value supplies an explicit DVM host list.
+.SH EXAMPLE
+.EX
+resolver:
+  scope-order:
+    - site
+
+local-services:
+  start-prte: false
+  start-dirsvc: true
+  start-qpm: true
+  services:
+    - fake-iqm
+.EE
+.SH SEE ALSO
+.BR qfw-service-plane (1),
+.BR qfw-services.yaml (5),
+.BR qfw-site.yaml (5),
+.BR qfw (7)

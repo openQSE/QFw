@@ -242,7 +242,7 @@ if [[ -d "${_qfw_cmake_generated_prefix}" ]]; then
 fi
 
 for _qfw_var in \
-	PATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
+	PATH MANPATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
 	QFW_LIBEXEC_DIR QFW_SHARE_DIR QFW_CONFIG_DIR QFW_SITE_CONFIG \
 	QFW_RUN_BASE_DIR DEFW_PREFIX DEFW_PATH DEFW_CONFIG_PATH \
 	DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH \
@@ -297,6 +297,15 @@ if [[ -z "${DEFW_CONFIG_PATH:-}" ]]; then
 fi
 
 _qfw_prepend_path PATH "${QFW_BIN_PATH}"
+_qfw_man_dir="${QFW_PREFIX}/@CMAKE_INSTALL_MANDIR@"
+if [[ -d "${QFW_PREFIX}/man/man1" ]]; then
+	_qfw_man_dir="${QFW_PREFIX}/man"
+fi
+if [[ -n "${MANPATH:-}" ]]; then
+	_qfw_prepend_path MANPATH "${_qfw_man_dir}"
+else
+	export MANPATH="${_qfw_man_dir}:"
+fi
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/lib"
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/src"
 while IFS= read -r _qfw_venv_path; do
@@ -340,7 +349,7 @@ qfw-deactivate() {
 
 	local _qfw_var
 	for _qfw_var in \
-		PATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
+		PATH MANPATH LD_LIBRARY_PATH PYTHONPATH QFW_PREFIX QFW_BIN_PATH \
 		QFW_LIBEXEC_DIR QFW_SHARE_DIR QFW_CONFIG_DIR QFW_SITE_CONFIG \
 		QFW_RUN_BASE_DIR DEFW_PREFIX DEFW_PATH DEFW_CONFIG_PATH \
 		DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH \
@@ -365,5 +374,5 @@ PS1="(qfw) ${PS1-}"
 
 unset _qfw_script_dir _qfw_script_prefix
 unset _qfw_cmake_source_prefix _qfw_cmake_generated_prefix
-unset _qfw_venv_path
+unset _qfw_man_dir _qfw_venv_path
 unset _qfw_requested_venv _qfw_parse_args

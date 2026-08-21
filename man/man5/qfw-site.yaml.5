@@ -1,0 +1,99 @@
+.TH QFW-SITE.YAML 5 "August 2026" "QFw 0.1.0" "QFw File Formats"
+.SH NAME
+qfw-site.yaml \- define QFw installation and site-service settings
+.SH DESCRIPTION
+The QFw site configuration describes installed paths and services shared by
+applications. It is YAML with top-level
+.BR install ,
+.BR directory-service ,
+.BR service ,
+and
+.B qpm
+mappings.
+.PP
+The default installed path is
+.IR prefix/share/qfw/config/site.yaml .
+Administrators normally provide a protected site-specific file and select it
+through
+.B QFW_SITE_CONFIG
+or a command's
+.B --site-config
+option.
+.SH INSTALL MAPPING
+.TP
+.B qfw-prefix
+QFw installation prefix. The value
+.B ${QFW_PREFIX}
+expands from the environment established by
+.BR qfw-activate (1).
+.TP
+.B defw-prefix
+DEFw installation prefix. The value
+.B ${DEFW_PREFIX}
+expands from the activated environment. Referencing an unset or empty
+environment variable is a configuration error.
+.SH DIRECTORY-SERVICE MAPPING
+The
+.B directory-service
+mapping describes the long-running site directory service.
+.TP
+.B name
+DEFw name of the directory service.
+.TP
+.B listen-port
+Control port opened on the node selected by
+.BR qfw-dir-svc (1).
+.TP
+.B connection-file
+Stable, client-readable JSON record written by
+.BR qfw-dir-svc (1).
+The path must be visible at the same location on service and application
+nodes when the service host is selected dynamically.
+.TP
+.B endpoint
+Optional permanent client endpoint in
+.I host:port
+form. Use this instead of
+.B connection-file
+only when the site provides a stable hostname or address.
+.TP
+.B connect-timeout-seconds
+Maximum time to wait for directory readiness.
+.SH SERVICE MAPPING
+.TP
+.B manifest
+Path to a service manifest described by
+.BR qfw-services.yaml (5).
+Relative paths are resolved from the site configuration directory.
+.TP
+.B device-access-config
+Path to protected device and credential bindings. Runtime state and client
+environment files do not copy credential values from this file.
+.SH QPM MAPPING
+The
+.B qpm
+mapping contains settings shared by QPM implementations. The
+.B completion-queues.retention
+mapping controls completion record lifetime, terminal reservation retention,
+record limits, byte limits, and purge frequency.
+.SH EXAMPLE
+.EX
+install:
+  qfw-prefix: /opt/qfw
+  defw-prefix: /opt/qfw
+
+directory-service:
+  name: qfw-site-dirsvc
+  listen-port: 8090
+  connect-timeout-seconds: 120
+  connection-file: /shared/qfw/services/directory-service.json
+
+service:
+  manifest: /etc/openqse/qfw/services.yaml
+  device-access-config: /etc/openqse/qfw/device-access.yaml
+.EE
+.SH SEE ALSO
+.BR qfw-service-plane (1),
+.BR qfw-runtime.yaml (5),
+.BR qfw-services.yaml (5),
+.BR qfw-service-plane (7)

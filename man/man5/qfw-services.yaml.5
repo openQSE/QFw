@@ -1,0 +1,83 @@
+.TH QFW-SERVICES.YAML 5 "August 2026" "QFw 0.1.0" "QFw File Formats"
+.SH NAME
+qfw-services.yaml \- define QPM service implementations and placement
+.SH DESCRIPTION
+A QFw service manifest is YAML containing a
+.B services
+sequence. Each entry names one QPM service and describes the DEFw module,
+placement, provider launcher, and optional device identity.
+.SH SERVICE KEYS
+.TP
+.B name
+Stable service identifier passed to
+.BR qfw-service-start (1)
+and published through
+.BR QFW_QPM_SERVICE_ID .
+.TP
+.B module
+Primary DEFw QPM module.
+.TP
+.B load-modules
+Comma-separated DEFw module load list. It normally includes the QPM module and
+.BR api_launcher .
+.TP
+.B agent-prefix
+Prefix used for QPM agents created by the service.
+.TP
+.B host
+Host used for a site-scoped service.
+.TP
+.B target
+Application-scope placement policy. Common values are
+.BR group1-head ,
+.BR group0-head ,
+and
+.BR local .
+.TP
+.B assigned-hosts
+Host assignment policy passed to the QPM. Common values are
+.BR group1 ,
+.BR group0 ,
+and
+.BR all .
+.TP
+.B assigned-hosts-env
+Additional environment variable that receives the resolved host list.
+.TP
+.B listen-port
+DEFw service listen port.
+.TP
+.B telnet-port
+DEFw diagnostic telnet port.
+.TP
+.B device-id
+Device identifier resolved through the protected device-access configuration.
+.TP
+.B provider-launch
+Provider execution mapping. The
+.B type
+key commonly selects
+.BR internal ,
+.BR mpi ,
+.BR remote-api ,
+or
+.BR qrmi-qdmi .
+Provider-specific keys may include
+.B wrapper
+and
+.BR use-dvm .
+.SH EXAMPLE
+.EX
+services:
+  - name: fake-iqm
+    module: svc_fake_iqm_qpm
+    load-modules: svc_fake_iqm_qpm,api_launcher
+    agent-prefix: qpm_fake_iqm
+    provider-launch:
+      type: internal
+.EE
+.SH SEE ALSO
+.BR qfw-service-plane (1),
+.BR qfw-service-start (1),
+.BR qfw-runtime.yaml (5),
+.BR qfw-site.yaml (5)

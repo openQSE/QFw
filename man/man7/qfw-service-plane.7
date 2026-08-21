@@ -1,0 +1,71 @@
+.TH QFW-SERVICE-PLANE 7 "August 2026" "QFw 0.1.0" "QFw Concepts"
+.SH NAME
+qfw-service-plane \- QFw service ownership and runtime-state model
+.SH OVERVIEW
+A service plane groups the persistent processes that provide QPM discovery and
+execution. It may contain a DEFw directory service, an optional PRTE DVM, and
+one QPM service.
+.PP
+The administrator or application selects authoritative YAML configuration.
+.BR qfw-service-plane (1)
+resolves that configuration with command-line settings and scheduler-provided
+node assignments. It writes the result as generated instance state.
+.SH OWNERSHIP
+A site-owned plane is started by an administrator or service manager and may
+serve several independent application jobs. Its lifetime is independent of
+application teardown.
+.PP
+An application-owned plane is started inside an application allocation. Its
+components carry application ownership and are stopped when that plane is
+released.
+.PP
+The manager stops only components recorded as owned by its service-plane
+instance. Attached or externally managed services remain outside its teardown
+boundary.
+.SH RUN DIRECTORY
+Each instance has one explicit run directory. The path remains stable for the
+lifetime of that instance. It contains generated state, client connection
+settings, PID files, readiness records, and logs.
+.PP
+Multinode simulator deployments place this directory on storage visible at the
+same pathname from every simulator node. PRTE writes its DVM URI there, and the
+QPM reads that URI when launching simulator work.
+.PP
+Applications connecting to an existing site plane need the client connection
+environment. They do not need the service-side DVM URI.
+.SH LIFECYCLE
+The generated state uses the lifecycle values
+.BR starting ,
+.BR ready ,
+.BR degraded ,
+.BR stopped ,
+and
+.BR error .
+Readiness requires every configured component to have a valid readiness record
+and, for PID-backed components, a live recorded process.
+.PP
+The foreground
+.B run
+operation supervises components and exits nonzero when an owned component
+fails. SIGINT and SIGTERM trigger reverse-order shutdown.
+.SH BACKEND TOPOLOGY
+Remote IQM and fakeIQM service planes do not require PRTE. Simulator services
+such as NWQ-Sim and TNQVM may use a DVM across assigned simulator nodes. The
+runtime configuration selects PRTE explicitly through
+.BR start-prte .
+.SH STATE AND CONFIGURATION
+YAML files remain authoritative user and administrator configuration. The
+.I state/service-plane.json
+file records the resolved instance and observed runtime state. Operators do not
+edit this generated file.
+.PP
+Static configuration is referenced by path. Credential values are excluded
+from generated client environment and service-plane state.
+.SH SEE ALSO
+.BR qfw (7),
+.BR qfw-dir-svc (1),
+.BR qfw-qpm-svc (1),
+.BR qfw-service-plane (1),
+.BR qfw-runtime.yaml (5),
+.BR qfw-services.yaml (5),
+.BR qfw-site.yaml (5)
