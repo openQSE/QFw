@@ -74,6 +74,8 @@ execute_process(
 		"${CMAKE_COMMAND}" -E env
 		"QFW_PREFIX=${QFW_SOURCE_DIR}"
 		"DEFW_PREFIX=${QFW_SOURCE_DIR}/DEFw"
+		"QFW_SHARED_ROOT=${qfw_run_base}"
+		"QFW_SITE_DIRSVC_ENDPOINTS=127.0.0.1:8090"
 		"PYTHONPATH=${QFW_SOURCE_DIR}/setup"
 		"${QFW_PYTHON}" -m qfw_runtime.commands qfw-dirsvc-start
 			--dry-run
@@ -91,6 +93,8 @@ execute_process(
 		"${CMAKE_COMMAND}" -E env
 		"QFW_PREFIX=${QFW_SOURCE_DIR}"
 		"DEFW_PREFIX=${QFW_SOURCE_DIR}/DEFw"
+		"QFW_SHARED_ROOT=${qfw_run_base}"
+		"QFW_SITE_DIRSVC_ENDPOINTS=127.0.0.1:8090"
 		"PYTHONPATH=${QFW_SOURCE_DIR}/setup"
 		"${QFW_PYTHON}" -m qfw_runtime.commands qfw-service-start
 			--dry-run

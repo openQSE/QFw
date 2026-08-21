@@ -1,22 +1,46 @@
+# QFw and DEFw installation roots are provided by qfw-activate. Keep these
+# references unless the site deliberately uses separate installations.
 install:
-  qfw-prefix: <prefix>
-  defw-prefix: <defw-prefix>
+  # QFw prefix exported by qfw-activate; change only for a split deployment.
+  qfw-prefix: ${QFW_PREFIX}
+  # DEFw prefix exported by qfw-activate; change when DEFw is installed apart.
+  defw-prefix: ${DEFW_PREFIX}
 
-directory:
-  site:
-    name: qfw-site-dirsvc
-    endpoint: 127.0.0.1:8090
-    connect-timeout-seconds: 300
+# Long-running site directory-service configuration. The service host is a
+# launch-time choice made by qfw-dir-svc --node and is published in the
+# connection file; do not put an allocation node name in this file.
+directory-service:
+  # Stable DEFw identity shared by the directory service and its clients.
+  name: qfw-site-dirsvc
+  # Control port opened on the node selected when qfw-dir-svc starts.
+  listen-port: 8090
+  # Maximum time QPM and application launchers wait for directory readiness.
+  connect-timeout-seconds: 300
+  # Stable, client-readable record written atomically by qfw-dir-svc. Set
+  # QFW_SHARED_ROOT to a filesystem visible at the same path on service and
+  # application nodes, or replace this with another site-specific shared path.
+  connection-file: ${QFW_SHARED_ROOT}/qfw-site-services/directory-service.json
 
+# Manifest describing the QPM service that qfw-qpm-svc may launch. Adjust the
+# device access path to the protected site file containing provider credentials.
 service:
-  manifest: <prefix>/share/qfw/config/services/site-services.yaml
+  # Inventory of site QPM services; replace for site-specific service IDs.
+  manifest: ${QFW_PREFIX}/share/qfw/config/services/site-services.yaml
+  # Protected device/provider bindings; adjust to the administrator-owned file.
   device-access-config: /etc/openqse/qfw/device/device-access.yaml
 
+# Completion records are retained by QPMd so clients can fetch terminal results.
+# Tune these limits for the site's expected job volume and retention policy.
 qpm:
   completion-queues:
     retention:
+      # Keep completed result records this many seconds for later client fetches.
       completion-ttl-seconds: 3600
+      # Keep terminal reservation metadata this many seconds after completion.
       terminal-reservation-retention-seconds: 3600
+      # Bound retained completion records for each reservation.
       max-records-per-reservation: 1024
+      # Bound retained result payload bytes for each reservation.
       max-bytes-per-reservation: 67108864
+      # Scan for expired completion and reservation records at this interval.
       purge-interval-seconds: 60

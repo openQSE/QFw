@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -8,19 +9,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
 from qfw_runtime import config as qfw_config
 
 
-def test_site_service_config_resolves_site_owned_paths(tmp_path):
+def test_site_service_config_resolves_environment_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("QFW_PREFIX", str(tmp_path / "qfw"))
+    monkeypatch.setenv("DEFW_PREFIX", str(tmp_path / "defw"))
     site_path = tmp_path / "config" / "site.yaml"
     site = {
         "install": {
-            "qfw-prefix": str(tmp_path / "qfw"),
-            "defw-prefix": str(tmp_path / "defw"),
+            "qfw-prefix": "${QFW_PREFIX}",
+            "defw-prefix": "${DEFW_PREFIX}",
         },
         "service": {
             "manifest": "site-services.yaml",
-            "device-access-config": "<prefix>/etc/device-access.yaml",
+            "device-access-config": "${QFW_PREFIX}/etc/device-access.yaml",
         },
     }
 
+    assert qfw_config.site_install_prefixes(site) == {
+        "qfw_prefix": tmp_path / "qfw",
+        "defw_prefix": tmp_path / "defw",
+    }
     selected = qfw_config.site_service_config(
         site, site_config_path=site_path)
 
@@ -29,6 +36,91 @@ def test_site_service_config_resolves_site_owned_paths(tmp_path):
         "device_access_config": tmp_path / "qfw" / "etc" /
         "device-access.yaml",
     }
+
+
+def test_expand_config_value_requires_braced_environment_reference(
+        monkeypatch):
+    monkeypatch.setenv("QFW_PREFIX", "/opt/qfw")
+
+    with pytest.raises(ValueError, match="must use braced form"):
+        qfw_config.expand_config_value("$QFW_PREFIX/share/qfw")
+
+
+@pytest.mark.parametrize("placeholder", [
+    "<prefix>",
+    "<qfw-prefix>",
+    "<defw-prefix>",
+])
+def test_expand_config_value_rejects_legacy_placeholders(placeholder):
+    with pytest.raises(ValueError, match="unsupported configuration"):
+        qfw_config.expand_config_value(placeholder)
+
+
+def test_expand_config_value_rejects_unset_environment(monkeypatch):
+    monkeypatch.delenv("QFW_MISSING_PREFIX", raising=False)
+
+    with pytest.raises(ValueError, match="unset environment variable"):
+        qfw_config.expand_config_value("${QFW_MISSING_PREFIX}/share/qfw")
+
+
+def test_expand_config_value_rejects_empty_environment(monkeypatch):
+    monkeypatch.setenv("QFW_EMPTY_PREFIX", "")
+
+    with pytest.raises(ValueError, match="empty environment variable"):
+        qfw_config.expand_config_value("${QFW_EMPTY_PREFIX}/share/qfw")
+
+
+def test_expand_config_value_rejects_invalid_reference():
+    with pytest.raises(ValueError, match="invalid environment variable"):
+        qfw_config.expand_config_value("${QFW-PREFIX}/share/qfw")
+
+
+def test_site_directory_uses_published_connection_record(tmp_path):
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "instance-1",
+        "name": "site-dirsvc",
+        "endpoint": "service-a:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+    site = {
+        "directory-service": {
+            "name": "configured-name",
+            "listen-port": 18090,
+            "connect-timeout-seconds": 17,
+            "connection-file": str(connection_file),
+        },
+    }
+
+    assert qfw_config.site_directory(site) == {
+        "name": "site-dirsvc",
+        "listen_port": 18090,
+        "connect_timeout_seconds": 17,
+        "connection_file": str(connection_file),
+        "endpoint": "service-a:18090",
+        "endpoints": ["service-a:18090"],
+        "instance_id": "instance-1",
+    }
+
+
+def test_site_directory_rejects_unready_connection_record(tmp_path):
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "instance-1",
+        "name": "site-dirsvc",
+        "endpoint": "service-a:18090",
+        "ready": False,
+    }) + "\n", encoding="utf-8")
+    site = {
+        "directory-service": {
+            "connection-file": str(connection_file),
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="not ready"):
+        qfw_config.site_directory(site)
 
 
 def test_site_qpm_config_returns_common_qpm_settings():
@@ -67,12 +159,11 @@ def test_prepare_run_state_persists_resolver_environment_overrides(
             "qfw-prefix": str(tmp_path / "qfw"),
             "defw-prefix": str(tmp_path / "defw"),
         },
-        "directory": {
-            "site": {
-                "name": "yaml-site-dirsvc",
-                "endpoint": "yaml-site:8090",
-                "connect-timeout-seconds": 11,
-            },
+        "directory-service": {
+            "name": "yaml-site-dirsvc",
+            "listen-port": 8090,
+            "connect-timeout-seconds": 11,
+            "connection-file": str(tmp_path / "directory-service.json"),
         },
     }
     runtime = {

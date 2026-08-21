@@ -379,8 +379,8 @@ for example, a site-only job does not use the local service manifest.
 
 ```yaml
 install:
-  qfw-prefix: <prefix>
-  defw-prefix: <defw-prefix>
+  qfw-prefix: ${QFW_PREFIX}
+  defw-prefix: ${DEFW_PREFIX}
 
 directory:
   site:
@@ -389,7 +389,7 @@ directory:
     connect-timeout-seconds: 300
 
 service:
-  manifest: <prefix>/share/qfw/config/services/site-services.yaml
+  manifest: ${QFW_PREFIX}/share/qfw/config/services/site-services.yaml
   device-access-config: /etc/openqse/qfw/device/device-access.yaml
 
 qpm:
@@ -401,6 +401,10 @@ qpm:
       max-bytes-per-reservation: 67108864
       purge-interval-seconds: 60
 ```
+
+QFw expands braced environment references while reading configuration paths.
+`qfw-activate` sets `QFW_PREFIX` and `DEFW_PREFIX` before these files are read.
+An unset or empty referenced variable is a configuration error.
 
 | Owner | Used by and when | Purpose |
 | --- | --- | --- |
@@ -434,7 +438,7 @@ local-services:
     name: qfw-local-dirsvc
     bind-host: 127.0.0.1
     port: auto
-  service-manifest: <prefix>/share/qfw/config/services/local-services.yaml
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/local-services.yaml
 ```
 
 `$QFW_SHARE_DIR/config/runtime/hybrid.yaml`
@@ -453,7 +457,7 @@ local-services:
     name: qfw-local-dirsvc
     bind-host: 127.0.0.1
     port: auto
-  service-manifest: <prefix>/share/qfw/config/services/local-services.yaml
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/local-services.yaml
 ```
 
 | Owner | Used by and when | Purpose |
@@ -808,7 +812,7 @@ local-services:
     name: qfw-local-dirsvc
     bind-host: 127.0.0.1
     port: auto
-  service-manifest: <prefix>/share/qfw/config/services/local-services.yaml
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/local-services.yaml
 ```
 
 The packaged hybrid profile has the same `local-services` block. Its resolver
@@ -837,7 +841,7 @@ local-services:
     name: qfw-local-dirsvc
     bind-host: 127.0.0.1
     port: auto
-  service-manifest: <prefix>/share/qfw/config/services/local-services.yaml
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/local-services.yaml
   services:
     - nwqsim
 ```

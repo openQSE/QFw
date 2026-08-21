@@ -176,12 +176,22 @@ def qfw_dirsvc_start(argv):
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    site = _load_optional_site(args.site_config)
-    site_dir = qfw_config.site_directory(site) if site else {}
+    use_site_defaults = bool(
+        args.site_config or not (args.name and args.listen_port is not None))
+    site_path = (
+        qfw_config.resolve_site_config(args.site_config)
+        if use_site_defaults else None
+    )
+    site = _load_optional_site(args.site_config) if use_site_defaults else {}
+    site_dir = qfw_config.site_directory_config(
+        site, site_config_path=site_path) if site else {}
     site_host, site_port = _split_endpoint(site_dir.get("endpoint", ""))
     dirsvc_name = args.name or site_dir.get("name", "qfw-dirsvc")
-    dirsvc_host = args.host or site_host
-    dirsvc_port = args.listen_port if args.listen_port is not None else site_port
+    dirsvc_host = args.host or site_host or socket.gethostname()
+    dirsvc_port = (
+        args.listen_port if args.listen_port is not None else
+        site_dir.get("listen_port") or site_port
+    )
     if not dirsvc_port:
         dirsvc_port = 8090
     startup_timeout = (
@@ -263,7 +273,18 @@ def qfw_service_start(argv):
         Path(args.ready_file) if args.ready_file else run_dir / "ready.json")
     site_config_path = qfw_config.resolve_site_config(args.site_config)
     site = _load_optional_site(args.site_config)
-    site_dir = qfw_config.site_directory(site) if site else {}
+    local_directory_endpoint = os.environ.get("QFW_LOCAL_DIRSVC_ENDPOINT")
+    if local_directory_endpoint:
+        site_dir = {
+            "name": os.environ.get(
+                "QFW_LOCAL_DIRSVC_NAME", "qfw-local-dirsvc"),
+            "endpoint": local_directory_endpoint,
+            "connect_timeout_seconds": int(
+                os.environ.get("QFW_DIRSVC_CONNECT_TIMEOUT_SECONDS", 300)),
+        }
+    else:
+        site_dir = qfw_config.site_directory(
+            site, site_config_path=site_config_path) if site else {}
     site_service = qfw_config.site_service_config(
         site, site_config_path=site_config_path) if site else {}
     service, service_config_path = _resolve_service(args, site_service)

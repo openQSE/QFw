@@ -114,9 +114,27 @@ configure_file(
 	cmake/qfw-setup-driver.in
 	"${QFW_GENERATED_LIBEXEC_DIR}/qfw-setup-driver"
 	@ONLY)
+configure_file(
+	cmake/qfw-service-plane.in
+	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane"
+	@ONLY)
+foreach(qfw_role_command IN ITEMS qfw-dir-svc qfw-qpm-svc)
+	if(qfw_role_command STREQUAL "qfw-dir-svc")
+		set(QFW_SERVICE_LIFECYCLE_ROLE "directory")
+	else()
+		set(QFW_SERVICE_LIFECYCLE_ROLE "qpm")
+	endif()
+	configure_file(
+		cmake/qfw-role-service.in
+		"${QFW_GENERATED_BIN_DIR}/${qfw_role_command}"
+		@ONLY)
+endforeach()
 file(CHMOD
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
 	"${QFW_GENERATED_BIN_DIR}/defw-python"
+	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane"
+	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
+	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"
 	"${QFW_GENERATED_LIBEXEC_DIR}/qfw-setup-driver"
 	PERMISSIONS
 		OWNER_READ OWNER_WRITE OWNER_EXECUTE
@@ -149,6 +167,9 @@ install(PROGRAMS
 	"${QFW_GENERATED_BIN_DIR}/qfw-teardown"
 	"${QFW_GENERATED_BIN_DIR}/qfw-dirsvc-start"
 	"${QFW_GENERATED_BIN_DIR}/qfw-service-start"
+	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane"
+	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
+	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"
 	DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 install(PROGRAMS

@@ -615,6 +615,12 @@ qpm:
       purge-interval-seconds: 60
 ```
 
+Configuration paths may reference activated environment variables with the
+strict `${NAME}` form. `qfw-activate` establishes `QFW_PREFIX` and
+`DEFW_PREFIX` before QFw reads the site and runtime files. Referencing an unset
+or empty variable is an error. Unbraced `$NAME` references and legacy
+angle-bracket placeholders are invalid.
+
 A source-tree development site file may use the same shape with a localhost
 site endpoint. That endpoint gives the implicit profile a directory to query
 during local development:
@@ -631,7 +637,7 @@ directory:
     connect-timeout-seconds: 300
 
 service:
-  manifest: <prefix>/share/qfw/config/services/site-services.yaml
+  manifest: ${QFW_PREFIX}/share/qfw/config/services/site-services.yaml
   device-access-config: /etc/openqse/qfw/device/device-access.yaml
 ```
 
@@ -745,7 +751,7 @@ local-services:
     name: qfw-local-dirsvc
     bind-host: 127.0.0.1
     port: auto
-  service-manifest: <prefix>/share/qfw/config/services/local-services.yaml
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/local-services.yaml
 ```
 
 When `local-services.start-dirsvc` is true, `qfw-setup` starts a job-owned

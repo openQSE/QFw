@@ -91,10 +91,13 @@ foreach(command_name
 			qfw-activate
 			defw-python
 		qfw-setup
-		qfw-srun
-		qfw-teardown
-		qfw-dirsvc-start
-		qfw-service-start)
+			qfw-srun
+			qfw-teardown
+			qfw-dirsvc-start
+			qfw-service-start
+			qfw-service-plane
+			qfw-dir-svc
+			qfw-qpm-svc)
 	if(NOT EXISTS "${QFW_INSTALL_PREFIX}/bin/${command_name}")
 		message(FATAL_ERROR "missing installed command: ${command_name}")
 	endif()
@@ -117,7 +120,7 @@ string(FIND "${dirsvc_unit_text}" "QFW_DIRSVC_NAME"
 	dirsvc_unit_name_env_index)
 string(FIND "${dirsvc_unit_text}" "--name" dirsvc_unit_name_arg_index)
 string(FIND "${dirsvc_unit_text}"
-	"qfw-dirsvc-start --site-config \"\${QFW_SITE_CONFIG}\""
+	"qfw-dir-svc run --scope site"
 	dirsvc_unit_site_config_index)
 if(NOT dirsvc_unit_name_env_index EQUAL -1 OR
    NOT dirsvc_unit_name_arg_index EQUAL -1 OR
@@ -604,11 +607,10 @@ file(WRITE "${prefix_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}/site-qfw
   defw-prefix: ${QFW_INSTALL_PREFIX}/site-defw
-directory:
-  site:
-    name: prefix-dirsvc
-    endpoint: 127.0.0.1:1
-    connect-timeout-seconds: 0
+directory-service:
+  name: prefix-dirsvc
+  endpoint: 127.0.0.1:1
+  connect-timeout-seconds: 0
 ")
 execute_process(
 	COMMAND
@@ -634,6 +636,8 @@ execute_process(
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
 		"QFW_RUN_BASE_DIR=${qfw_run_base}"
+		"QFW_SHARED_ROOT=${qfw_run_base}"
+		"QFW_SITE_DIRSVC_ENDPOINTS=127.0.0.1:1"
 		"${QFW_INSTALL_PREFIX}/bin/qfw-setup"
 			--profile hybrid
 			--dry-run
@@ -692,11 +696,10 @@ file(WRITE "${bad_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: bad-dirsvc
-    endpoint: 127.0.0.1:1
-    connect-timeout-seconds: 0
+directory-service:
+  name: bad-dirsvc
+  endpoint: 127.0.0.1:1
+  connect-timeout-seconds: 0
 ")
 file(WRITE "${bad_app_path}"
 "import os
@@ -736,11 +739,10 @@ file(WRITE "${tcp_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: tcp-listener
-    endpoint: 127.0.0.1:${tcp_listener_port}
-    connect-timeout-seconds: 1
+directory-service:
+  name: tcp-listener
+  endpoint: 127.0.0.1:${tcp_listener_port}
+  connect-timeout-seconds: 1
 ")
 execute_process(
 	COMMAND "${QFW_BASH}" -c
@@ -776,11 +778,10 @@ file(WRITE "${service_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: live-dirsvc
-    endpoint: 127.0.0.1:${dirsvc_port}
-    connect-timeout-seconds: 5
+directory-service:
+  name: live-dirsvc
+  endpoint: 127.0.0.1:${dirsvc_port}
+  connect-timeout-seconds: 5
 ")
 qfw_free_port(site_default_dirsvc_port)
 set(site_defaults_dir "${qfw_run_base}/site-defaults-smoke")
@@ -790,11 +791,10 @@ file(WRITE "${site_defaults_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: site-default-dirsvc
-    endpoint: 0.0.0.0:${site_default_dirsvc_port}
-    connect-timeout-seconds: 7
+directory-service:
+  name: site-default-dirsvc
+  endpoint: 0.0.0.0:${site_default_dirsvc_port}
+  connect-timeout-seconds: 7
 ")
 execute_process(
 	COMMAND
@@ -1091,11 +1091,10 @@ file(WRITE "${partial_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: partial-site
-    endpoint: 127.0.0.1:1
-    connect-timeout-seconds: 1
+directory-service:
+  name: partial-site
+  endpoint: 127.0.0.1:1
+  connect-timeout-seconds: 1
 ")
 execute_process(
 	COMMAND

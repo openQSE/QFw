@@ -103,10 +103,11 @@ qfw_chem_driver_require_positive_int() {
 }
 
 qfw_chem_driver_device_access_config() {
-	python3 - "${site_config}" "${QFW_PREFIX:-}" <<'PY'
-import os
+	python3 - "${site_config}" <<'PY'
 import sys
 from pathlib import Path
+
+from qfw_runtime.config import resolve_path
 
 try:
 	import yaml
@@ -115,17 +116,12 @@ except ImportError as exc:
 		f"ERROR: PyYAML is required to read the site configuration: {exc}")
 
 site_path = Path(sys.argv[1]).expanduser().resolve()
-prefix = sys.argv[2]
 with site_path.open("r", encoding="utf-8") as stream:
 	site = yaml.safe_load(stream) or {}
 value = (site.get("service") or {}).get("device-access-config")
 if not value:
 	raise SystemExit("site.yaml does not define service.device-access-config")
-value = str(value).replace("<prefix>", prefix)
-path = Path(os.path.expanduser(value))
-if not path.is_absolute():
-	path = site_path.parent / path
-path = path.resolve()
+path = resolve_path(value, base=site_path.parent)
 if not path.is_file():
 	raise SystemExit(f"device access config is not readable: {path}")
 print(path)

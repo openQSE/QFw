@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -lc 'source /etc/openqse/qfw/env.sh && exec qfw-dirsvc-start --site-config "${QFW_SITE_CONFIG}"'
+RuntimeDirectory=qfw/dirsvc-%i
+ExecStart=/bin/bash -lc 'source /etc/openqse/qfw/env.sh && exec qfw-dir-svc run --scope site --run-dir "/run/qfw/dirsvc-%i" --site-config "${QFW_SITE_CONFIG}"'
 Restart=on-failure
 TimeoutStartSec=360
 

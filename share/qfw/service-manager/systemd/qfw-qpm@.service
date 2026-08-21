@@ -7,7 +7,8 @@ Wants=network-online.target
 Type=simple
 Environment=QFW_QPM_SERVICE_ID=%i
 EnvironmentFile=/etc/openqse/qfw/services/qpm/%i.env
-ExecStart=/bin/bash -lc 'source /etc/openqse/qfw/env.sh && exec qfw-service-start --service-id "${QFW_QPM_SERVICE_ID}" --operation-mode "${QFW_QPM_OPERATION_MODE:-long-running}" --site-config "${QFW_SITE_CONFIG}"'
+RuntimeDirectory=qfw/qpm-%i
+ExecStart=/bin/bash -lc 'source /etc/openqse/qfw/env.sh && exec qfw-qpm-svc run --scope site --run-dir "/run/qfw/qpm-%i" --service-id "${QFW_QPM_SERVICE_ID}" --site-config "${QFW_SITE_CONFIG}"'
 Restart=on-failure
 TimeoutStartSec=360
 

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shlex
 import socket
 import tempfile
@@ -25,6 +26,15 @@ CALLER_ENVIRONMENT_KEYS = (
     "VIRTUAL_ENV",
     "VIRTUAL_ENV_PROMPT",
 )
+ENVIRONMENT_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+UNBRACED_ENVIRONMENT_REFERENCE = re.compile(
+    r"\$([A-Za-z_][A-Za-z0-9_]*)")
+LEGACY_PATH_PLACEHOLDERS = {
+    "<prefix>": "${QFW_PREFIX}",
+    "<qfw-prefix>": "${QFW_PREFIX}",
+    "<defw-prefix>": "${DEFW_PREFIX}",
+}
+DIRECTORY_SERVICE_CONNECTION_SCHEMA = "qfw-directory-service-v1"
 
 
 def _split_config_list(value):
@@ -103,27 +113,49 @@ def load_yaml(path):
     return data
 
 
-def expand_config_value(value, qfw_prefix_value=None, defw_prefix_value=None):
+def expand_config_value(value):
     if value is None:
         return None
-    qfw_value = Path(qfw_prefix_value).expanduser().resolve() \
-        if qfw_prefix_value is not None else qfw_prefix()
-    defw_value = Path(defw_prefix_value).expanduser().resolve() \
-        if defw_prefix_value is not None else defw_prefix()
     text = str(value)
-    text = text.replace("<prefix>", str(qfw_value))
-    text = text.replace("<qfw-prefix>", str(qfw_value))
-    text = text.replace("<defw-prefix>", str(defw_value))
+
+    for placeholder, replacement in LEGACY_PATH_PLACEHOLDERS.items():
+        if placeholder in text:
+            raise ValueError(
+                f"unsupported configuration placeholder {placeholder!r}; "
+                f"use {replacement}")
+
+    unbraced = UNBRACED_ENVIRONMENT_REFERENCE.search(text)
+    if unbraced:
+        name = unbraced.group(1)
+        raise ValueError(
+            f"environment variable references must use braced form: "
+            f"${{{name}}}")
+
+    unmatched = ENVIRONMENT_REFERENCE.sub("", text)
+    if "${" in unmatched:
+        raise ValueError(
+            f"invalid environment variable reference in configuration: "
+            f"{text!r}")
+
+    def replace_environment(match):
+        name = match.group(1)
+        if name not in os.environ:
+            raise ValueError(
+                f"configuration references unset environment variable: "
+                f"${{{name}}}")
+        selected = os.environ[name]
+        if not selected:
+            raise ValueError(
+                f"configuration references empty environment variable: "
+                f"${{{name}}}")
+        return selected
+
+    text = ENVIRONMENT_REFERENCE.sub(replace_environment, text)
     return os.path.expanduser(text)
 
 
-def resolve_path(value, base=None, qfw_prefix_value=None,
-                 defw_prefix_value=None):
-    value = expand_config_value(
-        value,
-        qfw_prefix_value=qfw_prefix_value,
-        defw_prefix_value=defw_prefix_value,
-    )
+def resolve_path(value, base=None):
+    value = expand_config_value(value)
     if value is None:
         return None
     path = Path(value)
@@ -144,7 +176,7 @@ def resolve_site_config(explicit=None):
 def resolve_runtime_config(explicit=None, profile=None,
                            qfw_prefix_override=None):
     if explicit:
-        return resolve_path(explicit, qfw_prefix_value=qfw_prefix_override)
+        return resolve_path(explicit)
     if profile:
         return (
             qfw_share_dir(qfw_prefix_override) /
@@ -152,7 +184,7 @@ def resolve_runtime_config(explicit=None, profile=None,
         )
     env_config = os.environ.get("QFW_RUNTIME_CONFIG")
     if env_config:
-        return resolve_path(env_config, qfw_prefix_value=qfw_prefix_override)
+        return resolve_path(env_config)
     env_profile = os.environ.get("QFW_RUNTIME_PROFILE")
     if env_profile:
         return (
@@ -178,11 +210,7 @@ def site_install_prefixes(site_config):
     )
     defw_value = install.get("defw-prefix") or install.get("defw_prefix")
     if defw_value is not None:
-        defw_path = resolve_path(
-            defw_value,
-            qfw_prefix_value=qfw_path,
-            defw_prefix_value=defw_prefix(),
-        )
+        defw_path = resolve_path(defw_value)
     else:
         source_defw = qfw_path / "DEFw"
         if source_defw.exists() and not (qfw_path / "bin" / "defwp").exists():
@@ -195,26 +223,116 @@ def site_install_prefixes(site_config):
     }
 
 
-def site_directory(site_config):
-    directory = site_config.get("directory") or {}
-    site = directory.get("site") or {}
-    endpoint = site.get("endpoint")
-    if not endpoint:
+def site_directory_config(site_config, site_config_path=None):
+    directory = site_config.get("directory-service") or {}
+    if not directory:
         return {}
-    return {
-        "name": site.get("name", "qfw-site-dirsvc"),
-        "endpoint": str(endpoint),
-        "endpoints": [str(endpoint)],
+    if not isinstance(directory, dict):
+        raise ValueError("directory-service must be a mapping")
+    base = None
+    if site_config_path is not None:
+        base = Path(site_config_path).expanduser().resolve().parent
+    connection_file = directory.get("connection-file")
+    endpoint = str(directory.get("endpoint") or "").strip()
+    if not connection_file and not endpoint:
+        raise ValueError(
+            "directory-service requires connection-file or a stable endpoint")
+    configured_port = directory.get("listen-port")
+    if configured_port is None and endpoint:
+        try:
+            configured_port = endpoint.rsplit(":", 1)[1]
+        except (IndexError, ValueError) as exc:
+            raise ValueError(
+                f"invalid directory-service endpoint: {endpoint}") from exc
+    listen_port = int(configured_port or 8090)
+    if listen_port <= 0 or listen_port > 65535:
+        raise ValueError(
+            f"invalid directory-service listen port: {listen_port}")
+    selected = {
+        "name": str(directory.get("name", "qfw-site-dirsvc")),
+        "listen_port": listen_port,
         "connect_timeout_seconds": int(
-            site.get("connect-timeout-seconds", 300)),
+            directory.get("connect-timeout-seconds", 300)),
     }
+    if connection_file:
+        selected["connection_file"] = str(
+            resolve_path(connection_file, base=base))
+    if endpoint:
+        selected["endpoint"] = endpoint
+        selected["endpoints"] = [endpoint]
+    return selected
+
+
+def read_directory_service_connection(connection_file, defaults=None):
+    path = resolve_path(connection_file)
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            record = json.load(stream)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"directory-service connection record is not available: {path}"
+        ) from exc
+    if not isinstance(record, dict):
+        raise ValueError(
+            f"directory-service connection record must be a mapping: {path}")
+    if record.get("schema") != DIRECTORY_SERVICE_CONNECTION_SCHEMA:
+        raise ValueError(
+            f"unsupported directory-service connection record: {path}")
+    if record.get("ready") is not True:
+        raise RuntimeError(f"directory service is not ready: {path}")
+    endpoint = str(record.get("endpoint") or "").strip()
+    name = str(record.get("name") or "").strip()
+    if not endpoint or not name:
+        raise ValueError(
+            f"directory-service connection record lacks name or endpoint: "
+            f"{path}")
+    selected = dict(defaults or {})
+    selected.update({
+        "name": name,
+        "endpoint": endpoint,
+        "endpoints": [endpoint],
+        "connection_file": str(path),
+        "instance_id": str(record.get("instance_id") or ""),
+    })
+    selected.setdefault("connect_timeout_seconds", int(
+        record.get("connect_timeout_seconds", 300)))
+    return selected
+
+
+def site_directory(site_config, site_config_path=None,
+                   connection_file=None):
+    configured = site_directory_config(site_config, site_config_path)
+    endpoint_override = os.environ.get("QFW_SITE_DIRSVC_ENDPOINTS")
+    if endpoint_override:
+        endpoints = _split_config_list(endpoint_override)
+        if endpoints:
+            selected = dict(configured)
+            selected.update({
+                "name": os.environ.get(
+                    "QFW_SITE_DIRSVC_NAME",
+                    configured.get("name", "qfw-site-dirsvc"),
+                ),
+                "endpoint": endpoints[0],
+                "endpoints": endpoints,
+            })
+            return selected
+    if configured.get("endpoint"):
+        return configured
+    selected_file = (
+        connection_file or
+        os.environ.get("QFW_DIRECTORY_SERVICE_INFO") or
+        configured.get("connection_file")
+    )
+    if not selected_file:
+        return {}
+    return read_directory_service_connection(
+        selected_file, defaults=configured)
 
 
 def site_service_config(site_config, site_config_path=None):
     service = site_config.get("service") or {}
     if not isinstance(service, dict):
         raise ValueError("service must be a mapping")
-    prefixes = site_install_prefixes(site_config)
     base = None
     if site_config_path is not None:
         base = Path(site_config_path).expanduser().resolve().parent
@@ -227,12 +345,7 @@ def site_service_config(site_config, site_config_path=None):
         value = service.get(key)
         if value is None:
             continue
-        result[canonical] = resolve_path(
-            value,
-            base=base,
-            qfw_prefix_value=prefixes["qfw_prefix"],
-            defw_prefix_value=prefixes["defw_prefix"],
-        )
+        result[canonical] = resolve_path(value, base=base)
     return result
 
 
@@ -341,17 +454,16 @@ def allocate_local_telnet_port(local_config, host, listen_port,
     return port
 
 
-def service_manifest_path(local_config, qfw_prefix_value=None,
-                          defw_prefix_value=None):
-    manifest = local_config.get(
-        "service-manifest",
-        "<prefix>/share/qfw/config/services/local-services.yaml",
+def service_manifest_path(local_config, qfw_prefix_value=None):
+    manifest = local_config.get("service-manifest")
+    if manifest is not None:
+        return resolve_path(manifest)
+    prefix = (
+        Path(qfw_prefix_value).expanduser().resolve()
+        if qfw_prefix_value is not None else qfw_prefix()
     )
-    return resolve_path(
-        manifest,
-        qfw_prefix_value=qfw_prefix_value,
-        defw_prefix_value=defw_prefix_value,
-    )
+    return prefix / "share" / "qfw" / "config" / "services" / \
+        "local-services.yaml"
 
 
 def selected_service_names(local_config, manifest_services):
@@ -392,11 +504,13 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
     state_dir.mkdir(parents=True, exist_ok=True)
 
     local_config = local_services(runtime_config)
-    site_dir = site_directory(site_config)
     scope_order = resolver_scope_order(runtime_config)
     scope_override = os.environ.get("QFW_QPM_RESOLVER_SCOPE_ORDER")
     if scope_override:
         scope_order = normalize_resolver_scope_order(scope_override)
+    site_dir = {}
+    if "site" in scope_order or os.environ.get("QFW_SITE_DIRSVC_ENDPOINTS"):
+        site_dir = site_directory(site_config, site_config_path)
     endpoint_override = os.environ.get("QFW_SITE_DIRSVC_ENDPOINTS")
     if endpoint_override:
         site_endpoints = _split_config_list(endpoint_override)
@@ -430,7 +544,6 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         manifest_path = service_manifest_path(
             local_config,
             qfw_prefix_value=qfw_install_prefix,
-            defw_prefix_value=defw_install_prefix,
         )
     environment = {
         "QFW_PREFIX": str(qfw_install_prefix),
@@ -459,6 +572,9 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         environment["QFW_SITE_DIRSVC_NAME"] = site_dir["name"]
         environment["QFW_DIRSVC_CONNECT_TIMEOUT_SECONDS"] = str(
             site_dir["connect_timeout_seconds"])
+        if site_dir.get("connection_file"):
+            environment["QFW_DIRECTORY_SERVICE_INFO"] = str(
+                site_dir["connection_file"])
     if local_endpoint:
         environment["QFW_LOCAL_DIRSVC_ENDPOINT"] = local_endpoint
         environment["QFW_LOCAL_DIRSVC_NAME"] = local_name

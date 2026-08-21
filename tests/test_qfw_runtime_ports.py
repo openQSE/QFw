@@ -42,9 +42,8 @@ def test_qfw_service_start_loads_service_paths_from_site(
     site_path = tmp_path / "site.yaml"
     site_path.write_text(
         "\n".join([
-            "directory:",
-            "  site:",
-            "    endpoint: 127.0.0.1:8090",
+            "directory-service:",
+            "  endpoint: 127.0.0.1:8090",
             "service:",
             f"  manifest: {manifest_path}",
             f"  device-access-config: {device_path}",

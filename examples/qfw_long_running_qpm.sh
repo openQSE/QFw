@@ -328,11 +328,10 @@ install:
   qfw-prefix: ${QFW_PREFIX}
   defw-prefix: ${DEFW_PREFIX}
 
-directory:
-  site:
-    name: qfw-site-dirsvc
-    endpoint: ${service_node}:${dirsvc_port}
-    connect-timeout-seconds: ${startup_timeout}
+directory-service:
+  name: qfw-site-dirsvc
+  endpoint: ${service_node}:${dirsvc_port}
+  connect-timeout-seconds: ${startup_timeout}
 
 service:
   manifest: ${service_manifest}

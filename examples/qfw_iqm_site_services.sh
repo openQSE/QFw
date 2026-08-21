@@ -458,11 +458,10 @@ install:
   qfw-prefix: ${qfw_prefix}
   defw-prefix: ${defw_prefix}
 
-directory:
-  site:
-    name: qfw-docker-iqm-dirsvc
-    endpoint: ${service_node}:${dirsvc_port}
-    connect-timeout-seconds: ${startup_timeout}
+directory-service:
+  name: qfw-docker-iqm-dirsvc
+  endpoint: ${service_node}:${dirsvc_port}
+  connect-timeout-seconds: ${startup_timeout}
 
 service:
   manifest: ${service_manifest}
