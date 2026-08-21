@@ -8,6 +8,7 @@ from defw_app_util import defw_get_directory_service
 from defw_exception import DEFwError
 from qfw_qiskit.qpm_resolver import QPMResolver
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
+from qfw_example_report import format_console_record
 
 
 def normalize_reservation_id(value):
@@ -39,8 +40,7 @@ def emit(kind, **payload):
 		"timestamp_ns": time.time_ns(),
 	}
 	record.update(payload)
-	print("QFW_EXAMPLE_RESERVATION " + json.dumps(record, sort_keys=True),
-	      flush=True)
+	print(format_console_record("QFW_EXAMPLE_RESERVATION", record), flush=True)
 
 
 def allocation_id():

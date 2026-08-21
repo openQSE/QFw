@@ -515,7 +515,8 @@ record = {
 	"timestamp_ns": time.time_ns(),
 	"duration_sec": float(duration_sec),
 }
-line = "QFW_CHEM_SMOKE_RESULT " + json.dumps(record, sort_keys=True)
+line = "QFW_CHEM_SMOKE_RESULT " + json.dumps(
+	record, indent=2, sort_keys=True)
 print(line)
 summary_path = os.path.join(run_dir, "chemistry-smoke.jsonl")
 with open(summary_path, "a", encoding="utf-8") as handle:

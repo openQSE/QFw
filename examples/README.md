@@ -20,10 +20,26 @@ to enable shell command tracing for the wrapper and any nested example drivers:
 ./qfw_ghz.sh --verbose qiskit 4 nwqsim 1
 ```
 
-Each wrapper and example emits machine-readable result records as JSON lines.
-Records are printed with a `QFW_EXAMPLE_RESULT ` prefix in the log. When
-`QFW_EXAMPLE_RESULT_FILE` is set, the same JSON records are appended to that
-file. The stable fields are:
+Each wrapper and example emits a result record. Standard output shows a
+human-readable, pretty-printed JSON block whose opening line starts with
+`QFW_EXAMPLE_RESULT `. When `QFW_EXAMPLE_RESULT_FILE` is set, the same record
+is appended to that file as compact, one-record-per-line JSONL for machine
+consumption. The stable fields are:
+
+```text
+QFW_EXAMPLE_RESULT {
+  "artifacts": {},
+  "details": {},
+  "example": "ghz-qiskit",
+  ...
+}
+```
+
+Other structured records emitted by the example drivers use the same
+pretty-printed stdout format, including `QFW_SLURM_DRIVER_RESULT`,
+`QFW_EXAMPLE_RESERVATION`, `QFW_FAKE_IQM_STRESS_RESULT`, and the chemistry and
+IQM service result prefixes. Files whose names end in `.jsonl` remain compact
+JSONL and should be used by automation instead of parsing terminal output.
 
 ```text
 schema: qfw-example-wrapper-v1 or qfw-example-result-v1

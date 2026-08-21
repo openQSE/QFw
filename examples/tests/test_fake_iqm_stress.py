@@ -13,7 +13,7 @@ from defw_app_util import defw_get_directory_service
 from defw_exception import DEFwError, DEFwNotReady
 from qfw_qiskit.qpm_resolver import QPMResolver
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
-from qfw_example_report import emit_result, jsonable
+from qfw_example_report import emit_result, format_console_record, jsonable
 
 
 FAKE_PROVIDER = "fake-iqm"
@@ -1159,8 +1159,10 @@ class ResultSink:
 		self.lock = threading.Lock()
 
 	def write(self, record):
-		payload = json.dumps(jsonable(record), sort_keys=True)
-		print("QFW_FAKE_IQM_STRESS_RESULT " + payload)
+		normalized = jsonable(record)
+		payload = json.dumps(normalized, sort_keys=True)
+		print(format_console_record(
+			"QFW_FAKE_IQM_STRESS_RESULT", normalized))
 		if not self.path:
 			return
 		directory = os.path.dirname(self.path)

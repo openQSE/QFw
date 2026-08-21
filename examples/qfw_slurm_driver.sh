@@ -137,7 +137,8 @@ record = {
 	"slurm_job_id": os.environ.get("SLURM_JOB_ID"),
 	"timestamp_ns": time.time_ns(),
 }
-line = "QFW_SLURM_DRIVER_RESULT " + json.dumps(record, sort_keys=True)
+line = "QFW_SLURM_DRIVER_RESULT " + json.dumps(
+	record, indent=2, sort_keys=True)
 print(line)
 if path:
 	directory = os.path.dirname(path)
@@ -149,15 +150,16 @@ PY
 }
 
 qfw_slurm_parse_reservation_id() {
+	PYTHONPATH="$(qfw_example_path tests)${PYTHONPATH:+:${PYTHONPATH}}" \
 	python3 -c '
-import json
 import sys
 
+from qfw_example_report import parse_console_records
+
 reservation_id = None
-for line in sys.stdin:
-	if not line.startswith("QFW_EXAMPLE_RESERVATION "):
-		continue
-	record = json.loads(line.split(" ", 1)[1])
+records = parse_console_records(
+	sys.stdin.read(), "QFW_EXAMPLE_RESERVATION")
+for record in records:
 	if record.get("kind") != "reserve":
 		continue
 	decision = record.get("decision") or {}

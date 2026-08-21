@@ -299,7 +299,7 @@ try:
 				"provider_device_id": provider_device_id,
 				"config": config_path,
 				"credential_db": credential_db_path,
-			}, sort_keys=True))
+			}, indent=2, sort_keys=True))
 			raise SystemExit(0)
 	raise ValueError(
 		f"credential DB does not contain an API key for owner {owner!r} "
@@ -312,7 +312,7 @@ except Exception as exc:
 		"target_device_id": target_device,
 		"config": config_path,
 		"error": str(exc),
-	}, sort_keys=True))
+	}, indent=2, sort_keys=True))
 	raise SystemExit(1)
 PY
 }

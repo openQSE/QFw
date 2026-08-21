@@ -308,7 +308,8 @@ record = {
 	"timestamp_ns": time.time_ns(),
 	"args": args,
 }
-line = "QFW_EXAMPLE_RESULT " + json.dumps(record, sort_keys=True)
+line = "QFW_EXAMPLE_RESULT " + json.dumps(
+	record, indent=2, sort_keys=True)
 print(line)
 if path:
 	directory = os.path.dirname(path)

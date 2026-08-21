@@ -334,7 +334,8 @@ record = {
 	"dry_run": dry_run == "yes",
 	"timestamp_ns": time.time_ns(),
 }
-print("QFW_IQM_INSTALL_DEPS_RESULT " + json.dumps(record, sort_keys=True))
+print("QFW_IQM_INSTALL_DEPS_RESULT " + json.dumps(
+	record, indent=2, sort_keys=True))
 PY
 }
 
@@ -674,7 +675,8 @@ def main():
 			"timestamp_ns": time.time_ns(),
 			"duration_sec": (time.time_ns() - start) / 1e9,
 		}
-		print("QFW_IQM_PREFLIGHT_RESULT " + json.dumps(record, sort_keys=True))
+		print("QFW_IQM_PREFLIGHT_RESULT " + json.dumps(
+			record, indent=2, sort_keys=True))
 		return 0
 	except Exception as exc:
 		record = {
@@ -688,7 +690,8 @@ def main():
 			"timestamp_ns": time.time_ns(),
 			"duration_sec": (time.time_ns() - start) / 1e9,
 		}
-		print("QFW_IQM_PREFLIGHT_RESULT " + json.dumps(record, sort_keys=True))
+		print("QFW_IQM_PREFLIGHT_RESULT " + json.dumps(
+			record, indent=2, sort_keys=True))
 		return 1
 
 
@@ -795,7 +798,8 @@ record = {
 	"qpm_log_stderr": f"{run_dir}/logs/{service_id}.stderr.log",
 	"timestamp_ns": time.time_ns(),
 }
-print("QFW_IQM_SITE_SERVICES_RESULT " + json.dumps(record, sort_keys=True))
+print("QFW_IQM_SITE_SERVICES_RESULT " + json.dumps(
+	record, indent=2, sort_keys=True))
 PY
 }
 
