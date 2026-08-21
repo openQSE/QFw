@@ -1,8 +1,9 @@
 # QFw Usage
 
 This guide covers the shortest supported path to clone, build, configure, and
-run QFw. See [README.md](README.md) for architecture, development, and complete
-example details.
+run QFw. See the [project README](../README.md) for architecture, development,
+and complete example details. See the [QFw recipes](recipes/README.md) for
+focused installation, service-lifecycle, and Slurm-placement procedures.
 
 ## Contents
 
@@ -382,11 +383,11 @@ install:
   qfw-prefix: ${QFW_PREFIX}
   defw-prefix: ${DEFW_PREFIX}
 
-directory:
-  site:
-    name: qfw-site-dirsvc
-    endpoint: 127.0.0.1:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: qfw-site-dirsvc
+  listen-port: 8090
+  connect-timeout-seconds: 300
+  connection-file: ${QFW_SHARED_ROOT}/qfw-site-services/directory-service.json
 
 service:
   manifest: ${QFW_PREFIX}/share/qfw/config/services/site-services.yaml
@@ -404,7 +405,9 @@ qpm:
 
 QFw expands braced environment references while reading configuration paths.
 `qfw-activate` sets `QFW_PREFIX` and `DEFW_PREFIX` before these files are read.
-An unset or empty referenced variable is a configuration error.
+The site administrator sets `QFW_SHARED_ROOT` to a path shared by service and
+application nodes. An unset or empty referenced variable is a configuration
+error.
 
 | Owner | Used by and when | Purpose |
 | --- | --- | --- |
@@ -599,11 +602,11 @@ install:
   qfw-prefix: /opt/openqse/qfw/current
   defw-prefix: /opt/openqse/defw/current
 
-directory:
-  site:
-    name: ornl-site-dirsvc
-    endpoint: login01:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: ornl-site-dirsvc
+  listen-port: 8090
+  connect-timeout-seconds: 300
+  connection-file: /shared/openqse/qfw/directory-service.json
 
 service:
   manifest: /etc/openqse/qfw/services/site-services.yaml

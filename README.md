@@ -18,6 +18,11 @@ allocation, or inside the containerized
 environment. The top-level scripts hide most of the differences between
 those launch modes.
 
+For copy-and-paste installation and execution procedures, see the
+[QFw recipes](docs/recipes/README.md).
+The [site service lifecycle contract](docs/site-service-lifecycle.md) defines
+ownership and run-directory boundaries for long-running QPM services.
+
 ## Table Of Contents
 
 - [Build QFw](#build-qfw)

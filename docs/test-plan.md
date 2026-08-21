@@ -456,8 +456,8 @@ export QFW_QPU_DEVICE_ID=ornl-iqm-20q
 ```
 
 Create or select a site configuration shared by the Docker-launched directory,
-IQM QPM, and application allocations. The endpoint host must be resolvable from
-all Docker Slurm nodes used by the test:
+IQM QPM, and application allocations. The connection record must be visible at
+the same path from all Docker Slurm nodes used by the test:
 
 ```bash
 export QFW_SITE_CONFIG=/workspace/qfw-container-base/iqm-site.yaml
@@ -466,11 +466,11 @@ install:
   qfw-prefix: $QFW_PREFIX
   defw-prefix: $QFW_PREFIX
 
-directory:
-  site:
-    name: qfw-docker-iqm-dirsvc
-    endpoint: <docker-service-node-host>:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: qfw-docker-iqm-dirsvc
+  listen-port: 8090
+  connect-timeout-seconds: 300
+  connection-file: /workspace/qfw-container-base/qfw-site-services/directory-service.json
 
 service:
   manifest: $QFW_PREFIX/share/qfw/config/services/site-services.yaml

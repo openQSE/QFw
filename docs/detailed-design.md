@@ -595,11 +595,11 @@ install:
   qfw-prefix: /opt/openqse/qfw/current
   defw-prefix: /opt/openqse/defw/current
 
-directory:
-  site:
-    name: ornl-site-dirsvc
-    endpoint: login01:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: ornl-site-dirsvc
+  listen-port: 8090
+  connect-timeout-seconds: 300
+  connection-file: /shared/openqse/qfw/directory-service.json
 
 service:
   manifest: /etc/openqse/qfw/services/site-services.yaml
@@ -630,11 +630,10 @@ install:
   qfw-prefix: /home/user/openQSE/QFw
   defw-prefix: /home/user/openQSE/QFw/DEFw
 
-directory:
-  site:
-    name: qfw-local-dirsvc
-    endpoint: localhost:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: qfw-local-dirsvc
+  endpoint: localhost:8090
+  connect-timeout-seconds: 300
 
 service:
   manifest: ${QFW_PREFIX}/share/qfw/config/services/site-services.yaml
@@ -2726,18 +2725,18 @@ resolver queries one or more DEFw-dirsvc instances and can also synthesize a
 binding record from a configured direct endpoint. QFw-managed local services
 register with the job-local directory service started by `qfw-setup`.
 Long-running services either register with the shared directory service whose
-endpoint is recorded in the site configuration or listen on a configured direct
-DEFw endpoint without registration.
+resolved endpoint is published in its connection record or listen on a
+configured direct DEFw endpoint without registration.
 
 The resolver input is the site configuration plus client runtime profile rather
 than a list of primary QPM endpoints. `site.yaml` provides the site-global
-directory endpoint:
+directory connection record:
 
 ```yaml
-directory:
-  site:
-    name: ornl-site-dirsvc
-    endpoint: login01:8090
+directory-service:
+  name: ornl-site-dirsvc
+  listen-port: 8090
+  connection-file: /shared/openqse/qfw/directory-service.json
 ```
 
 The selected runtime configuration provides lookup order. Directory scopes and
