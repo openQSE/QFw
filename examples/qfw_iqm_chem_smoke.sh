@@ -5,11 +5,13 @@ set -euo pipefail
 script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 original_args=("$@")
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_iqm_chem_smoke.sh [options] [chemistry-script.py] [script args...]
+Usage: ./qfw_iqm_chem_smoke.sh [--verbose] [options] [chemistry-script.py] [script args...]
 
 Run the QFw-enabled chemistry application smoke and preserve stdout/stderr in
 a JSONL evidence record.

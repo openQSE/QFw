@@ -4,10 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_long_running_qpm.sh [options]
+Usage: ./qfw_long_running_qpm.sh [--verbose] [options]
 
 Start a site directory, PRTE DVM, and long-running QPM service, then run
 concurrent application waves against that same service plane.

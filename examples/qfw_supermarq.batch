@@ -41,9 +41,10 @@ module list
 echo "##################################"
 
 set -euo pipefail
-set -x
 
 source "${QFW_SHARE_DIR}/examples/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 qfw_example_begin "supermarq-batch" "$@"
 qfw_example_setup
 

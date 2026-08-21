@@ -4,10 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_iqm_chem_site_run.sh [options] [chemistry-script args...]
+Usage: ./qfw_iqm_chem_site_run.sh [--verbose] [options] [chemistry-script args...]
 
 Start a site-style DEFw directory service and ORNL IQM QPM, reserve through the
 QFw Slurm-style driver, run the QFw-enabled chemistry application, and then

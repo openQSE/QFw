@@ -13,6 +13,13 @@ Each wrapper starts QFw with `qfw-setup`, runs one application through
 `qfw-srun`, and tears QFw down even when the application fails. Do not call
 `qfw-deactivate` until the wrapper has completed.
 
+Example scripts are quiet by default. Pass `--verbose` as the first argument
+to enable shell command tracing for the wrapper and any nested example drivers:
+
+```bash
+./qfw_ghz.sh --verbose qiskit 4 nwqsim 1
+```
+
 Each wrapper and example emits machine-readable result records as JSON lines.
 Records are printed with a `QFW_EXAMPLE_RESULT ` prefix in the log. When
 `QFW_EXAMPLE_RESULT_FILE` is set, the same JSON records are appended to that

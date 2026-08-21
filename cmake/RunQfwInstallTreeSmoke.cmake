@@ -529,6 +529,16 @@ execute_process(
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
 		test -z \"\${QFW_PATH+x}\"
 		source '${QFW_INSTALL_PREFIX}/share/qfw/examples/qfw_example_common.sh'
+		qfw_example_parse_common_options alpha beta
+		test \"\${#QFW_EXAMPLE_REMAINING_ARGS[@]}\" = 2
+		test \"\${QFW_EXAMPLE_REMAINING_ARGS[0]}\" = alpha
+		case \"\$-\" in *x*) exit 1 ;; esac
+		qfw_example_parse_common_options --verbose gamma
+		test \"\${#QFW_EXAMPLE_REMAINING_ARGS[@]}\" = 1
+		test \"\${QFW_EXAMPLE_REMAINING_ARGS[0]}\" = gamma
+		case \"\$-\" in *x*) ;; *) exit 1 ;; esac
+		set +x
+		unset QFW_EXAMPLE_VERBOSE
 		qfw_example_require_runtime
 		test \"\$(qfw_example_examples_dir)\" = '${QFW_INSTALL_PREFIX}/share/qfw/examples'
 		test \"\$(qfw_example_path tests/test_init_qfw.py)\" = '${QFW_INSTALL_PREFIX}/share/qfw/examples/tests/test_init_qfw.py'

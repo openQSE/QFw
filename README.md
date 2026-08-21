@@ -111,6 +111,9 @@ source /path/to/qfw-install/bin/qfw-activate
 cd "$QFW_SHARE_DIR/examples"
 ```
 
+Example wrappers are quiet by default. Pass `--verbose` before the wrapper's
+other arguments to enable shell command tracing.
+
 Validate framework startup and Qiskit backend construction:
 
 ```bash

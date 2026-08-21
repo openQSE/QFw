@@ -4,10 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_fake_iqm_stress.sh [driver options]
+Usage: ./qfw_fake_iqm_stress.sh [--verbose] [driver options]
 
 Start a local DEFw directory service and deterministic fake IQM QPM, then run
 the qhw-admission/qhw-scheduler stress driver through qfw-srun.

@@ -1,16 +1,17 @@
 #!/bin/bash
 
 set -euo pipefail
-set -x
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 qfw_example_begin "chemistry" "$@"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_chem_app.sh [--backend <nwqsim|tnqvm|iqm>] [--chem-app-dir <dir>] <script.py> [script args...]
+Usage: ./qfw_chem_app.sh [--verbose] [--backend <nwqsim|tnqvm|iqm>] [--chem-app-dir <dir>] <script.py> [script args...]
 
 Environment overrides:
   QFW_CHEM_BACKEND=<provider>     Default backend provider. Defaults to nwqsim.

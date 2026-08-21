@@ -4,10 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_iqm_site_services.sh <start|stop|status|preflight|install-deps> [options]
+Usage: ./qfw_iqm_site_services.sh [--verbose] <start|stop|status|preflight|install-deps> [options]
 
 Start, probe, or stop a Docker-hosted site-style DEFw directory service and
 long-running ORNL IQM QPM service.

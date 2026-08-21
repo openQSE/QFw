@@ -21,6 +21,21 @@ qfw_example_path() {
 	esac
 }
 
+qfw_example_parse_common_options() {
+	local verbose="${QFW_EXAMPLE_VERBOSE:-no}"
+
+	while [[ "${1:-}" == "--verbose" ]]; do
+		verbose="yes"
+		shift
+	done
+	QFW_EXAMPLE_REMAINING_ARGS=("$@")
+	export QFW_EXAMPLE_VERBOSE="${verbose}"
+
+	case "${verbose}" in
+		1|yes|true|on|y|YES|TRUE|ON|Y) set -x ;;
+	esac
+}
+
 qfw_example_begin() {
 	QFW_EXAMPLE_NAME="$1"
 	shift || true

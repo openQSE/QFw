@@ -4,7 +4,7 @@ set -uo pipefail
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_run_all.sh
+Usage: ./qfw_run_all.sh [--verbose]
 
 Run the QFw example wrappers sequentially. Each wrapper owns its own
 qfw-setup and qfw-teardown lifecycle.
@@ -20,13 +20,15 @@ Environment overrides:
 EOF
 }
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 	usage
 	exit 0
 fi
-
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${script_dir}/qfw_example_common.sh"
 
 examples_dir="$(qfw_example_examples_dir)"
 if [[ ! -d "${examples_dir}" ]]; then

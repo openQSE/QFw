@@ -4,10 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_iqm_chem_driver.sh [options] [chemistry-script.py] [script args...]
+Usage: ./qfw_iqm_chem_driver.sh [--verbose] [options] [chemistry-script.py] [script args...]
 
 Reserve through the QFw Slurm-style driver, then run a QFw-enabled chemistry
 application with the driver-provided reservation id.

@@ -1,10 +1,11 @@
 #!/bin/bash
 
 set -euo pipefail
-set -x
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 qfw_example_begin "qiskit-vqe" "$@"
 qfw_example_setup_backend_service nwqsim
