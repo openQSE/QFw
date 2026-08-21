@@ -234,13 +234,30 @@ class QrmiDriver(BaseDriver):
 					f"failed to read QRMI target(): {exc}") from exc
 		return self._target_cache[cache_key]
 
+	def _static_arch(self, target):
+		# QRMI 0.22.0 added the static architecture to target(). Before that the
+		# key was simply absent, which is why every caller here treats it as
+		# optional. It arrives as a LIST -- one architecture per DUT -- while
+		# qhw-iqm's normalizers want the single architecture dict and call
+		# .get() on whatever they are handed, so passing the list straight
+		# through raises AttributeError. An IQM server exposes one architecture,
+		# so take the first dict and ignore anything past it. A bare dict is
+		# tolerated too, in case the shape settles that way upstream.
+		static = target.get("static_quantum_architecture")
+		if isinstance(static, dict):
+			return static
+		for entry in (static or []):
+			if isinstance(entry, dict):
+				return entry
+		return {}
+
 	def _arch_raw(self):
 		# Map target() to the {static_architecture, dynamic_architecture} shape
 		# qhw-iqm's device/coupling normalizers expect.
 		target = self._target()
 		raw = {"dynamic_architecture":
 				target.get("dynamic_quantum_architecture") or {}}
-		static = target.get("static_quantum_architecture")
+		static = self._static_arch(target)
 		if static:
 			raw["static_architecture"] = static
 		return raw
@@ -286,17 +303,16 @@ class QrmiDriver(BaseDriver):
 
 	def get_backend_info(self):
 		# Native composite shape (mirrors svc_iqm_qpm.get_backend_info): the
-		# provider fields plus an embedded qhw device record. QRMI's target()
-		# does not carry the static architecture, so that field is present only
-		# when the resource reports it.
+		# provider fields plus an embedded qhw device record. The static
+		# architecture is empty against QRMI older than 0.22.0, which did not
+		# report it at all.
 		from qhw_iqm import normalize_device
 		target = self._target()
 		dynamic = target.get("dynamic_quantum_architecture") or {}
 		return {
 			"backend": self._descriptor.get("provider", "iqm"),
 			"metadata_supported": True,
-			"static_architecture":
-				target.get("static_quantum_architecture") or {},
+			"static_architecture": self._static_arch(target),
 			"active_qubits": dynamic.get("qubits") or [],
 			"calibration_set_id": dynamic.get("calibration_set_id"),
 			"qhw_device": normalize_device(
