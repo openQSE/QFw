@@ -391,7 +391,7 @@ the job-lifecycle and reservation-binding complexity.
 
 It is a **composable** facet: both libraries serve it, so it is wired for both —
 but they are normalized differently, because they expose different things. QDMI
-is *vendor-neutral*: MQT Core's FoMaC query interface (`mqt.core.fomac`) exposes
+is *vendor-neutral*: MQT Core's FoMaC query interface (`mqt.core.qdmi`) exposes
 the device's real qubit labels, coupling map, gate loci, and calibration
 directly, so the QDMI driver reads them off the FoMaC `Device` and normalizes
 with `drivers/fomac_normalize.py` — no Qiskit `Target`, no raw vendor data.

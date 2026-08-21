@@ -1,8 +1,8 @@
 # FoMaC Device -> qhw normalization for the device-introspection facet.
 #
-# QDMI is vendor-neutral: its FoMaC Device API (mqt.core.fomac) already exposes
-# the real qubit names, connectivity, gate loci, and calibration (T1/T2, gate
-# fidelity) through the QDMI query interface. The QDMI driver reads that
+# QDMI is vendor-neutral: its FoMaC Device API (mqt.core.qdmi in Python) already
+# exposes the real qubit names, connectivity, gate loci, and calibration (T1/T2,
+# gate fidelity) through the QDMI query interface. The QDMI driver reads that
 # directly -- no Qiskit Target, no raw vendor JSON -- and this builds the same
 # provider-neutral qhw-data records the native / QRMI paths emit, so a consumer
 # sees one device/coupling record regardless of which library served the call.
@@ -87,7 +87,7 @@ def to_device_record(topo, provider, device_id, include_raw=False,
 		new_device(provider, device_id, num_qubits=len(qubits))
 		.device(device_id, num_qubits=len(qubits))
 		.qubits(qubits)
-		.metadata({"source": "qdmi", "via": "mqt.core.fomac"})
+		.metadata({"source": "qdmi", "via": "mqt.core.qdmi"})
 	)
 	if include_raw:
 		builder.raw_payload(topo, format="qdmi-fomac-topology")
@@ -110,7 +110,7 @@ def to_coupling_record(topo, provider, device_id, include_raw=False,
 				directed=False)
 		.nodes(qubits)
 		.coupling(edges, directed=False, nodes=qubits, source=sources)
-		.metadata({"source": "qdmi", "via": "mqt.core.fomac"})
+		.metadata({"source": "qdmi", "via": "mqt.core.qdmi"})
 	)
 	for name, loci in sorted(operations.items()):
 		arity = max((len(locus) for locus in loci), default=0)
@@ -147,7 +147,7 @@ def to_calibration_record(cal, provider, device_id, include_raw=False,
 			quality_metric_count=len(gate_metrics))
 		.summaries({
 			"source": "qdmi",
-			"via": "mqt.core.fomac",
+			"via": "mqt.core.qdmi",
 			"qubits_with_coherence": coherence_qubits,
 			"gate_loci_measured": len(gate_metrics),
 			"operations_measured": operations_measured,
@@ -185,7 +185,7 @@ def to_result_record(counts, shots, provider, device_id, job_id=None,
 			num_circuits=1,
 			counts=counts,
 			success=(status == "completed"))
-		.metadata({"source": "qdmi", "via": "mqt.core.fomac"})
+		.metadata({"source": "qdmi", "via": "mqt.core.qdmi"})
 	)
 	return builder.build(validate_schema=validate)
 
