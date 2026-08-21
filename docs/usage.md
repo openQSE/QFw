@@ -261,29 +261,90 @@ is run. Activation does not start QFw services.
 
 ### Installed Paths And Environment Variables
 
-`QFW_SRC` and `QFW_BUILD` are convenience variables used by the build commands
-in this guide. They are not QFw runtime settings.
+The build commands in this guide use `QFW_BASE`, `QFW_SRC`, `QFW_VENV`, and
+`QFW_BUILD` as shell conveniences. QFw does not interpret those names at
+runtime. `QFW_VENV`, for example, becomes meaningful only when its value is
+passed to `qfw-activate --venv`.
 
-After activation, QFw exports the following runtime paths. In this table,
-`<prefix>` is the installation prefix selected during the build. For the
-commands above, `<prefix>` is `$HOME/.local/qfw`.
+QFw environment variables fall into three groups. Operators select the first
+group, activation derives the second group, and `qfw-setup` publishes the third
+group for commands and services in the active run. In these tables, `<prefix>`
+is the installation prefix selected during the build. For the commands above,
+`<prefix>` is `$HOME/.local/qfw`.
 
-| Variable | Default after activation | Purpose |
+#### Operator Configuration
+
+Set these variables before activation or `qfw-setup` when the defaults are not
+appropriate. An explicit command-line option takes precedence over its
+environment-variable counterpart.
+
+| Variable | Default | Meaning and use |
 | --- | --- | --- |
-| `QFW_PREFIX` | `<prefix>` | QFw installation root |
-| `QFW_BIN_PATH` | `<prefix>/bin` | Public QFw commands |
-| `QFW_LIBEXEC_DIR` | `<prefix>/libexec/qfw` | Private command helpers |
-| `QFW_SHARE_DIR` | `<prefix>/share/qfw` | Examples and packaged configuration |
-| `QFW_CONFIG_DIR` | `/etc/openqse/qfw` | Conventional, optional site configuration root |
-| `QFW_SITE_CONFIG` | `<prefix>/share/qfw/config/site.yaml` | Selected site configuration |
-| `QFW_RUN_BASE_DIR` | `${TMPDIR:-/tmp}/qfw-runs` | Job state, results, and logs |
-| `DEFW_PREFIX` | `<prefix>` | Bundled DEFw installation root |
-| `DEFW_CONFIG_PATH` | `<prefix>/share/defw/config/defw_generic.yaml` | DEFw configuration |
+| `QFW_PREFIX` | Prefix containing `qfw-activate` | QFw installation root. Activation normally derives this value from its own installed path. |
+| `QFW_CONFIG_DIR` | `/etc/openqse/qfw` | Conventional site-configuration root. This value does not select a site file by itself. |
+| `QFW_SITE_CONFIG` | `<prefix>/share/qfw/config/site.yaml` | Site configuration selected by `qfw-setup`; overridden by `qfw-setup --site-config`. |
+| `QFW_RUN_BASE_DIR` | `${TMPDIR:-/tmp}/qfw-runs` | Parent directory for per-run state, logs, PID/readiness files, the `current` marker, and the PRTE DVM URI. It must be writable. For a heterogeneous or multi-node allocation, it must be visible at the same path on every participating node; do not use node-local `/tmp` in that case. |
+| `QFW_RUNTIME_PROFILE` | Unset | Name of a packaged runtime profile such as `local` or `hybrid`; overridden by `qfw-setup --profile`. |
+| `QFW_RUNTIME_CONFIG` | Unset | Explicit runtime YAML path; overridden by `qfw-setup --runtime-config` and preferred over `QFW_RUNTIME_PROFILE`. |
+| `QFW_QPM_RESOLVER_SCOPE_ORDER` | Runtime configuration | Advanced comma-separated override for QPM resolution scopes, such as `allocation-local,site`. Normal runs should select a runtime profile instead. |
+| `QFW_SITE_DIRSVC_ENDPOINTS` | Site configuration | Advanced comma-separated override for site directory-service endpoints. Normal runs should configure them in `site.yaml`. |
+| `QFW_SITE_DIRSVC_NAME` | `qfw-site-dirsvc` | Directory-service name used with an endpoint override. |
+| `QFW_DIRSVC_CONNECT_TIMEOUT_SECONDS` | `300` | Directory readiness timeout used with an endpoint override, in seconds. |
+| `QFW_RUN_ID` | Generated UUID | Optional caller-supplied run identifier. Use a unique value for each concurrently active runtime. |
 
-`QFW_CONFIG_DIR` does not select a site file by itself. Local installations can
-ignore it. Sites and test wrappers may override `QFW_SITE_CONFIG` and
-`QFW_RUN_BASE_DIR` before activation, and activation preserves those explicit
-values. Confirm the active paths with:
+`QFW_TMP_PATH` is accepted as a compatibility fallback for
+`QFW_RUN_BASE_DIR`. New scripts and site configurations should use
+`QFW_RUN_BASE_DIR`.
+
+For a heterogeneous allocation, select a shared run base before activation.
+The Docker Slurm cluster mounts `/workspace/qfw-container-base` on every node,
+so a suitable setup is:
+
+```bash
+export QFW_RUN_BASE_DIR="/workspace/qfw-container-base/qfw-runs/job-${SLURM_JOB_ID}"
+mkdir -p "$QFW_RUN_BASE_DIR"
+source "$QFW_PREFIX/bin/qfw-activate" --venv "$QFW_VENV"
+```
+
+#### Activation-Derived Paths
+
+`qfw-activate` exports these paths. Callers normally inspect rather than set
+them.
+
+| Variable | Default after activation | Meaning and use |
+| --- | --- | --- |
+| `QFW_BIN_PATH` | `<prefix>/bin` | Public QFw commands added to `PATH`. |
+| `QFW_LIBEXEC_DIR` | `<prefix>/libexec/qfw` | Private command helpers used by the public commands. |
+| `QFW_SHARE_DIR` | `<prefix>/share/qfw` | Installed examples and packaged site, runtime, service, and device configuration. |
+| `DEFW_PREFIX` | `<prefix>` | Bundled DEFw installation root. |
+| `DEFW_CONFIG_PATH` | `<prefix>/share/defw/config/defw_generic.yaml` | DEFw runtime configuration. |
+
+#### Prepared Run Environment
+
+`qfw-setup` records these values in `qfw-runtime-env.sh` and
+`state/runtime-state.json` below the run directory. They are implementation and
+launcher context; applications and operators generally should not set them
+directly.
+
+| Variable | Published meaning |
+| --- | --- |
+| `QFW_RUN_ID` | Identifier for the prepared run. |
+| `QFW_RUN_TMP_PATH` | Full path to the current run directory below `QFW_RUN_BASE_DIR`. |
+| `QFW_LOG_DIR` | Service log directory for the current run. |
+| `QFW_DVM_URI_PATH` | PRTE DVM URI file used to coordinate process launch. This is why a heterogeneous run requires a shared `QFW_RUN_BASE_DIR`. |
+| `QFW_LOCAL_DIRSVC_ENDPOINT`, `QFW_LOCAL_DIRSVC_NAME` | Allocation-owned directory-service identity selected during setup. |
+| `QFW_LOCAL_SERVICE_CONFIG`, `QFW_SERVICE_SCOPE` | Service manifest and ownership scope selected by the runtime profile. |
+| `QFW_ALLOCATION_MODE` | Detected launch mode: local, normal Slurm, or heterogeneous Slurm. |
+| `QFW_GROUP_0_NODELIST`, `QFW_GROUP_1_NODELIST`, `QFW_GROUPS` | Normalized application and quantum-service placement derived from the Slurm allocation. |
+| `QFW_RESERVATION_ID` | Reservation context supplied to an application by a trusted Slurm/site launcher or by the example driver. It is not a user credential. |
+
+Example-only controls such as `QFW_RUN_ALL_BACKEND` are documented with their
+wrappers in [examples/README.md](../examples/README.md). Provider credentials
+are service configuration and must not be placed in these application runtime
+variables.
+
+Activation preserves explicit `QFW_SITE_CONFIG` and `QFW_RUN_BASE_DIR` values.
+Confirm the active paths with:
 
 ```bash
 printf 'QFW_PREFIX=%s\n' "$QFW_PREFIX"
@@ -1024,9 +1085,12 @@ salloc \
 
 Account, partition, walltime, constraint, and network options are site
 specific. After the allocation is granted, run the normal local-profile
-lifecycle:
+lifecycle. The run base must be shared by both groups because it carries the
+PRTE DVM URI and other coordination state:
 
 ```bash
+export QFW_RUN_BASE_DIR="/shared/qfw-runs/job-${SLURM_JOB_ID}"
+mkdir -p "$QFW_RUN_BASE_DIR"
 source "$QFW_PREFIX/bin/qfw-activate" --venv /shared/qfw-venv
 
 qfw-setup --profile local
@@ -1038,8 +1102,10 @@ QFw detects the heterogeneous Slurm environment. `qfw-setup` uses group 1 for
 the PRTE DVM and job-owned quantum service stack. `qfw-srun` uses group 0 for
 the application unless `--het-group` explicitly selects another group.
 
-The QFw installation, venv, application, and required simulator binaries must
-be available at consistent paths on the nodes where they are used.
+`QFW_RUN_BASE_DIR`, the QFw installation, venv, application, and required
+simulator binaries must be available at consistent paths on the nodes where
+they are used. A node-local `/tmp` run base is suitable only when every QFw
+runtime process executes on the same node.
 
 ### QFw Slurm Docker Cluster
 
