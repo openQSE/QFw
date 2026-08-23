@@ -5,14 +5,15 @@ ARG ROCKYLINUX_TAG=10.2
 FROM rockylinux/rockylinux:${ROCKYLINUX_TAG}
 
 
-ARG REVISION
-ARG BUILD_DATE
+ARG REVISION=unknown
+ARG BUILD_DATE=unknown
+
 LABEL org.opencontainers.image.revision="${REVISION}"
 LABEL org.opencontainers.image.created="${BUILD_DATE}"
 
 # TODO - inject these values from the build script environment.
 ARG LICENSE="BSD-3-Clause"
-ARG NAME="qfw-builder"
+ARG NAME="builder-qfw"
 ARG SUMMARY="Build environment with the QRMI/QDMI/QFw build toolchain"
 ARG VENDOR="Open QHPC Software Ecosystem (openQSE)"
 ARG VERSION="0.0.1"

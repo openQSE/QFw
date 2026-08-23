@@ -6,14 +6,14 @@
 #
 # syntax=docker/dockerfile:1
 
-# The qfw-builder image built from Dockerfile.builder. Must already exist
+# The builder-qfw image built from Dockerfile.builder. Must already exist
 # locally (or be pullable) before building this image.
-ARG BUILDER_IMAGE=qfw-builder:latest
+ARG BASE_IMAGE=openqse/builder-qfw:latest
 
-FROM ${BUILDER_IMAGE}
+FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.title="qfw"
-LABEL org.opencontainers.image.description="QRMI, QDMI, and QFw installed on top of the qfw-builder toolchain image"
+LABEL org.opencontainers.image.description="QRMI, QDMI, and QFw installed on top of the builder-qfw toolchain image"
 
 # The top-level directory where all packages are installed
 # Usually, it is /opt/qfw
