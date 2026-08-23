@@ -1,24 +1,20 @@
-.PHONY: docker-build docker-build-builder docker-build-qfw help lint test
+.PHONY: docker-build docker-build-builder docker-build-qfw help
 
 # Default target
 .DEFAULT_GOAL := help
 
-# Python source directories linted in CI (kept in sync with
-# .github/scripts/ci-syntax.sh).
-PY_DIRS := services/ service-apis/ backends/ examples/
+# The help target prints help message. It scans this file and looks for targets
+# with the '##' (double hash) description. If found, includes the target name
+# and the description in the printed output.
 
 # Colors for help output
-CYAN := $(shell tput -Txterm setaf 6)
-RESET := $(shell tput -Txterm sgr0)
-
+help: CYAN = $(shell tput -Txterm setaf 6)
+help: RESET = $(shell tput -Txterm sgr0)
 help:  ## Show this help message
-	@echo "QFw - Available Commands"
-	@echo "========================="
+	@echo "Usage: make [target]"
 	@echo ""
-	@echo "Development & Testing:"
-	@printf "  ${CYAN}%-20s${RESET} %s\n" "docker-build" "Build the qfw-builder and qfw docker images"
-	@printf "  ${CYAN}%-20s${RESET} %s\n" "docker-build-builder" "Build the qfw-builder toolchain image"
-	@printf "  ${CYAN}%-20s${RESET} %s\n" "docker-build-qfw" "Build the qfw image (QRMI, QDMI, QFw)"
+	@echo "Targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?##/ {printf "  ${CYAN}%-20s${RESET} %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # ============================================================================
 # Docker builds
@@ -27,6 +23,8 @@ help:  ## Show this help message
 # Builds both docker images in dependency order: the toolchain image first,
 # then the qfw image on top of it.
 docker-build: docker-build-builder docker-build-qfw
+docker-build: ## Build the qfw-builder and qfw docker images
+	@echo "Built all docker images"
 
 # The Dockerfile names to use. Dockerfile.builder installs the build
 # toolchain; Dockerfile.qfw builds QRMI, QDMI, and QFw on top of it.
@@ -97,14 +95,12 @@ endif
 # item of the form <build-arg-name>=<value> with --build-arg
 docker-build-builder: DOCKER_BUILD_ARGS = $(addprefix --build-arg ,$(BUILDER_IMAGE_BUILD_ARGS))
 docker-build-builder: ## Build the qfw-builder toolchain image
-	docker build -t $(BUILDER_IMAGE) $(SOURCE_TOPDIR) \
-		$(DOCKER_BUILD_EXTRA_ARGS) \
-		$(DOCKER_BUILD_ARGS) \
-		-f $(DOCKERFILE_BUILDER)
+	docker build $(DOCKER_BUILD_EXTRA_ARGS) -t $(BUILDER_IMAGE) $(SOURCE_TOPDIR) \
+        $(DOCKER_BUILD_ARGS) \
+        -f $(DOCKERFILE_BUILDER)
 
 docker-build-qfw: DOCKER_BUILD_ARGS = $(addprefix --build-arg ,$(QFW_IMAGE_BUILD_ARGS))
 docker-build-qfw: docker-build-builder ## Build the qfw image (QRMI, QDMI, QFw) atop qfw-builder
-	docker build -t $(QFW_IMAGE) $(SOURCE_TOPDIR) \
-		$(DOCKER_BUILD_EXTRA_ARGS) \
-		$(DOCKER_BUILD_ARGS) \
-		-f $(DOCKERFILE_QFW)
+	docker build $(DOCKER_BUILD_EXTRA_ARGS) -t $(QFW_IMAGE) $(SOURCE_TOPDIR) \
+        $(DOCKER_BUILD_ARGS) \
+        -f $(DOCKERFILE_QFW)
