@@ -122,4 +122,5 @@ RUN --mount=type=bind,source=.,target=/workspace,ro set -ex \
     && cmake --install /tmp/qfw-build \
     && rm -rf /tmp/qfw-build
 
+# This ensures we can `exec` into it w/o running any particular daemon.
 CMD ["sleep", "infinity"]

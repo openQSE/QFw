@@ -1,4 +1,4 @@
-.PHONY: docker-build docker-build-builder docker-build-qfw help
+.PHONY: docker-build docker-build-builder docker-build-qfw docker-image-ls help
 
 # Default target
 .DEFAULT_GOAL := help
@@ -28,14 +28,16 @@ help:  ## Show this help message
 DOCKERFILE_BUILDER := Dockerfile.builder
 DOCKERFILE_QFW := Dockerfile.qfw
 
-IMAGE_USERNAME ?= openqse
+# Each full image name is composed as $(IMAGE_NAMESPACE)/$(IMAGE_NAME):$(TAG).
+# Define the values for each component below.
+IMAGE_NAMESPACE ?= openqse
 IMAGE_VERSION ?= 0.1
 
 IMAGE_NAME_BUILDER := builder-qfw
 IMAGE_NAME_QFW := qfw
 
 # The IMAGE_TAG is used for all images built here.
-IMAGE_TAG ?= $(DEFAULT_IMAGE_TAG) ## Replaces the automatically-generated docker image tag
+IMAGE_TAG ?= $(DEFAULT_IMAGE_TAG) ## Set to replaces the auto-generated docker image tags
 #
 # The default non-sensical value for IMAGE_TAG to help determine if IMAGE_TAG
 # was explicitly set outside this Makefile.
@@ -49,12 +51,13 @@ ifneq ($(strip $(IMAGE_TAG)),$(DEFAULT_IMAGE_TAG))
 IMAGE_TAG_BUILDER := $(IMAGE_TAG)
 IMAGE_TAG_QFW := $(IMAGE_TAG)
 else
+# IMAGE_TAG wasn't provided externally, automatically derive the value
+# for each image based on the build environment and the current date.
 ifneq ($(strip $(GITHUB_ACTIONS)),)
 # Running inside GitHub actions, use precise timestamp
 IMAGE_TAG_TIMESTAMP := $(shell date -u +%y%m%d%H%M%S)
-$(error CI/CD)
 else
-# Use only the date in the
+# Use only the date as the timestamp
 IMAGE_TAG_TIMESTAMP := $(shell date -u +%y%m%d)
 endif
 # Create an image tag as the composite of the IMAGE_VERSION and the timestamp
@@ -66,8 +69,8 @@ IMAGE_TAG := $(IMAGE_VERSION).$(IMAGE_TAG_TIMESTAMP)
 endif
 
 # Compose the full image name, including the tag
-IMAGE_BUILDER := $(IMAGE_USERNAME)/$(IMAGE_NAME_BUILDER):$(IMAGE_TAG_BUILDER)
-IMAGE_QFW := $(IMAGE_USERNAME)/$(IMAGE_NAME_QFW):$(IMAGE_TAG_QFW)
+IMAGE_BUILDER := $(IMAGE_NAMESPACE)/$(IMAGE_NAME_BUILDER):$(IMAGE_TAG_BUILDER)
+IMAGE_QFW := $(IMAGE_NAMESPACE)/$(IMAGE_NAME_QFW):$(IMAGE_TAG_QFW)
 
 # Dependency/tool versions used as docker build args. Read from VERSIONS.env
 # so version bumps happen in one place.
@@ -162,4 +165,14 @@ docker-build-qfw: docker-build-builder ## Build the qfw image (QRMI, QDMI, QFw) 
 docker-build: docker-build-builder docker-build-qfw
 docker-build: ## Build the builder-qfw and qfw docker images
 	@echo "Built docker images"
-	@docker image ls 'openqse/*$(IMAGE_TAG)'
+	@$(DOCKER_IMAGE_LS)
+
+docker-image-ls: ## List relevant docker images with IMAGE_TAG value
+	$(DOCKER_IMAGE_LS)
+
+# Lists the images built by this Makefile, tagged with the current
+# IMAGE_TAG. Callable directly via the docker-image-ls target, and
+# reused as the last step of docker-build.
+define DOCKER_IMAGE_LS
+docker image ls 'openqse/*$(IMAGE_TAG)'
+endef
