@@ -1,3 +1,11 @@
+# This directive guarantees environment consistency: It ensures that every
+# developer and CI/CD pipeline building the image uses the exact same Dockerfile
+# parser version, eliminating the "works on my machine" bug.
+# It pulls the parser dynamically as a container image.
+# Used in the RUN step to mount the directory.
+#
+# syntax=docker/dockerfile:1
+
 # The Rocky Linux version. Used as the docker iamge tag.
 # The 10.2 default can be replaced with --build-arg cmdline arg.
 ARG ROCKYLINUX_TAG=10.2
@@ -19,13 +27,16 @@ RUN set -ex \
     && dnf makecache \
     && dnf -y install --nobest --exclude='*.i686' \
     cmake \
+    curl \
     gcc \
     gcc-c++ \
     gcc-gfortran \
     git \
     make \
-    openblas-devel \
-    swig \
+    python3 \
+    python3-pip \
+    tar \
+    uv \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
@@ -41,13 +52,6 @@ ARG INSTALL_DIR
 # Do not provide a default value to ensure explicit version is provided via
 # the --build-arg during image build.
 ARG QRMI_VERSION
-
-RUN set -ex \
-    && dnf -y install \
-    curl \
-    tar \
-    && dnf clean all \
-    && rm -rf /var/cache/dnf
 
 # The TARGETARCH is a Docker BuildKit's automatic build argument.
 # Used, among others, to determine the QRMI artifact flavor to download.
@@ -102,5 +106,43 @@ RUN set -ex \
     -DBUILD_QDMI_DOCS=OFF \
     && cmake --build /tmp/qdmi/build --target install \
     && rm -rf /tmp/qdmi
+
+# ============================================================================
+# Stage 4: Build QFw
+# ============================================================================
+
+RUN set -ex \
+    && dnf -y install \
+    libuuid-devel \
+    openblas-devel \
+    python3-devel \
+    swig \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Build and install QFw itself, following the "Build QFw" steps in
+# README.md: create a venv, install the build/runtime Python requirements,
+# then configure/build/install with CMake (equivalent to
+# `./setup/qfw_install.sh --prefix ${INSTALL_DIR}/qfw --with-defw`).
+#
+# The repository is bind-mounted read-only at build time instead of being
+# COPY-ed into the image, so the source tree (and its .git/submodule
+# metadata) never ends up baked into an image layer -- only the installed
+# QFw artifacts do. This means the image must be built with this
+# Dockerfile's directory as the build context, and submodules must already
+# be initialized on the host (`git submodule update --init --recursive`)
+# before building.
+RUN --mount=type=bind,source=.,target=/workspace,ro set -ex \
+    && python3 -m venv /opt/qfw-venv \
+    && /opt/qfw-venv/bin/pip install --upgrade pip setuptools wheel \
+    && /opt/qfw-venv/bin/pip install -r /workspace/setup/build-requirements.txt \
+    && /opt/qfw-venv/bin/pip install -r /workspace/setup/requirements.txt \
+    && source /opt/qfw-venv/bin/activate \
+    && cmake -S /workspace -B /tmp/qfw-build \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}/qfw" \
+    -DQFW_BUILD_BUNDLED_DEFW=ON \
+    && cmake --build /tmp/qfw-build \
+    && cmake --install /tmp/qfw-build \
+    && rm -rf /tmp/qfw-build
 
 CMD ["sleep", "infinity"]
