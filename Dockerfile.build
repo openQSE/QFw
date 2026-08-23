@@ -1,4 +1,6 @@
-ARG ROCKYLINUX_TAG=10.2.20260525.0
+# The Rocky Linux version. Used as the docker iamge tag.
+# The 10.2 default can be replaced with --build-arg cmdline arg.
+ARG ROCKYLINUX_TAG=10.2
 
 FROM rockylinux/rockylinux:${ROCKYLINUX_TAG}
 
@@ -35,9 +37,10 @@ ARG INSTALL_DIR
 # Stage 2: Install QRMI
 # ============================================================================
 
-ARG QDMI_VERSION
-
-ARG QRMI_VERSION=0.17.2
+# The QRMI version (release tag) to use.
+# Do not provide a default value to ensure explicit version is provided via
+# the --build-arg during image build.
+ARG QRMI_VERSION
 
 RUN set -ex \
     && dnf -y install \
@@ -69,5 +72,33 @@ RUN set -ex \
     "https://github.com/qiskit-community/qrmi/releases/download/${QRMI_VERSION}/libqrmi-${QRMI_VERSION}-el8-${QRMI_ARCH}.tar.gz" \
     && tar -xzf /tmp/qrmi.tar.gz -C "${INSTALL_DIR}/qrmi" --strip-components=1 \
     && rm -f /tmp/qrmi.tar.gz
+
+# ============================================================================
+# Stage 3: Install QDMI
+# ============================================================================
+
+# The QDMI version (release tag) to use.
+# Do not include the 'v' prefix, only the comma-separated numerals.
+ARG QDMI_VERSION
+
+# QDMI ships no prebuilt release artifacts (it's a header-only interface
+# library), so unlike QRMI above we build and install it from source with
+# CMake. Tests, examples, templates, and docs are disabled: they aren't
+# needed to install the qdmi::qdmi interface library and would otherwise
+# pull in extra dependencies (e.g. GoogleTest, Doxygen) fetched over the
+# network during the CMake configure step.
+RUN set -ex \
+    && git clone --depth 1 --branch "${QDMI_VERSION}" \
+    https://github.com/Munich-Quantum-Software-Stack/QDMI.git /tmp/qdmi \
+    && cmake -S /tmp/qdmi -B /tmp/qdmi/build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}/qdmi" \
+    -DINSTALL_QDMI=ON \
+    -DBUILD_QDMI_TESTS=OFF \
+    -DBUILD_QDMI_EXAMPLES=OFF \
+    -DBUILD_QDMI_TEMPLATES=OFF \
+    -DBUILD_QDMI_DOCS=OFF \
+    && cmake --build /tmp/qdmi/build --target install \
+    && rm -rf /tmp/qdmi
 
 CMD ["sleep", "infinity"]
