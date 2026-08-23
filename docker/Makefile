@@ -37,26 +37,33 @@ DOCKER_QFW_IMAGE_NAME := qfw
 BUILDER_IMAGE := $(DOCKER_BUILDER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 QFW_IMAGE := $(DOCKER_QFW_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 
-# Dependency/tool versions used as docker build args. Read from
-# VERSIONS.env when present, so version bumps happen in one place; the
+# Dependency/tool versions used as docker build args. Read from VERSIONS.env
+# so version bumps happen in one place.
 # ?= defaults below are only used if VERSIONS.env is missing.
-VERSIONS := VERSIONS.env
+VERSIONS_FILENAME := VERSIONS.env
 # Use abspath to ensure portable Makefile that works in other directories.
-VERSIONS_FILE := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))$(VERSIONS)
-ifneq (,$(wildcard $(VERSIONS_FILE)))
-include $(VERSIONS_FILE)
+VERSIONS ?= $(dir $(abspath $(lastword $(MAKEFILE_LIST))))$(VERSIONS_FILENAME)
+
+# Read in the versions of all dependencies and set the values
+# of versions for the dependencies.
+ifneq (,$(wildcard $(VERSIONS)))
+include $(VERSIONS)
 else
-$(info ⚠️ File $(VERSIONS) not found, using hard-coded default versions  ⚠️)
+$(error File $(abspath $(VERSIONS)) not found)
 endif
 
-# Rocky Linux version to use for docker image builds if VERSIONS_FILE not found.
-ROCKYLINUX_VERSION ?= 10.2
+# A default value when entry not found in VERSIONS env file.
+# The value is chosen deliberately to fail a shell command.
+UNDEFINED_VALUE := <undefined>
 
-# The QDMI version to use for builds if VERSIONS_FILE not found.
-QRMI_VERSION ?= 0.17.2
+# Rocky Linux version to use for docker image builds if VERSIONS file not found.
+ROCKYLINUX_VERSION ?= $(UNDEFINED_VALUE)
 
-# The QDMI version to use for builds if VERSIONS_FILE not found.
-QDMI_VERSION ?= 1.3.3
+# The QDMI version to use for builds if VERSIONS file not found.
+QRMI_VERSION ?= $(UNDEFINED_VALUE)
+
+# The QDMI version to use for builds if VERSIONS file not found.
+QDMI_VERSION ?= $(UNDEFINED_VALUE)
 
 # The directory within the docker image where all QFw dependencies,
 # like QRMI and QDMI are installed. Each dependency has its own
@@ -68,6 +75,7 @@ REVISION = $(shell git rev-parse --short HEAD)
 BUILD_DATE = $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 # Build args for the qfw-builder toolchain image (Dockerfile.builder).
+# The values are
 BUILDER_IMAGE_BUILD_ARGS := \
 	ROCKYLINUX_TAG=$(ROCKYLINUX_VERSION) \
 	REVISION=$(REVISION) \
@@ -81,8 +89,11 @@ QFW_IMAGE_BUILD_ARGS := \
 	QRMI_VERSION=$(QRMI_VERSION) \
 	QDMI_VERSION=$(QDMI_VERSION)
 
-# Gets the directory path of the current Makefile
-SOURCE_TOPDIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+# Define the docker build PATH argument aka the build context.
+# Use the location where the source files are listed in relation to
+# the directory path of the current Makefile.
+# Given this file's location in the source tree, use the parent directory.
+SOURCE_TOPDIR := $(abspath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../)
 
 # If the FORCE variable is defined, do not use previously-cached
 # build layers.
