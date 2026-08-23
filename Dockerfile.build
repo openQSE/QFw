@@ -1,0 +1,73 @@
+ARG ROCKYLINUX_TAG=10.2.20260525.0
+
+FROM rockylinux/rockylinux:${ROCKYLINUX_TAG}
+
+LABEL org.opencontainers.image.title="qfw-builder"
+LABEL org.opencontainers.image.description="Build environment with slurm-devel and the QRMI/QDMI shim build toolchain"
+
+# ARG REVISION
+# ARG BUILD_DATE
+# LABEL org.opencontainers.image.revision=$REVISION
+# LABEL org.opencontainers.image.created=$BUILD_DATE
+
+RUN set -ex \
+    && dnf makecache \
+    && dnf -y install dnf-plugins-core epel-release \
+    && dnf config-manager --set-enabled crb \
+    && dnf makecache \
+    && dnf -y install --nobest --exclude='*.i686' \
+    cmake \
+    gcc \
+    gcc-c++ \
+    gcc-gfortran \
+    git \
+    make \
+    openblas-devel \
+    swig \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# The top-level directory where all packages are installed
+# Usually, it is /opt/qfw
+ARG INSTALL_DIR
+
+# ============================================================================
+# Stage 2: Install QRMI
+# ============================================================================
+
+ARG QDMI_VERSION
+
+ARG QRMI_VERSION=0.17.2
+
+RUN set -ex \
+    && dnf -y install \
+    curl \
+    tar \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# The TARGETARCH is a Docker BuildKit's automatic build argument.
+# Used, among others, to determine the QRMI artifact flavor to download.
+ARG TARGETARCH
+
+# We need to download the correct TARGETARCH flavor of the QRMI tarball.
+# So, detrmine the appropriate component of the artifact name based on the
+# TARGETARCH as the QRMI_ARCH value. Then, resolve the full URL based on
+# the provided QRMI_VERSION argument value.
+# NOTE: The QRMI creates relese for RHEL8. We expect RockyLinux version 9
+# or 10 (based on the ROCKYLINUX_TAG value), so hard-code "rl8" into the
+# URL string when substituting the QRMI_ARCH and QRMI_VERSION.
+RUN set -ex \
+    && case "${TARGETARCH}" in \
+    amd64) QRMI_ARCH=x86_64 ;; \
+    arm64) QRMI_ARCH=aarch64 ;; \
+    ppc64le) QRMI_ARCH=ppc64le ;; \
+    *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && mkdir -p "${INSTALL_DIR}/qrmi" \
+    && curl -fsSL -o /tmp/qrmi.tar.gz \
+    "https://github.com/qiskit-community/qrmi/releases/download/${QRMI_VERSION}/libqrmi-${QRMI_VERSION}-el8-${QRMI_ARCH}.tar.gz" \
+    && tar -xzf /tmp/qrmi.tar.gz -C "${INSTALL_DIR}/qrmi" --strip-components=1 \
+    && rm -f /tmp/qrmi.tar.gz
+
+CMD ["sleep", "infinity"]
