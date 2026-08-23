@@ -78,6 +78,8 @@ RUN set -ex \
 # ============================================================================
 
 # The QDMI version (release tag) to use.
+# Do not provide a default value to ensure explicit version is provided via
+# the --build-arg during image build.
 # Do not include the 'v' prefix, only the comma-separated numerals.
 ARG QDMI_VERSION
 
@@ -88,7 +90,7 @@ ARG QDMI_VERSION
 # pull in extra dependencies (e.g. GoogleTest, Doxygen) fetched over the
 # network during the CMake configure step.
 RUN set -ex \
-    && git clone --depth 1 --branch "${QDMI_VERSION}" \
+    && git clone --depth 1 --branch "v${QDMI_VERSION}" \
     https://github.com/Munich-Quantum-Software-Stack/QDMI.git /tmp/qdmi \
     && cmake -S /tmp/qdmi -B /tmp/qdmi/build \
     -DCMAKE_BUILD_TYPE=Release \
