@@ -447,6 +447,9 @@ execute_process(
 		test \"\${DEFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 		test \"\${DEFW_LOAD_NO_INIT}\" = 'api_existing_helper,api_qpm_common'
 		command -v qfw-setup >/dev/null
+		command -v qfw-status >/dev/null
+		command -v qfw-dir-svc >/dev/null
+		command -v qfw-qpm-svc >/dev/null
 		export DEFW_ONLY_LOAD_MODULE=api_qpm_common
 		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None'
 		qfw-deactivate
@@ -638,6 +641,23 @@ endif()
 string(FIND "${installed_state_text}" "\"setup_complete\": true" complete_index)
 if(complete_index EQUAL -1)
 	message(FATAL_ERROR "QFw install dry-run setup did not mark complete state")
+endif()
+
+execute_process(
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"QFW_RUN_BASE_DIR=${qfw_run_base}"
+		"${QFW_INSTALL_PREFIX}/bin/qfw-status"
+			--run-dir "${qfw_run_base}/install-smoke"
+			--json
+	RESULT_VARIABLE status_rc
+	OUTPUT_VARIABLE status_output)
+if(NOT status_rc EQUAL 0)
+	message(FATAL_ERROR "QFw install qfw-status failed")
+endif()
+string(FIND "${status_output}" "\"state\": \"ready\"" status_ready_index)
+if(status_ready_index EQUAL -1)
+	message(FATAL_ERROR "QFw install qfw-status did not report ready")
 endif()
 
 set(prefix_site "${qfw_run_base}/prefix-site.yaml")
@@ -1113,12 +1133,12 @@ file(WRITE "${partial_runtime}"
     - local
 local-services:
   start-prte: false
-  start-dirsvc: false
+  start-dirsvc: true
   start-qpm: true
   dirsvc:
     name: partial-dirsvc
     bind-host: 127.0.0.1
-    port: 1
+    port: auto
     connect-timeout-seconds: 1
   service-manifest: ${partial_manifest}
   services:
@@ -1152,8 +1172,9 @@ endif()
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
-		test -s '${partial_run_dir}/state/first.pid'
-		first_pid=\$(cat '${partial_run_dir}/state/first.pid')
+		first_pid_file='${partial_run_dir}/service-plane/qpm/first/services/first/pid'
+		test -s \"\${first_pid_file}\"
+		first_pid=\$(cat \"\${first_pid_file}\")
 		for _attempt in \$(seq 1 30); do
 			if ! kill -0 \${first_pid} 2>/dev/null; then
 				exit 0

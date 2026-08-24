@@ -30,6 +30,9 @@ execute_process(
 		test \"\${QFW_SITE_CONFIG}\" = '${QFW_SOURCE_DIR}/share/qfw/config/site.yaml'
 		test \"\${MANPATH}\" = '${QFW_SOURCE_DIR}/man:/qfw-test-man'
 		command -v qfw-setup >/dev/null
+		command -v qfw-status >/dev/null
+		command -v qfw-dir-svc >/dev/null
+		command -v qfw-qpm-svc >/dev/null
 		'${QFW_PYTHON}' -c 'import qfw_runtime; print(\"source activation import ok\")'
 		qfw-deactivate
 		test \"\${PS1}\" = 'source \\W> '
@@ -70,6 +73,24 @@ endif()
 string(FIND "${source_state_text}" "QFW_LOCAL_DIRSVC_ENDPOINT" source_endpoint_index)
 if(source_endpoint_index EQUAL -1)
 	message(FATAL_ERROR "QFw source runtime state missed local endpoint")
+endif()
+
+execute_process(
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"QFW_RUN_BASE_DIR=${qfw_run_base}"
+		"PYTHONPATH=${QFW_SOURCE_DIR}/setup"
+		"${QFW_PYTHON}" -m qfw_runtime.commands qfw-status
+			--run-dir "${qfw_run_base}/source-smoke"
+			--json
+	RESULT_VARIABLE status_rc
+	OUTPUT_VARIABLE status_output)
+if(NOT status_rc EQUAL 0)
+	message(FATAL_ERROR "QFw source qfw-status failed")
+endif()
+string(FIND "${status_output}" "\"state\": \"ready\"" status_ready_index)
+if(status_ready_index EQUAL -1)
+	message(FATAL_ERROR "QFw source qfw-status did not report ready")
 endif()
 
 execute_process(

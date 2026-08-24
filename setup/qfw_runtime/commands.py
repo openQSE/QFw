@@ -10,10 +10,12 @@ import time
 from pathlib import Path
 
 from . import config as qfw_config
+from . import service_plane as qfw_service_plane
 
 
 COMMANDS = {
     "qfw-setup",
+    "qfw-status",
     "qfw-srun",
     "qfw-teardown",
     "qfw-dirsvc-start",
@@ -38,6 +40,8 @@ def main(argv=None):
     try:
         if command == "qfw-setup":
             return qfw_setup(argv)
+        if command == "qfw-status":
+            return qfw_status(argv)
         if command == "qfw-srun":
             return qfw_srun(argv)
         if command == "qfw-teardown":
@@ -95,12 +99,28 @@ def qfw_setup(argv):
     except Exception as exc:
         state["setup_error"] = str(exc)
         qfw_config.write_state(state)
+        _cleanup_application_service_managers(state)
         _cleanup_job_processes(state)
         qfw_config.clear_current_run(state)
         raise
 
     print(state["run_dir"])
     return 0
+
+
+def qfw_status(argv):
+    parser = argparse.ArgumentParser(prog="qfw-status")
+    parser.add_argument("--run-dir")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    state = qfw_config.read_state(args.run_dir)
+    report = _runtime_status(state)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_runtime_status(report)
+    return 0 if report["state"] == "ready" else 1
 
 
 def qfw_srun(argv):
@@ -150,7 +170,8 @@ def qfw_teardown(argv):
     args = parser.parse_args(argv)
 
     state = qfw_config.read_state(args.run_dir)
-    errors = _cleanup_job_processes(state, report_errors=False)
+    errors = _cleanup_application_service_managers(state)
+    errors.extend(_cleanup_job_processes(state, report_errors=False))
     qfw_config.clear_current_run(state)
     if not args.keep_run_dir:
         shutil.rmtree(state["run_dir"], ignore_errors=True)
@@ -159,6 +180,111 @@ def qfw_teardown(argv):
             print(error, file=sys.stderr)
         return 1
     return 0
+
+
+def _runtime_status(state):
+    setup_complete = bool(state.get("setup_complete"))
+    setup_error = state.get("setup_error")
+    if setup_error:
+        runtime_state = "failed"
+    elif setup_complete:
+        runtime_state = "ready"
+    else:
+        runtime_state = "incomplete"
+
+    managers = []
+    for manager in state.get("service_managers") or []:
+        record = {
+            "owner": manager.get("owner", ""),
+            "role": manager.get("role", ""),
+            "run_dir": manager.get("run_dir", ""),
+        }
+        if manager.get("service_id"):
+            record["service_id"] = manager["service_id"]
+        if record["owner"] != "application":
+            record["state"] = "external"
+            managers.append(record)
+            continue
+        try:
+            manager_state = qfw_service_plane.status(record["run_dir"])
+            record["state"] = manager_state.get("state", "unknown")
+            record["status"] = manager_state
+        except (OSError, RuntimeError, ValueError) as exc:
+            record["state"] = "unavailable"
+            record["error"] = str(exc)
+        if record["state"] != "ready" and runtime_state == "ready":
+            runtime_state = "degraded"
+        managers.append(record)
+
+    environment = state.get("environment") or {}
+    directory = state.get("local_dirsvc") or {}
+    directory_owner = "application"
+    if not directory.get("endpoint"):
+        directory = state.get("site_directory") or {}
+        directory_owner = "site" if directory else ""
+    directory_status = {
+        "owner": directory_owner,
+        "name": directory.get("name", ""),
+        "endpoint": directory.get("endpoint", ""),
+    }
+    connection_file = (
+        directory.get("connection_file") or
+        environment.get("QFW_DIRECTORY_SERVICE_INFO")
+    )
+    if connection_file:
+        directory_status["connection_file"] = connection_file
+
+    allocation = {
+        "mode": environment.get("QFW_ALLOCATION_MODE", ""),
+        "group0": environment.get("QFW_GROUP_0_NODELIST", ""),
+        "group1": environment.get("QFW_GROUP_1_NODELIST", ""),
+    }
+    return {
+        "schema": "qfw-runtime-status-v1",
+        "state": runtime_state,
+        "run_id": state.get("run_id", ""),
+        "run_dir": state.get("run_dir", ""),
+        "profile": state.get("profile"),
+        "setup": {
+            "complete": setup_complete,
+            "error": setup_error,
+        },
+        "allocation": allocation,
+        "directory_service": directory_status,
+        "service_managers": managers,
+        "teardown_required": True,
+        "runtime_state": state,
+    }
+
+
+def _print_runtime_status(report):
+    print(f"QFw runtime: {report['state']}")
+    print(f"  run-id: {report['run_id'] or '-'}")
+    print(f"  run-dir: {report['run_dir'] or '-'}")
+    print(f"  profile: {report['profile'] or '-'}")
+    allocation = report["allocation"]
+    print(f"  allocation: {allocation['mode'] or '-'}")
+    directory = report["directory_service"]
+    if directory["endpoint"]:
+        print(
+            "  directory-service: "
+            f"{directory['name'] or '-'} at {directory['endpoint']} "
+            f"({directory['owner']})"
+        )
+    else:
+        print("  directory-service: -")
+    managers = report["service_managers"]
+    if managers:
+        print("  service-managers:")
+        for manager in managers:
+            label = manager["role"] or "service"
+            if manager.get("service_id"):
+                label = f"{label}:{manager['service_id']}"
+            print(f"    {label}: {manager['state']}")
+    else:
+        print("  service-managers: none")
+    required = "yes" if report["teardown_required"] else "no"
+    print(f"  teardown-required: {required}")
 
 
 def qfw_dirsvc_start(argv):
@@ -414,178 +540,111 @@ def _start_job_local_services(state):
     local_config = state["local_services"]
     env = os.environ.copy()
     env.update(state["environment"])
-    processes = state.get("processes") or []
     local_timeout = _directory_timeout(state, "allocation-local")
     allocation = _allocation_context_from_env(env)
     _publish_allocation_environment(env, allocation)
     _publish_allocation_environment(state["environment"], allocation)
-    _configure_allocation_local_directory(state, env, allocation)
-    if env.get("QFW_DVM_URI_PATH"):
-        state["environment"]["QFW_DVM_URI_PATH"] = env["QFW_DVM_URI_PATH"]
-    qfw_config.write_env_file(state)
-    if qfw_config.bool_config(
-            local_config.get("start-prte"),
-            qfw_config.bool_config(local_config.get("start-qpm"), False)):
-        prte_record = _start_job_prte(state, env, allocation)
-        processes.append(prte_record)
-        state["processes"] = processes
-        qfw_config.write_state(state)
+    managers = state.setdefault("service_managers", [])
+    lifecycle_root = Path(state["run_dir"]) / "service-plane"
+    directory_info = state["environment"].get(
+        "QFW_DIRECTORY_SERVICE_INFO", "")
+
     if qfw_config.bool_config(local_config.get("start-dirsvc"), False):
-        local = state["local_dirsvc"]
-        pid_file = Path(state["state_dir"]) / "dirsvc.pid"
-        ready_file = Path(state["state_dir"]) / "dirsvc-ready.json"
-        command = [
-            str(_command_path("qfw-dirsvc-start", env=env)),
-            "--background",
-            "--run-dir", state["run_dir"],
-            "--name", local["name"],
-            "--host", local["host"],
-            "--listen-port", str(local["port"]),
-            "--telnet-port", str(local.get("telnet_port", 8091)),
-            "--timeout", str(local_timeout),
-            "--pid-file", str(pid_file),
-            "--ready-file", str(ready_file),
-        ]
-        _run_checked(_target_launch_command(
-            command, allocation, local["host"]), env)
-        processes.append({
-            "owner": "job",
-            "role": "dirsvc",
-            "target": local["host"],
-            "pid": int(pid_file.read_text(encoding="utf-8").strip()),
+        directory_run_dir = lifecycle_root / "directory"
+        directory_state = qfw_service_plane.start_role(
+            "directory",
+            run_dir=directory_run_dir,
+            site_config=state["site_config"],
+            runtime_config=state["runtime_config"],
+            scope="application",
+            timeout=local_timeout,
+            allocation=allocation,
+        )
+        managers.append({
+            "owner": "application",
+            "role": "directory",
+            "run_dir": str(directory_run_dir),
         })
-        state["processes"] = processes
+        state["service_managers"] = managers
+        _adopt_managed_directory(state, directory_state)
+        directory_info = state["environment"][
+            "QFW_DIRECTORY_SERVICE_INFO"]
         qfw_config.write_state(state)
+        qfw_config.write_env_file(state)
 
     if qfw_config.bool_config(local_config.get("start-qpm"), False):
+        if not directory_info:
+            raise RuntimeError(
+                "application QPM startup requires a managed or configured "
+                "directory-service connection record")
         manifest_path = Path(state["service_manifest"])
         services = qfw_config.load_service_manifest(manifest_path)
         selected = qfw_config.selected_service_names(local_config, services)
-        launch_specs = _local_service_launch_specs(
-            local_config, services, selected, allocation)
-        state["local_service_launches"] = launch_specs
-        qfw_config.write_state(state)
-        for launch in launch_specs:
-            service_id = launch["service_id"]
-            pid_file = Path(state["state_dir"]) / f"{service_id}.pid"
-            ready_file = Path(state["state_dir"]) / f"{service_id}-ready.json"
-            service_env = dict(env)
-            service_env["QFW_LOCAL_SERVICE_TARGET"] = launch["target"]
-            if launch.get("assigned_hosts"):
-                service_env["QFW_SERVICE_ASSIGNED_HOSTS"] = (
-                    launch["assigned_hosts"])
-                if launch.get("assigned_hosts_env"):
-                    service_env[launch["assigned_hosts_env"]] = (
-                        launch["assigned_hosts"])
-            command = [
-                str(_command_path("qfw-service-start", env=env)),
-                "--background",
-                "--run-dir", state["run_dir"],
-                "--service-id", service_id,
-                "--site-config", state["site_config"],
-                "--timeout", str(local_timeout),
-                "--pid-file", str(pid_file),
-                "--ready-file", str(ready_file),
-                "--operation-mode", "qfw-managed",
-                "--listen-port", str(launch["listen_port"]),
-                "--telnet-port", str(launch["telnet_port"]),
-            ]
-            _run_checked(_target_launch_command(
-                command, allocation, launch["target"]), service_env)
-            processes.append({
-                "owner": "job",
-                "role": "service",
+        launches = []
+        for service_id in selected:
+            service_run_dir = lifecycle_root / "qpm" / service_id
+            service_state = qfw_service_plane.start_role(
+                "qpm",
+                run_dir=service_run_dir,
+                site_config=state["site_config"],
+                runtime_config=state["runtime_config"],
+                scope="application",
+                service_id=service_id,
+                directory_service_info=directory_info,
+                timeout=local_timeout,
+                allocation=allocation,
+            )
+            managers.append({
+                "owner": "application",
+                "role": "qpm",
                 "service_id": service_id,
-                "endpoint": launch["endpoint"],
-                "target": launch["target"],
-                "assigned_hosts": launch.get("assigned_hosts", ""),
-                "listen_port": launch["listen_port"],
-                "telnet_port": launch["telnet_port"],
-                "pid": int(pid_file.read_text(encoding="utf-8").strip()),
+                "run_dir": str(service_run_dir),
             })
-            state["processes"] = processes
+            launches.append(dict(service_state["services"][0]))
+            state["service_managers"] = managers
+            state["local_service_launches"] = launches
             qfw_config.write_state(state)
-    state["processes"] = processes
+        state["environment"]["QFW_QPM_SERVICE_IDS"] = ",".join(selected)
+        if launches:
+            state["environment"]["QFW_DVM_URI_PATH"] = str(
+                Path(managers[-1]["run_dir"]) / "prte_dvm" / "dvm-uri")
+
+    state["service_managers"] = managers
     qfw_config.write_state(state)
+    qfw_config.write_env_file(state)
 
 
-def _start_job_prte(state, env, allocation):
-    prte_config = state["local_services"].get("prte") or {}
-    uri_path = Path(env["QFW_DVM_URI_PATH"]).expanduser().resolve()
-    uri_path.parent.mkdir(parents=True, exist_ok=True)
-    host_list = ",".join(f"{host}:*" for host in allocation["group1"])
-    command = [
-        "prte",
-        "--host", host_list,
-        "--report-uri", str(uri_path),
-    ]
-    job_id = env.get("QFW_JOB_ID") or env.get("SLURM_JOB_ID")
-    if job_id and str(job_id) != "-1":
-        env["SLURM_JOB_ID"] = str(job_id)
-        env["SLURM_JOBID"] = str(job_id)
-        command.extend([
-            "-x", f"SLURM_JOB_ID={job_id}",
-            "-x", f"SLURM_JOBID={job_id}",
-        ])
-    command.extend(_prte_runtime_args(allocation))
-    if os.geteuid() == 0:
-        command.append("--allow-run-as-root")
-    command.append("--daemonize")
-    _run_checked(_target_launch_command(
-        command, allocation, allocation["group1"][0]), env)
-    timeout = int(
-        prte_config.get(
-            "startup-timeout-seconds",
-            _directory_timeout(state, "allocation-local"),
-        )
-    )
-    _wait_for_ready(
-        f"PRTE DVM uri {uri_path}",
-        timeout,
-        lambda: uri_path.exists(),
-    )
-    return {
-        "owner": "job",
-        "role": "prte-dvm",
-        "uri_path": str(uri_path),
-        "targets": allocation["group1"],
-        "allocation_mode": allocation["mode"],
-        "force_cleanup": qfw_config.bool_config(
-            prte_config.get("force-cleanup"), False),
-    }
-
-
-def _configure_allocation_local_directory(state, env, allocation):
+def _adopt_managed_directory(state, directory_state):
+    directory = directory_state["directory"]
+    endpoint = directory["endpoint"]
+    host, port = _split_endpoint(endpoint)
+    connection_file = directory["connection_file"]
     local = state.get("local_dirsvc") or {}
-    if not local.get("endpoint"):
-        return
-    host = str(local.get("host") or "")
-    if allocation["mode"] in {"heterogeneous", "slurm"} and (
-            host in {"", "127.0.0.1", "localhost", socket.gethostname()}):
-        host = allocation["group1"][0]
-    port = int(local["port"])
-    endpoint = f"{host}:{port}"
-    local["host"] = host
-    local["endpoint"] = endpoint
+    local.update({
+        "name": directory["name"],
+        "host": host,
+        "port": port,
+        "telnet_port": directory["telnet_port"],
+        "endpoint": endpoint,
+        "connection_file": connection_file,
+    })
     state["local_dirsvc"] = local
-    env["QFW_LOCAL_DIRSVC_ENDPOINT"] = endpoint
-    env["QFW_LOCAL_DIRSVC_NAME"] = local["name"]
-    env["DEFW_PARENT_HOSTNAME"] = host
-    env["DEFW_PARENT_PORT"] = str(port)
-    env["DEFW_PARENT_NAME"] = local["name"]
-    env["DEFW_DISABLE_DIRSVC"] = "no"
     state["environment"].update({
+        "QFW_DIRECTORY_SERVICE_INFO": connection_file,
         "QFW_LOCAL_DIRSVC_ENDPOINT": endpoint,
-        "QFW_LOCAL_DIRSVC_NAME": local["name"],
+        "QFW_LOCAL_DIRSVC_NAME": directory["name"],
         "DEFW_PARENT_HOSTNAME": host,
         "DEFW_PARENT_PORT": str(port),
-        "DEFW_PARENT_NAME": local["name"],
+        "DEFW_PARENT_NAME": directory["name"],
         "DEFW_DISABLE_DIRSVC": "no",
     })
     for requirement in state.get("directory_requirements") or []:
-        if requirement.get("scope") == "allocation-local":
-            requirement["endpoint"] = endpoint
-            requirement["name"] = local["name"]
+        if requirement.get("scope") != "allocation-local":
+            continue
+        requirement.update({
+            "endpoint": endpoint,
+            "name": directory["name"],
+        })
 
 
 def _target_launch_command(command, allocation, target):
@@ -715,131 +774,6 @@ def _int_value(value, default):
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def _prte_runtime_args(allocation):
-    mode = allocation["mode"]
-    if mode == "heterogeneous":
-        return [
-            "--prtemca", "ras", "^slurm",
-            "--prtemca", "plm", "slurm",
-            "--prtemca", "plm_slurm_verbose", "100",
-            "--prtemca", "plm_base_verbose", "100",
-            "--prtemca", "ras_base_verbose", "100",
-            "--prtemca", "plm_slurm_args", "--het-group 1",
-        ]
-    if mode == "slurm":
-        return [
-            "--prtemca", "ras", "^slurm",
-            "--prtemca", "plm", "slurm",
-            "--prtemca", "plm_slurm_verbose", "100",
-            "--prtemca", "plm_base_verbose", "100",
-            "--prtemca", "ras_base_verbose", "100",
-        ]
-    return []
-
-
-def _local_service_launch_specs(local_config, services, selected,
-                                allocation=None):
-    allocation = allocation or _allocation_context_from_env()
-    listen_base = _positive_int(
-        local_config.get("service-listen-port-base", 8290),
-        "local-services.service-listen-port-base",
-    )
-    telnet_base = _positive_int(
-        local_config.get("service-telnet-port-base", 8291),
-        "local-services.service-telnet-port-base",
-    )
-    port_stride = _positive_int(
-        local_config.get("service-port-stride", 100),
-        "local-services.service-port-stride",
-    )
-    used_ports = {}
-    launch_specs = []
-    next_listen = listen_base
-    next_telnet = telnet_base
-    for service_id in selected:
-        service = qfw_config.service_by_name(services, service_id)
-        target = _resolve_node_policy(
-            service.get("target", "group1-head"), allocation)
-        assigned_hosts = _resolve_host_policy(
-            service.get("assigned-hosts"), allocation)
-        service_host = str(service.get(
-            "bind-host", service.get("host", target or "127.0.0.1")))
-        listen_config = _service_port_value(service, "listen-port")
-        listen_port = _reserve_service_port(
-            used_ports,
-            service_id,
-            "listen",
-            listen_config,
-            next_listen,
-            port_stride,
-        )
-        next_listen = (
-            listen_port + port_stride if listen_config is None else
-            _next_available_port(next_listen, port_stride, used_ports)
-        )
-        telnet_config = _service_port_value(service, "telnet-port")
-        telnet_port = _reserve_service_port(
-            used_ports,
-            service_id,
-            "telnet",
-            telnet_config,
-            next_telnet,
-            port_stride,
-        )
-        next_telnet = (
-            telnet_port + port_stride if telnet_config is None else
-            _next_available_port(next_telnet, port_stride, used_ports)
-        )
-        launch_specs.append({
-            "service_id": service_id,
-            "host": service_host,
-            "target": target,
-            "assigned_hosts": assigned_hosts,
-            "assigned_hosts_env": service.get("assigned-hosts-env", ""),
-            "endpoint": f"{service_host}:{listen_port}",
-            "listen_port": listen_port,
-            "telnet_port": telnet_port,
-        })
-    return launch_specs
-
-
-def _service_port_value(service, key):
-    return service.get(key, service.get(key.replace("-", "_")))
-
-
-def _reserve_service_port(used_ports, service_id, kind, configured,
-                          start, stride):
-    if configured is None:
-        port = _next_available_port(start, stride, used_ports)
-    else:
-        port = _positive_int(configured, f"{service_id}.{kind}-port")
-    if port in used_ports:
-        owner = used_ports[port]
-        raise ValueError(
-            f"duplicate local service {kind} port {port} for {service_id}; "
-            f"already used by {owner}"
-        )
-    used_ports[port] = f"{service_id} {kind}"
-    return port
-
-
-def _next_available_port(start, stride, used_ports):
-    port = start
-    while port in used_ports:
-        port += stride
-    return port
-
-
-def _positive_int(value, name):
-    try:
-        result = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be an integer: {value!r}") from exc
-    if result <= 0:
-        raise ValueError(f"{name} must be a positive integer: {value!r}")
-    return result
 
 
 def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
@@ -1009,6 +943,21 @@ def _cleanup_job_processes(state, env=None, allocation=None,
             "; ".join(errors),
             file=sys.stderr,
         )
+    return errors
+
+
+def _cleanup_application_service_managers(state):
+    errors = []
+    for manager in reversed(state.get("service_managers") or []):
+        if manager.get("owner") != "application":
+            continue
+        try:
+            qfw_service_plane.stop(manager["run_dir"])
+        except Exception as exc:
+            role = manager.get("role", "service")
+            service_id = manager.get("service_id")
+            label = f"{role}:{service_id}" if service_id else role
+            errors.append(f"{label}: {exc}")
     return errors
 
 

@@ -145,6 +145,7 @@ file(CHMOD
 
 foreach(qfw_command
 		qfw-setup
+		qfw-status
 		qfw-srun
 		qfw-teardown
 		qfw-dirsvc-start
@@ -165,6 +166,7 @@ install(PROGRAMS
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
 	"${QFW_GENERATED_BIN_DIR}/defw-python"
 	"${QFW_GENERATED_BIN_DIR}/qfw-setup"
+	"${QFW_GENERATED_BIN_DIR}/qfw-status"
 	"${QFW_GENERATED_BIN_DIR}/qfw-srun"
 	"${QFW_GENERATED_BIN_DIR}/qfw-teardown"
 	"${QFW_GENERATED_BIN_DIR}/qfw-dirsvc-start"

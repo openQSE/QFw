@@ -68,6 +68,42 @@ def qpm_service_main(argv=None):
     return _role_main("qpm", argv)
 
 
+def start_role(role, *, run_dir, site_config=None, runtime_config=None,
+               profile=None, scope="site", service_id=None,
+               directory_service_info=None, node=None, timeout=120,
+               poll_interval=2.0, dry_run=False, allocation=None):
+    """Start one lifecycle role through the shared service-plane engine."""
+    if role not in {"directory", "qpm"}:
+        raise ValueError(f"unsupported service-plane role: {role}")
+    if role == "qpm" and not service_id:
+        raise ValueError("qpm lifecycle requires a service ID")
+    if role == "directory" and service_id:
+        raise ValueError("directory lifecycle does not accept a service ID")
+    args = argparse.Namespace(
+        action="start",
+        run_dir=str(run_dir),
+        site_config=str(site_config) if site_config else None,
+        runtime_config=str(runtime_config) if runtime_config else None,
+        profile=profile,
+        scope=scope,
+        node=node,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        dry_run=bool(dry_run),
+        component_mode=role,
+        service_node=None,
+        directory_node=None,
+        qpm_node=None,
+        directory_service_info=(
+            str(directory_service_info)
+            if directory_service_info else None
+        ),
+        service_id=str(service_id) if service_id else None,
+        allocation=allocation,
+    )
+    return start(args)
+
+
 def _role_main(role, argv=None):
     program = "qfw-dir-svc" if role == "directory" else "qfw-qpm-svc"
     parser = _role_argument_parser(program, role)
@@ -329,7 +365,7 @@ def _resolve_plan(args, run_dir):
     )
     runtime = qfw_config.load_yaml(runtime_path)
     local = qfw_config.local_services(runtime)
-    allocation = _allocation_context()
+    allocation = getattr(args, "allocation", None) or _allocation_context()
     component_mode = getattr(args, "component_mode", "combined")
     node = getattr(args, "node", None)
     if args.scope == "application" and node:
@@ -479,8 +515,13 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
     telnet_port = int(local.get("service-telnet-port-base", 8291))
     stride = int(local.get("service-port-stride", 100))
     resolved = []
-    for index, service_id in enumerate(selected):
+    manifest_indexes = {
+        str(service.get("name", "")): index
+        for index, service in enumerate(manifest_services)
+    }
+    for service_id in selected:
         service = qfw_config.service_by_name(manifest_services, service_id)
+        index = manifest_indexes[service_id]
         if args.scope == "application":
             target = allocation["group1"][0]
         else:

@@ -229,6 +229,59 @@ def test_qpm_lifecycle_consumes_connection_record(tmp_path, monkeypatch):
     assert state["services"][0]["target"] == "qpm-a"
 
 
+def test_independent_application_qpms_use_manifest_port_offsets(tmp_path):
+    site, manifest = write_site_configuration(tmp_path, [
+        ("nwqsim", "svc_nwqsim_qpm", "mpi"),
+        ("tnqvm", "svc_tnqvm_qpm", "mpi"),
+    ])
+    runtime = write_runtime_configuration(tmp_path, prte=False)
+    with runtime.open("a", encoding="utf-8") as stream:
+        stream.write(f"  service-manifest: {manifest}\n")
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "service-a:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+    allocation = {
+        "mode": "slurm",
+        "group0": ["app-a"],
+        "group1": ["service-a"],
+        "group0_nodelist": "app-a",
+        "group1_nodelist": "service-a",
+    }
+
+    nwqsim = service_plane.start_role(
+        "qpm",
+        run_dir=tmp_path / "nwqsim-run",
+        site_config=site,
+        runtime_config=runtime,
+        scope="application",
+        service_id="nwqsim",
+        directory_service_info=connection_file,
+        dry_run=True,
+        allocation=allocation,
+    )
+    tnqvm = service_plane.start_role(
+        "qpm",
+        run_dir=tmp_path / "tnqvm-run",
+        site_config=site,
+        runtime_config=runtime,
+        scope="application",
+        service_id="tnqvm",
+        directory_service_info=connection_file,
+        dry_run=True,
+        allocation=allocation,
+    )
+
+    assert nwqsim["services"][0]["listen_port"] == 8290
+    assert nwqsim["services"][0]["telnet_port"] == 8291
+    assert tnqvm["services"][0]["listen_port"] == 8390
+    assert tnqvm["services"][0]["telnet_port"] == 8391
+
+
 def test_application_roles_place_control_plane_on_group1_head(
         tmp_path, monkeypatch):
     site, manifest = write_site_configuration(tmp_path, [
