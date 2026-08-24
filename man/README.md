@@ -16,13 +16,15 @@ related pages through `SEE ALSO`.
 Preview a page from the source tree:
 
 ```bash
-man -l man/man1/qfw-service-plane.1
+man -l man/man1/qfw-setup.1
 ```
 
 Check roff syntax without formatting output:
 
 ```bash
-groff -man -z man/man1/qfw-service-plane.1
+for page in man/man1/*.1 man/man5/*.5 man/man7/*.7; do
+  groff -man -z "$page"
+done
 ```
 
 Install only the documentation component:
@@ -34,3 +36,6 @@ cmake --install build --component documentation
 
 `qfw-activate` adds the installed manual directory to `MANPATH`. It also makes
 the source-tree pages available when activation uses a CMake build tree.
+The application lifecycle is documented by `qfw-activate(1)`,
+`qfw-setup(1)`, `qfw-status(1)`, `qfw-srun(1)`, `qfw-teardown(1)`, and
+`qfw-deactivate(1)`.

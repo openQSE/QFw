@@ -411,7 +411,7 @@ error.
 
 | Owner | Used by and when | Purpose |
 | --- | --- | --- |
-| Site administrator | `qfw-setup` reads it while preparing runtime state. `qfw-service-start` resolves its service-side file selections and passes the selected site path to the QPM. | Select the installation, site directory, service-side files, and common QPM settings. |
+| Site administrator | `qfw-setup`, `qfw-dir-svc`, and `qfw-qpm-svc` resolve it. The QPM manager passes the selected site path to its service process. | Select the installation, site directory, service-side files, and common QPM settings. |
 
 </details>
 
@@ -528,7 +528,7 @@ services:
 
 | Owner | Used by and when | Purpose |
 | --- | --- | --- |
-| QFw package | `qfw-setup` reads it when planning allocation-owned services. `qfw-service-start` reads the selected entry when launching a QPM. | Define local simulator services, allocation placement, and provider launch settings. |
+| QFw package | `qfw-setup` reads it when planning allocation-owned services. The `qfw-qpm-svc` lifecycle engine resolves the selected entry when launching a QPM. | Define local simulator services, allocation placement, and provider launch settings. |
 
 The current launcher consumes the service name, module, loaded modules,
 placement, assigned-host fields, ports, and device ID. Simulator launch code
@@ -562,7 +562,7 @@ services:
 
 | Owner | Used by and when | Purpose |
 | --- | --- | --- |
-| Site administrator | `qfw-service-start` reads the service selected by `--service-id`. Applications discover running instances through the site directory. | Define hardware-facing QPM implementations that a site operator can start. |
+| Site administrator | `qfw-qpm-svc` reads the service selected by `--service-id`. Applications discover running instances through the site directory. | Define hardware-facing QPM implementations that a site operator can start. |
 
 </details>
 
@@ -727,7 +727,7 @@ file or its contents.
 The site-owned device file commonly lives at
 `/etc/openqse/qfw/device/device-access.yaml`. The
 `device-access-config` field in `site.yaml` selects it for
-`qfw-service-start`.
+`qfw-qpm-svc` and its QPM process.
 
 #### Select The Site File
 
@@ -753,26 +753,35 @@ source /opt/openqse/qfw/current/bin/qfw-activate
 2. `QFW_SITE_CONFIG`
 3. `$QFW_SHARE_DIR/config/site.yaml`
 
-An operator can override the site file for one setup or service-start command
+An operator can override the site file for one setup or role-manager command
 with `--site-config /path/to/site.yaml`.
 
 #### Start A Site Service
 
 After `site.yaml`, its site manifest, and its device-access file are defined,
-an administrator can start the IQM QPM:
+an administrator starts the directory service and IQM QPM independently:
 
 ```bash
 export QFW_SITE_CONFIG=/etc/openqse/qfw/site.yaml
 source /opt/openqse/qfw/current/bin/qfw-activate
-qfw-service-start \
+qfw-dir-svc start \
+  --run-dir /shared/openqse/qfw/services/directory \
+  --site-config "$QFW_SITE_CONFIG" \
+  --scope site \
+  --node dirsvc01
+qfw-qpm-svc start \
+  --run-dir /shared/openqse/qfw/services/iqm-ornl-20q \
   --service-id iqm-ornl-20q \
-  --site-config /etc/openqse/qfw/site.yaml
+  --site-config "$QFW_SITE_CONFIG" \
+  --scope site \
+  --node qpm01
 ```
 
-`qfw-service-start` resolves the site service manifest and device-access path
-through `site.yaml`. It does not accept separate configuration-path overrides
-for those resources. The launched QPM receives `QFW_SITE_CONFIG` and reads the
-common QPM settings from that site file itself.
+`qfw-dir-svc` publishes the resolved endpoint to the connection file selected
+by `directory-service.connection-file`. `qfw-qpm-svc` reads that connection
+record automatically through `site.yaml`, resolves the site service manifest
+and device-access path, and starts only the requested service. The launched
+QPM receives `QFW_SITE_CONFIG` and reads common QPM settings from that file.
 
 The service launcher passes the protected device-access path only to the QPM
 process. The QPM reads that file and its referenced credential database.
@@ -828,26 +837,12 @@ resolver:
     - site
 ```
 
-Neither packaged profile contains a `services` list. Without that list, QFw
-starts every service in the selected service manifest. An example wrapper that
-needs only NWQ-Sim generates a runtime file containing:
-
-```yaml
-resolver:
-  scope-order:
-    - local
-
-local-services:
-  start-dirsvc: true
-  start-qpm: true
-  dirsvc:
-    name: qfw-local-dirsvc
-    bind-host: 127.0.0.1
-    port: auto
-  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/local-services.yaml
-  services:
-    - nwqsim
-```
+Neither packaged local profile contains a `services` list. A direct
+`qfw-setup --profile local` invocation therefore starts every service in the
+selected manifest. Backend-aware example wrappers add
+`--service-id <backend-service>` so they start only the requested QPM without
+generating another runtime file. `--service-id` requires a runtime with a
+`local-services` section.
 
 Runtime selection uses this order:
 
@@ -876,6 +871,15 @@ source "$QFW_PREFIX/bin/qfw-activate" --venv /path/to/qfw-venv
 qfw-setup --profile local
 ```
 
+`qfw-setup` creates the application run directory and delegates each requested
+component to the split lifecycle managers. It starts one application-owned
+directory through `qfw-dir-svc`, then starts each selected QPM through
+`qfw-qpm-svc`. Each QPM manager also owns its optional PRTE DVM. The generated
+directory connection record is added to application runtime state
+automatically; users do not source a service environment file or invoke the
+role commands themselves. `qfw-teardown` stops the QPM managers and directory
+manager in reverse order before removing application state.
+
 For a production cluster, the site module or environment script selects the
 site file. The user then runs `qfw-setup` without a profile to use site services
 only:
@@ -897,14 +901,24 @@ can set local service port bases and per-service listener ports.
 QFw applications run through one lifecycle:
 
 ```text
-qfw-setup -> qfw-srun -> qfw-teardown
+qfw-setup -> qfw-status -> qfw-srun -> qfw-teardown
 ```
 
 | Command | Responsibility |
 | --- | --- |
 | `qfw-setup` | Select configuration, create run state, validate directory access, and start job-owned services when requested |
+| `qfw-status` | Report the current application run and recorded role-manager health |
 | `qfw-srun` | Launch the application through DEFw with the prepared runtime and Slurm placement |
 | `qfw-teardown` | Stop job-owned services and clean runtime state without stopping site-owned services |
+
+One `qfw-setup` invocation creates one run directory for one logical
+application run. Multiple `qfw-srun` steps may share that prepared runtime.
+Without `--run-dir`, status, launch, and teardown resolve the current-run
+marker written by setup. `qfw-status --json` includes the complete recorded
+runtime state and current application-owned manager status. A launcher
+managing concurrent runtimes passes each explicit run directory to status,
+launch, and teardown because the current marker identifies only the most
+recent setup below one run base.
 
 The application process does not call these commands itself. A shell wrapper,
 batch script, workflow manager, or Slurm integration owns the lifecycle and
@@ -942,6 +956,7 @@ cleanup() {
 trap cleanup EXIT
 
 qfw-setup --profile local
+qfw-status
 qfw-srun my_application.py --shots 128
 ```
 
@@ -972,6 +987,7 @@ cleanup() {
 trap cleanup EXIT
 
 qfw-setup
+qfw-status
 qfw-srun my_application.py --shots 128
 ```
 
@@ -1139,7 +1155,7 @@ and simulator lifecycle.
 
 Use the default site-only runtime when the Docker cluster has an already
 running site directory and long-running QPM. In that mode, the application job
-does not start or stop the service plane.
+does not start or stop those site-owned services.
 
 The checkout, installation, venv, and application files must be visible at the
 same paths on every participating container node. Runtime logs and temporary
@@ -1195,22 +1211,34 @@ Run a SuperMarQ GHZ circuit through NWQ-Sim:
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
 
-Run the standard example set:
+Run the compatible examples with application-owned NWQSim services:
 
 ```bash
-QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
+./qfw_run_all.sh --service-mode local --backend nwqsim
+```
+
+Run the same examples against an existing site-owned QPM:
+
+```bash
+./qfw_run_all.sh \
+  --service-mode site \
+  --backend nwqsim
 ```
 
 The example wrappers perform `qfw-setup`, launch the application through
-`qfw-srun`, and call `qfw-teardown`. Do not deactivate QFw while a wrapper is
-running.
+`qfw-srun`, and call `qfw-teardown`. In site mode setup creates application
+state with the installed default site-only runtime and does not start services.
+In local mode the wrapper selects the installed `local` profile and only its
+requested backend. Neither mode generates an application runtime YAML file.
+MPI smoke remains a separate test because it has its own placement contract.
+Do not deactivate QFw while a wrapper is running.
 
 Examples that require admission-managed capacity use
 `qfw_slurm_driver.sh`. It is the test stand-in for the Slurm integration. The
 driver reserves capacity, provides `QFW_RESERVATION_ID` to the application,
 runs the application, releases the reservation, and records each step.
 
-See [examples/README.md](examples/README.md) for the complete example list and
+See [examples/README.md](../examples/README.md) for the complete example list and
 wrapper arguments.
 
 </details>
@@ -1221,6 +1249,7 @@ wrapper arguments.
 A successful run must provide more evidence than an exit status. Confirm:
 
 - The setup or driver reports that the runtime and reservation are ready.
+- `qfw-status` reports `ready` before the application step begins.
 - The application output shows a submitted workload and its result.
 - The QPM log shows execution and completion for the same reservation.
 - The wrapper or driver reports a successful finish and reservation release.
@@ -1238,9 +1267,10 @@ squeue -u "$USER"
 <details id="failure-recovery">
 <summary><strong>10. Failure Recovery</strong></summary>
 
-Run teardown after an application or wrapper failure:
+Inspect and then tear down an application after a failure:
 
 ```bash
+qfw-status --json
 qfw-teardown
 ```
 
@@ -1252,6 +1282,12 @@ If setup cannot reach the required directory before its configured timeout, it
 returns nonzero and the application should not be launched. Verify the selected
 site file, runtime profile, hostname resolution, directory port, allocation,
 and firewall policy before retrying.
+
+For stale manager state, missing DVM URIs, failed QPM registration, leaked
+reservations, and clean service restart, follow the
+[service recovery recipe](recipes/recover-services.md). Preserve the manager
+run directory until the recorded node, PID, ownership, and logs have been
+inspected.
 
 When finished, restore the shell environment with:
 

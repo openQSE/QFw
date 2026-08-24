@@ -8,11 +8,22 @@ or application-owned services created inside a scheduler allocation.
 .PP
 Applications prepare runtime state with
 .BR qfw-setup (1),
+inspect it with
+.BR qfw-status (1),
 launch through
 .BR qfw-srun (1),
 and release application-owned state with
 .BR qfw-teardown (1).
-Persistent directory, DVM, and QPM components are managed by
+For local runtime profiles,
+.B qfw-setup
+uses the same lifecycle engine as
+.BR qfw-dir-svc (1)
+and
+.BR qfw-qpm-svc (1),
+and
+.B qfw-teardown
+stops the recorded application-owned instances. Persistent site directory,
+DVM, and QPM components remain independently managed by the role commands or
 .BR qfw-service-plane (1).
 .SH CONFIGURATION
 Site installation and shared endpoints are described by
@@ -25,6 +36,11 @@ Available QPM implementations are described by
 Commands are documented in section 1. Configuration formats use section 5.
 Architecture and operational concepts use section 7.
 .SH SEE ALSO
+.BR qfw-activate (1),
+.BR qfw-setup (1),
+.BR qfw-status (1),
+.BR qfw-srun (1),
+.BR qfw-teardown (1),
 .BR qfw-service-plane (1),
 .BR qfw-service-plane (7),
 .BR qfw-runtime.yaml (5),

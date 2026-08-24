@@ -7,13 +7,17 @@ execution. It may contain a DEFw directory service, an optional PRTE DVM, and
 one QPM service.
 .PP
 The administrator or application selects authoritative YAML configuration.
+.BR qfw-dir-svc (1)
+manages one directory instance, while
+.BR qfw-qpm-svc (1)
+manages one QPM and its optional DVM. The combined
 .BR qfw-service-plane (1)
-resolves that configuration with command-line settings and scheduler-provided
-node assignments. It writes the result as generated instance state.
+interface remains available for compatibility. Each command writes resolved
+configuration as generated instance state.
 .SH OWNERSHIP
-A site-owned plane is started by an administrator or service manager and may
-serve several independent application jobs. Its lifetime is independent of
-application teardown.
+A site directory and each site QPM are started independently by an
+administrator or service manager. They may serve several independent
+application jobs and their lifetime is independent of application teardown.
 .PP
 An application-owned plane is started inside an application allocation. Its
 components carry application ownership and are stopped when that plane is
@@ -23,9 +27,9 @@ The manager stops only components recorded as owned by its service-plane
 instance. Attached or externally managed services remain outside its teardown
 boundary.
 .SH RUN DIRECTORY
-Each instance has one explicit run directory. The path remains stable for the
-lifetime of that instance. It contains generated state, client connection
-settings, PID files, readiness records, and logs.
+Each directory or QPM manager has one explicit run directory. The path remains
+stable for the lifetime of that instance. It contains generated state, client
+connection settings, PID files, readiness records, and logs.
 .PP
 Multinode simulator deployments place this directory on storage visible at the
 same pathname from every simulator node. PRTE writes its DVM URI there, and the

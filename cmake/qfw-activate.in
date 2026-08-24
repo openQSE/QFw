@@ -40,6 +40,9 @@ if [[ "${_qfw_parse_args}" == "1" ]]; then
 				cat <<'EOF'
 Usage: source qfw-activate [--venv PATH]
 
+Activation prepares the QFw environment. Application-owned services are
+started later by qfw-setup according to the selected runtime profile.
+
 Options:
   --venv PATH  Activate PATH first, then layer QFw and DEFw paths on top.
   -h, --help   Show this help text.

@@ -1,6 +1,6 @@
 .TH QFW-SERVICE-PLANE 1 "August 2026" "QFw 0.1.0" "QFw Commands"
 .SH NAME
-qfw-service-plane \- manage a persistent QFw directory, DVM, and QPM plane
+qfw-service-plane \- compatibility manager for a combined QFw service plane
 .SH SYNOPSIS
 .B qfw-service-plane start
 .BI --run-dir " directory"
@@ -18,9 +18,15 @@ qfw-service-plane \- manage a persistent QFw directory, DVM, and QPM plane
 .SH DESCRIPTION
 .B qfw-service-plane
 starts and manages the services used by QFw applications. A service plane may
-contain a DEFw directory service, a PRTE DVM, and one or more QPM services.
+contain a DEFw directory service, a PRTE DVM, and one QPM service.
 The selected YAML files describe the requested services. The command resolves
 those inputs and records the running instance under the required run directory.
+.PP
+New site deployments normally start the directory service independently with
+.BR qfw-dir-svc (1)
+and start one manager per QPM with
+.BR qfw-qpm-svc (1).
+This allows a central directory to serve QPMs on different nodes.
 .PP
 The
 .B start

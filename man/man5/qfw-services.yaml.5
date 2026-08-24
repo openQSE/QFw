@@ -10,7 +10,7 @@ placement, provider launcher, and optional device identity.
 .TP
 .B name
 Stable service identifier passed to
-.BR qfw-service-start (1)
+.BR qfw-qpm-svc (1)
 and published through
 .BR QFW_QPM_SERVICE_ID .
 .TP
@@ -51,7 +51,8 @@ DEFw service listen port.
 DEFw diagnostic telnet port.
 .TP
 .B device-id
-Device identifier resolved through the protected device-access configuration.
+Device identifier resolved through the protected configuration described by
+.BR qfw-device-access.yaml (5).
 .TP
 .B provider-launch
 Provider execution mapping. The
@@ -77,7 +78,8 @@ services:
       type: internal
 .EE
 .SH SEE ALSO
-.BR qfw-service-plane (1),
-.BR qfw-service-start (1),
+.BR qfw-qpm-svc (1),
+.BR qfw-service-lifecycle (7),
+.BR qfw-device-access.yaml (5),
 .BR qfw-runtime.yaml (5),
 .BR qfw-site.yaml (5)

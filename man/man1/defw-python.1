@@ -1,0 +1,37 @@
+.TH DEFW-PYTHON 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+defw-python \- run a Python application through the QFw DEFw executor
+.SH SYNOPSIS
+.B defw-python
+.I script
+.RI [ arguments ... ]
+.SH DESCRIPTION
+.B defw-python
+locates the DEFw executor under
+.BR DEFW_PREFIX ,
+verifies that its embedded Python major and minor version match the active
+Python environment, exposes that environment's site packages, and invokes the
+script through DEFw.
+.PP
+Normal applications use this entry point indirectly through
+.BR qfw-srun (1).
+It is also useful for low-level diagnostics that require a DEFw agent context.
+.SH ENVIRONMENT
+.TP
+.B VIRTUAL_ENV
+Selects the application Python environment when it contains
+.IR bin/python .
+.TP
+.B DEFW_PREFIX
+Selects the DEFw installation. The activated QFw environment supplies the
+default.
+.TP
+.B PYTHONPATH
+Is extended with active-environment site-package directories.
+.SH EXIT STATUS
+The DEFw wrapper or application status is returned. Missing executors and
+Python-version mismatches return nonzero.
+.SH SEE ALSO
+.BR qfw-activate (1),
+.BR qfw-srun (1),
+.BR qfw (7)

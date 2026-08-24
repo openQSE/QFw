@@ -9,10 +9,32 @@ and optional
 .B local-services
 mappings.
 .PP
+When
+.B local-services
+is present,
+.BR qfw-setup (1)
+orchestrates the requested application-owned components through the
+.BR qfw-dir-svc (1)
+and
+.BR qfw-qpm-svc (1)
+lifecycle engines. The generated connection record and manager run directories
+are stored in application runtime state and are released by
+.BR qfw-teardown (1).
+.PP
 A command may select this file with
 .BR --runtime-config ,
 .BR QFW_RUNTIME_CONFIG ,
 or an installed profile.
+.PP
+The installed default runtime is site-only. The installed
+.B local
+and
+.B hybrid
+profiles contain
+.BR local-services .
+Backend-aware example wrappers select one service from the local profile with
+.BR "qfw-setup --service-id" ;
+applications do not need to generate another runtime file.
 .SH RESOLVER MAPPING
 .TP
 .B scope-order
@@ -81,7 +103,9 @@ local-services:
     - fake-iqm
 .EE
 .SH SEE ALSO
-.BR qfw-service-plane (1),
+.BR qfw-dir-svc (1),
+.BR qfw-qpm-svc (1),
+.BR qfw-service-lifecycle (7),
 .BR qfw-services.yaml (5),
 .BR qfw-site.yaml (5),
 .BR qfw (7)

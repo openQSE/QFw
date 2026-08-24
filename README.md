@@ -81,7 +81,9 @@ cmake --install build
 
 The install places public commands in `/path/to/qfw-install/bin`,
 including `qfw-activate`, `defw-python`, `qfw-setup`, `qfw-srun`,
-`qfw-teardown`, `qfw-dirsvc-start`, and `qfw-service-start`.
+`qfw-status`, `qfw-teardown`, `qfw-dir-svc`, and `qfw-qpm-svc`. The
+`qfw-service-plane`, `qfw-dirsvc-start`, and `qfw-service-start` commands
+remain available for compatibility and low-level integration.
 
 Simulator runners and optional hardware client libraries must be available
 through the activated environment or site image. The QFw install packages
@@ -105,6 +107,16 @@ qfw-deactivate
 The example wrappers call `qfw-setup`, run one application through
 `qfw-srun`, and then call `qfw-teardown`. Do not call `qfw-deactivate`
 until the wrapper completes.
+
+For a manually prepared runtime, `qfw-status` reports the current run without
+requiring its generated path:
+
+```bash
+qfw-setup --profile local
+qfw-status
+qfw-srun my_application.py
+qfw-teardown
+```
 
 ## Run Examples
 
@@ -320,13 +332,17 @@ The installed prefix contains:
 - `bin/defw-python`: runs Python through the DEFw executor bridge.
 - `bin/qfw-setup`: creates runtime state and starts allocation-local
   services when requested.
+- `bin/qfw-status`: reports the current application runtime and its recorded
+  service-manager health.
 - `bin/qfw-srun`: launches applications with the active QFw runtime state.
-- `bin/qfw-teardown`: stops QFw-owned runtime processes and removes run
-  state.
-- `bin/qfw-dirsvc-start`: starts a long-running or allocation-local DEFw
-  directory service.
-- `bin/qfw-service-start`: starts a long-running or allocation-local QFw
-  service.
+- `bin/qfw-teardown`: stops application-owned role managers and removes the
+  application run directory.
+- `bin/qfw-dir-svc`: manages one directory-service instance.
+- `bin/qfw-qpm-svc`: manages one QPM and its optional PRTE DVM.
+- `bin/qfw-service-plane`: compatibility command for a combined service
+  plane.
+- `bin/qfw-dirsvc-start` and `bin/qfw-service-start`: retained low-level
+  one-process launch commands.
 - `share/qfw/config`: site, runtime, service, and device configuration
   templates.
 - `share/qfw/examples`: installed example wrappers and application tests.
@@ -389,17 +405,16 @@ With that setting, QFw still returns `qhw_result`, including
 <details>
 <summary>Node-local and shared directory expectations</summary>
 
-QFw does not enforce a shared filesystem across nodes in a Slurm
-allocation. The setup layer treats the run id as global state, propagates
-it to remote setup commands, and creates the required QFw temp directories
-on each node before writing logs or startup artifacts there.
+For heterogeneous or multinode simulator execution,
+`QFW_RUN_BASE_DIR` must be writable and visible at the same pathname on every
+participating node. QFw records application state and the PRTE DVM URI below
+that base. The QPM and simulator launch path must be able to resolve the same
+URI file. Node-local `/tmp` is therefore unsuitable for these runs.
 
-This means the QFw infrastructure can operate with node-local temp
-directories for startup logs, service logs, pid files, and the PRTE DVM
-URI as long as the producer and consumer of each file run on the same
-node. In the current startup model, the directory service, QPM services,
-and DVM startup run on the group-1 head node, so those local files do not
-require a cluster-wide shared directory.
+A same-node runtime may use node-local storage because every producer and
+consumer sees the same filesystem. Site-owned directory and QPM managers use
+their own explicit run directories; a multinode QPM run directory has the
+same shared-path requirement when it owns a DVM.
 
 Backend simulators can have stricter requirements. QFw does not rewrite
 or stage simulator-specific files automatically.

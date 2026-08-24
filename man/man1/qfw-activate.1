@@ -1,0 +1,66 @@
+.TH QFW-ACTIVATE 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-activate \- prepare a shell to use an installed QFw environment
+.SH SYNOPSIS
+.B source prefix/bin/qfw-activate
+.RI [ --venv " directory" ]
+.SH DESCRIPTION
+.B qfw-activate
+must be sourced by Bash. It adds the selected QFw and DEFw installation to the
+current shell, preserves the caller's previous environment, and defines the
+.BR qfw-deactivate (1)
+shell function.
+.PP
+Activation does not create an application run directory and does not start a
+directory service, DVM, or QPM. Application runtime state is created later by
+.BR qfw-setup (1).
+.SH OPTIONS
+.TP
+.BI --venv " directory"
+Activate the Python virtual environment at
+.I directory
+before adding QFw and DEFw paths. The environment must contain an executable
+.IR bin/python
+and a readable
+.IR bin/activate .
+The matching
+.BR qfw-deactivate (1)
+restores the Python environment that was active before this option was used.
+.TP
+.BR -h , " --help"
+Print usage. Because this command is sourced, help returns control to the
+current shell.
+.SH ENVIRONMENT
+.B qfw-activate
+sets installation-derived variables including
+.BR QFW_PREFIX ,
+.BR QFW_BIN_PATH ,
+.BR QFW_LIBEXEC_DIR ,
+.BR QFW_SHARE_DIR ,
+.BR QFW_SITE_CONFIG ,
+.BR DEFW_PREFIX ,
+.BR DEFW_PATH ,
+and
+.BR DEFW_CONFIG_PATH .
+It updates
+.BR PATH ,
+.BR PYTHONPATH ,
+.BR LD_LIBRARY_PATH ,
+and
+.B MANPATH
+without discarding existing values.
+.PP
+If
+.B QFW_RUN_BASE_DIR
+is already set, activation preserves it. Application launchers set this value
+to shared storage before
+.B qfw-setup
+when a multinode runtime needs a common path.
+.SH EXIT STATUS
+Sourcing returns zero on success. Invalid options, a missing virtual
+environment, or direct execution return nonzero.
+.SH SEE ALSO
+.BR qfw-deactivate (1),
+.BR qfw-setup (1),
+.BR qfw-status (1),
+.BR qfw (7)

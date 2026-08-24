@@ -1,0 +1,78 @@
+.TH QFW-DEVICE-ACCESS.YAML 5 "August 2026" "QFw 0.1.0" "QFw File Formats"
+.SH NAME
+qfw-device-access.yaml \- bind logical QFw devices to providers and credentials
+.SH DESCRIPTION
+The device-access configuration is a site-owned YAML file that maps logical
+QFw device IDs to provider devices, API endpoints, and credential providers.
+A service entry's
+.B device-id
+selects one device from this file.
+.PP
+The
+.B service.device-access-config
+field in
+.BR qfw-site.yaml (5)
+selects the active file. This separation allows a service manifest to describe
+reusable QPM implementations while each site supplies its own devices,
+endpoints, and credential integration.
+.PP
+Only the account running a device-backed QPM needs read access. The QPM manager
+passes the selected path to the QPM process. Application processes do not
+receive the file or provider credentials.
+.SH QPUS MAPPING
+The top-level
+.B qpus
+mapping contains one entry for each logical device ID.
+.TP
+.B provider
+Provider implementation used by the device, such as
+.BR iqm .
+.TP
+.B provider-device-id
+Device name expected by the provider API. The logical QFw ID remains the key
+under
+.BR qpus .
+.TP
+.B url
+Provider API endpoint.
+.TP
+.B credential-db
+Path to a file-backed credential database. A relative path is resolved from
+the directory containing the device-access file.
+.TP
+.B credential-provider
+Name of an entry in the optional top-level
+.B credential-providers
+mapping. Use this instead of
+.B credential-db
+when a site integrates another credential source.
+.TP
+.B aliases
+Optional alternate names that may resolve to this device.
+.SH CREDENTIAL PROVIDERS
+The optional
+.B credential-providers
+mapping defines named credential integrations. Supported provider types include
+.BR file ,
+.BR no-secret ,
+and Python plugin providers. Provider-specific fields select the credential
+database, scope, lifetime, or plugin implementation.
+.SH SECURITY
+The device-access file contains device endpoints and credential-provider
+references. A referenced file credential database contains provider secrets
+and must be readable only by the QPM service account. Keep both files outside
+client-readable runtime directories.
+.SH EXAMPLE
+.EX
+qpus:
+  site-qpu:
+    provider: iqm
+    provider-device-id: default
+    url: https://provider.example/
+    credential-db: qpu-users.json
+.EE
+.SH SEE ALSO
+.BR qfw-qpm-svc (1),
+.BR qfw-services.yaml (5),
+.BR qfw-site.yaml (5),
+.BR qfw-service-lifecycle (7)

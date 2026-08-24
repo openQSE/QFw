@@ -211,8 +211,12 @@ site-selected equivalent. A typical combined prefix has this shape:
     qfw-activate
     defw-python
     qfw-setup
+    qfw-status
     qfw-srun
     qfw-teardown
+    qfw-dir-svc
+    qfw-qpm-svc
+    qfw-service-plane
     qfw-dirsvc-start
     qfw-service-start
   libexec/qfw/
@@ -261,10 +265,14 @@ different prefix, but the relative paths under each prefix remain the same.
 | `/opt/openqse/qfw/current/bin/qfw-activate` | QFw package | Shell activation entry point. |
 | `/opt/openqse/qfw/current/bin/defw-python` | QFw package | DEFw-backed Python launcher for user applications. |
 | `/opt/openqse/qfw/current/bin/qfw-setup` | QFw package | User job setup command. |
+| `/opt/openqse/qfw/current/bin/qfw-status` | QFw package | User job status command. |
 | `/opt/openqse/qfw/current/bin/qfw-srun` | QFw package | User application launch command. |
 | `/opt/openqse/qfw/current/bin/qfw-teardown` | QFw package | User job cleanup command. |
-| `/opt/openqse/qfw/current/bin/qfw-dirsvc-start` | QFw package | One-directory-service lifecycle command. |
-| `/opt/openqse/qfw/current/bin/qfw-service-start` | QFw package | One-service-instance lifecycle command. |
+| `/opt/openqse/qfw/current/bin/qfw-dir-svc` | QFw package | One directory-service manager. |
+| `/opt/openqse/qfw/current/bin/qfw-qpm-svc` | QFw package | One QPM and optional DVM manager. |
+| `/opt/openqse/qfw/current/bin/qfw-service-plane` | QFw package | Combined compatibility manager. |
+| `/opt/openqse/qfw/current/bin/qfw-dirsvc-start` | QFw package | Low-level directory process launcher. |
+| `/opt/openqse/qfw/current/bin/qfw-service-start` | QFw package | Low-level QPM process launcher. |
 | `/opt/openqse/qfw/current/libexec/qfw` | QFw package | Private helper scripts used by public commands. |
 | `/opt/openqse/qfw/current/lib/qfw/services` | QFw package | Installed QPM and utility service modules. |
 | `/opt/openqse/qfw/current/lib/qfw/service-apis` | QFw package | Installed DEFw service API bindings and proxies. |
@@ -308,9 +316,9 @@ replace the user's Python executable.
 
 Every public command installed under `<prefix>/bin` must be executable.
 Activation prepends that directory to `PATH` so users and service wrappers can
-call `qfw-setup`, `qfw-srun`, `qfw-teardown`, `qfw-dirsvc-start`, and
-`qfw-service-start` by name. Activation also augments `LD_LIBRARY_PATH` only
-for libraries that are not already reachable through RPATH or runpath.
+call `qfw-setup`, `qfw-status`, `qfw-srun`, `qfw-teardown`, `qfw-dir-svc`,
+and `qfw-qpm-svc` by name. Activation also augments `LD_LIBRARY_PATH` only for
+libraries that are not already reachable through RPATH or runpath.
 
 An installed activation exports the logical path variables used by the role
 wrappers:
@@ -377,34 +385,47 @@ hyphens. QFw startup has three layers.
 library paths, Python paths, and DEFw defaults for every role. It does not own
 any process lifecycle.
 
-`qfw-setup`, `qfw-srun`, and `qfw-teardown` define the user job lifecycle.
+`qfw-setup`, `qfw-status`, `qfw-srun`, and `qfw-teardown` define the user job
+lifecycle.
 This lifecycle is used for both production client jobs and local simulator
 jobs. `qfw-setup` reads `site.yaml`, reads the selected runtime configuration,
-creates job-owned run and log directories, validates resolver policy, and
-starts local services only when `local-services` is present. `qfw-srun` runs
-the user application in the prepared QFw context through `defw-python`.
-`qfw-teardown` stops only job-owned processes and cleans job-owned runtime
-state.
+creates job-owned run and log directories, and validates resolver policy. When
+`local-services` is present, it delegates the application-owned directory to
+the `qfw-dir-svc` lifecycle engine and each selected QPM and optional DVM to
+the `qfw-qpm-svc` lifecycle engine. It records those manager run directories
+and the generated directory connection record in application state.
+`qfw-srun` runs the user application in the prepared QFw context through
+`defw-python`. `qfw-status` composes the recorded runtime with current manager
+health. `qfw-teardown` stops the recorded QPM managers and directory manager in
+reverse order, then cleans job-owned runtime state. It never stops site-owned
+service managers.
 
-`qfw-dirsvc-start` and `qfw-service-start` define the service lifecycle. They
-are used by administrators, service managers, or local runtime profile setup
-code. Each invocation owns one process lifecycle. `qfw-dirsvc-start` starts
-one DEFw-dirsvc process. `qfw-service-start` starts one named QPM or utility
-service instance. The commands prepare DEFw configuration, create service run
-and log directories, start the process they own, handle shutdown signals, and
-clean service-owned runtime state. QPM service startup waits for directory
-registration to succeed before reporting the service as ready. These commands
-do not call `qfw-setup` or `qfw-teardown` because those commands are scoped to
-a user job.
+Each setup invocation creates one run directory for one logical application
+run. Several application steps may use that directory through `qfw-srun`.
+Activation is reusable across sequential or concurrent application runtimes;
+it does not select an application run directory.
+
+`qfw-dir-svc` and `qfw-qpm-svc` define the operator-facing service lifecycle.
+Each manager accepts one explicit run directory and supports `start`, `run`,
+`status`, and `stop`. The directory manager owns one DEFw directory service.
+The QPM manager owns one named QPM and starts a PRTE DVM only when its provider
+requires one. `qfw-service-plane` retains the combined interface for
+compatibility. `qfw-dirsvc-start` and `qfw-service-start` remain the low-level
+one-process launchers used by the managers; applications and administrators
+normally use the higher-level commands.
 
 | Command | Lifecycle | Responsibility |
 | --- | --- | --- |
 | `qfw-activate` | Environment | Prepare QFw, DEFw, Python, and library paths for the current shell or service unit. |
-| `qfw-setup` | User job | Prepare a job runtime context and optionally start job-owned local services. |
+| `qfw-setup` | User job | Prepare a job runtime context and orchestrate requested application-owned role managers. |
+| `qfw-status` | User job | Report runtime state and recorded role-manager health. |
 | `qfw-srun` | User job | Run one application in the prepared QFw runtime context. |
-| `qfw-teardown` | User job | Stop job-owned local services and clean job runtime state. |
-| `qfw-dirsvc-start` | Service | Start and own one DEFw-dirsvc process. |
-| `qfw-service-start` | Service | Start and own one named QPM or utility service instance. |
+| `qfw-teardown` | User job | Stop recorded application-owned role managers and clean job runtime state. |
+| `qfw-dir-svc` | Service | Manage one DEFw directory-service instance. |
+| `qfw-qpm-svc` | Service | Manage one QPM and its optional PRTE DVM. |
+| `qfw-service-plane` | Service | Preserve the combined compatibility interface. |
+| `qfw-dirsvc-start` | Internal compatibility | Start one DEFw directory process. |
+| `qfw-service-start` | Internal compatibility | Start one named QPM process. |
 
 The job lifecycle and service lifecycle share lower-level helpers for config
 loading, DEFw preparation, run-directory creation, PID files, signal handling,
@@ -432,6 +453,7 @@ The normal user flow is the same in both modes:
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate
 qfw-setup
+qfw-status
 qfw-srun my_app.py
 qfw-teardown
 ```
@@ -441,18 +463,26 @@ Local simulator jobs select the local profile:
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate
 qfw-setup --profile local
+qfw-status
 qfw-srun my_app.py
 qfw-teardown
 ```
 
-Site services use service lifecycle commands instead of the job lifecycle:
+Site services use independent role managers instead of the job lifecycle:
 
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate
-qfw-dirsvc-start --site-config /etc/openqse/qfw/site.yaml
-qfw-service-start \
+qfw-dir-svc start \
+  --run-dir /shared/openqse/qfw/services/directory \
+  --site-config /etc/openqse/qfw/site.yaml \
+  --scope site \
+  --node dirsvc01
+qfw-qpm-svc start \
+  --run-dir /shared/openqse/qfw/services/iqm-ornl-20q \
   --service-id iqm-ornl-20q \
-  --site-config /etc/openqse/qfw/site.yaml
+  --site-config /etc/openqse/qfw/site.yaml \
+  --scope site \
+  --node qpm01
 ```
 
 A service manager may either source `qfw-activate` in a small wrapper or use an
@@ -472,14 +502,11 @@ systemctl restart qfw-qpm@iqm.service
 ```
 
 The unit should load `/etc/openqse/qfw/env.sh` or call a wrapper that sources
-`qfw-activate`, then run `qfw-dirsvc-start` or `qfw-service-start`. The unit's
-startup timeout should exceed the QFw directory connection timeout so systemd
-does not kill a service while QFw is still waiting for a reachable directory.
-For QPM units, the systemd instance name identifies the production service
-through unit configuration and is passed to `qfw-service-start` as the service
-id. The command resolves that ID in the site manifest selected by `site.yaml`.
-A deployment that runs several production QPM services enables several
-`qfw-qpm@...` units.
+`qfw-activate`, then use `qfw-dir-svc run` or `qfw-qpm-svc run`. The foreground
+`run` action lets systemd supervise the manager and trigger reverse-order
+cleanup with SIGTERM. For QPM units, the instance configuration supplies one
+service ID and one QPM run directory. A deployment that runs several
+production QPM services enables several `qfw-qpm@...` units.
 
 The selected behavior comes from client runtime configuration or an explicit
 command-line option. It does not come from `site.yaml`. The compatibility
@@ -493,8 +520,8 @@ sequenceDiagram
     autonumber
     participant Admin as Site service manager
     participant Act as qfw-activate
-    participant DStart as qfw-dirsvc-start
-    participant SStart as qfw-service-start
+    participant DStart as qfw-dir-svc
+    participant SStart as qfw-qpm-svc
     participant Dir as DEFw-dirsvc
     participant QPM as QPM service
     participant User as User job
@@ -523,12 +550,12 @@ sequenceDiagram
     rect rgb(246, 246, 246)
         User->>Act: prepare job environment
         User->>Setup: select runtime config
-        Setup->>Setup: create job run and log state
+        Setup->>Setup: create application run and log state
         alt runtime requests local services
-            Setup->>DStart: start job-owned directory service
+            Setup->>DStart: start application-owned directory manager
             loop selected manifest entry
-                Setup->>LStart: start one job-owned service
-                LStart->>SStart: qfw-service-start service-id
+                Setup->>LStart: start one application-owned manager
+                LStart->>SStart: qfw-qpm-svc service-id
                 SStart->>QPM: start one QPM service instance
                 QPM->>Dir: register local service binding
             end
@@ -663,11 +690,11 @@ started local directory service and the configured site directory service. If a
 required directory is not reachable before the timeout, setup fails and
 `qfw-srun` should not run the application.
 
-`qfw-service-start` uses the same timeout when starting one named service
-instance. The service must register its bindings with the configured directory
-before it is considered ready. If registration cannot complete before the
-timeout, the service exits nonzero. This prevents it from continuing to run in
-a state where clients cannot discover it.
+`qfw-qpm-svc` uses the same timeout when starting one named service instance.
+The QPM must register its bindings with the configured directory before it is
+considered ready. If registration cannot complete before the timeout, the
+manager exits nonzero and cleans its owned components. This prevents it from
+continuing in a state where clients cannot discover it.
 
 `qfw-srun` may also validate the prepared directory environment before
 launching the application. A direct client lookup that loses directory
@@ -843,13 +870,12 @@ The manifest also contains the `mpi-launch` block used by local simulator
 services. This keeps allocation-specific MPI policy with the services that
 consume it. Provider wrappers live in each service's `provider-launch` block.
 
-`qfw-setup` expands the selected runtime profile into one start request per
-selected manifest entry. A local-service launcher helper runs inside the job
-lifecycle and invokes `qfw-service-start` once for each selected entry.
-`qfw-service-start` starts only the named service entry it is given and reports
-readiness only after that service has registered with the job-local directory
-service. If a required entry fails to start, `qfw-setup` fails the local
-runtime setup and tears down any job-owned services already started.
+`qfw-setup` expands the selected runtime profile into one manager request per
+selected manifest entry. It invokes the `qfw-qpm-svc` lifecycle engine once
+for each selected QPM. Each manager starts only its named service and reports
+readiness only after registration with the application directory. If a
+required entry fails, setup stops all application-owned managers already
+started and reports a failed runtime.
 
 ### Configure Profiles
 

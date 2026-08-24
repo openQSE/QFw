@@ -1,0 +1,37 @@
+.TH QFW-TEARDOWN 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-teardown \- release one QFw application runtime
+.SH SYNOPSIS
+.B qfw-teardown
+.RI [ --run-dir " directory" ]
+.RI [ --keep-run-dir ]
+.SH DESCRIPTION
+.B qfw-teardown
+reads the application runtime created by
+.BR qfw-setup (1),
+stops recorded application-owned QPM managers in reverse order, stops the
+application-owned directory manager, clears the current-run marker, and removes
+the application run directory.
+.PP
+Site-owned directory services, DVMs, and QPMs are outside this ownership
+boundary and are never stopped by application teardown. Legacy application
+process records remain supported for runtimes created by older launch paths.
+.SH OPTIONS
+.TP
+.BI --run-dir " directory"
+Tear down an explicit application runtime. Without this option, the current
+runtime is selected.
+.TP
+.B --keep-run-dir
+Keep generated state and logs after stopping application-owned services and
+clearing the current-run marker.
+.SH EXIT STATUS
+Zero indicates that all application-owned components stopped successfully.
+Incomplete cleanup or unreadable runtime state returns nonzero.
+.SH SEE ALSO
+.BR qfw-setup (1),
+.BR qfw-status (1),
+.BR qfw-srun (1),
+.BR qfw-deactivate (1),
+.BR qfw-service-plane (7),
+.BR qfw (7)

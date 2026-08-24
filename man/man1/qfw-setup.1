@@ -1,0 +1,85 @@
+.TH QFW-SETUP 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-setup \- prepare one QFw application runtime
+.SH SYNOPSIS
+.B qfw-setup
+.RI [ options ]
+.SH DESCRIPTION
+.B qfw-setup
+creates one application run directory, resolves site and runtime
+configuration, records the generated environment, starts requested
+application-owned services, and waits for the required directory service.
+It prints the resolved run directory on success and marks that run as current.
+.PP
+For a local or hybrid profile, setup uses the same lifecycle engine as
+.BR qfw-dir-svc (1)
+and
+.BR qfw-qpm-svc (1).
+Each selected QPM has an independent manager run directory. An optional PRTE
+DVM is owned by its QPM manager. A failure stops every application-owned
+manager already started by the invocation.
+.PP
+When the selected runtime uses site services, setup records and validates the
+site directory connection but does not adopt or stop those services.
+.SH OPTIONS
+.TP
+.BI --site-config " file"
+Use
+.I file
+instead of the activated site configuration.
+.TP
+.BI --runtime-config " file"
+Use an explicit runtime YAML file.
+.TP
+.BI --profile " name"
+Use the installed runtime profile named
+.IR name .
+.TP
+.BI --service-id " id"
+Start only service
+.I id
+from the local service manifest. This option requires a runtime profile or
+configuration containing
+.BR local-services .
+.TP
+.BI --run-id " id"
+Use an explicit identifier instead of generating one.
+.TP
+.BI --run-dir " directory"
+Create the runtime at an explicit path instead of below
+.BR QFW_RUN_BASE_DIR .
+.TP
+.B --dry-run
+Resolve configuration and write representative runtime state without starting
+services or waiting for directory readiness.
+.TP
+.B --no-start-services
+Prepare state without starting services. Unlike
+.BR --dry-run ,
+required directory readiness is still checked.
+.SH GENERATED FILES
+.TP
+.I run-dir/state/runtime-state.json
+Resolved configuration, allocation, environment, application-owned manager
+records, setup state, and lifecycle timestamps.
+.TP
+.I run-dir/qfw-runtime-env.sh
+Environment inherited by
+.BR qfw-srun (1).
+.TP
+.I run-dir/service-plane/directory/
+Application-owned directory manager state when requested.
+.TP
+.I run-dir/service-plane/qpm/service-id/
+Application-owned QPM and optional DVM manager state for each selected service.
+.SH EXIT STATUS
+Zero indicates complete setup and readiness. Configuration errors, service
+startup failures, and directory readiness failures return nonzero.
+.SH SEE ALSO
+.BR qfw-activate (1),
+.BR qfw-status (1),
+.BR qfw-srun (1),
+.BR qfw-teardown (1),
+.BR qfw-runtime.yaml (5),
+.BR qfw-site.yaml (5),
+.BR qfw (7)

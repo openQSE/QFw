@@ -1,0 +1,55 @@
+.TH QFW-SRUN 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-srun \- launch an application in a prepared QFw runtime
+.SH SYNOPSIS
+.B qfw-srun
+.RI [ options ]
+.I application
+.RI [ arguments ... ]
+.SH DESCRIPTION
+.B qfw-srun
+loads the environment recorded by
+.BR qfw-setup (1),
+configures the application DEFw client, and launches the requested application
+through
+.BR defw-python .
+The application may be a Python script or another command accepted by that
+wrapper.
+.PP
+Without
+.BR --run-dir ,
+the current application runtime is used. Several application steps may use the
+same prepared runtime before
+.BR qfw-teardown (1).
+.PP
+In a heterogeneous Slurm allocation, the application defaults to group 0.
+Application-owned directory, QPM, and simulator services are placed separately
+by setup according to the runtime profile.
+.SH OPTIONS
+.TP
+.BI --run-dir " directory"
+Use an explicit prepared application run directory.
+.TP
+.BI --nodes " count"
+Pass a node count to the generated Slurm launch.
+.TP
+.BI --ntasks " count"
+Pass a task count to the generated Slurm launch.
+.TP
+.BI --nodelist " hosts"
+Restrict the generated Slurm launch to these hosts.
+.TP
+.BI --het-group " number"
+Select an explicit heterogeneous group. Group 0 is the default.
+.TP
+.B --exclusive
+Request an exclusive Slurm step.
+.SH EXIT STATUS
+The application or Slurm step exit status is returned. An incomplete or
+missing runtime returns nonzero without launching the application.
+.SH SEE ALSO
+.BR qfw-setup (1),
+.BR qfw-status (1),
+.BR qfw-teardown (1),
+.BR qfw-activate (1),
+.BR qfw (7)

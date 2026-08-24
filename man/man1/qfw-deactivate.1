@@ -1,0 +1,32 @@
+.TH QFW-DEACTIVATE 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-deactivate \- restore the shell environment saved by qfw-activate
+.SH SYNOPSIS
+.B qfw-deactivate
+.SH DESCRIPTION
+.B qfw-deactivate
+is a shell function defined by sourcing
+.BR qfw-activate (1).
+It restores the prior QFw, DEFw, Python, library, manual, and prompt settings,
+then removes QFw's activation helpers from the shell.
+.PP
+When
+.BR qfw-activate (1)
+was called with
+.BR --venv ,
+deactivation also deactivates that virtual environment. A virtual environment
+that was active before QFw activation is restored.
+.PP
+Deactivation does not stop services and does not remove an application run
+directory. Call
+.BR qfw-teardown (1)
+for every prepared application runtime before deactivating QFw. Site-owned
+services are stopped separately with the role command or service manager that
+started them.
+.SH EXIT STATUS
+Zero indicates that the saved environment was restored.
+.SH SEE ALSO
+.BR qfw-activate (1),
+.BR qfw-setup (1),
+.BR qfw-teardown (1),
+.BR qfw (7)

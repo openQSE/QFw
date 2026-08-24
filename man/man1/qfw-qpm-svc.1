@@ -27,6 +27,26 @@ In application scope QPMd and the PRTE DVM master run on the head of
 allocation group 1. In site scope
 .B --node
 selects the QPM node. Remote placement requires a Slurm allocation.
+.PP
+.BR qfw-setup (1)
+invokes this lifecycle engine once for each QPM selected by an application
+runtime profile. It passes the directory connection record automatically and
+.BR qfw-teardown (1)
+stops the recorded managers in reverse order.
+.SH ACTIONS
+.TP
+.B start
+Start in the background and return after QPM readiness.
+.TP
+.B run
+Remain in the foreground for a service supervisor. SIGINT and SIGTERM stop the
+QPM and then its owned DVM.
+.TP
+.B status
+Probe recorded components and print generated state as JSON.
+.TP
+.B stop
+Stop the QPM and optional DVM in reverse order and update generated state.
 .SH OPTIONS
 .TP
 .BI --run-dir " path"
@@ -53,10 +73,25 @@ Select application-owned or site-owned lifetime and placement rules.
 .BI --node " node"
 Site-scope QPM node. This option is rejected in application scope.
 .TP
+.BI --timeout " seconds"
+Startup and directory-registration timeout. The default is 120 seconds.
+.TP
+.BI --poll-interval " seconds"
+Foreground supervision interval used by
+.BR run .
+The default is 2 seconds.
+.TP
 .B --dry-run
 Resolve and record the plan without starting processes.
+.SH EXIT STATUS
+Zero indicates successful startup, ready status, or shutdown. Status returns
+nonzero when the QPM or its owned DVM is not ready. Configuration, readiness,
+and cleanup errors also return nonzero.
 .SH SEE ALSO
 .BR qfw-dir-svc (1),
+.BR qfw-setup (1),
+.BR qfw-status (1),
+.BR qfw-teardown (1),
 .BR qfw-site.yaml (5),
 .BR qfw-services.yaml (5),
 .BR qfw-service-plane (7)

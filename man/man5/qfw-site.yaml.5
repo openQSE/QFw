@@ -67,8 +67,10 @@ Path to a service manifest described by
 Relative paths are resolved from the site configuration directory.
 .TP
 .B device-access-config
-Path to protected device and credential bindings. Runtime state and client
-environment files do not copy credential values from this file.
+Path to the protected device and credential bindings described by
+.BR qfw-device-access.yaml (5).
+Runtime state and client environment files do not copy credential values from
+this file.
 .SH QPM MAPPING
 The
 .B qpm
@@ -79,8 +81,8 @@ record limits, byte limits, and purge frequency.
 .SH EXAMPLE
 .EX
 install:
-  qfw-prefix: /opt/qfw
-  defw-prefix: /opt/qfw
+  qfw-prefix: ${QFW_PREFIX}
+  defw-prefix: ${DEFW_PREFIX}
 
 directory-service:
   name: qfw-site-dirsvc
@@ -93,7 +95,11 @@ service:
   device-access-config: /etc/openqse/qfw/device-access.yaml
 .EE
 .SH SEE ALSO
-.BR qfw-service-plane (1),
+.BR qfw-dir-svc (1),
+.BR qfw-qpm-svc (1),
+.BR qfw-setup (1),
+.BR qfw-service-lifecycle (7),
 .BR qfw-runtime.yaml (5),
 .BR qfw-services.yaml (5),
-.BR qfw-service-plane (7)
+.BR qfw-device-access.yaml (5),
+.BR qfw-service-lifecycle (7)

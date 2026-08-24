@@ -94,6 +94,7 @@ foreach(command_name
 			qfw-activate
 			defw-python
 			qfw-setup
+			qfw-status
 			qfw-srun
 			qfw-teardown
 			qfw-dirsvc-start
@@ -108,9 +109,18 @@ endforeach()
 
 set(qfw_man_root "${QFW_INSTALL_PREFIX}/${QFW_INSTALL_MANDIR}")
 foreach(man_page
+		man1/defw-python.1
+		man1/qfw-activate.1
+		man1/qfw-deactivate.1
 		man1/qfw-dir-svc.1
+		man1/qfw-dirsvc-start.1
 		man1/qfw-qpm-svc.1
 		man1/qfw-service-plane.1
+		man1/qfw-service-start.1
+		man1/qfw-setup.1
+		man1/qfw-srun.1
+		man1/qfw-status.1
+		man1/qfw-teardown.1
 		man5/qfw-runtime.yaml.5
 		man5/qfw-services.yaml.5
 		man5/qfw-site.yaml.5
@@ -126,7 +136,7 @@ if(QFW_MAN)
 	execute_process(
 		COMMAND "${CMAKE_COMMAND}" -E env
 			"MANPATH=${qfw_man_root}"
-			"${QFW_MAN}" -w qfw-service-plane
+			"${QFW_MAN}" -w qfw-setup
 		RESULT_VARIABLE man_lookup_rc
 		OUTPUT_VARIABLE man_lookup_out
 		ERROR_VARIABLE man_lookup_err)

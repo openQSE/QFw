@@ -1,0 +1,60 @@
+.TH QFW-STATUS 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-status \- inspect a prepared QFw application runtime
+.SH SYNOPSIS
+.B qfw-status
+.RI [ --run-dir " directory" ]
+.RI [ --json ]
+.SH DESCRIPTION
+.B qfw-status
+reads the application runtime created by
+.BR qfw-setup (1)
+and reports its setup state, allocation, directory connection, and recorded
+service managers. Application-owned manager health is obtained through the
+same service-plane status contract used by the role commands.
+.PP
+Without
+.BR --run-dir ,
+the command uses
+.B QFW_RUN_TMP_PATH
+when set, otherwise the current-run marker below
+.BR QFW_RUN_BASE_DIR .
+The command does not start, stop, or adopt services.
+.PP
+The current marker identifies the most recently prepared runtime below one run
+base. Launchers managing concurrent runtimes pass
+.B --run-dir
+explicitly.
+.SH OPTIONS
+.TP
+.BI --run-dir " directory"
+Inspect an explicit application run directory.
+.TP
+.B --json
+Print the complete
+.B qfw-runtime-status-v1
+JSON object, including the recorded runtime state and manager status objects.
+.SH STATES
+.TP
+.B ready
+Setup completed and every recorded application-owned manager is ready.
+.TP
+.B degraded
+Setup completed but a recorded manager is stopped, degraded, or unavailable.
+.TP
+.B incomplete
+The runtime has not completed setup.
+.TP
+.B failed
+Setup recorded an error.
+.SH EXIT STATUS
+Zero indicates
+.BR ready .
+All other runtime states and state-reading errors return nonzero.
+.SH SEE ALSO
+.BR qfw-setup (1),
+.BR qfw-srun (1),
+.BR qfw-teardown (1),
+.BR qfw-dir-svc (1),
+.BR qfw-qpm-svc (1),
+.BR qfw (7)
