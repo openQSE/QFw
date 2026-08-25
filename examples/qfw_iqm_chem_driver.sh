@@ -522,19 +522,12 @@ if ! qfw_chem_driver_bool_enabled "${dry_run}" ||
 	}
 fi
 
-runtime_config="${run_dir}/config/chem-site-runtime.yaml"
 launcher="${run_dir}/config/qfw-chem-with-reservation.py"
 app_run_dir="${run_dir}/runtime"
 driver_result="${run_dir}/driver.jsonl"
 example_result="${run_dir}/chemistry-example.jsonl"
 stdout_log="${run_dir}/logs/qfw-iqm-chem-driver.stdout.log"
 stderr_log="${run_dir}/logs/qfw-iqm-chem-driver.stderr.log"
-
-cat >"${runtime_config}" <<EOF
-resolver:
-  scope-order:
-    - site
-EOF
 
 launcher_args=(
 	"--qfw"
@@ -651,8 +644,8 @@ if qfw_chem_driver_bool_enabled "${preflight_only}"; then
 fi
 
 if qfw_chem_driver_bool_enabled "${dry_run}"; then
-	printf "DRY RUN qfw-setup --site-config %q --runtime-config %q --run-dir %q\n" \
-		"${site_config}" "${runtime_config}" "${app_run_dir}"
+	printf "DRY RUN qfw-setup --site-config %q --run-dir %q\n" \
+		"${site_config}" "${app_run_dir}"
 	printf "DRY RUN QFW_EXAMPLE_RESULT_FILE=%q QFW_SLURM_DRIVER_RESULT_FILE=%q %q" \
 		"${example_result}" "${driver_result}" \
 		"$(qfw_example_path qfw_slurm_driver.sh)"
@@ -665,7 +658,6 @@ qfw_example_require_runtime
 qfw_chem_driver_preflight_owner "${device_access_config}"
 qfw-setup \
 	--site-config "${site_config}" \
-	--runtime-config "${runtime_config}" \
 	--run-dir "${app_run_dir}"
 
 driver_rc=0

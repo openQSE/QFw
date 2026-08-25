@@ -240,6 +240,53 @@ def test_prepare_run_state_persists_local_dvm_uri(tmp_path):
     assert state["local_dirsvc"]["telnet_port"] == 0
 
 
+def test_prepare_run_state_selects_one_profile_service(tmp_path):
+    site_path = tmp_path / "site.yaml"
+    runtime_path = tmp_path / "runtime.yaml"
+    site = {
+        "install": {
+            "qfw-prefix": str(tmp_path / "qfw"),
+            "defw-prefix": str(tmp_path / "defw"),
+        },
+    }
+    runtime = {
+        "resolver": {
+            "scope-order": ["local"],
+        },
+        "local-services": {
+            "start-dirsvc": True,
+            "start-qpm": True,
+        },
+    }
+
+    state = qfw_config.prepare_run_state(
+        site_path,
+        runtime_path,
+        site,
+        runtime,
+        run_id="selected-service-test",
+        run_dir=tmp_path / "run",
+        dry_run=True,
+        service_id="nwqsim",
+    )
+
+    assert state["local_services"]["services"] == ["nwqsim"]
+
+
+def test_prepare_run_state_rejects_service_without_local_profile(tmp_path):
+    with pytest.raises(ValueError, match="requires a runtime profile"):
+        qfw_config.prepare_run_state(
+            tmp_path / "site.yaml",
+            tmp_path / "runtime.yaml",
+            {},
+            {"resolver": {"scope-order": ["site"]}},
+            run_id="invalid-service-test",
+            run_dir=tmp_path / "run",
+            dry_run=True,
+            service_id="nwqsim",
+        )
+
+
 def test_local_directory_rejects_duplicate_listen_and_telnet_ports():
     local = {
         "dirsvc": {

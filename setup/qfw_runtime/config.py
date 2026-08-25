@@ -486,7 +486,7 @@ def load_service_manifest(path):
 
 def prepare_run_state(site_config_path, runtime_config_path, site_config,
                       runtime_config, profile=None, run_id=None,
-                      run_dir=None, dry_run=False):
+                      run_dir=None, dry_run=False, service_id=None):
     prefixes = site_install_prefixes(site_config)
     qfw_install_prefix = prefixes["qfw_prefix"]
     defw_install_prefix = prefixes["defw_prefix"]
@@ -503,7 +503,12 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
     log_dir.mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
 
-    local_config = local_services(runtime_config)
+    local_config = dict(local_services(runtime_config))
+    if service_id:
+        if not local_config:
+            raise ValueError(
+                "--service-id requires a runtime profile with local-services")
+        local_config["services"] = [service_id]
     scope_order = resolver_scope_order(runtime_config)
     scope_override = os.environ.get("QFW_QPM_RESOLVER_SCOPE_ORDER")
     if scope_override:

@@ -13,8 +13,8 @@ site directory and QPM while owning only its application runtime.
 Options:
   --service-mode MODE       local or site (default: local)
   --backend NAME            Backend for compatible examples (default: nwqsim)
-  --site-config PATH        Site configuration required by site mode
-  --runtime-config PATH     Site-only runtime configuration required by site mode
+  --site-config PATH        Override the activated site configuration
+  --runtime-config PATH     Override the selected runtime profile
   --tests LIST              Comma-separated case names (default: all)
   --verbose                 Enable shell tracing in example wrappers
   -h, --help                Show this help
@@ -101,16 +101,7 @@ case "${service_mode}" in
 		exit 2
 		;;
 esac
-if [[ "${service_mode}" == "site" ]]; then
-	if [[ -z "${site_config}" || ! -r "${site_config}" ]]; then
-		echo "ERROR: site mode requires a readable --site-config" >&2
-		exit 2
-	fi
-	if [[ -z "${runtime_config}" || ! -r "${runtime_config}" ]]; then
-		echo "ERROR: site mode requires a readable --runtime-config" >&2
-		exit 2
-	fi
-elif [[ "${backend}" == "iqm" ]]; then
+if [[ "${service_mode}" != "site" && "${backend}" == "iqm" ]]; then
 	echo "ERROR: the IQM backend requires --service-mode site" >&2
 	exit 2
 fi
@@ -157,9 +148,12 @@ test_index=0
 
 common_args=(--service-mode "${service_mode}" --backend "${backend}")
 if [[ "${service_mode}" == "site" ]]; then
-	common_args+=(
-		--site-config "${site_config}"
-		--runtime-config "${runtime_config}")
+	if [[ -n "${site_config}" ]]; then
+		common_args+=(--site-config "${site_config}")
+	fi
+	if [[ -n "${runtime_config}" ]]; then
+		common_args+=(--runtime-config "${runtime_config}")
+	fi
 fi
 case "${verbose}" in
 	1|yes|true|on|y|YES|TRUE|ON|Y) common_args=(--verbose "${common_args[@]}") ;;

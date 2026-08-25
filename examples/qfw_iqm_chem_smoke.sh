@@ -335,15 +335,6 @@ qfw_chem_qpm_ready() {
 	qfw-qpm-svc status --run-dir "${qpm_run_dir}" >/dev/null 2>&1
 }
 
-qfw_chem_write_site_runtime_config() {
-	chem_site_runtime_config="${run_dir}/config/chem-site-runtime.yaml"
-	cat >"${chem_site_runtime_config}" <<EOF
-resolver:
-  scope-order:
-    - site
-EOF
-}
-
 qfw_chem_emit_result() {
 	local status="$1"
 	local app_rc="$2"
@@ -518,8 +509,6 @@ if ! qfw_chem_bool_enabled "${dry_run}"; then
 	qfw_example_require_runtime
 fi
 
-qfw_chem_write_site_runtime_config
-
 if [[ "${service_mode}" == "site" && -z "${site_config}" ]]; then
 	echo "ERROR: --site-config is required for site mode" >&2
 	exit 2
@@ -554,7 +543,6 @@ if [[ "${service_mode}" == "site" ]]; then
 		--service-mode "${service_mode}"
 		--backend "${backend}"
 		--site-config "${site_config}"
-		--runtime-config "${chem_site_runtime_config}"
 		--chem-app-dir "${chem_app_dir}"
 		"${chem_script}"
 		--smoke
@@ -602,7 +590,6 @@ else
 		export QFW_QPU_DEVICE_ID="${target_device}"
 		if [[ "${service_mode}" == "site" ]]; then
 			export QFW_SITE_CONFIG="${site_config}"
-			export QFW_RUNTIME_CONFIG="${chem_site_runtime_config}"
 		fi
 		"${chem_command[@]}"
 	) >"${stdout_path}" 2>"${stderr_path}"

@@ -67,9 +67,7 @@ qfw_example_emit finish ok 0 3 0
 def test_execution_options_select_site_runtime_without_local_services(
         tmp_path):
     site = tmp_path / "site.yaml"
-    runtime = tmp_path / "runtime.yaml"
     site.write_text("directory-service: {}\n", encoding="utf-8")
-    runtime.write_text("resolver: {}\n", encoding="utf-8")
     script = f"""
 source examples/qfw_example_common.sh
 qfw-setup() {{ printf 'setup:%s\\n' "$*"; }}
@@ -77,7 +75,7 @@ qfw-srun() {{ :; }}
 qfw-teardown() {{ :; }}
 qfw_example_parse_execution_options \\
   --service-mode site --backend nwqsim \\
-  --site-config {site} --runtime-config {runtime} payload
+  --site-config {site} payload
 printf 'selection:%s:%s:%s\\n' \\
   "$QFW_EXAMPLE_SERVICE_MODE" "$QFW_EXAMPLE_BACKEND" \\
   "${{QFW_EXAMPLE_REMAINING_ARGS[*]}}"
@@ -94,7 +92,30 @@ qfw_example_setup_backend_service nwqsim
 
     assert "selection:site:nwqsim:payload" in result.stdout
     assert f"--site-config {site}" in result.stdout
-    assert f"--runtime-config {runtime}" in result.stdout
+    assert "--runtime-config" not in result.stdout
+    assert "--profile" not in result.stdout
+
+
+def test_execution_options_select_installed_local_profile():
+    script = """
+source examples/qfw_example_common.sh
+qfw-setup() { printf 'setup:%s\n' "$*"; }
+qfw-srun() { :; }
+qfw-teardown() { :; }
+qfw_example_parse_execution_options \
+  --service-mode local --backend nwqsim payload
+qfw_example_setup_backend_service nwqsim
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "setup:--profile local --service-id nwqsim" in result.stdout
 
 
 def test_execution_options_reject_unknown_service_mode():

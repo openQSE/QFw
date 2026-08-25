@@ -45,6 +45,7 @@ def qfw_setup(argv):
     parser.add_argument("--site-config")
     parser.add_argument("--runtime-config")
     parser.add_argument("--profile")
+    parser.add_argument("--service-id")
     parser.add_argument("--run-id")
     parser.add_argument("--run-dir")
     parser.add_argument("--dry-run", action="store_true")
@@ -69,6 +70,7 @@ def qfw_setup(argv):
         run_id=args.run_id,
         run_dir=args.run_dir,
         dry_run=args.dry_run,
+        service_id=args.service_id,
     )
 
     try:

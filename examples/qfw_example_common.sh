@@ -231,17 +231,22 @@ qfw_example_setup_local_services() {
 qfw_example_setup_site_services() {
 	local site_config="${QFW_EXAMPLE_SITE_CONFIG_PATH:-${QFW_SITE_CONFIG:-}}"
 	local runtime_config="${QFW_EXAMPLE_RUNTIME_CONFIG_PATH:-${QFW_RUNTIME_CONFIG:-}}"
-	if [[ -z "${site_config}" || ! -r "${site_config}" ]]; then
-		echo "ERROR: site service mode requires a readable --site-config" >&2
-		return 2
+	local setup_args=()
+	if [[ -n "${site_config}" ]]; then
+		if [[ ! -r "${site_config}" ]]; then
+			echo "ERROR: site config is not readable: ${site_config}" >&2
+			return 2
+		fi
+		setup_args+=(--site-config "${site_config}")
 	fi
-	if [[ -z "${runtime_config}" || ! -r "${runtime_config}" ]]; then
-		echo "ERROR: site service mode requires a readable --runtime-config" >&2
-		return 2
+	if [[ -n "${runtime_config}" ]]; then
+		if [[ ! -r "${runtime_config}" ]]; then
+			echo "ERROR: runtime config is not readable: ${runtime_config}" >&2
+			return 2
+		fi
+		setup_args+=(--runtime-config "${runtime_config}")
 	fi
-	qfw_example_setup \
-		--site-config "${site_config}" \
-		--runtime-config "${runtime_config}"
+	qfw_example_setup "${setup_args[@]}"
 }
 
 qfw_example_default_service_manifest() {
@@ -283,7 +288,9 @@ qfw_example_setup_backend_service() {
 		local)
 			local service_name
 			service_name="$(qfw_example_service_for_backend "$1")"
-			qfw_example_setup_qpm_services "${service_name}"
+			qfw_example_setup \
+				--profile local \
+				--service-id "${service_name}"
 			;;
 		site)
 			qfw_example_setup_site_services
