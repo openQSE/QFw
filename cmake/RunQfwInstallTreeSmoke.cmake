@@ -535,8 +535,9 @@ execute_process(
 			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
 			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-prompt-switch.err'
 			qfw-deactivate
-			test \"\${PS1}\" = 'original> '
-			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
+			test \"\${PS1}\" = '(fake-venv) original> '
+			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
 			deactivate
 			test \"\${PS1}\" = 'original> '
 			test -z \"\${VIRTUAL_ENV+x}\"
@@ -549,7 +550,8 @@ execute_process(
 			test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 			qfw-deactivate
 			test \"\${PS1}\" = 'original> '
-			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			test -z \"\${VIRTUAL_ENV+x}\"
+			! declare -F deactivate >/dev/null 2>&1
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_switch_venv}' 2> '${qfw_run_base}/qfw-activate-switch.err'
 			test \"\${PS1}\" = '(qfw) original> '
@@ -559,16 +561,16 @@ execute_process(
 			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-switch.err'
 			qfw-deactivate
 			test \"\${PS1}\" = 'original> '
-			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
-			deactivate
 			test -z \"\${VIRTUAL_ENV+x}\"
+			! declare -F deactivate >/dev/null 2>&1
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv='${qfw_activation_venv}'
 			test \"\${PS1}\" = '(qfw) original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
 			qfw-deactivate
 			test \"\${PS1}\" = 'original> '
-			deactivate"
+			test -z \"\${VIRTUAL_ENV+x}\"
+			! declare -F deactivate >/dev/null 2>&1"
 		RESULT_VARIABLE activation_venv_rc)
 	if(NOT activation_venv_rc EQUAL 0)
 		message(FATAL_ERROR "QFw install activation venv smoke failed")
