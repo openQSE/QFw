@@ -3,6 +3,12 @@ set(QFW_MAN1_PAGES
 	man1/qfw-activate.1
 	man1/qfw-deactivate.1
 	man1/qfw-dir-svc.1
+	man1/qfw_chem_app.sh.1
+	man1/qfw_ghz.sh.1
+	man1/qfw_mpi_smoke.sh.1
+	man1/qfw_qiskit_simple.sh.1
+	man1/qfw_run_all.sh.1
+	man1/qfw_supermarq.sh.1
 	man1/qfw-qpm-svc.1
 	man1/qfw-setup.1
 	man1/qfw-srun.1
@@ -17,6 +23,7 @@ set(QFW_MAN5_PAGES
 
 set(QFW_MAN7_PAGES
 	man7/qfw.7
+	man7/qfw-examples.7
 	man7/qfw-service-lifecycle.7)
 
 foreach(qfw_man_section RANGE 1 9)

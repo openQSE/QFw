@@ -23,7 +23,7 @@ Environment overrides:
   QFW_RUN_ALL_SERVICE_MODE=<local|site>
   QFW_RUN_ALL_BACKEND=<name>          Backend for compatible tests
   QFW_RUN_ALL_SITE_CONFIG=<path>      Site configuration
-  QFW_RUN_ALL_RUNTIME_CONFIG=<path>   Site-only runtime configuration
+  QFW_RUN_ALL_RUNTIME_CONFIG=<path>   Runtime configuration override
   QFW_RUN_ALL_TESTS=<list>            Comma-separated case names
   QFW_RUN_ALL_QUBITS=<n>              Qubit count for GHZ/simple tests
   QFW_RUN_ALL_ITERS=<n>               Iterations for GHZ tests

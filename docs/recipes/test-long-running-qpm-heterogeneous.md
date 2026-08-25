@@ -12,8 +12,8 @@ client-readable site configuration and its directory connection file. They do
 not need the site QPM run directory or DVM URI.
 
 `qfw-activate(1)` prepares the application shell; run `man 1 qfw-activate` for
-its environment and virtual-environment rules. The example runner documents
-its arguments through `qfw_run_all.sh --help`.
+its environment and virtual-environment rules. Run `man 1 qfw_run_all.sh` for
+the example runner's arguments and runnable examples.
 
 ## 2. Request the application allocation
 
@@ -47,8 +47,8 @@ cd "${QFW_SHARE_DIR}/examples"
 Each compatible example passes the activated `QFW_SITE_CONFIG` to
 `qfw-setup(1)` without selecting a profile. The same behavior applies when an
 individual wrapper, such as `qfw_ghz.sh`, receives `--service-mode site`. Run
-`qfw_run_all.sh --help` for runner options and `man 1 qfw-setup` for runtime
-selection details.
+`man 1 qfw_ghz.sh` for that test, `man 1 qfw_run_all.sh` for runner options,
+and `man 1 qfw-setup` for runtime selection details.
 
 `qfw-srun(1)` places ordinary application work in group 0. Run
 `man 1 qfw-srun` for its placement options. Group 1 remains

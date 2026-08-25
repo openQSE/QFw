@@ -117,6 +117,12 @@ foreach(man_page
 		man1/qfw-activate.1
 		man1/qfw-deactivate.1
 		man1/qfw-dir-svc.1
+		man1/qfw_chem_app.sh.1
+		man1/qfw_ghz.sh.1
+		man1/qfw_mpi_smoke.sh.1
+		man1/qfw_qiskit_simple.sh.1
+		man1/qfw_run_all.sh.1
+		man1/qfw_supermarq.sh.1
 		man1/qfw-qpm-svc.1
 		man1/qfw-setup.1
 		man1/qfw-srun.1
@@ -126,6 +132,7 @@ foreach(man_page
 		man5/qfw-services.yaml.5
 		man5/qfw-site.yaml.5
 		man7/qfw.7
+		man7/qfw-examples.7
 		man7/qfw-service-lifecycle.7)
 	if(NOT EXISTS "${qfw_man_root}/${man_page}")
 		message(FATAL_ERROR "missing installed manual page: ${man_page}")

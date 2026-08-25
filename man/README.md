@@ -38,4 +38,6 @@ cmake --install build --component documentation
 the source-tree pages available when activation uses a CMake build tree.
 The application lifecycle is documented by `qfw-activate(1)`,
 `qfw-setup(1)`, `qfw-status(1)`, `qfw-srun(1)`, `qfw-teardown(1)`, and
-`qfw-deactivate(1)`.
+`qfw-deactivate(1)`. Installed tests and their service-mode behavior are
+introduced by `qfw-examples(7)`. Each public test wrapper has a section 1 page
+whose name includes the script's `.sh` suffix.

@@ -1,0 +1,135 @@
+.TH QFW_RUN_ALL.SH 1 "August 2026" "QFw 0.1.0" "QFw Examples"
+.SH NAME
+qfw_run_all.sh \- run the backend-compatible QFw example suite
+.SH SYNOPSIS
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_run_all.sh [options]
+.EE
+.SH DESCRIPTION
+.B qfw_run_all.sh
+runs compatible examples sequentially and verifies that each completed wrapper
+emits a successful terminal result. It continues after individual failures,
+prints a pass, fail, and skip summary, and returns nonzero when any selected
+test fails.
+.PP
+Local mode gives each backend-aware wrapper its own application-owned service
+lifecycle. Site mode connects every compatible wrapper to the existing site
+directory and QPM. MPI smoke remains a separate command because it validates
+a specialized MPI service and task-placement contract.
+.SH OPTIONS
+.TP
+.BI --service-mode " mode"
+Select
+.B local
+or
+.BR site .
+The default is
+.BR local .
+.TP
+.BI --backend " name"
+Select the backend used by compatible tests. The default is
+.BR nwqsim .
+Real IQM requires site mode.
+.TP
+.BI --site-config " path"
+Override the activated site configuration for a site-mode run.
+.TP
+.BI --runtime-config " path"
+Override the runtime selected by the service mode. Normal local and site runs
+use installed profiles and do not require this option.
+.TP
+.BI --tests " list"
+Run a comma-separated subset. Valid names are
+.BR init-test ,
+.BR shim-smoke ,
+.BR qiskit-simple ,
+.BR ghz-qiskit ,
+.BR ghz-pennylane ,
+.BR pennylane ,
+.BR qaoa ,
+.BR qiskit-vqe ,
+.BR supermarq ,
+and
+.BR chemistry .
+.TP
+.B --verbose
+Enable shell tracing in the selected wrappers.
+.TP
+.BR -h , " --help"
+Print command help.
+.SH ENVIRONMENT
+.TP
+.B QFW_RUN_ALL_QUBITS
+Qubit count for simple and GHZ tests. The default is 4.
+.TP
+.B QFW_RUN_ALL_ITERS
+GHZ iteration count. The default is 1.
+.TP
+.B QFW_RUN_ALL_SHOTS
+SuperMarQ shot count. The default is 128.
+.TP
+.B QFW_RUN_ALL_VQE_ITERS
+Qiskit VQE optimizer iterations. The default is 1.
+.TP
+.B QFW_RUN_ALL_SHIM_LIB
+Shim library for the local shim smoke case. Use
+.B qrmi
+or
+.BR qdmi .
+.TP
+.B QFW_RUN_ALL_CHEM_APP
+Chemistry script name. The chemistry case is skipped when this is unset.
+.TP
+.B QFW_RUN_ALL_TESTS
+Default comma-separated selection for
+.BR --tests .
+.PP
+The corresponding
+.BR QFW_RUN_ALL_SERVICE_MODE ,
+.BR QFW_RUN_ALL_BACKEND ,
+.BR QFW_RUN_ALL_SITE_CONFIG ,
+and
+.B QFW_RUN_ALL_RUNTIME_CONFIG
+variables provide defaults for their command options.
+.SH EXAMPLES
+Run three short NWQSim tests with application-owned services:
+.EX
+salloc --nodes=1 --ntasks=1 --time=00:30:00
+source /opt/openqse/qfw/current/bin/qfw-activate \e
+  --venv /opt/openqse/qfw/venv
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_run_all.sh --service-mode local --backend nwqsim \e
+  --tests init-test,qiskit-simple,ghz-qiskit
+qfw-deactivate
+.EE
+.PP
+Run the compatible suite against a site-owned NWQSim QPM:
+.EX
+source /opt/openqse/qfw/current/bin/qfw-activate \e
+  --venv /opt/openqse/qfw/venv
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_run_all.sh --service-mode site --backend nwqsim
+qfw-deactivate
+.EE
+.PP
+Run one bounded SuperMarQ workload against a site-owned IQM QPM:
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+QFW_RUN_ALL_QUBITS=2 QFW_RUN_ALL_SHOTS=16 \e
+  ./qfw_run_all.sh --service-mode site --backend iqm \e
+  --tests supermarq
+.EE
+.SH RESULTS
+Logs and per-test JSONL files are written beneath
+.IR QFW_RUN_BASE_DIR/examples-run-timestamp .
+The combined machine-readable report is
+.IR summary.jsonl .
+.SH SEE ALSO
+.BR qfw_qiskit_simple.sh (1),
+.BR qfw_ghz.sh (1),
+.BR qfw_supermarq.sh (1),
+.BR qfw-examples (7),
+.BR qfw-activate (1),
+.BR qfw-setup (1),
+.BR qfw-deactivate (1)

@@ -92,8 +92,8 @@ Site services are always owned through independent `qfw-dir-svc(1)` and
 `--service-mode site` option connects each compatible case to those existing
 services without transferring ownership or requiring an application-generated
 runtime file. `--service-mode local` selects the installed local profile and
-only the requested backend service. Run `qfw_run_all.sh --help` for runner
-arguments and `man 1 qfw-setup` for profile selection details.
+only the requested backend service. Run `man 1 qfw_run_all.sh` for runner
+arguments and examples, and `man 1 qfw-setup` for profile selection details.
 
 <details>
 <summary>Diagnostics, verification, reservations, and cleanup</summary>

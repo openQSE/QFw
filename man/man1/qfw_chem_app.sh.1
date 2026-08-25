@@ -1,0 +1,89 @@
+.TH QFW_CHEM_APP.SH 1 "August 2026" "QFw 0.1.0" "QFw Examples"
+.SH NAME
+qfw_chem_app.sh \- run a QFw-enabled chemistry application
+.SH SYNOPSIS
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_chem_app.sh [common-options] [--chem-app-dir directory] \e
+  script.py [script-arguments ...]
+.EE
+.SH DESCRIPTION
+.B qfw_chem_app.sh
+locates an external chemistry application, starts or connects to the selected
+QPM, and launches the script through
+.BR qfw-srun (1).
+The wrapper appends
+.B --qfw
+and
+.BI --backend " name"
+to the application arguments. The selected script must implement those
+options.
+.SH OPTIONS
+.TP
+.BI --chem-app-dir " directory"
+Directory containing the chemistry script. If omitted, the wrapper checks the
+adjacent
+.I chemistry_example_aim2
+checkout and the installed example test tree.
+.TP
+.BR -h , " --help"
+Print command help.
+.SH COMMON OPTIONS
+.TP
+.BI --service-mode " mode"
+Use application-owned
+.B local
+services or an existing
+.B site
+QPM. The default is local.
+.TP
+.BI --backend " name"
+Select the QPM provider. The default comes from
+.B QFW_CHEM_BACKEND
+or falls back to
+.BR nwqsim .
+.TP
+.BI --site-config " path"
+Override the activated site configuration.
+.TP
+.BI --runtime-config " path"
+Override the installed runtime selected by the service mode.
+.TP
+.B --verbose
+Enable shell tracing.
+.PP
+Common options must precede
+.B --chem-app-dir
+and the script name.
+.SH ENVIRONMENT
+.TP
+.B QFW_CHEM_APP_DIR
+Default chemistry application directory.
+.TP
+.B QFW_CHEM_BACKEND
+Default backend when
+.B --backend
+is omitted.
+.SH EXAMPLES
+Run the AIM2 helium smoke input on an application-owned NWQSim QPM:
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_chem_app.sh --service-mode local --backend nwqsim \e
+  --chem-app-dir /path/to/chemistry_example_aim2 \e
+  example_1_He_from_pyscf.py --smoke --no-draw \e
+  --reservation-shots 16
+.EE
+.PP
+Run the same bounded input through a site-owned IQM QPM:
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_chem_app.sh --service-mode site --backend iqm \e
+  --chem-app-dir /path/to/chemistry_example_aim2 \e
+  example_1_He_from_pyscf.py --smoke --no-draw \e
+  --reservation-shots 16
+.EE
+.SH SEE ALSO
+.BR qfw_run_all.sh (1),
+.BR qfw-examples (7),
+.BR qfw-srun (1),
+.BR qfw-runtime.yaml (5)

@@ -1211,6 +1211,9 @@ Run a SuperMarQ GHZ circuit through NWQ-Sim:
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
 
+The installed command reference is available through
+`man 7 qfw-examples` and `man 1 qfw_run_all.sh`.
+
 Run the compatible examples with application-owned NWQSim services:
 
 ```bash

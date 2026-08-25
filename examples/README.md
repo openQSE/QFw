@@ -2,7 +2,8 @@
 
 These scripts are intended to run after the QFw environment has been
 activated inside a Slurm allocation. They are integration examples, not
-unit tests.
+unit tests. Run `man 7 qfw-examples` for the installed overview and
+`man 1 <script-name>` for a public wrapper's complete command reference.
 
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate

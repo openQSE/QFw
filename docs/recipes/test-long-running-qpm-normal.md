@@ -14,8 +14,8 @@ The application needs the client-readable site configuration. It does not need
 the QPM manager run directory or DVM URI.
 
 `qfw-activate(1)` prepares the application shell; run `man 1 qfw-activate` for
-its environment and virtual-environment rules. The example runner documents
-its arguments through `qfw_run_all.sh --help`.
+its environment and virtual-environment rules. Run `man 1 qfw_run_all.sh` for
+the example runner's arguments and runnable examples.
 
 ## 2. Request and prepare the application allocation
 
@@ -49,8 +49,9 @@ cd "${QFW_SHARE_DIR}/examples"
 Each compatible example passes the activated `QFW_SITE_CONFIG` to
 `qfw-setup(1)` without selecting a profile. An application developer can use
 the same behavior by passing `--service-mode site` to an individual wrapper,
-such as `qfw_ghz.sh`. Run `qfw_run_all.sh --help` for runner options and
-`man 1 qfw-setup` for runtime selection details.
+such as `qfw_ghz.sh`. Run `man 1 qfw_ghz.sh` for that test,
+`man 1 qfw_run_all.sh` for runner options, and `man 1 qfw-setup` for runtime
+selection details.
 
 Every passing case must emit a successful terminal JSONL record. MPI smoke
 remains separate because it has its own task-placement contract.

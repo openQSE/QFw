@@ -5,8 +5,8 @@ Use application-owned service mode for the simplest QFw validation topology.
 `qfw-activate(1)` prepares the shell; run `man 1 qfw-activate` for its
 environment and virtual-environment rules. `qfw-deactivate(1)` restores the
 shell and deactivates the virtual environment selected by `--venv`; run
-`man 1 qfw-deactivate` for details. The example runner documents its arguments
-through `qfw_run_all.sh --help`.
+`man 1 qfw-deactivate` for details. Run `man 1 qfw_run_all.sh` for the example
+runner and `man 1 qfw_mpi_smoke.sh` for the separate MPI test.
 
 ```bash
 salloc --nodes=1 --ntasks=1 --time=00:30:00

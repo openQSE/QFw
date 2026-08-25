@@ -1,0 +1,90 @@
+.TH QFW_SUPERMARQ.SH 1 "August 2026" "QFw 0.1.0" "QFw Examples"
+.SH NAME
+qfw_supermarq.sh \- run a SuperMarQ workload through QFw admission control
+.SH SYNOPSIS
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_supermarq.sh [common-options] run iterations start-qubits \e
+  shots increase method backend
+.EE
+.SH DESCRIPTION
+.B qfw_supermarq.sh
+runs a SuperMarQ GHZ or VQE workload through the QFw Slurm-style reservation
+driver. It reserves the requested circuit count, qubits, and shots before
+launching the application. The reservation is released when the test ends.
+.SH ARGUMENTS
+.TP
+.I run
+Use
+.B sync
+for synchronous QPM calls or
+.B async
+for asynchronous submission and completion reads.
+.TP
+.I iterations
+Positive workload iteration count.
+.TP
+.I start-qubits
+Initial circuit width.
+.TP
+.I shots
+Shots per circuit.
+.TP
+.I increase
+Boolean value. When true, each iteration adds one qubit.
+.TP
+.I method
+Use
+.B ghz
+or
+.BR vqe .
+.TP
+.I backend
+QPM provider name. An explicit
+.B --backend
+option takes precedence.
+.SH COMMON OPTIONS
+.TP
+.BI --service-mode " mode"
+Use application-owned
+.B local
+services or an existing
+.B site
+QPM.
+.TP
+.BI --backend " name"
+Override the positional backend.
+.TP
+.BI --site-config " path"
+Override the activated site configuration.
+.TP
+.BI --runtime-config " path"
+Override the installed runtime selected by the service mode.
+.TP
+.B --verbose
+Enable shell tracing.
+.PP
+Common options must precede the positional arguments.
+.SH ENVIRONMENT
+.TP
+.B QFW_SUPERMARQ_RESERVATION_COUNT
+Override the reserved quantum-task count. It defaults to the iteration count.
+.SH EXAMPLES
+Run one four-qubit GHZ circuit with 128 shots on NWQSim:
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_supermarq.sh --service-mode local --backend nwqsim \e
+  sync 1 4 128 false ghz nwqsim
+.EE
+.PP
+Run one bounded two-qubit GHZ circuit on a site-owned IQM QPM:
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_supermarq.sh --service-mode site --backend iqm \e
+  sync 1 2 16 false ghz iqm
+.EE
+.SH SEE ALSO
+.BR qfw_ghz.sh (1),
+.BR qfw_run_all.sh (1),
+.BR qfw-examples (7),
+.BR qfw-srun (1)
