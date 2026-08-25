@@ -214,7 +214,7 @@ def test_resolver_filters_real_directory_records_by_type_and_capability():
 		selector_resource="shared-target",
 		api_category="execution",
 		qpm_type=QPMType.QPM_TYPE_HARDWARE,
-		qpm_capability=QPMCapability.QPM_CAP_SUPERCONDUCTING,
+		qpm_capabilities=QPMCapability.QPM_CAP_SUPERCONDUCTING,
 		timeout=1,
 	)
 

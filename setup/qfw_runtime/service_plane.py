@@ -35,31 +35,6 @@ class _StoreOnce(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
-def main(argv=None):
-    parser = _argument_parser()
-    args = parser.parse_args(argv)
-
-    try:
-        if args.action == "start":
-            state = start(args)
-            _print_state(state)
-            return 0
-        if args.action == "run":
-            return run(args)
-        if args.action == "status":
-            state = status(args.run_dir)
-            _print_state(state)
-            return 0 if state["state"] == "ready" else 1
-        if args.action == "stop":
-            state = stop(args.run_dir)
-            _print_state(state)
-            return 0
-    except (OSError, ServicePlaneError, ValueError) as exc:
-        print(f"qfw-service-plane: {exc}", file=sys.stderr)
-        return 1
-    return 2
-
-
 def directory_service_main(argv=None):
     return _role_main("directory", argv)
 
@@ -91,7 +66,6 @@ def start_role(role, *, run_dir, site_config=None, runtime_config=None,
         poll_interval=poll_interval,
         dry_run=bool(dry_run),
         component_mode=role,
-        service_node=None,
         directory_node=None,
         qpm_node=None,
         directory_service_info=(
@@ -146,7 +120,6 @@ def _role_argument_parser(program, role):
         command.add_argument("--dry-run", action="store_true")
         command.set_defaults(
             component_mode=role,
-            service_node=None,
             directory_node=None,
             qpm_node=None,
             directory_service_info=None,
@@ -162,57 +135,6 @@ def _role_argument_parser(program, role):
         command = actions.add_parser(name)
         command.add_argument("--run-dir", required=True)
     return parser
-
-
-def _argument_parser():
-    parser = argparse.ArgumentParser(
-        prog="qfw-service-plane",
-        description=(
-            "Start, supervise, inspect, or stop a QFw service plane. "
-            "The selected YAML files are authoritative; service-plane.json "
-            "is generated runtime state."
-        ),
-    )
-    actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("start", "run"):
-        command = actions.add_parser(name)
-        _add_start_arguments(command)
-    for name in ("status", "stop"):
-        command = actions.add_parser(name)
-        command.add_argument("--run-dir", required=True)
-    return parser
-
-
-def _add_start_arguments(parser):
-    parser.add_argument("--run-dir", required=True)
-    parser.add_argument("--site-config")
-    parser.add_argument("--runtime-config")
-    parser.add_argument("--profile")
-    parser.add_argument(
-        "--scope",
-        choices=("application", "site"),
-        default="site",
-        help="Select application-owned or site-owned service configuration",
-    )
-    parser.add_argument(
-        "--service-id",
-        dest="service_id",
-        action=_StoreOnce,
-        help="Single QPM service to start",
-    )
-    parser.add_argument(
-        "--service-node",
-        help="Node on which to start the directory service and default QPM",
-    )
-    parser.add_argument("--timeout", type=int, default=120)
-    parser.add_argument("--poll-interval", type=float, default=2.0)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.set_defaults(
-        component_mode="combined",
-        directory_node=None,
-        qpm_node=None,
-        directory_service_info=None,
-    )
 
 
 def start(args):
@@ -366,7 +288,10 @@ def _resolve_plan(args, run_dir):
     runtime = qfw_config.load_yaml(runtime_path)
     local = qfw_config.local_services(runtime)
     allocation = getattr(args, "allocation", None) or _allocation_context()
-    component_mode = getattr(args, "component_mode", "combined")
+    component_mode = args.component_mode
+    if component_mode not in {"directory", "qpm"}:
+        raise ServicePlaneError(
+            f"unsupported service-plane role: {component_mode}")
     node = getattr(args, "node", None)
     if args.scope == "application" and node:
         raise ServicePlaneError(
@@ -374,13 +299,11 @@ def _resolve_plan(args, run_dir):
             "selected automatically")
     directory_node = (
         getattr(args, "directory_node", None) or
-        (node if component_mode == "directory" else None) or
-        getattr(args, "service_node", None)
+        (node if component_mode == "directory" else None)
     )
     qpm_node = (
         getattr(args, "qpm_node", None) or
-        (node if component_mode == "qpm" else None) or
-        getattr(args, "service_node", None)
+        (node if component_mode == "qpm" else None)
     )
     for selected_node in {directory_node, qpm_node} - {None}:
         if allocation["mode"] == "local" and selected_node not in {
@@ -404,16 +327,6 @@ def _resolve_plan(args, run_dir):
             "directory": False,
             "qpm": True,
         }
-    else:
-        components = {
-            "prte": qfw_config.bool_config(
-                component_config.get("start-prte"), False),
-            "directory": qfw_config.bool_config(
-                component_config.get("start-dirsvc"), True),
-            "qpm": qfw_config.bool_config(
-                component_config.get("start-qpm"), True),
-        }
-
     if components["directory"]:
         directory = _resolve_directory(
             site, site_path, local, allocation, args.scope,
@@ -1281,4 +1194,5 @@ if __name__ == "__main__":
         raise SystemExit(directory_service_main())
     if role == "qpm":
         raise SystemExit(qpm_service_main())
-    raise SystemExit(main())
+    raise SystemExit(
+        "set QFW_SERVICE_LIFECYCLE_ROLE to 'directory' or 'qpm'")

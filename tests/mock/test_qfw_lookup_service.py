@@ -111,7 +111,7 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	assert dirsvc.queries[0]["service_type"] == "qfw.qpm"
 	assert dirsvc.queries[0]["binding_name"] == "execution"
 	assert dirsvc.queries[0]["qpm_type"] == DEFAULT_QPM_TYPE
-	assert dirsvc.queries[0]["qpm_capability"] == DEFAULT_QPM_CAPABILITIES
+	assert dirsvc.queries[0]["qpm_capabilities"] == DEFAULT_QPM_CAPABILITIES
 	assert dirsvc.queries[0]["qpm_capabilities"] == DEFAULT_QPM_CAPABILITIES
 	assert len(fake_defw.binding_connections) == 1
 	binding = fake_defw.binding_connections[0]

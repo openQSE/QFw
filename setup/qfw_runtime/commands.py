@@ -2,7 +2,6 @@ import argparse
 import json
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -86,7 +85,6 @@ def qfw_setup(argv):
         state["setup_error"] = str(exc)
         qfw_config.write_state(state)
         _cleanup_application_service_managers(state)
-        _cleanup_job_processes(state)
         qfw_config.clear_current_run(state)
         raise
 
@@ -157,7 +155,6 @@ def qfw_teardown(argv):
 
     state = qfw_config.read_state(args.run_dir)
     errors = _cleanup_application_service_managers(state)
-    errors.extend(_cleanup_job_processes(state, report_errors=False))
     qfw_config.clear_current_run(state)
     if not args.keep_run_dir:
         shutil.rmtree(state["run_dir"], ignore_errors=True)
@@ -548,40 +545,6 @@ def _directory_timeout(state, scope):
     return 300
 
 
-def _cleanup_job_processes(state, env=None, allocation=None,
-                           report_errors=True):
-    errors = []
-    try:
-        env, allocation = _cleanup_context_from_state(
-            state, env=env, allocation=allocation)
-    except Exception as exc:
-        errors.append(str(exc))
-        if report_errors:
-            print(
-                "errors while cleaning partially started services: " +
-                "; ".join(errors),
-                file=sys.stderr,
-            )
-        return errors
-    for process in reversed(state.get("processes") or []):
-        if process.get("owner") != "job":
-            continue
-        try:
-            if process.get("role") == "prte-dvm":
-                _cleanup_prte(process, env=env, allocation=allocation)
-            elif process.get("pid") is not None:
-                _cleanup_recorded_process(process, env, allocation)
-        except Exception as exc:
-            errors.append(str(exc))
-    if errors and report_errors:
-        print(
-            "errors while cleaning partially started services: " +
-            "; ".join(errors),
-            file=sys.stderr,
-        )
-    return errors
-
-
 def _cleanup_application_service_managers(state):
     errors = []
     for manager in reversed(state.get("service_managers") or []):
@@ -595,69 +558,6 @@ def _cleanup_application_service_managers(state):
             label = f"{role}:{service_id}" if service_id else role
             errors.append(f"{label}: {exc}")
     return errors
-
-
-def _cleanup_context_from_state(state, env=None, allocation=None):
-    cleanup_env = os.environ.copy()
-    if env:
-        cleanup_env.update(env)
-    cleanup_env.update(state.get("environment") or {})
-    if allocation is None:
-        allocation = _allocation_context_from_env(cleanup_env)
-    _publish_allocation_environment(cleanup_env, allocation)
-    return cleanup_env, allocation
-
-
-def _cleanup_recorded_process(process, env, allocation):
-    pid = int(process["pid"])
-    target = process.get("target")
-    if _should_launch_on_target(allocation, target):
-        _terminate_process_on_target(pid, target, env, allocation)
-        return
-    _terminate_process(pid)
-
-
-def _cleanup_prte(process, env=None, allocation=None):
-    env = env or os.environ.copy()
-    allocation = allocation or {
-        "mode": process.get("allocation_mode", "local"),
-    }
-    targets = _process_targets(process, allocation)
-    launch_target = targets[0] if targets else None
-    uri_path = process.get("uri_path")
-    if uri_path:
-        uri = Path(uri_path)
-        if uri.exists():
-            _run_cleanup_command(
-                ["pterm", "--dvm", f"file:{uri}"],
-                env,
-                allocation,
-                launch_target,
-            )
-        if _should_launch_on_any_target(allocation, targets):
-            for target in targets:
-                _terminate_prte_by_uri(uri, target, env, allocation)
-        shutil.rmtree(str(uri.parent), ignore_errors=True)
-    if not qfw_config.bool_config(process.get("force_cleanup"), False):
-        return
-    cleanup_targets = targets or [None]
-    if _should_launch_on_any_target(allocation, targets):
-        for target in cleanup_targets:
-            for name in ("prte", "prted"):
-                _run_cleanup_command(
-                    ["pkill", "-9", name],
-                    env,
-                    allocation,
-                    target,
-                )
-        return
-    for name in ("prte", "prted"):
-        _run_cleanup_command(
-            ["pkill", "-9", name],
-            env,
-            allocation,
-            None,
-        )
 
 
 def _tcp_endpoint_ready(endpoint):
@@ -798,218 +698,6 @@ def _command_path(name, env=None):
     if found:
         return Path(found)
     raise FileNotFoundError(f"unable to find QFw command: {name}")
-
-
-_REMOTE_TERMINATE_PROCESS = r"""
-import os
-import signal
-import sys
-import time
-
-pid = int(sys.argv[1])
-
-def alive(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-def signal_process(sig):
-    delivered = False
-    try:
-        os.killpg(pid, sig)
-        delivered = True
-    except ProcessLookupError:
-        return False
-    except OSError:
-        pass
-    try:
-        os.kill(pid, sig)
-        delivered = True
-    except ProcessLookupError:
-        return False
-    except OSError:
-        pass
-    return delivered
-
-if not signal_process(signal.SIGTERM):
-    sys.exit(0)
-
-deadline = time.monotonic() + 5
-while time.monotonic() < deadline:
-    if not alive(pid):
-        sys.exit(0)
-    time.sleep(0.1)
-
-signal_process(signal.SIGKILL)
-deadline = time.monotonic() + 2
-while time.monotonic() < deadline:
-    if not alive(pid):
-        sys.exit(0)
-    time.sleep(0.1)
-
-sys.exit(1 if alive(pid) else 0)
-"""
-
-
-_REMOTE_TERMINATE_PRTE_BY_URI = r"""
-import os
-import signal
-import sys
-import time
-
-needle = sys.argv[1]
-
-def proc_cmdline(pid):
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as stream:
-            return stream.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
-
-def is_prte(pid, cmdline):
-    if pid == os.getpid() or not cmdline:
-        return False
-    argv0 = cmdline.split("\0", 1)[0]
-    name = os.path.basename(argv0)
-    if name not in ("prte", "prted"):
-        return False
-    return needle in cmdline.replace("\0", " ")
-
-def collect():
-    pids = []
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
-            continue
-        pid = int(entry)
-        if is_prte(pid, proc_cmdline(pid)):
-            pids.append(pid)
-    return pids
-
-def signal_pid(pid, sig):
-    try:
-        os.killpg(pid, sig)
-    except (ProcessLookupError, OSError):
-        pass
-    try:
-        os.kill(pid, sig)
-    except (ProcessLookupError, OSError):
-        pass
-
-pids = collect()
-for pid in pids:
-    signal_pid(pid, signal.SIGTERM)
-
-deadline = time.monotonic() + 5
-while time.monotonic() < deadline:
-    if not collect():
-        sys.exit(0)
-    time.sleep(0.1)
-
-for pid in collect():
-    signal_pid(pid, signal.SIGKILL)
-
-deadline = time.monotonic() + 2
-while time.monotonic() < deadline:
-    if not collect():
-        sys.exit(0)
-    time.sleep(0.1)
-
-sys.exit(1 if collect() else 0)
-"""
-
-
-def _process_targets(process, allocation):
-    targets = list(process.get("targets") or [])
-    if not targets and process.get("target"):
-        targets.append(process["target"])
-    if not targets and allocation.get("mode") in {"heterogeneous", "slurm"}:
-        group1 = allocation.get("group1") or []
-        if group1:
-            targets.append(group1[0])
-    return targets
-
-
-def _should_launch_on_target(allocation, target):
-    return bool(
-        target and allocation.get("mode") in {"heterogeneous", "slurm"})
-
-
-def _should_launch_on_any_target(allocation, targets):
-    return bool(
-        targets and allocation.get("mode") in {"heterogeneous", "slurm"})
-
-
-def _run_cleanup_command(command, env, allocation, target):
-    command = list(command)
-    if _should_launch_on_target(allocation, target):
-        command = _target_launch_command(command, allocation, target)
-    return subprocess.run(
-        command,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-
-
-def _terminate_process_on_target(pid, target, env, allocation):
-    result = _run_cleanup_command(
-        [sys.executable or "python3", "-c", _REMOTE_TERMINATE_PROCESS,
-         str(pid)],
-        env,
-        allocation,
-        target,
-    )
-    if result.returncode:
-        raise RuntimeError(
-            f"failed to terminate pid {pid} on {target}: "
-            f"status {result.returncode}")
-
-
-def _terminate_prte_by_uri(uri, target, env, allocation):
-    result = _run_cleanup_command(
-        [sys.executable or "python3", "-c", _REMOTE_TERMINATE_PRTE_BY_URI,
-         str(uri)],
-        env,
-        allocation,
-        target,
-    )
-    if result.returncode:
-        raise RuntimeError(
-            f"failed to terminate PRTE processes for {uri} on {target}: "
-            f"status {result.returncode}")
-
-
-def _terminate_process(pid):
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    except OSError:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.1)
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    except OSError:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
 
 
 if __name__ == "__main__":

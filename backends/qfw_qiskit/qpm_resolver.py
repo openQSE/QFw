@@ -147,18 +147,9 @@ class QPMResolutionRequest:
 	selector_resource: Optional[str] = None
 	selector_alias: Optional[str] = None
 	qpm_type: Any = -1
-	qpm_capability: Any = -1
-	qpm_capabilities: Any = None
+	qpm_capabilities: Any = -1
 	provider: Optional[str] = None
 	allow_simulator_fallback: bool = False
-
-	def __post_init__(self):
-		if self.qpm_capabilities is None:
-			object.__setattr__(
-				self, "qpm_capabilities", self.qpm_capability)
-		elif self.qpm_capability in (-1, None):
-			object.__setattr__(
-				self, "qpm_capability", self.qpm_capabilities)
 
 	def binding_filter(self):
 		return binding_name_for_category(self.api_category, self.binding_name)
@@ -255,8 +246,7 @@ class DirectEndpointDirectory:
 			properties["provider"] = provider
 		if kwargs.get("qpm_type") not in (-1, None):
 			properties["qpm_type"] = kwargs.get("qpm_type")
-		qpm_capabilities = kwargs.get(
-			"qpm_capabilities", kwargs.get("qpm_capability"))
+		qpm_capabilities = kwargs.get("qpm_capabilities")
 		if qpm_capabilities not in (-1, None):
 			properties["qpm_capabilities"] = qpm_capabilities
 		return {
@@ -406,7 +396,7 @@ class QPMResolver:
 		if not candidates:
 			raise DEFwReserveError(
 				f"Couldn't connect to a QPM "
-				f"({request.qpm_type}, {request.qpm_capability})")
+				f"({request.qpm_type}, {request.qpm_capabilities})")
 		return self._select_candidate(candidates, request)
 
 	def _collect_candidates(self, request):
@@ -448,7 +438,6 @@ class QPMResolver:
 			"selector_alias": request.selector_alias,
 			"api_category": request.api_category,
 			"qpm_type": request.qpm_type,
-			"qpm_capability": request.qpm_capability,
 			"qpm_capabilities": request.qpm_capabilities,
 			"provider": request.provider,
 		}
@@ -478,16 +467,9 @@ class QPMResolver:
 		_validate_directory_record(service, binding, record)
 		api_binding = _api_binding_from_mapping(binding, request)
 		properties = dict(service.get("properties") or {})
-		for key in (
-				"qpm_type", "qpm_capabilities", "qpm_capability",
-				"capability"):
+		for key in ("qpm_type", "qpm_capabilities", "capability"):
 			if key in service and key not in properties:
 				properties[key] = service[key]
-		if (
-			"qpm_capabilities" not in properties and
-			"qpm_capability" in properties
-		):
-			properties["qpm_capabilities"] = properties["qpm_capability"]
 		selector = dict(service.get("selector") or {})
 		endpoint = service.get("endpoint") or record.get("endpoint")
 		service_id = service.get("service_id") or properties.get("service_id")
@@ -523,7 +505,7 @@ class QPMResolver:
 			return False
 		if not _candidate_bits_match(
 				candidate,
-				("qpm_capabilities", "qpm_capability"),
+				("qpm_capabilities",),
 				request.qpm_capabilities):
 			return False
 		if request.selector_resource:

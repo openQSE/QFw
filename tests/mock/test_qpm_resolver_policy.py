@@ -667,8 +667,8 @@ def test_operation_modes_expose_same_qpm_api_after_binding():
 
 		assert proxy is qpm_api
 		results.append((
-			proxy.reserve({"device": "IQM-20q", "shots": 10}),
-			proxy.release("reservation-1"),
+			proxy.reserve(request={"device": "IQM-20q", "shots": 10}),
+			proxy.release(reservation_id="reservation-1"),
 			proxy.sync_run(
 				{"qasm": "OPENQASM 2.0;", "num_shots": 10},
 				reservation_id="reservation-1",

@@ -249,17 +249,6 @@ qfw_example_setup_site_services() {
 	qfw_example_setup "${setup_args[@]}"
 }
 
-qfw_example_default_service_manifest() {
-	if [[ -n "${QFW_EXAMPLE_SERVICE_MANIFEST:-}" ]]; then
-		printf "%s\n" "${QFW_EXAMPLE_SERVICE_MANIFEST}"
-	elif [[ -n "${QFW_SHARE_DIR:-}" &&
-	        -r "${QFW_SHARE_DIR%/}/config/services/local-services.yaml" ]]; then
-		printf "%s\n" "${QFW_SHARE_DIR%/}/config/services/local-services.yaml"
-	else
-		qfw_example_path "../share/qfw/config/services/local-services.yaml"
-	fi
-}
-
 qfw_example_service_for_backend() {
 	local backend="${1:-}"
 	case "${backend}" in
@@ -271,12 +260,6 @@ qfw_example_service_for_backend() {
 			return 1
 			;;
 	esac
-}
-
-qfw_example_setup_qpm_services() {
-	local manifest_path
-	manifest_path="$(qfw_example_default_service_manifest)"
-	qfw_example_setup_local_services "${manifest_path}" "$@"
 }
 
 qfw_example_setup_backend_service() {

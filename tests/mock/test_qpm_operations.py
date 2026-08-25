@@ -194,7 +194,7 @@ class PendingCompletionQPM(UTIL_QPM):
 def test_managed_operations_flow_reports_telemetry(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-target")
-	reservation_id = qpm.reserve({
+	reservation_id = qpm.reserve(request={
 		"owner": {"user": "ops-user"},
 		"job_id": "ops-job",
 		"num_qubits": 2,
@@ -226,7 +226,7 @@ def test_managed_operations_flow_reports_telemetry(monkeypatch):
 		reservation_id=reservation_id,
 		reason="ops-cancel")
 	after_cancel = qpm.get_capacity_snapshot()
-	released = qpm.release(reservation_id, reason=7)
+	released = qpm.release(reservation_id=reservation_id, reason=7)
 
 	assert cancelled["outcome"] == "CANCELLED"
 	assert after_cancel["held_capacity"]["qtask_count"] == 0
@@ -237,7 +237,7 @@ def test_managed_operations_flow_reports_telemetry(monkeypatch):
 def test_completion_queue_created_and_lazily_repaired(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-cq-create")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 
 	assert reservation_id in qpm.controller.completion_queues
 
@@ -256,7 +256,7 @@ def test_completion_queue_created_and_lazily_repaired(monkeypatch):
 def test_completion_queue_supports_scoped_oldest_peek_and_read(monkeypatch):
 	_setup(monkeypatch)
 	qpm = CompletingQPM(target_id="ops-cq-scoped")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	first = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -312,7 +312,7 @@ def test_qb_qrc_completion_sink_feeds_reservation_queue(
 			return None
 
 	qpm = QBQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	request = parse_execution_request({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -350,7 +350,7 @@ def test_qb_qrc_completion_sink_feeds_reservation_queue(
 def test_operations_timeout_expiration_and_reconciliation(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-timeout")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	qpm.pause_execution_target(reason="operator")
 
 	timed_out = qpm.sync_run({
@@ -369,7 +369,7 @@ def test_operations_timeout_expiration_and_reconciliation(monkeypatch):
 
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-reconcile")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -393,8 +393,8 @@ def test_operations_timeout_expiration_and_reconciliation(monkeypatch):
 def test_operations_reject_reservation_mismatched_task_selectors(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-reservation-scope")
-	reservation_a = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	reservation_b = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_a = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	reservation_b = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -430,8 +430,8 @@ def test_event_notifications_are_isolated_by_reservation_and_filters(monkeypatch
 		return sink
 
 	monkeypatch.setattr(util_qpm, "BaseEventAPI", event_api_factory)
-	reservation_a = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	reservation_b = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_a = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	reservation_b = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	first = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -482,7 +482,7 @@ def test_stale_event_endpoint_does_not_block_live_delivery(monkeypatch):
 		return sink
 
 	monkeypatch.setattr(util_qpm, "BaseEventAPI", event_api_factory)
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -519,7 +519,7 @@ def test_completion_events_keep_reservation_scope_after_cleanup(monkeypatch):
 		return sink
 
 	monkeypatch.setattr(util_qpm, "BaseEventAPI", event_api_factory)
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	qpm.register_event_notification(
 		"endpoint-a", "circ-result", "class-a",
 		reservation_id=reservation_id)
@@ -545,8 +545,8 @@ def test_completion_events_keep_reservation_scope_after_cleanup(monkeypatch):
 def test_result_reads_keep_reservation_scope_after_cleanup(monkeypatch):
 	_setup(monkeypatch)
 	qpm = CompletingQPM(target_id="ops-results-cleanup")
-	reservation_a = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	reservation_b = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_a = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	reservation_b = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -578,7 +578,7 @@ def test_completion_polling_returns_structured_in_progress_status(
 		monkeypatch):
 	_setup(monkeypatch)
 	qpm = PendingCompletionQPM(target_id="ops-pending-results")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -643,7 +643,7 @@ def test_completion_polling_rejects_missing_reservation(monkeypatch):
 def test_failed_provider_completion_is_published_once(monkeypatch):
 	_setup(monkeypatch)
 	qpm = FailingCompletionQPM(target_id="ops-provider-failure-completion")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
@@ -673,14 +673,14 @@ def test_failed_provider_completion_is_published_once(monkeypatch):
 def test_result_reads_allow_terminal_reservation_state(monkeypatch):
 	_setup(monkeypatch)
 	qpm = CompletingQPM(target_id="ops-results-terminal-reservation")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": reservation_id,
 	})
 
-	released = qpm.release(reservation_id, reason=7)
+	released = qpm.release(reservation_id=reservation_id, reason=7)
 	status = qpm.task_status(
 		qtask_id=response["qtask_id"], reservation_id=reservation_id)
 	peeked = qpm.peek_cq(cid=response["cid"], reservation_id=reservation_id)
@@ -700,7 +700,7 @@ def test_completion_retention_evicts_records_with_structured_status(
 	_set_retention_site(
 		monkeypatch, tmp_path, **{"max-records-per-reservation": 1})
 	qpm = CompletingQPM(target_id="ops-retention-records")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	first = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -730,14 +730,14 @@ def test_terminal_completion_queue_garbage_collection(monkeypatch, tmp_path):
 		"terminal-reservation-retention-seconds": 1,
 	})
 	qpm = CompletingQPM(target_id="ops-retention-terminal")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": reservation_id,
 	})
 
-	qpm.release(reservation_id, reason=7)
+	qpm.release(reservation_id=reservation_id, reason=7)
 	terminal_at_ns = (
 		qpm.controller.completion_queues[reservation_id].terminal_at_ns)
 	summary = qpm.controller.purge_completion_queues(
@@ -760,13 +760,13 @@ def test_completion_purge_worker_expires_idle_terminal_queue(
 		"purge-interval-seconds": 1,
 	})
 	qpm = CompletingQPM(target_id="ops-retention-worker")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
 		"reservation_id": reservation_id,
 	})
-	qpm.release(reservation_id, reason=7)
+	qpm.release(reservation_id=reservation_id, reason=7)
 	qpm.controller.completion_queues[
 		reservation_id].terminal_at_ns = time.time_ns() - 2_000_000_000
 

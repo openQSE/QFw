@@ -485,7 +485,7 @@ def test_scheduler_failed_task_does_not_block_completion_queue_gc(
 		"reservation_id": "reservation-1",
 	})
 
-	qpm.release("reservation-1", reason=9)
+	qpm.release(reservation_id="reservation-1", reason=9)
 
 	assert response["outcome"] == "FAILED"
 	assert response["qtask_id"] in (
@@ -552,7 +552,7 @@ def test_provider_failed_task_does_not_block_completion_queue_gc(
 		"reservation_id": "reservation-1",
 	})
 
-	qpm.release("reservation-1", reason=10)
+	qpm.release(reservation_id="reservation-1", reason=10)
 
 	assert response["outcome"] == "FAILED"
 	_assert_terminal_queue_garbage_collected(
@@ -639,7 +639,7 @@ def test_cancelled_task_does_not_block_completion_queue_gc(monkeypatch):
 	cancelled = qpm.cancel_task(
 		qtask_id=response["qtask_id"], reservation_id="reservation-1",
 		reason="user-request")
-	qpm.release("reservation-1", reason=11)
+	qpm.release(reservation_id="reservation-1", reason=11)
 
 	assert cancelled["outcome"] == "CANCELLED"
 	assert response["qtask_id"] in (

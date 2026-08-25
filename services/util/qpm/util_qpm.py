@@ -955,18 +955,13 @@ class UTIL_QPM:
 
 	def get_scheduler_queue_state(self, token=None, device_id=None,
 				      include_restricted=False):
-		token, device_id, include_restricted = (
-			_token_device_payload_args(
-				token, device_id, include_restricted))
 		return self.controller.get_scheduler_queue_state(
 			include_restricted=include_restricted)
 
 	def evaluate(self, token=None, request=None):
-		token, request = _token_request_args(token, request)
 		return self.controller.evaluate_reservation(request, token=token)
 
-	def reserve(self, token=None, request=None, *args, **kwargs):
-		token, request = _token_request_args(token, request)
+	def reserve(self, token=None, request=None):
 		if not isinstance(request, dict):
 			raise DEFwExecutionError(
 				"legacy service reservation is not supported by the "
@@ -974,15 +969,10 @@ class UTIL_QPM:
 		return self.controller.reserve_admission(request, token=token)
 
 	def renew(self, token=None, reservation_id=None, request=None):
-		token, reservation_id, request = _token_reservation_request_args(
-			token, reservation_id, request)
 		return self.controller.renew_admission(
 			reservation_id, request=request, token=token)
 
-	def release(self, token=None, reservation_id=None, reason=None,
-		    services=None):
-		token, reservation_id, reason = _token_reservation_reason_args(
-			token, reservation_id, reason)
+	def release(self, token=None, reservation_id=None, reason=None):
 		if reservation_id is None or isinstance(
 				reservation_id, (list, tuple, set)):
 			raise DEFwExecutionError(
@@ -992,19 +982,14 @@ class UTIL_QPM:
 			reservation_id, reason_code=reason or 0, token=token)
 
 	def cancel(self, token=None, reservation_id=None, reason=None):
-		token, reservation_id, reason = _token_reservation_reason_args(
-			token, reservation_id, reason)
 		return self.controller.cancel_admission(
 			reservation_id, reason_code=reason or 0, token=token)
 
 	def get_reservation(self, token=None, reservation_id=None):
-		token, reservation_id = _token_reservation_args(
-			token, reservation_id)
 		return self.controller.get_admission_reservation(
 			reservation_id, token=token)
 
 	def list_reservations(self, token=None, filters=None):
-		token, filters = _token_filters_args(token, filters)
 		return self.controller.list_admission_reservations(
 			filters=filters, token=token)
 
@@ -1108,58 +1093,6 @@ class UTIL_QPM:
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None
-
-
-def _token_request_args(token, request):
-	if request is None and isinstance(token, dict):
-		return None, token
-	return token, request
-
-
-def _token_reservation_args(token, reservation_id):
-	if reservation_id is None:
-		return None, token
-	return token, reservation_id
-
-
-def _token_reservation_request_args(token, reservation_id, request):
-	if reservation_id is None:
-		return None, token, request
-	if isinstance(reservation_id, dict) and request is None:
-		return None, token, reservation_id
-	return token, reservation_id, request
-
-
-def _token_reservation_reason_args(token, reservation_id, reason):
-	if reservation_id is None:
-		return None, token, reason
-	return token, reservation_id, reason
-
-
-def _token_filters_args(token, filters):
-	return token, filters
-
-
-def _token_device_payload_args(token, device_id, payload,
-			       legacy_payload_first=False):
-	if payload is None:
-		if isinstance(device_id, dict):
-			return None, token, device_id
-		if isinstance(token, dict):
-			return None, None, token
-		return token, device_id, payload
-	if (legacy_payload_first and isinstance(token, dict)
-			and not isinstance(payload, dict)):
-		return device_id, payload, token
-	return token, device_id, payload
-
-
-def _token_task_metadata_args(token, cid, reservation_id, qtask_id):
-	if qtask_id is not None:
-		return token, cid, reservation_id, qtask_id
-	if cid is None:
-		return None, token, reservation_id, qtask_id
-	return token, cid, reservation_id, qtask_id
 
 
 def _sync_deadline(timeout):

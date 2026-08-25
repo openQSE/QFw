@@ -293,10 +293,6 @@ environment-variable counterpart.
 | `QFW_DIRSVC_CONNECT_TIMEOUT_SECONDS` | `300` | Directory readiness timeout used with an endpoint override, in seconds. |
 | `QFW_RUN_ID` | Generated UUID | Optional caller-supplied run identifier. Use a unique value for each concurrently active runtime. |
 
-`QFW_TMP_PATH` is accepted as a compatibility fallback for
-`QFW_RUN_BASE_DIR`. New scripts and site configurations should use
-`QFW_RUN_BASE_DIR`.
-
 For a heterogeneous allocation, select a shared run base before activation.
 The Docker Slurm cluster mounts `/workspace/qfw-container-base` on every node,
 so a suitable setup is:

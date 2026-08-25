@@ -145,7 +145,7 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 	assert profile["baseline"]["qubit_count"] == 4
 	assert admission.policies[-1][1] == "unlimited"
 
-	decision = qpm.reserve({
+	decision = qpm.reserve(request={
 		"owner": {"user": "stress-user"},
 		"job_id": "job-fake-iqm",
 		"scope_id": "allocation-1",
@@ -218,7 +218,7 @@ def test_fake_iqm_qpm_uses_reservation_provider_credential(
 		admission_context_factory=FakeAdmissionContext,
 		scheduler_context_factory=FakeSchedulerContext,
 	)
-	decision = qpm.reserve({
+	decision = qpm.reserve(request={
 		"owner": {"user": "stress-user"},
 		"job_id": "job-fake-iqm-credential",
 		"scope_id": "allocation-credential",

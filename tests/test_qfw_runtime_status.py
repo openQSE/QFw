@@ -26,7 +26,6 @@ def runtime_state(tmp_path, managers=None):
             "endpoint": "service-a:18090",
         },
         "service_managers": managers or [],
-        "processes": [],
     }
 
 

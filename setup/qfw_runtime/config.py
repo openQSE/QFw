@@ -98,7 +98,6 @@ def qfw_bin_path(prefix=None):
 def qfw_run_base_dir():
     value = (
         os.environ.get("QFW_RUN_BASE_DIR") or
-        os.environ.get("QFW_TMP_PATH") or
         os.path.join(tempfile.gettempdir(), "qfw-runs")
     )
     return Path(value).expanduser().resolve()
@@ -632,7 +631,6 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         "service_manifest": str(manifest_path) if manifest_path else "",
         "environment": environment,
         "service_managers": [],
-        "processes": [],
         "dry_run": bool(dry_run),
         "setup_complete": False,
     }

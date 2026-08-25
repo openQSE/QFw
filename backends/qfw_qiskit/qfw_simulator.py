@@ -86,7 +86,7 @@ class QFwBackend(BackendV2):
 			if betype in (-1, None):
 				betype = selection["qpm_type"]
 			if capability in (-1, None):
-				capability = selection["qpm_capability"]
+				capability = selection["qpm_capabilities"]
 		self._capability = capability
 		lookup_kwargs = {}
 		if lookup_timeout is not None:

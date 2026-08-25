@@ -565,7 +565,7 @@ execute_process(
 			test -z \"\${_OLD_VIRTUAL_PS1+x}\"
 			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
 			test \"\$(command -v python)\" = '${qfw_switch_venv}/bin/python'
-			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-switch.err'
+			test ! -s '${qfw_run_base}/qfw-activate-switch.err'
 			qfw-deactivate
 			test \"\${PS1}\" = 'original> '
 			test -z \"\${VIRTUAL_ENV+x}\"

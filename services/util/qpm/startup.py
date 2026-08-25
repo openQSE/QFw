@@ -385,8 +385,7 @@ def _service_info_record(defw_module, service_info):
 	endpoint = _defw_endpoint(defw_module)
 	endpoint_record = _endpoint_record(endpoint)
 	qpm_type = properties.get("qpm_type", -1)
-	qpm_capabilities = properties.get(
-		"qpm_capabilities", properties.get("qpm_capability", -1))
+	qpm_capabilities = properties.get("qpm_capabilities", -1)
 	if qpm_type != -1:
 		properties.setdefault("qpm_type", qpm_type)
 	if qpm_capabilities != -1:

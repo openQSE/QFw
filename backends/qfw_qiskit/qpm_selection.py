@@ -7,32 +7,32 @@ QPM_PROVIDER_SELECTIONS = {
 	"iqm": {
 		"provider": "iqm",
 		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
-		"qpm_capability": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
 	"fake-iqm": {
 		"provider": "fake-iqm",
 		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
-		"qpm_capability": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
 	"shim": {
 		"provider": "shim",
 		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
-		"qpm_capability": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
 	"nwqsim": {
 		"provider": "nwqsim",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
-		"qpm_capability": QPMCapability.QPM_CAP_STATEVECTOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_STATEVECTOR,
 	},
 	"tnqvm": {
 		"provider": "tnqvm",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
-		"qpm_capability": QPMCapability.QPM_CAP_TENSORNETWORK,
+		"qpm_capabilities": QPMCapability.QPM_CAP_TENSORNETWORK,
 	},
 	"qb": {
 		"provider": "qb",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
-		"qpm_capability": QPMCapability.QPM_CAP_STATEVECTOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_STATEVECTOR,
 	},
 }
 
@@ -51,6 +51,4 @@ def normalize_qpm_provider(provider, default_provider=DEFAULT_QPM_PROVIDER):
 def qpm_selection_for_provider(
 		provider=None, default_provider=DEFAULT_QPM_PROVIDER):
 	provider = normalize_qpm_provider(provider, default_provider)
-	selection = dict(QPM_PROVIDER_SELECTIONS[provider])
-	selection["qpm_capabilities"] = selection["qpm_capability"]
-	return selection
+	return dict(QPM_PROVIDER_SELECTIONS[provider])

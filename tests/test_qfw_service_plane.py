@@ -64,12 +64,14 @@ def write_runtime_configuration(tmp_path, *, prte, services=None):
     return runtime
 
 
-def parse_start_args(*argv):
-    return service_plane._argument_parser().parse_args(["start", *argv])
+def parse_role_start_args(role, *argv):
+    program = "qfw-dir-svc" if role == "directory" else "qfw-qpm-svc"
+    return service_plane._role_argument_parser(program, role).parse_args(
+        ["start", *argv])
 
 
 def test_empty_run_dir_is_rejected(capsys):
-    assert service_plane.main([
+    assert service_plane.directory_service_main([
         "start", "--run-dir", "", "--dry-run",
     ]) == 1
     assert "--run-dir must not be empty" in capsys.readouterr().err
@@ -87,12 +89,11 @@ def test_site_dry_run_generates_state_and_supports_status_and_stop(
     )
     run_dir = tmp_path / "run"
 
-    assert service_plane.main([
+    assert service_plane.directory_service_main([
         "start",
         "--run-dir", str(run_dir),
         "--site-config", str(site),
         "--runtime-config", str(runtime),
-        "--service-id", "iqm-test",
         "--dry-run",
     ]) == 0
     capsys.readouterr()
@@ -103,16 +104,16 @@ def test_site_dry_run_generates_state_and_supports_status_and_stop(
     assert state["configuration"]["components"] == {
         "directory": True,
         "prte": False,
-        "qpm": True,
+        "qpm": False,
     }
-    assert set(state["components"]) == {"directory", "qpm:iqm-test"}
-    assert state["configuration"]["service_ids"] == ["iqm-test"]
+    assert set(state["components"]) == {"directory"}
+    assert state["configuration"]["service_ids"] == []
 
-    assert service_plane.main([
+    assert service_plane.directory_service_main([
         "status", "--run-dir", str(run_dir),
     ]) == 0
     capsys.readouterr()
-    assert service_plane.main([
+    assert service_plane.directory_service_main([
         "stop", "--run-dir", str(run_dir),
     ]) == 0
     capsys.readouterr()
@@ -133,12 +134,23 @@ def test_application_configuration_controls_optional_prte(tmp_path):
     with runtime.open("a", encoding="utf-8") as stream:
         stream.write(f"  service-manifest: {manifest}\n")
     run_dir = tmp_path / "fake-run"
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "localhost:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
 
-    args = parse_start_args(
+    args = parse_role_start_args(
+        "qpm",
         "--run-dir", str(run_dir),
         "--site-config", str(site),
         "--runtime-config", str(runtime),
         "--scope", "application",
+        "--service-id", "fake-iqm",
+        "--directory-service-info", str(connection_file),
         "--dry-run",
     )
     state = service_plane.start(args)
@@ -367,7 +379,7 @@ def test_application_roles_place_control_plane_on_group1_head(
 
 
 def test_service_plane_rejects_repeated_service_id():
-    parser = service_plane._argument_parser()
+    parser = service_plane._role_argument_parser("qfw-qpm-svc", "qpm")
     with pytest.raises(SystemExit):
         parser.parse_args([
             "start", "--run-dir", "/tmp/qfw-test",
@@ -385,11 +397,22 @@ def test_application_prte_configuration_creates_and_stops_dvm_state(tmp_path):
         stream.write(f"  service-manifest: {manifest}\n")
     run_dir = tmp_path / "nwqsim-run"
 
-    args = parse_start_args(
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "localhost:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+    args = parse_role_start_args(
+        "qpm",
         "--run-dir", str(run_dir),
         "--site-config", str(site),
         "--runtime-config", str(runtime),
         "--scope", "application",
+        "--service-id", "nwqsim",
+        "--directory-service-info", str(connection_file),
         "--dry-run",
     )
     state = service_plane.start(args)
@@ -401,7 +424,7 @@ def test_application_prte_configuration_creates_and_stops_dvm_state(tmp_path):
     assert not uri_path.exists()
 
 
-def test_start_composes_private_process_launchers(tmp_path, monkeypatch):
+def test_qpm_start_composes_private_process_launcher(tmp_path, monkeypatch):
     site, _manifest = write_site_configuration(tmp_path, [
         ("iqm-test", "svc_iqm_qpm", "remote-api"),
     ])
@@ -411,6 +434,14 @@ def test_start_composes_private_process_launchers(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     run_dir = tmp_path / "live-run"
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": f"{socket.gethostname()}:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
     calls = []
     terminated = []
 
@@ -432,60 +463,28 @@ def test_start_composes_private_process_launchers(tmp_path, monkeypatch):
         lambda pid, node, allocation: terminated.append((pid, node)),
     )
 
-    args = parse_start_args(
+    args = parse_role_start_args(
+        "qpm",
         "--run-dir", str(run_dir),
         "--site-config", str(site),
         "--runtime-config", str(runtime),
         "--service-id", "iqm-test",
+        "--directory-service-info", str(connection_file),
     )
     state = service_plane.start(args)
 
     assert state["state"] == "ready"
-    assert [call[1][:4] for call in calls] == [
-        [sys.executable, "-m", "qfw_runtime._process_launcher", "directory"],
-        [sys.executable, "-m", "qfw_runtime._process_launcher", "qpm"],
-    ]
-    qpm_env = calls[1][2]
+    assert [call[1][:4] for call in calls] == [[
+        sys.executable, "-m", "qfw_runtime._process_launcher", "qpm",
+    ]]
+    qpm_env = calls[0][2]
     assert qpm_env["QFW_SERVICE_SCOPE"] == "site"
     assert qpm_env["QFW_SITE_DIRSVC_ENDPOINTS"] == (
         f"{socket.gethostname()}:18090")
 
     stopped = service_plane.stop(run_dir)
     assert stopped["state"] == "stopped"
-    assert [pid for pid, _node in terminated] == [2002, 2001]
-
-
-def test_service_node_replaces_loopback_site_endpoint(tmp_path, monkeypatch):
-    site, _manifest = write_site_configuration(tmp_path, [
-        ("iqm-test", "svc_iqm_qpm", "remote-api"),
-    ])
-    runtime = tmp_path / "site-runtime.yaml"
-    runtime.write_text(
-        "resolver:\n  scope-order:\n    - site\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(service_plane, "_allocation_context", lambda: {
-        "mode": "slurm",
-        "group0": ["service-a"],
-        "group1": ["service-a"],
-        "group0_nodelist": "service-a",
-        "group1_nodelist": "service-a",
-    })
-    args = parse_start_args(
-        "--run-dir", str(tmp_path / "run"),
-        "--site-config", str(site),
-        "--runtime-config", str(runtime),
-        "--service-id", "iqm-test",
-        "--service-node", "service-a",
-        "--dry-run",
-    )
-
-    state = service_plane.start(args)
-
-    assert state["directory"]["endpoint"] == "service-a:18090"
-    assert state["directory"]["target"] == "service-a"
-    assert state["services"][0]["target"] == "service-a"
-    assert state["allocation"]["group0"] == ["service-a"]
+    assert [pid for pid, _node in terminated] == [2001]
 
 
 def test_foreground_run_stops_on_sigterm(tmp_path):
@@ -503,6 +502,7 @@ def test_foreground_run_stops_on_sigterm(tmp_path):
     source_setup = str(Path(__file__).resolve().parents[1] / "setup")
     environment["PYTHONPATH"] = source_setup + os.pathsep + environment.get(
         "PYTHONPATH", "")
+    environment["QFW_SERVICE_LIFECYCLE_ROLE"] = "directory"
     process = subprocess.Popen(
         [
             sys.executable,
@@ -511,7 +511,6 @@ def test_foreground_run_stops_on_sigterm(tmp_path):
             "--run-dir", str(run_dir),
             "--site-config", str(site),
             "--runtime-config", str(runtime),
-            "--service-id", "iqm-test",
             "--dry-run",
             "--poll-interval", "0.05",
         ],
