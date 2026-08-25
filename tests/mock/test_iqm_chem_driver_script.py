@@ -10,10 +10,7 @@ SCRIPT = (
 )
 
 
-def test_service_run_dir_overrides_environment_site_config(tmp_path):
-	service_run_dir = tmp_path / "services"
-	env_dir = service_run_dir / "env"
-	env_dir.mkdir(parents=True)
+def test_explicit_site_config_overrides_environment(tmp_path):
 	chem_app_dir = tmp_path / "chem"
 	chem_app_dir.mkdir()
 	(chem_app_dir / "smoke.py").write_text("", encoding="utf-8")
@@ -37,19 +34,15 @@ def test_service_run_dir_overrides_environment_site_config(tmp_path):
 		f"  device-access-config: {device_access}\n",
 		encoding="utf-8",
 	)
-	(env_dir / "iqm-site.env").write_text(
-		f"export QFW_SITE_CONFIG={site_config}\n",
-		encoding="utf-8",
-	)
-
 	env = os.environ.copy()
 	env["QFW_SITE_CONFIG"] = str(tmp_path / "installed-default.yaml")
+	env["PYTHONPATH"] = str(SCRIPT.parent.parent / "setup")
 	result = subprocess.run(
 		[
 			"bash",
 			str(SCRIPT),
-			"--service-run-dir",
-			str(service_run_dir),
+			"--site-config",
+			str(site_config),
 			"--chem-app-dir",
 			str(chem_app_dir),
 			"--owner",
@@ -64,4 +57,5 @@ def test_service_run_dir_overrides_environment_site_config(tmp_path):
 	)
 
 	assert '"status": "ok"' in result.stdout
-	assert str(site_config) not in result.stderr
+	assert str(device_access) in result.stdout
+	assert "installed-default.yaml" not in result.stdout

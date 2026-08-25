@@ -104,6 +104,13 @@ add_custom_target(qfw_external_runtime ALL
 		qfw_external_qhw_admission
 		qfw_external_qhw_scheduler)
 
+# Remove wrappers left by build trees configured before the legacy launchers
+# were retired. They are private Python module operations now.
+file(REMOVE
+	"${QFW_GENERATED_BIN_DIR}/qfw-dirsvc-start"
+	"${QFW_GENERATED_BIN_DIR}/qfw-service-start"
+	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane")
+
 configure_file(
 	cmake/qfw-activate.in
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
@@ -115,10 +122,6 @@ configure_file(
 configure_file(
 	cmake/qfw-setup-driver.in
 	"${QFW_GENERATED_LIBEXEC_DIR}/qfw-setup-driver"
-	@ONLY)
-configure_file(
-	cmake/qfw-service-plane.in
-	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane"
 	@ONLY)
 foreach(qfw_role_command IN ITEMS qfw-dir-svc qfw-qpm-svc)
 	if(qfw_role_command STREQUAL "qfw-dir-svc")
@@ -134,7 +137,6 @@ endforeach()
 file(CHMOD
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
 	"${QFW_GENERATED_BIN_DIR}/defw-python"
-	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane"
 	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
 	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"
 	"${QFW_GENERATED_LIBEXEC_DIR}/qfw-setup-driver"
@@ -147,9 +149,7 @@ foreach(qfw_command
 		qfw-setup
 		qfw-status
 		qfw-srun
-		qfw-teardown
-		qfw-dirsvc-start
-		qfw-service-start)
+		qfw-teardown)
 	set(QFW_COMMAND_NAME "${qfw_command}")
 	configure_file(
 		cmake/qfw-command.in
@@ -169,9 +169,6 @@ install(PROGRAMS
 	"${QFW_GENERATED_BIN_DIR}/qfw-status"
 	"${QFW_GENERATED_BIN_DIR}/qfw-srun"
 	"${QFW_GENERATED_BIN_DIR}/qfw-teardown"
-	"${QFW_GENERATED_BIN_DIR}/qfw-dirsvc-start"
-	"${QFW_GENERATED_BIN_DIR}/qfw-service-start"
-	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane"
 	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
 	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"
 	DESTINATION "${CMAKE_INSTALL_BINDIR}")
@@ -243,10 +240,7 @@ install(PROGRAMS
 	examples/qfw_ghz.sh
 	examples/qfw_init_test.sh
 	examples/qfw_iqm_chem_driver.sh
-	examples/qfw_iqm_chem_site_run.sh
 	examples/qfw_iqm_chem_smoke.sh
-	examples/qfw_iqm_site_services.sh
-	examples/qfw_long_running_qpm.sh
 	examples/qfw_mpi_smoke.sh
 	examples/qfw_pennylane.sh
 	examples/qfw_qaoa.sh

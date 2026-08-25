@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
 
 from qfw_runtime import commands
+from qfw_runtime import _process_launcher as process_launcher
 
 
 def allocation():
@@ -31,7 +32,7 @@ def hetero_allocation():
     }
 
 
-def test_qfw_service_start_loads_service_paths_from_site(
+def test_private_qpm_launcher_loads_service_paths_from_site(
         tmp_path, monkeypatch):
     device_path = tmp_path / "device-access.yaml"
     manifest_path = tmp_path / "site-services.yaml"
@@ -59,9 +60,10 @@ def test_qfw_service_start_loads_service_paths_from_site(
         return 0
 
     monkeypatch.setenv("QFW_SERVICE_SCOPE", "site")
-    monkeypatch.setattr(commands, "_start_defw_owned_process", fake_start)
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", fake_start)
 
-    rc = commands.qfw_service_start([
+    rc = process_launcher.start_qpm([
         "--service-id", "iqm",
         "--site-config", str(site_path),
         "--run-dir", str(tmp_path / "run"),
@@ -75,7 +77,7 @@ def test_qfw_service_start_loads_service_paths_from_site(
     assert captured["env"]["QFW_SITE_CONFIG"] == str(site_path)
 
 
-def test_qfw_service_start_rejects_removed_config_overrides(
+def test_private_qpm_launcher_rejects_removed_config_overrides(
         tmp_path, monkeypatch):
     site_path = tmp_path / "site.yaml"
     site_path.write_text(
@@ -85,7 +87,7 @@ def test_qfw_service_start_rejects_removed_config_overrides(
         encoding="utf-8",
     )
     with pytest.raises(SystemExit):
-        commands.qfw_service_start([
+        process_launcher.start_qpm([
             "--service-id", "iqm",
             "--module", "svc_iqm_qpm",
             "--site-config", str(site_path),
@@ -309,7 +311,7 @@ def test_cleanup_application_service_managers_uses_reverse_order(
     ]
 
 
-def test_start_defw_owned_process_uses_defw_python_wrapper(
+def test_private_process_launcher_uses_defw_python_wrapper(
         tmp_path, monkeypatch):
     pid_file = tmp_path / "svc.pid"
     ready_file = tmp_path / "svc-ready.json"
@@ -337,15 +339,15 @@ def test_start_defw_owned_process_uses_defw_python_wrapper(
         captured["stderr_name"] = stderr.name
         return FakeProcess()
 
-    monkeypatch.setattr(commands, "_command_path", fake_command_path)
-    monkeypatch.setattr(commands.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(process_launcher, "_command_path", fake_command_path)
+    monkeypatch.setattr(process_launcher.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(
-        commands,
+        process_launcher,
         "_wait_process_ready",
         lambda process, timeout, name, ready_probe: None,
     )
 
-    rc = commands._start_defw_owned_process(
+    rc = process_launcher._start_defw_owned_process(
         "svc",
         {"DEFW_LOG_DIR": str(log_dir), "VIRTUAL_ENV": "/shared/venv"},
         pid_file,

@@ -216,9 +216,6 @@ site-selected equivalent. A typical combined prefix has this shape:
     qfw-teardown
     qfw-dir-svc
     qfw-qpm-svc
-    qfw-service-plane
-    qfw-dirsvc-start
-    qfw-service-start
   libexec/qfw/
     qfw-setup-driver
     service-lifecycle/
@@ -270,9 +267,6 @@ different prefix, but the relative paths under each prefix remain the same.
 | `/opt/openqse/qfw/current/bin/qfw-teardown` | QFw package | User job cleanup command. |
 | `/opt/openqse/qfw/current/bin/qfw-dir-svc` | QFw package | One directory-service manager. |
 | `/opt/openqse/qfw/current/bin/qfw-qpm-svc` | QFw package | One QPM and optional DVM manager. |
-| `/opt/openqse/qfw/current/bin/qfw-service-plane` | QFw package | Combined compatibility manager. |
-| `/opt/openqse/qfw/current/bin/qfw-dirsvc-start` | QFw package | Low-level directory process launcher. |
-| `/opt/openqse/qfw/current/bin/qfw-service-start` | QFw package | Low-level QPM process launcher. |
 | `/opt/openqse/qfw/current/libexec/qfw` | QFw package | Private helper scripts used by public commands. |
 | `/opt/openqse/qfw/current/lib/qfw/services` | QFw package | Installed QPM and utility service modules. |
 | `/opt/openqse/qfw/current/lib/qfw/service-apis` | QFw package | Installed DEFw service API bindings and proxies. |
@@ -409,10 +403,8 @@ it does not select an application run directory.
 Each manager accepts one explicit run directory and supports `start`, `run`,
 `status`, and `stop`. The directory manager owns one DEFw directory service.
 The QPM manager owns one named QPM and starts a PRTE DVM only when its provider
-requires one. `qfw-service-plane` retains the combined interface for
-compatibility. `qfw-dirsvc-start` and `qfw-service-start` remain the low-level
-one-process launchers used by the managers; applications and administrators
-normally use the higher-level commands.
+requires one. The role managers invoke a private installed Python module when
+they need to start a DEFw process on another node.
 
 | Command | Lifecycle | Responsibility |
 | --- | --- | --- |
@@ -423,9 +415,6 @@ normally use the higher-level commands.
 | `qfw-teardown` | User job | Stop recorded application-owned role managers and clean job runtime state. |
 | `qfw-dir-svc` | Service | Manage one DEFw directory-service instance. |
 | `qfw-qpm-svc` | Service | Manage one QPM and its optional PRTE DVM. |
-| `qfw-service-plane` | Service | Preserve the combined compatibility interface. |
-| `qfw-dirsvc-start` | Internal compatibility | Start one DEFw directory process. |
-| `qfw-service-start` | Internal compatibility | Start one named QPM process. |
 
 The job lifecycle and service lifecycle share lower-level helpers for config
 loading, DEFw preparation, run-directory creation, PID files, signal handling,

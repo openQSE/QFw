@@ -20,14 +20,14 @@ Options:
   --backend NAME              QPM provider/backend (default: iqm)
   --target-device DEVICE      QFw device id (default: QFW_QPU_DEVICE_ID or ornl-iqm-20q)
   --site-config PATH          Site config for site-mode runs
-  --service-run-dir DIR       Existing IQM site-services run directory to check
+  --qpm-run-dir DIR           QPM manager run directory to verify remains alive
   --qfw-src DIR               QFw source checkout for optional build/install
   --build-dir DIR             CMake build directory for optional build/install
   --install-prefix DIR        QFw install prefix to activate
   --shared-venv DIR           Shared virtual environment passed to qfw-activate
   --build-install             Build and install QFw before running the smoke
   --chem-app-dir DIR          chemistry_example_aim2 checkout
-  --setup-mode MODE           local or site (default: site for iqm, local otherwise)
+  --service-mode MODE         local or site (default: site for iqm, local otherwise)
   --partition NAME            Slurm partition for self-allocation
   --nodes N                   Slurm node count for self-allocation (default: 1)
   --nodelist LIST             Slurm nodelist for self-allocation
@@ -49,14 +49,14 @@ backend="${QFW_CHEM_BACKEND:-iqm}"
 target_device="${QFW_QPU_DEVICE_ID:-ornl-iqm-20q}"
 device_access_config=""
 site_config="${QFW_SITE_CONFIG:-}"
-service_run_dir="${QFW_IQM_RUN_DIR:-}"
+qpm_run_dir="${QFW_QPM_RUN_DIR:-}"
 qfw_src="${QFW_SRC:-}"
 build_dir="${QFW_BUILD:-}"
 install_prefix="${QFW_PREFIX:-}"
 shared_venv="${QFW_SHARED_VENV:-}"
 build_install="no"
 chem_app_dir="${QFW_CHEM_APP_DIR:-}"
-setup_mode="${QFW_CHEM_SETUP_MODE:-}"
+service_mode="${QFW_CHEM_SERVICE_MODE:-}"
 partition="${QFW_CHEM_SLURM_PARTITION:-}"
 nodes="${QFW_CHEM_SLURM_NODES:-1}"
 nodelist="${QFW_CHEM_SLURM_NODELIST:-}"
@@ -98,9 +98,9 @@ while [[ $# -gt 0 ]]; do
 			site_config="$2"
 			shift 2
 			;;
-		--service-run-dir)
+		--qpm-run-dir)
 			qfw_chem_need_value "$@"
-			service_run_dir="$2"
+			qpm_run_dir="$2"
 			shift 2
 			;;
 		--qfw-src)
@@ -132,9 +132,9 @@ while [[ $# -gt 0 ]]; do
 			chem_app_dir="$2"
 			shift 2
 			;;
-		--setup-mode)
+		--service-mode)
 			qfw_chem_need_value "$@"
-			setup_mode="$2"
+			service_mode="$2"
 			shift 2
 			;;
 		--partition)
@@ -243,13 +243,17 @@ qfw_chem_require_positive_int "--nodes" "${nodes}"
 qfw_chem_require_positive_int "--shots" "${shots}"
 qfw_chem_require_positive_int "--max-output-bytes" "${max_output_bytes}"
 
-if [[ -z "${setup_mode}" ]]; then
+if [[ -z "${service_mode}" ]]; then
 	if [[ "${backend}" == "iqm" ]]; then
-		setup_mode="site"
+		service_mode="site"
 	else
-		setup_mode="local"
+		service_mode="local"
 	fi
 fi
+case "${service_mode}" in
+	local|site) ;;
+	*) echo "ERROR: --service-mode must be local or site" >&2; exit 2 ;;
+esac
 
 if [[ -z "${run_dir}" ]]; then
 	timestamp="$(date +%Y%m%d-%H%M%S)"
@@ -324,30 +328,11 @@ qfw_chem_activate() {
 	fi
 }
 
-qfw_chem_service_pid_file() {
-	local service_id="${QFW_IQM_SERVICE_ID:-iqm-ornl-20q}"
-	if [[ -n "${service_run_dir}" &&
-	      -r "${service_run_dir}/state/${service_id}.pid" ]]; then
-		printf "%s\n" "${service_run_dir}/state/${service_id}.pid"
-	fi
-}
-
-qfw_chem_pid_alive() {
-	local pid_file="$1"
-	if [[ -z "${pid_file}" || ! -r "${pid_file}" ]]; then
+qfw_chem_qpm_ready() {
+	if [[ -z "${qpm_run_dir}" ]]; then
 		return 1
 	fi
-	local pid
-	pid="$(<"${pid_file}")"
-	python3 - "${pid}" <<'PY'
-import os
-import sys
-
-try:
-	os.kill(int(sys.argv[1]), 0)
-except OSError:
-	sys.exit(1)
-PY
+	qfw-qpm-svc status --run-dir "${qpm_run_dir}" >/dev/null 2>&1
 }
 
 qfw_chem_write_site_runtime_config() {
@@ -370,8 +355,8 @@ qfw_chem_emit_result() {
 	local command_json="$8"
 	local duration_sec="$9"
 	python3 - "${status}" "${app_rc}" "${backend}" "${target_device}" \
-		"${setup_mode}" "${run_dir}" "${stdout_path}" "${stderr_path}" \
-		"${result_path}" "${max_output_bytes}" "${service_run_dir}" \
+		"${service_mode}" "${run_dir}" "${stdout_path}" "${stderr_path}" \
+		"${result_path}" "${max_output_bytes}" "${qpm_run_dir}" \
 		"${service_alive_before}" "${service_alive_after}" \
 		"${device_access_config}" "${site_config}" "${qfw_src}" \
 		"${build_dir}" "${install_prefix}" "${shared_venv}" \
@@ -388,13 +373,13 @@ import time
 	app_rc,
 	backend,
 	target_device,
-	setup_mode,
+	service_mode,
 	run_dir,
 	stdout_path,
 	stderr_path,
 	result_path,
 	max_output_bytes,
-	service_run_dir,
+	qpm_run_dir,
 	service_alive_before,
 	service_alive_after,
 	device_access_config,
@@ -482,7 +467,7 @@ record = {
 	"rc": int(app_rc),
 	"backend": backend,
 	"target_device": target_device,
-	"setup_mode": setup_mode,
+	"service_mode": service_mode,
 	"run_dir": run_dir,
 	"stdout_path": stdout_path,
 	"stderr_path": stderr_path,
@@ -496,7 +481,7 @@ record = {
 	"example_records": example_records,
 	"reservation_id": reservation_id,
 	"release_result": release_result,
-	"service_run_dir": service_run_dir,
+	"qpm_run_dir": qpm_run_dir,
 	"service_alive_before": service_alive_before == "true",
 	"service_alive_after": service_alive_after == "true",
 	"device_access_config": device_access_config,
@@ -535,27 +520,18 @@ fi
 
 qfw_chem_write_site_runtime_config
 
-if [[ "${setup_mode}" == "site" && -z "${site_config}" ]]; then
-	if [[ -r "${service_run_dir}/env/iqm-site.env" ]]; then
-		# shellcheck source=/dev/null
-		source "${service_run_dir}/env/iqm-site.env"
-		site_config="${QFW_SITE_CONFIG:-${site_config}}"
-	fi
-fi
-
-if [[ "${setup_mode}" == "site" && -z "${site_config}" ]]; then
-	echo "ERROR: --site-config or --service-run-dir is required for site mode" >&2
+if [[ "${service_mode}" == "site" && -z "${site_config}" ]]; then
+	echo "ERROR: --site-config is required for site mode" >&2
 	exit 2
 fi
 
 stdout_path="${run_dir}/logs/chemistry.stdout.log"
 stderr_path="${run_dir}/logs/chemistry.stderr.log"
 example_result_path="${run_dir}/chemistry-example.jsonl"
-service_pid_file="$(qfw_chem_service_pid_file || true)"
 service_alive_before="unknown"
 service_alive_after="unknown"
-if [[ -n "${service_pid_file}" ]]; then
-	if qfw_chem_pid_alive "${service_pid_file}"; then
+if [[ -n "${qpm_run_dir}" ]]; then
+	if qfw_chem_qpm_ready; then
 		service_alive_before="true"
 	else
 		service_alive_before="false"
@@ -564,14 +540,27 @@ fi
 
 chem_command=(
 	"$(qfw_example_path qfw_chem_app.sh)"
+	--service-mode "${service_mode}"
 	--backend "${backend}"
 	--chem-app-dir "${chem_app_dir}"
-	--setup-mode "${setup_mode}"
 	"${chem_script}"
 	--smoke
 	--no-draw
 	--reservation-shots "${shots}"
 )
+if [[ "${service_mode}" == "site" ]]; then
+	chem_command=(
+		"$(qfw_example_path qfw_chem_app.sh)"
+		--service-mode "${service_mode}"
+		--backend "${backend}"
+		--site-config "${site_config}"
+		--runtime-config "${chem_site_runtime_config}"
+		--chem-app-dir "${chem_app_dir}"
+		"${chem_script}"
+		--smoke
+		--no-draw
+		--reservation-shots "${shots}")
+fi
 if [[ -n "${reservation_qubits}" ]]; then
 	chem_command+=(--reservation-qubits "${reservation_qubits}")
 fi
@@ -607,11 +596,11 @@ else
 	(
 		export QFW_EXAMPLE_RESULT_FILE="${example_result_path}"
 		export QFW_RUN_BASE_DIR="${run_dir}/qfw-runs"
-		export QFW_CHEM_SETUP_MODE="${setup_mode}"
+		export QFW_CHEM_SERVICE_MODE="${service_mode}"
 		export QFW_CHEM_BACKEND="${backend}"
 		export QFW_CHEM_APP_DIR="${chem_app_dir}"
 		export QFW_QPU_DEVICE_ID="${target_device}"
-		if [[ "${setup_mode}" == "site" ]]; then
+		if [[ "${service_mode}" == "site" ]]; then
 			export QFW_SITE_CONFIG="${site_config}"
 			export QFW_RUNTIME_CONFIG="${chem_site_runtime_config}"
 		fi
@@ -625,12 +614,12 @@ else
 	fi
 fi
 
-if [[ -n "${service_pid_file}" ]]; then
-	if qfw_chem_pid_alive "${service_pid_file}"; then
+if [[ -n "${qpm_run_dir}" ]]; then
+	if qfw_chem_qpm_ready; then
 		service_alive_after="true"
 	else
 		service_alive_after="false"
-		if [[ "${setup_mode}" == "site" && "${status}" == "ok" ]]; then
+		if [[ "${service_mode}" == "site" && "${status}" == "ok" ]]; then
 			status="error"
 			app_rc=1
 		fi

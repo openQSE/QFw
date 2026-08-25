@@ -23,8 +23,10 @@ and
 and
 .B qfw-teardown
 stops the recorded application-owned instances. Persistent site directory,
-DVM, and QPM components remain independently managed by the role commands or
-.BR qfw-service-plane (1).
+DVM, and QPM components remain independently managed through
+.BR qfw-dir-svc (1)
+and
+.BR qfw-qpm-svc (1).
 .SH CONFIGURATION
 Site installation and shared endpoints are described by
 .BR qfw-site.yaml (5).
@@ -41,8 +43,9 @@ Architecture and operational concepts use section 7.
 .BR qfw-status (1),
 .BR qfw-srun (1),
 .BR qfw-teardown (1),
-.BR qfw-service-plane (1),
-.BR qfw-service-plane (7),
+.BR qfw-dir-svc (1),
+.BR qfw-qpm-svc (1),
+.BR qfw-service-lifecycle (7),
 .BR qfw-runtime.yaml (5),
 .BR qfw-services.yaml (5),
 .BR qfw-site.yaml (5)

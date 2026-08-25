@@ -229,6 +229,42 @@ def test_qpm_lifecycle_consumes_connection_record(tmp_path, monkeypatch):
     assert state["services"][0]["target"] == "qpm-a"
 
 
+def test_site_qpm_defaults_to_manager_host_without_allocation(
+        tmp_path, monkeypatch):
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text("resolver:\n  scope-order:\n    - site\n")
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "directory-a:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setattr(socket, "gethostname", lambda: "iqm-head")
+    monkeypatch.setattr(service_plane, "_allocation_context", lambda: {
+        "mode": "local",
+        "group0": ["iqm-head"],
+        "group1": ["iqm-head"],
+        "group0_nodelist": "iqm-head",
+        "group1_nodelist": "iqm-head",
+    })
+    parser = service_plane._role_argument_parser("qfw-qpm-svc", "qpm")
+    args = parser.parse_args([
+        "start", "--run-dir", str(tmp_path / "qpm-run"),
+        "--site-config", str(site), "--runtime-config", str(runtime),
+        "--service-id", "iqm-test", "--dry-run",
+    ])
+
+    state = service_plane.start(args)
+
+    assert state["directory"]["endpoint"] == "directory-a:18090"
+    assert state["services"][0]["target"] == "iqm-head"
+
+
 def test_independent_application_qpms_use_manifest_port_offsets(tmp_path):
     site, manifest = write_site_configuration(tmp_path, [
         ("nwqsim", "svc_nwqsim_qpm", "mpi"),
@@ -365,7 +401,7 @@ def test_application_prte_configuration_creates_and_stops_dvm_state(tmp_path):
     assert not uri_path.exists()
 
 
-def test_start_composes_existing_role_commands(tmp_path, monkeypatch):
+def test_start_composes_private_process_launchers(tmp_path, monkeypatch):
     site, _manifest = write_site_configuration(tmp_path, [
         ("iqm-test", "svc_iqm_qpm", "remote-api"),
     ])
@@ -378,9 +414,6 @@ def test_start_composes_existing_role_commands(tmp_path, monkeypatch):
     calls = []
     terminated = []
 
-    def fake_command_path(name):
-        return f"/test-bin/{name}"
-
     def fake_run_on_node(node, command, env, allocation, check=True):
         calls.append((node, list(command), dict(env)))
         if "--pid-file" in command:
@@ -392,7 +425,6 @@ def test_start_composes_existing_role_commands(tmp_path, monkeypatch):
             ready_file.write_text('{"ready": true}\n', encoding="utf-8")
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(service_plane, "_command_path", fake_command_path)
     monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
     monkeypatch.setattr(
         service_plane,
@@ -409,9 +441,9 @@ def test_start_composes_existing_role_commands(tmp_path, monkeypatch):
     state = service_plane.start(args)
 
     assert state["state"] == "ready"
-    assert [Path(call[1][0]).name for call in calls] == [
-        "qfw-dirsvc-start",
-        "qfw-service-start",
+    assert [call[1][:4] for call in calls] == [
+        [sys.executable, "-m", "qfw_runtime._process_launcher", "directory"],
+        [sys.executable, "-m", "qfw_runtime._process_launcher", "qpm"],
     ]
     qpm_env = calls[1][2]
     assert qpm_env["QFW_SERVICE_SCOPE"] == "site"

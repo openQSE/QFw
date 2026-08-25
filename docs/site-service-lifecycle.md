@@ -21,9 +21,9 @@ Shutdown follows ownership. `qfw-teardown` stops only managers recorded as
 application-owned. It never stops a site directory service or site QPM. A site
 manager stops only the component recorded in its own run directory.
 
-The low-level `qfw-dirsvc-start` and `qfw-service-start` commands remain
-available for compatibility and manager internals. New application and site
-workflows use the higher-level role managers.
+The role managers use a private runtime module when a DEFw process must be
+started on another node. Applications and administrators use only the public
+lifecycle commands above.
 
 ## Application Runtime Directory
 

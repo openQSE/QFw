@@ -444,9 +444,13 @@ def _resolve_plan(args, run_dir):
         manifest_services = qfw_config.load_service_manifest(manifest_path)
         selected = _selected_service_ids(
             getattr(args, "service_id", None), local, manifest_services)
+        default_target = (
+            socket.gethostname() if args.scope == "site"
+            else directory.get("target", "")
+        )
         services = _resolve_services(
             selected, manifest_services, local, allocation, args, qpm_node,
-            directory.get("target", ""))
+            default_target)
         if component_mode == "qpm" and components["prte"]:
             components["prte"] = any(
                 service["provider_launch"].get("type") not in {
@@ -744,7 +748,8 @@ def _start_directory(state, timeout):
         _write_dry_run_component(record)
     else:
         command = [
-            _command_path("qfw-dirsvc-start"),
+            sys.executable or "python3",
+            "-m", "qfw_runtime._process_launcher", "directory",
             "--background",
             "--site-config", state["configuration"]["site_config"],
             "--run-dir", state["run_dir"],
@@ -807,7 +812,8 @@ def _start_qpm(state, service, timeout):
             env["QFW_SITE_DIRSVC_ENDPOINTS"] = directory.get("endpoint", "")
             env["QFW_SITE_DIRSVC_NAME"] = directory.get("name", "")
         command = [
-            _command_path("qfw-service-start"),
+            sys.executable or "python3",
+            "-m", "qfw_runtime._process_launcher", "qpm",
             "--background",
             "--run-dir", state["run_dir"],
             "--service-id", service_id,

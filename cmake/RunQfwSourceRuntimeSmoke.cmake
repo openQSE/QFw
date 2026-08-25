@@ -33,7 +33,7 @@ execute_process(
 		command -v qfw-status >/dev/null
 		command -v qfw-dir-svc >/dev/null
 		command -v qfw-qpm-svc >/dev/null
-		'${QFW_PYTHON}' -c 'import qfw_runtime; print(\"source activation import ok\")'
+		'${QFW_PYTHON}' -c 'import qfw_runtime._process_launcher; print(\"source activation import ok\")'
 		qfw-deactivate
 		test \"\${PS1}\" = 'source \\W> '
 		test -z \"\${QFW_PREFIX+x}\"
@@ -91,44 +91,4 @@ endif()
 string(FIND "${status_output}" "\"state\": \"ready\"" status_ready_index)
 if(status_ready_index EQUAL -1)
 	message(FATAL_ERROR "QFw source qfw-status did not report ready")
-endif()
-
-execute_process(
-	COMMAND
-		"${CMAKE_COMMAND}" -E env
-		"QFW_PREFIX=${QFW_SOURCE_DIR}"
-		"DEFW_PREFIX=${QFW_SOURCE_DIR}/DEFw"
-		"QFW_SHARED_ROOT=${qfw_run_base}"
-		"QFW_SITE_DIRSVC_ENDPOINTS=127.0.0.1:8090"
-		"PYTHONPATH=${QFW_SOURCE_DIR}/setup"
-		"${QFW_PYTHON}" -m qfw_runtime.commands qfw-dirsvc-start
-			--dry-run
-			--run-dir "${qfw_run_base}/source-smoke"
-			--name source-dirsvc
-			--pid-file "${qfw_run_base}/source-smoke/state/source-dirsvc.pid"
-			--ready-file "${qfw_run_base}/source-smoke/state/source-dirsvc-ready.json"
-	RESULT_VARIABLE dirsvc_rc)
-if(NOT dirsvc_rc EQUAL 0)
-	message(FATAL_ERROR "QFw source qfw-dirsvc-start dry-run failed")
-endif()
-
-execute_process(
-	COMMAND
-		"${CMAKE_COMMAND}" -E env
-		"QFW_PREFIX=${QFW_SOURCE_DIR}"
-		"DEFW_PREFIX=${QFW_SOURCE_DIR}/DEFw"
-		"QFW_SHARED_ROOT=${qfw_run_base}"
-		"QFW_SITE_DIRSVC_ENDPOINTS=127.0.0.1:8090"
-		"PYTHONPATH=${QFW_SOURCE_DIR}/setup"
-		"${QFW_PYTHON}" -m qfw_runtime.commands qfw-service-start
-			--dry-run
-			--service-id nwqsim
-			--module svc_nwqsim_qpm
-			--load-modules svc_nwqsim_qpm,api_launcher
-			--run-dir "${qfw_run_base}/source-smoke"
-			--pid-file "${qfw_run_base}/source-smoke/state/nwqsim.pid"
-			--ready-file "${qfw_run_base}/source-smoke/state/nwqsim-ready.json"
-	RESULT_VARIABLE service_rc)
-if(NOT service_rc EQUAL 0)
-	message(FATAL_ERROR "QFw source qfw-service-start dry-run failed")
 endif()

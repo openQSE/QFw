@@ -179,7 +179,7 @@ Impact: if chemistry cleanup is restored to a normal `finally` path, or if any
 other application calls `QFwEstimatorV2.shutdown()`, the application can shut
 down a site-owned or long-running QPM. That violates the intended lifecycle
 boundary where service teardown is owned by `qfw-teardown`,
-`qfw_iqm_site_services.sh stop`, or an operator/site-driver path.
+`qfw-qpm-svc stop`, or an operator/site-manager path.
 
 Expected behavior:
 

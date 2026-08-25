@@ -40,7 +40,7 @@ The environment must provide:
   test, including DEFw-dirsvc, QPM service APIs, and client proxy bindings.
 - CMake install output with executable `qfw-activate`, `defw-python`,
   `qfw-setup`, `qfw-status`, `qfw-srun`, `qfw-teardown`, `qfw-dir-svc`, and
-  `qfw-qpm-svc` commands. Compatibility lifecycle commands remain installed.
+  `qfw-qpm-svc` commands.
 - Source-tree activation with the same logical path variables as the installed
   layout.
 - Runtime profile templates for implicit production, local, and hybrid
@@ -518,11 +518,13 @@ the application allocation in site mode:
 source "$QFW_PREFIX/bin/qfw-activate" \
   --venv /workspace/qfw-container-base/qfw-shared-test-venv
 export QFW_SITE_CONFIG=/workspace/qfw-container-base/iqm-site.yaml
-export QFW_CHEM_SETUP_MODE=site
+export QFW_RUNTIME_CONFIG=/workspace/qfw-container-base/site-runtime.yaml
 
 cd "$QFW_SHARE_DIR/examples"
 salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:20:00 \
-  ./qfw_chem_app.sh --backend iqm \
+  ./qfw_chem_app.sh --service-mode site --backend iqm \
+  --site-config "${QFW_SITE_CONFIG}" \
+  --runtime-config "${QFW_RUNTIME_CONFIG}" \
   --chem-app-dir /workspace/qfw-container-base/chemistry_example_aim2 \
   example_1_He_from_pyscf.py --smoke --no-draw \
   --reservation-qubits 20 \
@@ -531,14 +533,10 @@ salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:20:00 \
   --reservation-ttl-s <ttl>
 ```
 
-The planned IQM helper scripts should mirror the existing Slurm-style driver
-pattern used by the admission and scheduler fixture:
-
-- `examples/qfw_iqm_site_services.sh` builds or selects a site config, accepts
-  `--target-device`, starts the Docker-hosted site-style directory and
-  long-running IQM QPM, runs telemetry preflight, records service logs, and
-  leaves services running until explicitly stopped.
-- `examples/qfw_iqm_chem_smoke.sh` accepts `--target-device`,
+The IQM smoke driver follows the existing Slurm-style driver pattern used by
+the admission and scheduler fixture. Site services are started with
+`qfw-dir-svc` and `qfw-qpm-svc`; the application test does not own them.
+`examples/qfw_iqm_chem_smoke.sh` accepts `--target-device`,
   `--site-config`, `--qfw-src`, `--build-dir`, `--install-prefix`,
   `--shared-venv`, `--chem-app-dir`, `--partition`, `--nodes`, `--nodelist`,
   `--time`, `--shots`, and `--max-output-bytes`;

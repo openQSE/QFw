@@ -16,7 +16,7 @@ itrs = int(sys.argv[3])
 records = []
 qfw_run_options = (
 	qfw_reservation_options()
-	if sim_type in ("nwqsim", "tnqvm") else {}
+	if sim_type != "qiskit-aer" else {}
 )
 
 qc = QuantumCircuit(nq)
@@ -28,11 +28,11 @@ qc.measure_all()
 # print(qc)
 
 
-if sim_type == "nwqsim":
+if sim_type != "qiskit-aer":
 	# ghz_nwqsim_times = []
 	for i in range(itrs):
 		start_time = time.time()
-		simulator_obj = QFwBackend(provider="nwqsim")
+		simulator_obj = QFwBackend(provider=sim_type)
 		# counts_nwqsim = qfw.execute(qc, shots=1024, backend="nwqsim") # sync
 		qfw_job = simulator_obj.run(qc, shots=1024, **qfw_run_options)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
@@ -40,33 +40,13 @@ if sim_type == "nwqsim":
 		end_time = time.time()
 		records.append({
 			"iteration": i,
-			"backend": "nwqsim",
+			"backend": sim_type,
 			"overall_time_ms": (end_time - start_time) * 1000,
 			"backend_time_ms": getattr(res_obj, "time_taken", 0) * 1000,
 			"counts": counts_nwqsim,
 		})
 		print("\n\n OVERALL TIME TAKEN (", (end_time - start_time) * 1000, ") ms \n", "Output: ", counts_nwqsim, "\n\n")
-		print("\n\n QFW with NWQSIM took (", (res_obj.time_taken) * 1000, ") ms \n", "Output: ", counts_nwqsim, "\n\n")
-
-elif sim_type == "tnqvm":
-	# ghz_tnqvm_times = []
-	for i in range(itrs):
-		start_time = time.time()
-		simulator_obj = QFwBackend(provider="tnqvm")
-		qfw_job = simulator_obj.run(qc, shots=1024, **qfw_run_options)  # async job, but will poll and get result
-		res_obj = qfw_job.result()
-		counts_tnqvm = res_obj.get_counts()
-		end_time = time.time()
-		records.append({
-			"iteration": i,
-			"backend": "tnqvm",
-			"overall_time_ms": (end_time - start_time) * 1000,
-			"backend_time_ms": getattr(res_obj, "time_taken", 0) * 1000,
-			"counts": counts_tnqvm,
-		})
-		# ghz_nwqsim_times.append((end_time - start_time)*1000)
-		print("\n\n OVERALL TIME TAKEN (", (end_time - start_time) * 1000, ") ms \n", "Output: ", counts_tnqvm, "\n\n")
-		print("\n\n QFW with TNQVM took (", (res_obj.time_taken) * 1000, ") ms \n", "Output: ", counts_tnqvm, "\n\n")
+		print("\n\n QFW with", sim_type, "took (", (res_obj.time_taken) * 1000, ") ms \n", "Output: ", counts_nwqsim, "\n\n")
 
 elif sim_type == "qiskit-aer":
 	# ghz_tnqvm_times = []

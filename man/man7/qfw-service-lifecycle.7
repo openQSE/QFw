@@ -1,6 +1,6 @@
-.TH QFW-SERVICE-PLANE 7 "August 2026" "QFw 0.1.0" "QFw Concepts"
+.TH QFW-SERVICE-LIFECYCLE 7 "August 2026" "QFw 0.1.0" "QFw Concepts"
 .SH NAME
-qfw-service-plane \- QFw service ownership and runtime-state model
+qfw-service-lifecycle \- QFw service ownership and runtime-state model
 .SH OVERVIEW
 A service plane groups the persistent processes that provide QPM discovery and
 execution. It may contain a DEFw directory service, an optional PRTE DVM, and
@@ -10,9 +10,7 @@ The administrator or application selects authoritative YAML configuration.
 .BR qfw-dir-svc (1)
 manages one directory instance, while
 .BR qfw-qpm-svc (1)
-manages one QPM and its optional DVM. The combined
-.BR qfw-service-plane (1)
-interface remains available for compatibility. Each command writes resolved
+manages one QPM and its optional DVM. Each command writes resolved
 configuration as generated instance state.
 .SH OWNERSHIP
 A site directory and each site QPM are started independently by an
@@ -69,7 +67,6 @@ from generated client environment and service-plane state.
 .BR qfw (7),
 .BR qfw-dir-svc (1),
 .BR qfw-qpm-svc (1),
-.BR qfw-service-plane (1),
 .BR qfw-runtime.yaml (5),
 .BR qfw-services.yaml (5),
 .BR qfw-site.yaml (5)

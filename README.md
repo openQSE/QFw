@@ -82,8 +82,8 @@ cmake --install build
 The install places public commands in `/path/to/qfw-install/bin`,
 including `qfw-activate`, `defw-python`, `qfw-setup`, `qfw-srun`,
 `qfw-status`, `qfw-teardown`, `qfw-dir-svc`, and `qfw-qpm-svc`. The
-`qfw-service-plane`, `qfw-dirsvc-start`, and `qfw-service-start` commands
-remain available for compatibility and low-level integration.
+two role commands are the only public interfaces for independently managed
+directory services and QPMs.
 
 Simulator runners and optional hardware client libraries must be available
 through the activated environment or site image. The QFw install packages
@@ -196,15 +196,21 @@ available:
 Run the standard example set sequentially:
 
 ```bash
-./qfw_run_all.sh
+./qfw_run_all.sh --service-mode local --backend nwqsim
 ```
 
-Useful `qfw_run_all.sh` overrides:
+Run the same compatible set against an existing site-owned QPM:
 
 ```bash
-QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
-QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
+./qfw_run_all.sh \
+  --service-mode site \
+  --backend nwqsim \
+  --site-config "${QFW_SITE_CONFIG}" \
+  --runtime-config "${QFW_RUNTIME_CONFIG}"
 ```
+
+MPI validation remains separate because it has its own task-placement
+contract. See the recipes for canonical site-service startup and recovery.
 
 Examples that need a managed reservation should be launched through
 `qfw_slurm_driver.sh`. This script is the test stand-in for the future
@@ -339,10 +345,6 @@ The installed prefix contains:
   application run directory.
 - `bin/qfw-dir-svc`: manages one directory-service instance.
 - `bin/qfw-qpm-svc`: manages one QPM and its optional PRTE DVM.
-- `bin/qfw-service-plane`: compatibility command for a combined service
-  plane.
-- `bin/qfw-dirsvc-start` and `bin/qfw-service-start`: retained low-level
-  one-process launch commands.
 - `share/qfw/config`: site, runtime, service, and device configuration
   templates.
 - `share/qfw/examples`: installed example wrappers and application tests.

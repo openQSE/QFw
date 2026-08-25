@@ -17,7 +17,8 @@ from qfw_qiskit import QFwBackend
 from qfw_example_context import qfw_reservation_options
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
-backend = QFwBackend(provider="nwqsim")
+backend_name = sys.argv[2] if len(sys.argv) > 2 else "nwqsim"
+backend = QFwBackend(provider=backend_name)
 run_options = qfw_reservation_options()
 #backend = Aer.get_backend('statevector_simulator')
 
@@ -113,7 +114,7 @@ if rank == 0:
 		parameters={
 			"max_iterations": max_iter,
 			"mpi_size": size,
-			"backend": "nwqsim",
+			"backend": backend_name,
 		},
 		metrics={
 			"duration_sec": time.time() - start_time,

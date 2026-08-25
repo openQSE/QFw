@@ -64,6 +64,96 @@ qfw_example_emit finish ok 0 3 0
     assert record["args"] == ["one", "two"]
 
 
+def test_execution_options_select_site_runtime_without_local_services(
+        tmp_path):
+    site = tmp_path / "site.yaml"
+    runtime = tmp_path / "runtime.yaml"
+    site.write_text("directory-service: {}\n", encoding="utf-8")
+    runtime.write_text("resolver: {}\n", encoding="utf-8")
+    script = f"""
+source examples/qfw_example_common.sh
+qfw-setup() {{ printf 'setup:%s\\n' "$*"; }}
+qfw-srun() {{ :; }}
+qfw-teardown() {{ :; }}
+qfw_example_parse_execution_options \\
+  --service-mode site --backend nwqsim \\
+  --site-config {site} --runtime-config {runtime} payload
+printf 'selection:%s:%s:%s\\n' \\
+  "$QFW_EXAMPLE_SERVICE_MODE" "$QFW_EXAMPLE_BACKEND" \\
+  "${{QFW_EXAMPLE_REMAINING_ARGS[*]}}"
+qfw_example_setup_backend_service nwqsim
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "selection:site:nwqsim:payload" in result.stdout
+    assert f"--site-config {site}" in result.stdout
+    assert f"--runtime-config {runtime}" in result.stdout
+
+
+def test_execution_options_reject_unknown_service_mode():
+    script = """
+source examples/qfw_example_common.sh
+qfw_example_parse_execution_options --service-mode unknown
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "must be local or site" in result.stderr
+
+
+def test_terminal_result_helper_requires_successful_finish(tmp_path):
+    success = tmp_path / "success.jsonl"
+    missing = tmp_path / "missing.jsonl"
+    success.write_text(json.dumps({
+        "kind": "wrapper",
+        "event": "finish",
+        "status": "ok",
+        "rc": 0,
+    }) + "\n", encoding="utf-8")
+    missing.write_text(json.dumps({
+        "kind": "example",
+        "status": "ok",
+    }) + "\n", encoding="utf-8")
+    script = f"""
+source examples/qfw_example_common.sh
+qfw_example_result_is_terminal_success {success}
+if qfw_example_result_is_terminal_success {missing}; then
+  exit 9
+fi
+"""
+
+    subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+    )
+
+
+def test_run_all_rejects_unknown_selected_case():
+    result = subprocess.run(
+        ["bash", "examples/qfw_run_all.sh", "--tests", "not-a-test"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "unknown --tests case" in result.stderr
+
+
 def test_console_record_parser_accepts_pretty_and_compact_records():
     prefix = "QFW_EXAMPLE_RESERVATION"
     reserve = {"kind": "reserve", "decision": {"reservation_id": 17}}
@@ -90,11 +180,6 @@ def test_embedded_structured_emitters_request_pretty_json():
         },
         "examples/qfw_iqm_chem_driver.sh": {
             "QFW_CHEM_CREDENTIAL_PREFLIGHT": 2,
-        },
-        "examples/qfw_iqm_site_services.sh": {
-            "QFW_IQM_INSTALL_DEPS_RESULT": 1,
-            "QFW_IQM_PREFLIGHT_RESULT": 2,
-            "QFW_IQM_SITE_SERVICES_RESULT": 1,
         },
     }
 

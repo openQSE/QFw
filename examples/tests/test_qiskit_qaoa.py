@@ -45,12 +45,7 @@ plt.savefig('max_cut_graph.png')
 # simulator_obj = AerSimulator(method="statevector")
 # --------------------------------------------------- #
 # ------------------ QFW simulator ------------------ #
-if sim_type.lower() == "nwqsim":
-    simulator_obj = QFwBackend(provider="nwqsim")
-elif sim_type.lower() == "tnqvm":
-    simulator_obj = QFwBackend(provider="tnqvm")
-else:
-    raise ValueError(f"Unsupported simulator type: {sim_type}")
+simulator_obj = QFwBackend(provider=sim_type.lower())
 # --------------------------------------------------- #
 
 backend_sampler = QFwSamplerV2(

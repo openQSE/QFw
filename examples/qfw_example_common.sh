@@ -36,6 +36,81 @@ qfw_example_parse_common_options() {
 	esac
 }
 
+qfw_example_parse_execution_options() {
+	local verbose="${QFW_EXAMPLE_VERBOSE:-no}"
+	local service_mode="${QFW_EXAMPLE_SERVICE_MODE:-local}"
+	local backend="${QFW_EXAMPLE_BACKEND:-}"
+	local site_config="${QFW_EXAMPLE_SITE_CONFIG_PATH:-${QFW_SITE_CONFIG:-}}"
+	local runtime_config="${QFW_EXAMPLE_RUNTIME_CONFIG_PATH:-${QFW_RUNTIME_CONFIG:-}}"
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			--verbose)
+				verbose="yes"
+				shift
+				;;
+			--service-mode)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --service-mode requires local or site" >&2
+					return 2
+				fi
+				service_mode="$2"
+				shift 2
+				;;
+			--backend)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --backend requires a value" >&2
+					return 2
+				fi
+				backend="$2"
+				shift 2
+				;;
+			--site-config)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --site-config requires a path" >&2
+					return 2
+				fi
+				site_config="$2"
+				shift 2
+				;;
+			--runtime-config)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --runtime-config requires a path" >&2
+					return 2
+				fi
+				runtime_config="$2"
+				shift 2
+				;;
+			--)
+				shift
+				break
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+
+	case "${service_mode}" in
+		local|site) ;;
+		*)
+			echo "ERROR: --service-mode must be local or site: ${service_mode}" >&2
+			return 2
+			;;
+	esac
+
+	QFW_EXAMPLE_REMAINING_ARGS=("$@")
+	export QFW_EXAMPLE_VERBOSE="${verbose}"
+	export QFW_EXAMPLE_SERVICE_MODE="${service_mode}"
+	export QFW_EXAMPLE_BACKEND="${backend}"
+	export QFW_EXAMPLE_SITE_CONFIG_PATH="${site_config}"
+	export QFW_EXAMPLE_RUNTIME_CONFIG_PATH="${runtime_config}"
+
+	case "${verbose}" in
+		1|yes|true|on|y|YES|TRUE|ON|Y) set -x ;;
+	esac
+}
+
 qfw_example_begin() {
 	QFW_EXAMPLE_NAME="$1"
 	shift || true
@@ -153,6 +228,22 @@ qfw_example_setup_local_services() {
 	qfw_example_setup --runtime-config "${runtime_config}"
 }
 
+qfw_example_setup_site_services() {
+	local site_config="${QFW_EXAMPLE_SITE_CONFIG_PATH:-${QFW_SITE_CONFIG:-}}"
+	local runtime_config="${QFW_EXAMPLE_RUNTIME_CONFIG_PATH:-${QFW_RUNTIME_CONFIG:-}}"
+	if [[ -z "${site_config}" || ! -r "${site_config}" ]]; then
+		echo "ERROR: site service mode requires a readable --site-config" >&2
+		return 2
+	fi
+	if [[ -z "${runtime_config}" || ! -r "${runtime_config}" ]]; then
+		echo "ERROR: site service mode requires a readable --runtime-config" >&2
+		return 2
+	fi
+	qfw_example_setup \
+		--site-config "${site_config}" \
+		--runtime-config "${runtime_config}"
+}
+
 qfw_example_default_service_manifest() {
 	if [[ -n "${QFW_EXAMPLE_SERVICE_MANIFEST:-}" ]]; then
 		printf "%s\n" "${QFW_EXAMPLE_SERVICE_MANIFEST}"
@@ -188,9 +279,53 @@ qfw_example_setup_backend_service() {
 		echo "ERROR: qfw_example_setup_backend_service requires a backend" >&2
 		return 2
 	fi
-	local service_name
-	service_name="$(qfw_example_service_for_backend "$1")"
-	qfw_example_setup_qpm_services "${service_name}"
+	case "${QFW_EXAMPLE_SERVICE_MODE:-local}" in
+		local)
+			local service_name
+			service_name="$(qfw_example_service_for_backend "$1")"
+			qfw_example_setup_qpm_services "${service_name}"
+			;;
+		site)
+			qfw_example_setup_site_services
+			;;
+		*)
+			echo "ERROR: unsupported service mode: ${QFW_EXAMPLE_SERVICE_MODE}" >&2
+			return 2
+			;;
+	esac
+}
+
+qfw_example_backend() {
+	local fallback="${1:-nwqsim}"
+	printf "%s\n" "${QFW_EXAMPLE_BACKEND:-${fallback}}"
+}
+
+qfw_example_result_is_terminal_success() {
+	local result_file="${1:-}"
+	if [[ -z "${result_file}" || ! -s "${result_file}" ]]; then
+		return 1
+	fi
+	python3 - "${result_file}" <<'PY'
+import json
+import sys
+
+terminal = None
+try:
+	with open(sys.argv[1], "r", encoding="utf-8") as stream:
+		for line in stream:
+			if not line.strip():
+				continue
+			record = json.loads(line)
+			if record.get("kind") == "wrapper" and record.get("event") == "finish":
+				terminal = record
+except (OSError, ValueError):
+	raise SystemExit(1)
+
+if terminal is None:
+	raise SystemExit(1)
+if terminal.get("status") != "ok" or terminal.get("rc") != 0:
+	raise SystemExit(1)
+PY
 }
 
 qfw_example_srun() {
