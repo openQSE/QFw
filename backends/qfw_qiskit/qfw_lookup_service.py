@@ -5,7 +5,7 @@ import inspect
 import defw
 from defw_app_util import defw_get_directory_service, SYSTEM_UP_TIMEOUT
 from .qpm_resolver import (
-	DIRECT_ENDPOINT_FALLBACK_ENV,
+	DIRECT_ENDPOINT_ENABLED_ENV,
 	DIRECT_QPM_ENDPOINT_ENV,
 	QPM_IMPL_ENV,
 	QPMResolver,
@@ -31,7 +31,7 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 def _external_qpm_resolution_configured():
 	if os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV):
 		return True
-	value = os.environ.get(DIRECT_ENDPOINT_FALLBACK_ENV, "")
+	value = os.environ.get(DIRECT_ENDPOINT_ENABLED_ENV, "")
 	if value.strip().lower() not in {"1", "true", "yes", "on", "y"}:
 		return False
 	return bool(os.environ.get(DIRECT_QPM_ENDPOINT_ENV))

@@ -1,4 +1,3 @@
-import inspect
 import json
 import logging
 import os
@@ -13,7 +12,7 @@ from .controller import find_target_controller
 
 OPERATION_MODE_ENV = "QFW_QPM_OPERATION_MODE"
 REGISTER_WITH_DIRSVC_ENV = "QFW_QPM_REGISTER_WITH_DIRSVC"
-DIRECT_ENDPOINT_FALLBACK_ENV = "QFW_QPM_DIRECT_ENDPOINT_FALLBACK"
+DIRECT_ENDPOINT_ENABLED_ENV = "QFW_QPM_DIRECT_ENDPOINT_ENABLED"
 DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
 SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 STARTUP_TIMEOUT_ENV = "QFW_STARTUP_TIMEOUT"
@@ -50,8 +49,8 @@ def _env_flag(name, default=None):
 	return default
 
 
-def direct_endpoint_fallback_enabled():
-	return bool(_env_flag(DIRECT_ENDPOINT_FALLBACK_ENV, False))
+def direct_endpoint_enabled():
+	return bool(_env_flag(DIRECT_ENDPOINT_ENABLED_ENV, False))
 
 
 def operation_mode():
@@ -73,7 +72,7 @@ def register_with_dirsvc():
 	configured = _env_flag(REGISTER_WITH_DIRSVC_ENV, None)
 	if configured is not None:
 		return configured
-	if direct_endpoint_fallback_enabled():
+	if direct_endpoint_enabled():
 		return False
 	if long_running_mode_enabled():
 		return site_dirsvc_endpoints_configured()
@@ -87,7 +86,7 @@ def startup_config():
 			DEFAULT_OPERATION_MODE,
 		).strip().lower(),
 		"register_with_dirsvc": register_with_dirsvc(),
-		"direct_endpoint_fallback": direct_endpoint_fallback_enabled(),
+		"direct_endpoint_enabled": direct_endpoint_enabled(),
 		"direct_qpm_endpoint": os.environ.get(DIRECT_QPM_ENDPOINT_ENV, ""),
 		"site_dirsvc_endpoints": os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV, ""),
 	}
@@ -114,30 +113,18 @@ def should_wait_for_dirsvc(defw_module):
 
 
 def listener_ready(defw_module):
-	return _readiness_hook(defw_module, (
-		"qpm_listener_ready",
-		"listener_ready",
-		"rpc_listener_ready",
-	), default=True)
+	return _readiness_hook(defw_module, "qpm_listener_ready")
 
 
 def controller_ready(defw_module):
-	return _readiness_hook(defw_module, (
-		"qpm_controller_ready",
-		"controller_ready",
-	), default=True)
+	return _readiness_hook(defw_module, "qpm_controller_ready")
 
 
-def _readiness_hook(defw_module, method_names, default):
-	for method_name in method_names:
-		method = getattr(defw_module, method_name, None)
-		if method is None:
-			continue
-		try:
-			return bool(method())
-		except TypeError:
-			return bool(method(defw_module))
-	return default
+def _readiness_hook(defw_module, method_name):
+	method = getattr(defw_module, method_name, None)
+	if method is None:
+		return True
+	return bool(method())
 
 
 def _listener_and_controller_ready(defw_module):
@@ -177,22 +164,7 @@ def _site_dirsvc_ready(defw_module):
 
 
 def _site_dirsvc_endpoint_ready(defw_module, endpoint):
-	for method_name in (
-			"site_dirsvc_ready",
-			"dirsvc_ready",
-			"directory_ready"):
-		method = getattr(defw_module, method_name, None)
-		if method is None:
-			continue
-		try:
-			return bool(method(endpoint))
-		except TypeError:
-			return bool(method())
-	for attr_name in ("site_dirsvc", "dirsvc"):
-		client = getattr(defw_module, attr_name, None)
-		if client is not None:
-			return True
-	return False
+	return _site_dirsvc_client(defw_module, endpoint) is not None
 
 
 def _site_registration_required():
@@ -249,7 +221,7 @@ def _ensure_local_registration(defw_module):
 	for record in records:
 		try:
 			registered_record = _register_site_record(
-				client, record, peer, defw_module)
+				client, record, defw_module)
 			registered_records = _as_list(registered_record)
 			registered.extend(registered_records)
 			for lifecycle_record in registered_records or [record]:
@@ -310,7 +282,7 @@ def _ensure_site_registration(defw_module):
 		for record in records:
 			try:
 				registered_record = _register_site_record(
-					client, record, peer, defw_module)
+					client, record, defw_module)
 				registered_records = _as_list(registered_record)
 				registered.extend(registered_records)
 				for lifecycle_record in registered_records or [record]:
@@ -325,19 +297,11 @@ def _ensure_site_registration(defw_module):
 
 
 def _site_registration_records(defw_module):
-	records = _call_or_read(defw_module, (
-		"qpm_site_service_records",
-		"site_service_records",
-		"service_records",
-	))
+	records = _call_or_read(defw_module, "qpm_site_service_records")
 	if records:
 		return [dict(record) for record in _as_list(records)]
 
-	infos = _call_or_read(defw_module, (
-		"qpm_site_service_info",
-		"site_service_info",
-		"service_info",
-	))
+	infos = _call_or_read(defw_module, "qpm_site_service_info")
 	if not infos:
 		infos = _query_local_service_info(defw_module)
 	return [
@@ -346,13 +310,11 @@ def _site_registration_records(defw_module):
 	]
 
 
-def _call_or_read(obj, names):
-	for name in names:
-		value = getattr(obj, name, None)
-		if value is None:
-			continue
-		return value() if callable(value) else value
-	return None
+def _call_or_read(obj, name):
+	value = getattr(obj, name, None)
+	if value is None:
+		return None
+	return value() if callable(value) else value
 
 
 def _query_local_service_info(defw_module):
@@ -457,62 +419,29 @@ def _default_api_binding(service_info, properties):
 
 
 def _site_dirsvc_client(defw_module, endpoint):
-	for method_name in (
-			"connect_to_site_dirsvc",
-			"site_dirsvc_client",
-			"connect_to_directory"):
-		method = getattr(defw_module, method_name, None)
-		if method is None:
-			continue
-		return method(endpoint)
-	for attr_name in ("site_dirsvc", "dirsvc"):
-		client = getattr(defw_module, attr_name, None)
-		if client is not None:
-			return client
 	connect_to_binding = getattr(defw_module, "connect_to_binding", None)
-	if connect_to_binding is not None:
+	if connect_to_binding is None:
+		raise AttributeError(
+			"DEFw runtime does not expose connect_to_binding")
+	try:
 		return connect_to_binding(_directory_binding_record(endpoint))
-	return None
+	except Exception:
+		return None
 
 
-def _register_site_record(client, record, peer, defw_module):
+def _register_site_record(client, record, defw_module):
 	register_service = getattr(client, "register_service", None)
-	if register_service is not None:
-		if _register_service_uses_context(register_service):
-			service_ep = _site_registration_service_endpoint(defw_module)
-			if service_ep is None:
-				raise AttributeError(
-					"QPM DEFw endpoint unavailable for site registration")
-			return register_service(
-				service_ep,
-				context=_site_registration_context(record),
-			)
-		return _register_raw_site_record(register_service, record, peer)
-
-	register = getattr(client, "register", None)
-	if register is not None:
-		return _register_raw_site_record(register, record, peer)
-	raise AttributeError("site dirsvc client does not expose register_service")
-
-
-def _register_service_uses_context(method):
-	try:
-		parameters = inspect.signature(method).parameters
-	except (TypeError, ValueError):
-		return True
-	if "context" in parameters:
-		return True
-	for parameter in parameters.values():
-		if parameter.kind == inspect.Parameter.VAR_KEYWORD:
-			return True
-	return False
-
-
-def _register_raw_site_record(method, record, peer):
-	try:
-		return method(record, peer=peer)
-	except TypeError:
-		return method(record)
+	if register_service is None:
+		raise AttributeError(
+			"site dirsvc client does not expose register_service")
+	service_ep = _site_registration_service_endpoint(defw_module)
+	if service_ep is None:
+		raise AttributeError(
+			"QPM DEFw endpoint unavailable for site registration")
+	return register_service(
+		service_ep,
+		context=_site_registration_context(record),
+	)
 
 
 def _site_registration_context(record):
@@ -530,11 +459,7 @@ def _site_registration_context(record):
 
 
 def _site_registration_service_endpoint(defw_module):
-	endpoint = _call_or_read(defw_module, (
-		"qpm_site_registration_endpoint",
-		"site_registration_endpoint",
-		"registration_endpoint",
-	))
+	endpoint = _call_or_read(defw_module, "qpm_site_registration_endpoint")
 	if _is_defw_service_endpoint(endpoint):
 		return endpoint
 	endpoint = _defw_endpoint(defw_module)
@@ -608,11 +533,7 @@ def _controller_for_service_record(record):
 
 
 def _site_registration_peer(defw_module):
-	peer = _call_or_read(defw_module, (
-		"qpm_site_registration_peer",
-		"site_registration_peer",
-		"registration_peer",
-	))
+	peer = _call_or_read(defw_module, "qpm_site_registration_peer")
 	if peer:
 		return dict(peer)
 	endpoint = _defw_endpoint(defw_module)

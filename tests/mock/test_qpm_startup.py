@@ -39,12 +39,16 @@ class FakeSiteDirSvc:
 	def __init__(self):
 		self.registrations = []
 
-	def register_service(self, record, peer=None):
-		self.registrations.append((dict(record), dict(peer or {})))
-		return {
-			"service_id": record["service_id"],
+	def register_service(self, service_ep, context=None):
+		context = dict(context or {})
+		self.registrations.append((service_ep, context))
+		return [{
+			"service_id": context["service_id"],
+			"service_type": context["service_type"],
+			"runtime_id": service_ep.get_id(),
+			"peer_handle": service_ep.blk_uuid,
 			"generation": 1,
-		}
+		}]
 
 
 class FakeEndpoint:
@@ -56,22 +60,6 @@ class FakeEndpoint:
 
 	def get_id(self):
 		return self.remote_uuid
-
-
-class FakeDefwDirSvc:
-	def __init__(self):
-		self.registrations = []
-
-	def register_service(self, service_ep, context=None):
-		context = dict(context or {})
-		self.registrations.append((service_ep, context))
-		return [{
-			"service_id": context["service_id"],
-			"service_type": context["service_type"],
-			"runtime_id": service_ep.get_id(),
-			"peer_handle": service_ep.blk_uuid,
-			"generation": 1,
-		}]
 
 
 class FakeDefw:
@@ -86,10 +74,8 @@ class FakeDefw:
 		self.controller_is_ready = controller_ready
 		self.endpoint = endpoint or FakeEndpoint()
 
-	def site_dirsvc_ready(self, endpoint):
-		return endpoint in self.site_ready
-
-	def connect_to_site_dirsvc(self, endpoint):
+	def connect_to_binding(self, binding):
+		endpoint = binding["service_record"]["endpoint"]["address"]
 		if endpoint not in self.site_ready:
 			return None
 		return self.site_dirsvc
@@ -126,7 +112,7 @@ def test_qpm_startup_waits_for_dirsvc_by_default(monkeypatch):
 	reset_qpm_state(uq)
 	started = []
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setattr(
 		startup,
 		"_start_wait_thread",
@@ -147,7 +133,7 @@ def test_qpm_startup_initializes_without_dirsvc_when_disabled(monkeypatch):
 
 	reset_qpm_state(uq)
 	monkeypatch.setenv("QFW_QPM_REGISTER_WITH_DIRSVC", "no")
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 
 	state = startup.initialize_qpm_service(FakeDefw(), "ready")
 
@@ -155,13 +141,13 @@ def test_qpm_startup_initializes_without_dirsvc_when_disabled(monkeypatch):
 	assert uq.qpm_initialized is True
 
 
-def test_qpm_startup_direct_endpoint_fallback_skips_dirsvc(monkeypatch):
+def test_qpm_startup_direct_endpoint_skips_dirsvc(monkeypatch):
 	import util.qpm.startup as startup
 	import util.qpm.util_qpm as uq
 
 	reset_qpm_state(uq)
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 
 	state = startup.initialize_qpm_service(FakeDefw(), "ready")
 
@@ -176,7 +162,7 @@ def test_qpm_startup_long_running_listener_skips_allocation_dirsvc(monkeypatch):
 	reset_qpm_state(uq)
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
 
 	state = startup.initialize_qpm_service(FakeDefw(), "ready")
@@ -194,7 +180,7 @@ def test_qpm_startup_long_running_site_registration_waits(monkeypatch):
 	site_dirsvc = FakeSiteDirSvc()
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setattr(
 		startup,
@@ -227,7 +213,7 @@ def test_qpm_startup_long_running_site_registration_registers_payload(
 	site_dirsvc = FakeSiteDirSvc()
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 
 	state = startup.initialize_qpm_service(
@@ -242,14 +228,13 @@ def test_qpm_startup_long_running_site_registration_registers_payload(
 	assert state == "initialized"
 	assert uq.qpm_initialized is True
 	assert len(site_dirsvc.registrations) == 1
-	record, peer = site_dirsvc.registrations[0]
-	assert record["service_type"] == "qfw.qpm"
-	assert record["selector"]["resources"] == ["IQM-20q"]
-	assert record["properties"]["provider"] == "iqm"
-	assert record["api_bindings"][0]["binding_name"] == "execution"
-	assert record["api_bindings"][0]["client_class"] == "QPMExecution"
-	assert peer["runtime_id"] == "qpm-runtime-1"
-	assert peer["peer_handle"] == "qpm-peer-1"
+	registered_endpoint, context = site_dirsvc.registrations[0]
+	assert registered_endpoint.get_id() == "qpm-runtime-1"
+	assert context["service_type"] == "qfw.qpm"
+	assert context["selector"]["resources"] == ["IQM-20q"]
+	assert context["properties"]["provider"] == "iqm"
+	assert context["api_bindings"][0]["binding_name"] == "execution"
+	assert context["api_bindings"][0]["client_class"] == "QPMExecution"
 
 	status = startup.startup_status(
 		FakeDefw(
@@ -269,11 +254,11 @@ def test_qpm_startup_long_running_site_registration_uses_defw_api(
 	import util.qpm.util_qpm as uq
 
 	reset_qpm_state(uq)
-	site_dirsvc = FakeDefwDirSvc()
+	site_dirsvc = FakeSiteDirSvc()
 	endpoint = FakeEndpoint()
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 
 	state = startup.initialize_qpm_service(
@@ -321,7 +306,7 @@ def test_qpm_startup_registration_records_lifecycle_telemetry(monkeypatch):
 	record["properties"]["controller"] = {"target_id": "startup-target"}
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 
 	state = startup.initialize_qpm_service(
@@ -370,7 +355,7 @@ def test_qpm_startup_records_real_defw_directory_lifecycle(monkeypatch):
 	record["properties"]["controller"] = {"target_id": "directory-target"}
 	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
 	monkeypatch.setenv("QFW_QPM_REGISTER_WITH_DIRSVC", "no")
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 
 	state = startup.initialize_qpm_service(
 		FakeDefw(dirsvc=object()),
@@ -439,7 +424,7 @@ def test_qpm_startup_site_registration_waits_for_listener_before_registering(
 	)
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setattr(
 		startup,
@@ -479,7 +464,7 @@ def test_qpm_startup_site_registration_waits_for_controller_before_registering(
 	)
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setattr(
 		startup,
@@ -506,14 +491,14 @@ def test_qpm_startup_site_registration_waits_for_controller_before_registering(
 	assert len(site_dirsvc.registrations) == 1
 
 
-def test_qpm_startup_direct_fallback_reports_listener_health(monkeypatch):
+def test_qpm_startup_direct_endpoint_reports_listener_health(monkeypatch):
 	import util.qpm.startup as startup
 	import util.qpm.util_qpm as uq
 
 	reset_qpm_state(uq)
 	started = []
 	fake_defw = FakeDefw(listener_ready=False, controller_ready=True)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.delenv("QFW_QPM_REGISTER_WITH_DIRSVC", raising=False)
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
@@ -530,7 +515,7 @@ def test_qpm_startup_direct_fallback_reports_listener_health(monkeypatch):
 	assert state == "waiting-for-listener"
 	assert uq.qpm_initialized is False
 	assert len(started) == 1
-	assert status["direct_endpoint_fallback"] is True
+	assert status["direct_endpoint_enabled"] is True
 	assert status["direct_qpm_endpoint"] == "qpm-direct:9000"
 	assert status["register_with_dirsvc"] is False
 	assert status["listener_ready"] is False
@@ -544,7 +529,7 @@ def test_qpm_startup_wait_for_dirsvc_times_out(monkeypatch):
 
 	reset_qpm_state(uq)
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 
 	startup.wait_for_dirsvc(FakeDefw(), "ready", timeout=0)

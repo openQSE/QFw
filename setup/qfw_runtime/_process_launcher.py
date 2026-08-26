@@ -183,8 +183,8 @@ def start_qpm(argv):
         service.get("register-with-dirsvc"),
         default=operation_mode != "direct",
     )
-    direct_fallback = qfw_config.bool_config(
-        service.get("direct-endpoint-fallback"),
+    direct_enabled = qfw_config.bool_config(
+        service.get("direct-endpoint-enabled"),
         default=False,
     )
     dirsvc_endpoint = (
@@ -233,8 +233,8 @@ def start_qpm(argv):
         "QFW_QPM_SERVICE_ID": service_id,
         "QFW_QPM_SERVICE_MODULE": module,
         "QFW_QPM_REGISTER_WITH_DIRSVC": "yes" if register else "no",
-        "QFW_QPM_DIRECT_ENDPOINT_FALLBACK": (
-            "yes" if direct_fallback else "no"),
+        "QFW_QPM_DIRECT_ENDPOINT_ENABLED": (
+            "yes" if direct_enabled else "no"),
         "QFW_STARTUP_TIMEOUT": str(startup_timeout),
         "QFW_SERVICE_READY_FILE": str(service_ready_file),
     })

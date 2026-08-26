@@ -176,7 +176,7 @@ def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
 
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
 	monkeypatch.delenv("QFW_QPM_IMPL", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
 	monkeypatch.setattr(

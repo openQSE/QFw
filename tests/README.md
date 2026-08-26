@@ -110,7 +110,7 @@ Checklist:
 - [ ] Allow `QFwBackend` to accept injected `event_api`
 - [ ] Allow `QFwBackend` to accept injected `qpm_resolver`
 - [ ] Allow `QFwBackend` to accept injected `runtime_api`
-- [ ] Preserve backward-compatible default behavior
+- [ ] Define explicit defaults for constructed runtime collaborators
 - [ ] Update Phase 1 tests to prefer direct injection over global patching
 
 Phase 2 should cover:

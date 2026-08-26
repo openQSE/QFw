@@ -533,16 +533,9 @@ salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:20:00 \
   --reservation-ttl-s <ttl>
 ```
 
-The IQM smoke driver follows the existing Slurm-style driver pattern used by
-the admission and scheduler fixture. Site services are started with
+The IQM chemistry driver follows the existing Slurm-style driver pattern used
+by the admission and scheduler fixture. Site services are started with
 `qfw-dir-svc` and `qfw-qpm-svc`; the application test does not own them.
-`examples/qfw_iqm_chem_smoke.sh` accepts `--target-device`,
-  `--site-config`, `--qfw-src`, `--build-dir`, `--install-prefix`,
-  `--shared-venv`, `--chem-app-dir`, `--partition`, `--nodes`, `--nodelist`,
-  `--time`, `--shots`, and `--max-output-bytes`;
-  captures stdout and stderr; embeds bounded output in a JSONL result record;
-  and verifies that app-side teardown does not stop the Docker-hosted
-  site-style services.
 
 ## System Test Cases
 

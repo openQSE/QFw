@@ -192,7 +192,7 @@ def test_resolver_from_environment_selects_site_scoped_directory(monkeypatch):
 
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	resolver = QPMResolver.from_environment(
 		directory_client_factory=client_factory,
 		sleeper=lambda seconds: None,
@@ -222,7 +222,7 @@ def test_resolver_from_environment_site_scope_reuses_bound_site_dirsvc(
 
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.delenv("QFW_LOCAL_DIRSVC_ENDPOINT", raising=False)
 	resolver = QPMResolver.from_environment(
@@ -260,7 +260,7 @@ def test_resolver_from_environment_keeps_order_with_local_and_site(
 		monkeypatch.setenv("QFW_LOCAL_DIRSVC_ENDPOINT", "local-a")
 		monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 		monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", order)
-		monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+		monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 		resolver = QPMResolver.from_environment(
 			dirsvc=local,
 			directory_client_factory=client_factory,
@@ -292,7 +292,7 @@ def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setenv("QFW_LOCAL_DIRSVC_ENDPOINT", "local-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "local")
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	resolver = QPMResolver.from_environment(
 		dirsvc=local,
@@ -316,9 +316,9 @@ def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
 	assert clients == {}
 
 
-def test_resolver_from_environment_allows_direct_endpoint_fallback(monkeypatch):
+def test_resolver_from_environment_allows_direct_endpoint(monkeypatch):
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
 	resolver = QPMResolver.from_environment(sleeper=lambda seconds: None)
@@ -353,7 +353,7 @@ def test_resolver_from_environment_binds_site_directory_without_factory(
 	fake_defw = FakeDefw()
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a:8090")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
+	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	resolver = QPMResolver.from_environment(
 		defw_module=fake_defw,
 		sleeper=lambda seconds: None,
@@ -420,7 +420,7 @@ def test_direct_endpoint_connect_uses_defw_binding(monkeypatch):
 
 	fake_defw = FakeDefw()
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
 	monkeypatch.setenv("QFW_QPM_IMPL", "nwqsim")
@@ -447,7 +447,7 @@ def test_direct_endpoint_connect_reports_unsupported_without_binding(
 		pass
 
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
+	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
 	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
 	resolver = QPMResolver.from_environment(

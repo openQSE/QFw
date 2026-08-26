@@ -90,14 +90,15 @@ Use these managed commands in place of removed setup fragments:
 ```text
 qfw-activate
 qfw-setup
+qfw-status
 qfw-srun
 qfw-teardown
-qfw-dirsvc-start
-qfw-service-start
+qfw-dir-svc
+qfw-qpm-svc
 ```
 
-Native consumers must rebuild against this compatibility set because
-`qhw_adm_device_profile_t` gains `max_provider_queue_depth`.
+Native consumers must rebuild because `qhw_adm_device_profile_t` gains
+`max_provider_queue_depth`.
 
 ## Examples and test tooling
 

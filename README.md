@@ -242,14 +242,6 @@ QPM environment and are not exported to the application.
   -- ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
 
-`qfw_supermarq.batch` is a Frontier-oriented batch template. Edit the
-account, node counts, paths, and arguments before submitting it with
-`sbatch`:
-
-```bash
-sbatch qfw_supermarq.batch
-```
-
 For per-wrapper argument details, see
 [examples/README.md](examples/README.md).
 

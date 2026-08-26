@@ -308,20 +308,12 @@ Use the common execution options to select a site-owned hardware QPM:
   <script-name.py>
 ```
 
-### `qfw_iqm_chem_driver.sh` and `qfw_iqm_chem_smoke.sh`
+### `qfw_iqm_chem_driver.sh`
 
 The driver performs credential preflight, reserves through the Slurm-style
 driver, runs the chemistry application against an existing IQM QPM, and
 records evidence. Pass the canonical site file directly with `--site-config`.
-The smoke wrapper accepts `--service-mode local|site`; use `--qpm-run-dir` when
-it should also verify that a site-owned QPM PID remains alive after application
-teardown. Neither command sources state from a service manager run directory.
-
-### `qfw_supermarq.batch`
-
-Frontier-oriented batch template for submitting the SupermarQ workflow
-as a heterogeneous Slurm job. Update account, node counts, paths, and
-arguments before use.
+The command does not source state from a service manager run directory.
 
 Long-running site-service startup, application validation, and interruption
 recovery are documented in `docs/recipes`.

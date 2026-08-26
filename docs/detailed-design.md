@@ -1112,7 +1112,7 @@ Client and resolver variables:
 | `QFW_RUNTIME_PROFILE` | Optional profile name, such as `local` or `hybrid`, used when no explicit runtime path is supplied. |
 | `QFW_SITE_DIRSVC_ENDPOINTS` | Override for site directory endpoints from `site.yaml`; normally unset. |
 | `QFW_QPM_RESOLVER_SCOPE_ORDER` | Override for `resolver.scope-order` from runtime configuration. |
-| `QFW_QPM_DIRECT_ENDPOINT_FALLBACK` | Enables the configured direct-endpoint resolver scope. The name is retained for compatibility, but the scope is also used for explicit direct long-running profiles. |
+| `QFW_QPM_DIRECT_ENDPOINT_ENABLED` | Enables the configured direct-endpoint resolver scope for an explicitly configured direct QPM. |
 | `QFW_DIRECT_QPM_ENDPOINT` | Configured direct DEFw endpoint for an unregistered or directly selected long-running QPM. |
 | `QFW_DIRECT_QPM_SERVICE_MODULE` | Optional service module override for a direct endpoint binding. |
 | `QFW_DIRECT_QPM_SERVICE_CLASS` | Optional service class override for a direct endpoint binding. |
@@ -1123,7 +1123,7 @@ Service-launch variables:
 | --- | --- |
 | `QFW_QPM_OPERATION_MODE` | QPM operation-mode override, such as `long-running` or `qfw-managed`. |
 | `QFW_QPM_REGISTER_WITH_DIRSVC` | Override controlling whether a QPM registers with a directory service. |
-| `QFW_QPM_DIRECT_ENDPOINT_FALLBACK` | Enables direct listener readiness when a service runs without directory-service registration. |
+| `QFW_QPM_DIRECT_ENDPOINT_ENABLED` | Enables direct listener readiness when a service runs without directory-service registration. |
 | `QFW_DIRECT_QPM_ENDPOINT` | Stable endpoint advertised to direct clients for long-running listener mode. |
 | `DEFW_DISABLE_DIRSVC` | Low-level DEFw listener setting written by wrappers; users should not set it directly. |
 

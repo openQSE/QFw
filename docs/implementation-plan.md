@@ -117,7 +117,7 @@ changes.
 | Commit ID | Primary repo | Plan tasks | Scope and exit criteria |
 | --- | --- | --- | --- |
 | PH1-C01 | DEFw | PH1.1 | Replace SCons with CMake as the authoritative DEFw build and install system while preserving current behavior, the DEFw executor runtime model, SWIG artifacts, extension module names, typemap compatibility, install layout, and test entry points. |
-| PH1-C02 | DEFw | PH1.2 | Replace the legacy DEFw discovery manager with DEFw-dirsvc across service names, APIs, configuration, code ownership, tests, and documentation while keeping any required compatibility aliases thin and explicitly deprecated. |
+| PH1-C02 | DEFw | PH1.2 | Replace the legacy DEFw discovery manager with DEFw-dirsvc across service names, APIs, configuration, code ownership, tests, and documentation, removing the superseded names. |
 | PH1-C03 | DEFw | PH1.3 | Replace the internal C multi-list model with one authoritative connection table. Preserve current behavior through C-only tests and manual smoke coverage. |
 | PH1-C04 | DEFw | PH1.4 | Rebuild the existing SWIG-exported iterator and connect functions as filtered views over the single C table. Python code should not change in this commit. |
 | PH1-C05 | DEFw | PH1.5 | Preserve request, response, event, and active-connect callback semantics while the C storage model changes. RPC request/response tests should still pass. |
@@ -199,7 +199,7 @@ changes.
 | PH8-C02 | QFw | PH8.2 | Define the QFw installed prefix layout through CMake install rules, including packaged configuration template destinations, examples, service modules, service API bindings, and site-package outputs. |
 | PH8-C03 | QFw, DEFw | PH8.3 | Add `qfw-activate` and `defw-python` so installed QFw preserves the user's Python environment while running applications through the DEFw executor. |
 | PH8-C04 | QFw | PH8.4 | Implement the user job lifecycle commands `qfw-setup`, `qfw-srun`, and `qfw-teardown` for production, local, and hybrid runtime profiles. |
-| PH8-C05 | QFw, DEFw | PH8.5 | Implement `qfw-dirsvc-start` and `qfw-service-start` as one-process service lifecycle commands with readiness, signal handling, and service-manager compatibility. |
+| PH8-C05 | QFw, DEFw | PH8.5 | Implement `qfw-dir-svc` and `qfw-qpm-svc` as one-process service lifecycle commands with readiness, signal handling, and service-manager integration. |
 | PH8-C06 | QFw | PH8.6 | Implement site configuration and runtime profile resolution, including privileged service/device configuration locations and local-service manifest behavior. |
 | PH8-C07 | QFw, DEFw | PH8.7 | Add source-layout and installed-prefix startup tests covering activation, DEFw Python execution, runtime profiles, service commands, and teardown boundaries. |
 
@@ -317,9 +317,8 @@ Primary requirements: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`,
      resource reservation terminology.
    - Use configuration names such as `register-with-dirsvc` and
      `dirsvc-endpoint` for directory-service registration.
-   - Keep any required compatibility aliases thin, local to this transition,
-     and explicitly deprecated. New implementation work must call the
-     `dirsvc` names.
+   - Remove the superseded discovery-manager names. Runtime and integration
+     code must use the `dirsvc` names.
    - Keep QPM reservation, admission, scheduler, and capacity ownership out of
      DEFw-dirsvc. The directory service only registers services, resolves
      endpoints and API bindings, and tracks service lifecycle.
@@ -1123,7 +1122,7 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-001`,
      templates with CMake configuration, so installed deployments do not
      depend on source-tree paths.
    - Install thin executable wrappers for `qfw-setup`, `qfw-srun`,
-     `qfw-teardown`, `qfw-dirsvc-start`, and `qfw-service-start`.
+     `qfw-teardown`, `qfw-dir-svc`, and `qfw-qpm-svc`.
    - Keep runtime logic in installed Python modules or private helpers rather
      than in large shell scripts.
    - Allow an optional developer convenience installer only when it delegates
@@ -1159,8 +1158,8 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-001`,
    - Preserve the user's virtual environment, check the Python major and minor
      version against `defwp --py-version`, and invoke the installed
      `defwp-wrapper` with the original script arguments.
-   - Keep virtual-environment rewriting as an explicit legacy development
-     option rather than installed runtime behavior.
+   - Keep virtual-environment selection explicit through `qfw-activate` rather
+     than rewriting an installed runtime environment.
    - Reqs: `OPM-001`, `OPM-002`, `API-003`.
 
 4. PH8.4 Implement the user job lifecycle.
@@ -1177,8 +1176,8 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-001`,
      `DISC-005`, `API-003`.
 
 5. PH8.5 Implement the service lifecycle commands.
-   - Implement `qfw-dirsvc-start` as the owner of one DEFw-dirsvc process.
-   - Implement `qfw-service-start` as the owner of one QPM or utility service
+   - Implement `qfw-dir-svc` as the owner of one DEFw-dirsvc process.
+   - Implement `qfw-qpm-svc` as the owner of one QPM service
      instance.
    - Have both commands prepare DEFw configuration, create service run and log
      directories, write PID or readiness state, handle shutdown signals, and

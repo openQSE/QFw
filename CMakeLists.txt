@@ -104,13 +104,6 @@ add_custom_target(qfw_external_runtime ALL
 		qfw_external_qhw_admission
 		qfw_external_qhw_scheduler)
 
-# Remove wrappers left by build trees configured before the legacy launchers
-# were retired. They are private Python module operations now.
-file(REMOVE
-	"${QFW_GENERATED_BIN_DIR}/qfw-dirsvc-start"
-	"${QFW_GENERATED_BIN_DIR}/qfw-service-start"
-	"${QFW_GENERATED_BIN_DIR}/qfw-service-plane")
-
 configure_file(
 	cmake/qfw-activate.in
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
@@ -203,20 +196,8 @@ install(DIRECTORY service-apis/
 	FILES_MATCHING
 		PATTERN "*.py"
 		PATTERN "__pycache__" EXCLUDE)
-install(CODE
-	"file(REMOVE_RECURSE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/service-apis/api_qpm\")")
 install(DIRECTORY share/qfw/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw")
-install(CODE
-	"file(REMOVE
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/qfw_services.yaml\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/service-runtime.yaml\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/device/device-access.yaml\")")
-install(CODE
-	"file(REMOVE_RECURSE
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/templates\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/device\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/services/config\")")
 install(FILES
 	share/qfw/service-manager/env.sh
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/service-manager")
@@ -227,7 +208,6 @@ install(FILES
 install(DIRECTORY examples/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/examples"
 	FILES_MATCHING
-		PATTERN "*.batch"
 		PATTERN "*.md"
 		PATTERN "*.py"
 		PATTERN "*.yaml"
@@ -240,7 +220,6 @@ install(PROGRAMS
 	examples/qfw_ghz.sh
 	examples/qfw_init_test.sh
 	examples/qfw_iqm_chem_driver.sh
-	examples/qfw_iqm_chem_smoke.sh
 	examples/qfw_mpi_smoke.sh
 	examples/qfw_pennylane.sh
 	examples/qfw_qaoa.sh

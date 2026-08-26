@@ -192,7 +192,6 @@ foreach(example_file
 		examples/qfw_shim_device_access.yaml
 		examples/qfw_shim_smoke_services.yaml
 		examples/qfw_slurm_driver.sh
-		examples/qfw_supermarq.batch
 		examples/tests/test_init_qfw.py)
 	if(NOT EXISTS "${QFW_INSTALL_PREFIX}/share/qfw/${example_file}")
 		message(FATAL_ERROR

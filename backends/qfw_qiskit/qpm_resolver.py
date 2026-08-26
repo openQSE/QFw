@@ -17,7 +17,7 @@ DEFAULT_SERVICE_TYPE = "qfw.qpm"
 LOCAL_DIRSVC_ENDPOINT_ENV = "QFW_LOCAL_DIRSVC_ENDPOINT"
 SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 RESOLVER_SCOPE_ORDER_ENV = "QFW_QPM_RESOLVER_SCOPE_ORDER"
-DIRECT_ENDPOINT_FALLBACK_ENV = "QFW_QPM_DIRECT_ENDPOINT_FALLBACK"
+DIRECT_ENDPOINT_ENABLED_ENV = "QFW_QPM_DIRECT_ENDPOINT_ENABLED"
 DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
 DIRECT_QPM_SERVICE_MODULE_ENV = "QFW_DIRECT_QPM_SERVICE_MODULE"
 DIRECT_QPM_SERVICE_CLASS_ENV = "QFW_DIRECT_QPM_SERVICE_CLASS"
@@ -343,7 +343,7 @@ class QPMResolver:
 				identity=endpoint,
 				priority=50,
 			))
-		if (_env_enabled(DIRECT_ENDPOINT_FALLBACK_ENV) and
+		if (_env_enabled(DIRECT_ENDPOINT_ENABLED_ENV) and
 				_names_allowed(("direct", "direct-endpoint"), order)):
 			endpoint = os.environ.get(DIRECT_QPM_ENDPOINT_ENV)
 			if endpoint:
@@ -646,15 +646,13 @@ class QPMResolver:
 			if not self._directory_matches_resolved(directory, resolved):
 				continue
 			client = directory.client
-			for method_name in ("get_service_generation", "get_generation"):
-				if not hasattr(client, method_name):
-					continue
-				try:
-					latest = getattr(client, method_name)(resolved.service_id)
-				except TypeError:
-					continue
-				if latest is not None:
-					return latest
+			get_service_generation = getattr(
+				client, "get_service_generation", None)
+			if get_service_generation is None:
+				continue
+			latest = get_service_generation(resolved.service_id)
+			if latest is not None:
+				return latest
 		if resolved.latest_generation is not None:
 			return resolved.latest_generation
 		return None

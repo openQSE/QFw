@@ -196,9 +196,6 @@ def test_embedded_structured_emitters_request_pretty_json():
         "examples/qfw_slurm_driver.sh": {
             "QFW_SLURM_DRIVER_RESULT": 1,
         },
-        "examples/qfw_iqm_chem_smoke.sh": {
-            "QFW_CHEM_SMOKE_RESULT": 1,
-        },
         "examples/qfw_iqm_chem_driver.sh": {
             "QFW_CHEM_CREDENTIAL_PREFLIGHT": 2,
         },
