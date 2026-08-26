@@ -1,4 +1,3 @@
-from defw_agent_info import *  # noqa: F401,F403
 import sys
 import os
 import time

@@ -1,5 +1,4 @@
 from api_events import Event
-from defw_agent_info import *  # noqa: F401,F403
 from defw_util import print_thread_stack_trace_to_logger
 import logging
 import time

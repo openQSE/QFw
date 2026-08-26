@@ -2681,11 +2681,10 @@ binding class, selector name, selector aliases, and selector resources.
 
 ### DISC-002
 
-The removed discovery-service activation path called
-`service_info.consume_capacity()` before activating the service callback. That
-capacity was stored on the queried `DEFwServiceInfo` object, not in an
-admission-grade resource database. The target design removes QPM admission
-capacity accounting from this path.
+The removed discovery-service activation path changed capacity on queried
+service metadata before activating the service callback. That state was not
+stored in an admission-grade resource database. The target design removes QPM
+admission capacity accounting from this path.
 
 Directory resolution should return service records, selected API bindings, and
 endpoints. Transport binding should connect the client to the selected

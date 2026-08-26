@@ -561,14 +561,11 @@ def test_resolver_rejects_directory_record_without_selected_binding():
 		raise AssertionError("expected invalid directory record rejection")
 
 
-def test_resolver_rejects_legacy_service_info_records():
-	class LegacyServiceInfo:
-		pass
-
+def test_resolver_rejects_non_dictionary_records():
 	resolver = QPMResolver(
 		[DirectoryScope(
 			"site", "site",
-			client=DirectoryClient([LegacyServiceInfo()]),
+			client=DirectoryClient([object()]),
 			priority=50)],
 		connector=Connector(),
 		selection_order=["site"],
@@ -578,9 +575,9 @@ def test_resolver_rejects_legacy_service_info_records():
 	try:
 		resolver.resolve(service_type="qfw.qpm", timeout=1)
 	except QPMInvalidDirectoryRecordError as exc:
-		assert "legacy DEFwServiceInfo" in str(exc)
+		assert "record dictionaries" in str(exc)
 	else:
-		raise AssertionError("expected legacy service-info rejection")
+		raise AssertionError("expected non-dictionary record rejection")
 
 
 def test_hardware_request_requires_explicit_simulator_fallback_policy():

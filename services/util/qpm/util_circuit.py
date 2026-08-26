@@ -1,4 +1,3 @@
-from defw_agent_info import *  # noqa: F401,F403
 from defw_util import round_half_up, round_to_nearest_power_of_two
 import logging
 import time

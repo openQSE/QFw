@@ -454,7 +454,7 @@ class QPMResolver:
 			)
 		raise QPMInvalidDirectoryRecordError(
 			"QPM directory resolution requires binding-aware directory "
-			"records; legacy DEFwServiceInfo entries are not supported")
+			"record dictionaries")
 
 	def _normalize_directory_record(self, directory, record, request,
 					discovery_index):

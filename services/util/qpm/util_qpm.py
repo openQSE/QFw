@@ -1,4 +1,3 @@
-from defw_agent_info import *  # noqa: F401,F403
 from api_events import BaseEventAPI
 from defw_util import expand_host_list
 from defw import me
@@ -851,7 +850,6 @@ class UTIL_QPM:
 	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc,
 					 properties=None):
 		from api_qpm_common import QPMType, QPMCapability
-		from defw_agent_info import get_bit_list, get_bit_desc, Capability, DEFwServiceInfo
 		properties = dict(properties or {})
 		service_module = self.__class__.__module__
 		service_class = self.__class__.__name__
@@ -877,16 +875,32 @@ class UTIL_QPM:
 		properties.setdefault("service_module", service_module)
 		properties.setdefault("service_class", service_class)
 		properties.setdefault("controller", self.controller_telemetry())
-		t = get_bit_list(type_bits, QPMType)
-		c = get_bit_list(caps_bits, QPMCapability)
-		cap = Capability(type_bits, caps_bits, get_bit_desc(t, c))
-		info = DEFwServiceInfo(
-			svc_name, svc_desc,
-			service_class,
-			service_module,
-			cap, -1,
-			properties=properties)
-		return info
+		type_names = [
+			name for name, member in QPMType.__members__.items()
+			if int(member) & int(type_bits)
+		]
+		capability_names = [
+			name for name, member in QPMCapability.__members__.items()
+			if int(member) & int(caps_bits)
+		]
+		return {
+			"service_id": properties["service_id"],
+			"service_name": svc_name,
+			"service_type": properties["service_type"],
+			"api_bindings": list(properties["api_bindings"]),
+			"selector": dict(properties["selector"]),
+			"properties": properties,
+			"capability": {
+				"type": int(type_bits),
+				"caps": int(caps_bits),
+				"description": (
+					f"{','.join(type_names)} -> "
+					f"{','.join(capability_names)}"),
+			},
+			"qpm_type": int(type_bits),
+			"qpm_capabilities": int(caps_bits),
+			"description": svc_desc,
+		}
 
 	def controller_telemetry(self):
 		return self.controller.telemetry()

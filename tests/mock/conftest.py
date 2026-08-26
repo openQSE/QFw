@@ -217,9 +217,6 @@ def _install_defw_stubs():
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
 
-	if "defw_agent_info" not in sys.modules:
-		sys.modules["defw_agent_info"] = types.ModuleType("defw_agent_info")
-
 	if "api_events" not in sys.modules:
 		api_events = types.ModuleType("api_events")
 

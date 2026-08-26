@@ -552,7 +552,8 @@ Primary requirements: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`,
    - Route the new client binding path through the selected API binding so QFw
      can request execution, telemetry, admission, or control surfaces without
      forcing the client class and service class to share a name.
-   - Remove `DEFwServiceInfo.consume_capacity()` from the QPM connection path.
+   - Keep capacity accounting out of DEFw service metadata and the QPM
+     connection path.
    - Remove directory `reserve()` and `release()` semantics for QPM.
    - Reqs: `DISC-002`, `DISC-004`, `OPM-003`.
 

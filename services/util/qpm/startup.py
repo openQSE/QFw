@@ -301,12 +301,10 @@ def _site_registration_records(defw_module):
 	if records:
 		return [dict(record) for record in _as_list(records)]
 
-	infos = _call_or_read(defw_module, "qpm_site_service_info")
-	if not infos:
-		infos = _query_local_service_info(defw_module)
+	advertisements = _query_local_service_metadata(defw_module)
 	return [
-		_service_info_record(defw_module, info)
-		for info in _as_list(infos)
+		_service_record(defw_module, advertisement)
+		for advertisement in advertisements
 	]
 
 
@@ -317,11 +315,11 @@ def _call_or_read(obj, name):
 	return value() if callable(value) else value
 
 
-def _query_local_service_info(defw_module):
+def _query_local_service_metadata(defw_module):
 	services = getattr(defw_module, "services", None)
 	if services is None:
 		return []
-	infos = []
+	advertisements = []
 	for _svc, module in services:
 		svc_info = getattr(module, "svc_info", {})
 		if svc_info.get("name") == "Directory Service":
@@ -329,35 +327,47 @@ def _query_local_service_info(defw_module):
 		for service_class in getattr(module, "service_classes", []):
 			try:
 				obj = service_class(start=False)
-				info = obj.query()
+				metadata = obj.query()
 			except Exception:
 				logging.exception("failed to query QPM service metadata")
 				continue
-			infos.extend(_as_list(info))
-	return infos
+			advertisements.extend(_as_list(metadata))
+	return advertisements
 
 
-def _service_info_record(defw_module, service_info):
-	properties = _service_info_properties(service_info)
+def _service_record(defw_module, advertisement):
+	if not isinstance(advertisement, dict):
+		raise TypeError("QPM service query must return a metadata dictionary")
+	advertisement = dict(advertisement)
+	properties = dict(advertisement.get("properties") or {})
 	lifecycle_service_id = os.environ.get("QFW_QPM_SERVICE_ID")
-	if lifecycle_service_id:
-		properties.setdefault("service_id", lifecycle_service_id)
-	capability, _, _ = _service_info_capability(service_info)
-	service_name = service_info.get_service_name()
+	service_id = lifecycle_service_id or advertisement.get("service_id") or \
+		properties.get("service_id")
+	if service_id:
+		properties["service_id"] = service_id
+	service_name = advertisement.get("service_name")
+	if not service_name:
+		raise ValueError("QPM service metadata missing service_name")
 	endpoint = _defw_endpoint(defw_module)
 	endpoint_record = _endpoint_record(endpoint)
-	qpm_type = properties.get("qpm_type", -1)
-	qpm_capabilities = properties.get("qpm_capabilities", -1)
+	qpm_type = advertisement.get(
+		"qpm_type", properties.get("qpm_type", -1))
+	qpm_capabilities = advertisement.get(
+		"qpm_capabilities", properties.get("qpm_capabilities", -1))
 	if qpm_type != -1:
 		properties.setdefault("qpm_type", qpm_type)
 	if qpm_capabilities != -1:
 		properties.setdefault("qpm_capabilities", qpm_capabilities)
-	service_id = properties.get("service_id") or \
+	service_id = service_id or \
 		f"{service_name}:{endpoint_record['hostname']}:{endpoint_record['node_name']}"
+	api_bindings = advertisement.get("api_bindings")
+	if not api_bindings:
+		raise ValueError("QPM service metadata missing api_bindings")
 	return {
 		"service_id": service_id,
 		"service_name": service_name,
-		"service_type": properties.get("service_type", "defw.service"),
+		"service_type": advertisement.get(
+			"service_type", properties.get("service_type", "defw.service")),
 		"runtime_id": (
 			properties.get("runtime_id") or
 			endpoint_record["runtime_id"]
@@ -367,54 +377,15 @@ def _service_info_record(defw_module, service_info):
 			_endpoint_attr(endpoint, "blk_uuid", ZERO_UUID)
 		),
 		"endpoint": endpoint_record,
-		"api_bindings": properties.get("api_bindings") or [
-			_default_api_binding(service_info, properties)
-		],
-		"selector": properties.get("selector", {"resources": [service_name]}),
+		"api_bindings": [dict(binding) for binding in api_bindings],
+		"selector": dict(
+			advertisement.get("selector") or
+			properties.get("selector") or
+			{"resources": [service_name]}),
 		"properties": properties,
-		"capability": capability,
+		"capability": dict(advertisement.get("capability") or {}),
 		"qpm_type": qpm_type,
 		"qpm_capabilities": qpm_capabilities,
-	}
-
-
-def _service_info_properties(service_info):
-	get_properties = getattr(service_info, "get_properties", None)
-	if not callable(get_properties):
-		return {}
-	return dict(get_properties() or {})
-
-
-def _service_info_capability(service_info):
-	get_capabilities = getattr(service_info, "get_capabilities", None)
-	if not callable(get_capabilities):
-		return {}, -1, -1
-	capabilities = get_capabilities()
-	if capabilities is None:
-		return {}, -1, -1
-	capability = {}
-	get_capability_dict = getattr(capabilities, "get_capability_dict", None)
-	if callable(get_capability_dict):
-		capability = dict(get_capability_dict() or {})
-	return (
-		capability,
-		capabilities.get_cap_type(),
-		capabilities.get_caps(),
-	)
-
-
-def _default_api_binding(service_info, properties):
-	service_name = service_info.get_service_name()
-	return {
-		"binding_name": properties.get("binding_name", "execution"),
-		"client_module": properties.get(
-			"client_module", "api_qpm_execution"),
-		"client_class": properties.get("client_class", service_name),
-		"service_module": properties.get(
-			"service_module", service_info.get_module_name()),
-		"service_class": properties.get(
-			"service_class", service_info.get_class_name()),
-		"version": properties.get("binding_version", 1),
 	}
 
 

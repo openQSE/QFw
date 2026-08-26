@@ -100,6 +100,29 @@ class FakeDefw:
 		return self.controller_is_ready
 
 
+def test_service_record_enriches_metadata_advertisement(monkeypatch):
+	import util.qpm.startup as startup
+
+	class Runtime:
+		def my_endpoint(self):
+			return FakeEndpoint()
+
+	advertisement = site_qpm_record()
+	advertisement.pop("runtime_id")
+	advertisement.pop("peer_handle")
+	advertisement.pop("endpoint")
+	monkeypatch.setenv("QFW_QPM_SERVICE_ID", "qpm:iqm:configured")
+
+	record = startup._service_record(Runtime(), advertisement)
+
+	assert record["service_id"] == "qpm:iqm:configured"
+	assert record["runtime_id"] == "qpm-runtime-1"
+	assert record["peer_handle"] == "qpm-peer-1"
+	assert record["service_type"] == "qfw.qpm"
+	assert record["api_bindings"][0]["binding_name"] == "execution"
+	assert record["capability"] == {}
+
+
 def reset_qpm_state(uq):
 	uq.qpm_initialized = False
 	uq.qpm_shutdown = False
