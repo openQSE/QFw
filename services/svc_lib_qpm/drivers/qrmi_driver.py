@@ -24,11 +24,34 @@
 # milestone.
 
 from .base_driver import BaseDriver
-from defw_exception import DEFwExecutionError
+from defw_exception import (DEFwExecutionError, DEFwNotFound,
+		DEFwNotReady)
 import json
 import logging
 import os
 import time
+
+
+# QRMI 0.24.0 classifies its failures instead of raising one opaque
+# RuntimeError, so a caller can finally tell "no such backend" from
+# "credentials rejected" from "that job is gone" without matching on message
+# text. This maps the classes that have an honest DEFw counterpart.
+#
+# Only three do. DEFw has no authentication, bad-input or configuration error,
+# and inventing a mapping onto a DEFw type that means something else would make
+# the type less trustworthy than leaving it alone -- so everything else stays
+# DEFwExecutionError. The QRMI class name goes into every message either way,
+# which keeps the distinction greppable even where the DEFw type cannot carry
+# it.
+#
+# Looked up by name at raise time, so a qrmi too old to define these (anything
+# before 0.24.0) simply never matches and every failure stays
+# DEFwExecutionError, exactly as before.
+_QRMI_ERROR_MAP = (
+	("ResourceNotFoundError", DEFwNotFound),
+	("TaskNotFoundError", DEFwNotFound),
+	("TaskNotReadyError", DEFwNotReady),
+)
 
 
 def _status_str(status):
@@ -76,6 +99,21 @@ class QrmiDriver(BaseDriver):
 			self._qrmi = qrmi
 			logging.debug("shim: QRMI client initialized")
 		return self._qrmi
+
+	def _qrmi_error(self, exc, context):
+		# Translate a QRMI failure into the closest DEFw exception (see
+		# _QRMI_ERROR_MAP). Returns the exception rather than raising it so the
+		# call site keeps its `raise ... from exc` and the original traceback.
+		qrmi = self._qrmi
+		# Naming the QRMI class beats a prose label: it never duplicates the
+		# message QRMI already wrote, and it is what upstream documents.
+		message = f"{context}: [{type(exc).__name__}] {exc}"
+		if qrmi is not None:
+			for attr, defw_cls in _QRMI_ERROR_MAP:
+				cls = getattr(qrmi, attr, None)
+				if cls is not None and isinstance(exc, cls):
+					return defw_cls(message)
+		return DEFwExecutionError(message)
 
 	# --- QRMI resource binding ------------------------------------------
 
@@ -201,8 +239,8 @@ class QrmiDriver(BaseDriver):
 			resource_obj = qrmi.QuantumResource(
 					alias, qrmi.ResourceType.IQMServer)
 		except Exception as exc:
-			raise DEFwExecutionError(
-				f"failed to open QRMI IQM resource {alias!r}: {exc}") from exc
+			raise self._qrmi_error(
+				exc, f"failed to open QRMI IQM resource {alias!r}") from exc
 		self._resource_objs[cache_key] = resource_obj
 		logging.debug("shim: QRMI IQM resource opened (%s)", alias)
 		return resource_obj
@@ -230,8 +268,8 @@ class QrmiDriver(BaseDriver):
 				self._target_cache[cache_key] = json.loads(
 					self._qpu(credential=credential).target().value)
 			except Exception as exc:
-				raise DEFwExecutionError(
-					f"failed to read QRMI target(): {exc}") from exc
+				raise self._qrmi_error(
+					exc, "failed to read QRMI target()") from exc
 		return self._target_cache[cache_key]
 
 	def _static_arch(self, target):
@@ -362,8 +400,7 @@ class QrmiDriver(BaseDriver):
 		try:
 			job_id = self._qpu(credential=credential).task_start(payload)
 		except Exception as exc:
-			raise DEFwExecutionError(
-				f"QRMI task_start failed: {exc}") from exc
+			raise self._qrmi_error(exc, "QRMI task_start failed") from exc
 		timing["submit_seconds"] = time.monotonic() - start
 
 		status = self._poll_task(job_id, timeout, poll, credential=credential)
@@ -381,8 +418,7 @@ class QrmiDriver(BaseDriver):
 			result_json = json.loads(
 				self._qpu(credential=credential).task_result(job_id).value)
 		except Exception as exc:
-			raise DEFwExecutionError(
-				f"QRMI task_result failed: {exc}") from exc
+			raise self._qrmi_error(exc, "QRMI task_result failed") from exc
 		timing["result_fetch_seconds"] = time.monotonic() - result_started
 		timing["total_wall_seconds"] = time.monotonic() - start
 
@@ -444,8 +480,8 @@ class QrmiDriver(BaseDriver):
 			try:
 				raw = self._qpu(credential=credential).task_status(job_id)
 			except Exception as exc:
-				raise DEFwExecutionError(
-					f"QRMI task_status failed: {exc}") from exc
+				raise self._qrmi_error(
+					exc, "QRMI task_status failed") from exc
 			state = _status_str(raw)
 			if "complet" in state:
 				return "completed"
