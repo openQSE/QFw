@@ -5,9 +5,16 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backends"))
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO_ROOT / "backends"))
+sys.path.insert(0, str(_REPO_ROOT / "DEFw" / "python" / "infra"))
 
 import qfw_telemetry as telemetry
+
+try:
+    import defw_trace
+except ImportError:  # DEFw submodule without the trace-context seam
+    defw_trace = None
 
 # Only ONE test in this module may install a real provider. OpenTelemetry
 # refuses to override an already-set global TracerProvider or MeterProvider,
@@ -84,6 +91,14 @@ def test_off_profile_is_inert(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_defw_hooks_are_not_registered_when_telemetry_is_off():
+    # Nothing should touch the RPC path when telemetry is off.
+    telemetry.configure("qfw-qpm", "0.1")
+    assert telemetry._STATE.defw_hooks is False
+    if defw_trace is not None:
+        assert defw_trace.hooks_registered() is False
+
+
 def test_transport_spans_stay_off_without_a_provider(monkeypatch):
     # The flag alone must not enable a span that has nowhere to go. Guarded
     # call sites then cost a boolean test.
@@ -122,7 +137,10 @@ def _read_otlp_spans(path):
     return spans, resource
 
 
-def test_file_profile_writes_a_parented_trace(tmp_path, monkeypatch):
+@pytest.mark.skipif(defw_trace is None,
+                    reason="DEFw submodule has no trace-context seam")
+def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
+        tmp_path, monkeypatch):
     monkeypatch.setenv(telemetry.TELEMETRY_ENV, telemetry.PROFILE_FILE)
     monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(telemetry.TELEMETRY_SAMPLE_ENV, telemetry.SAMPLE_ALWAYS)
@@ -131,10 +149,23 @@ def test_file_profile_writes_a_parented_trace(tmp_path, monkeypatch):
         telemetry.PROFILE_FILE
     assert telemetry.enabled() is True
 
+    assert telemetry._STATE.defw_hooks is True
+
+    # Caller side. DEFw builds this carrier while the client span is current.
     with telemetry.tracer().start_as_current_span("qfw.app.job") as job:
         assert job.is_recording() is True
+        carrier = defw_trace.inject()
+    assert carrier["traceparent"].startswith("00-")
+
+    # Remote side, as handle_rpc_req does it: attach the received context so
+    # the work joins the caller's trace rather than starting a new one.
+    token = defw_trace.attach(carrier)
+    try:
         with telemetry.tracer().start_as_current_span("qfw.qpm.receive"):
             pass
+    finally:
+        defw_trace.detach(token)
+
     telemetry.duration_histogram("qfw.qpm.duration").record(
         0.0042, {"qfw.qpm.op": "receive"})
     telemetry.shutdown()
@@ -145,8 +176,10 @@ def test_file_profile_writes_a_parented_trace(tmp_path, monkeypatch):
 
     by_name = {span["name"]: span for span in spans}
     assert set(by_name) == {"qfw.app.job", "qfw.qpm.receive"}
-    # The child carries the parent link, which is what makes a per-hop
-    # breakdown reconstructable without cross-node timestamp subtraction.
+    # One trace, not two. Without context propagation the remote hop would
+    # open its own trace and no per-hop breakdown would be reconstructable.
+    assert len({span["traceId"] for span in spans}) == 1
+    # The remote span is parented to the caller's span across the boundary.
     assert by_name["qfw.qpm.receive"]["parentSpanId"] == \
         by_name["qfw.app.job"]["spanId"]
     assert "parentSpanId" not in by_name["qfw.app.job"]

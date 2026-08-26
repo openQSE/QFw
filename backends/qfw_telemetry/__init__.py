@@ -88,6 +88,7 @@ class _State(object):
 		self.histograms = {}
 		self.streams = []
 		self.transport_spans = False
+		self.defw_hooks = False
 
 
 _STATE = _State()
@@ -288,6 +289,40 @@ def _build_metric_reader(service_name, profile):
 	return PeriodicExportingMetricReader(exporter)
 
 
+def _register_defw_trace_hooks():
+	"""
+	Teach DEFw how to move a trace context across its RPC boundary.
+
+	DEFw carries an opaque carrier and knows nothing about OpenTelemetry, so
+	the propagator is supplied from here. Without this, every hop across an
+	RPC starts a new unrelated trace and no cross-node breakdown is possible.
+
+	A DEFw build with no seam to register against is not an error. It means
+	traces stay per-process until the submodule catches up.
+	"""
+	try:
+		import defw_trace
+	except ImportError:
+		return False
+
+	from opentelemetry import context as otel_context
+	from opentelemetry.propagate import extract, inject
+
+	defw_trace.set_hooks(
+		inject=inject,
+		attach=lambda carrier: otel_context.attach(extract(carrier)),
+		detach=otel_context.detach)
+	return True
+
+
+def _clear_defw_trace_hooks():
+	try:
+		import defw_trace
+	except ImportError:
+		return
+	defw_trace.clear_hooks()
+
+
 def configure(service_name, service_version=None, role=None):
 	"""
 	Bring telemetry up for this process. Safe to call more than once and safe
@@ -352,6 +387,12 @@ def configure(service_name, service_version=None, role=None):
 		_STATE.meter_provider = meter_provider
 		_STATE.tracer = _trace.get_tracer("qfw", str(CONVENTIONS_VERSION))
 		_STATE.meter = _metrics.get_meter("qfw", str(CONVENTIONS_VERSION))
+		_STATE.defw_hooks = _register_defw_trace_hooks()
+		if not _STATE.defw_hooks:
+			logging.getLogger(__name__).info(
+				"DEFw has no trace-context seam, so traces will not stitch "
+				"across RPC boundaries. Update the DEFw submodule to get "
+				"cross-node traces.")
 		_STATE.configured = True
 		return _STATE.profile
 
@@ -419,6 +460,9 @@ def shutdown():
 	spans are not lost. Safe to call when telemetry was never configured.
 	"""
 	with _LOCK:
+		if _STATE.defw_hooks:
+			_clear_defw_trace_hooks()
+			_STATE.defw_hooks = False
 		if _STATE.tracer_provider is not None:
 			try:
 				_STATE.tracer_provider.shutdown()
