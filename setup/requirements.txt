@@ -24,3 +24,12 @@ netifaces
 psutil
 paramiko
 rich
+
+# OpenTelemetry: benchmarking and profiling telemetry, see
+# docs/benchmarking-design.md. QFw degrades to no-op instrumentation when
+# these are absent, so they are a soft dependency rather than a hard one.
+opentelemetry-api>=1.44.0
+opentelemetry-sdk>=1.44.0
+# Supplies the OTLP encoders. The SDK ships no file exporter, so the file
+# profile encodes with these and writes OTLP/JSON itself.
+opentelemetry-exporter-otlp-proto-common>=1.44.0
