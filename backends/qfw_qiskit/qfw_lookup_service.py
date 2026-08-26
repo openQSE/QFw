@@ -1,6 +1,5 @@
 import logging
 import os
-import inspect
 
 import defw
 from defw_app_util import defw_get_directory_service, SYSTEM_UP_TIMEOUT
@@ -46,20 +45,9 @@ def _embedded_directory_expected():
 		os.environ.get("DEFW_PARENT_PORT"))
 
 
-def _get_directory_service(timeout):
-	signature = inspect.signature(defw_get_directory_service)
-	if (
-			"timeout" in signature.parameters or
-			any(
-				item.kind == item.VAR_KEYWORD
-				for item in signature.parameters.values())):
-		return defw_get_directory_service(timeout=timeout)
-	return defw_get_directory_service()
-
-
 def _optional_directory_service(timeout=SYSTEM_UP_TIMEOUT):
 	try:
-		return _get_directory_service(timeout)
+		return defw_get_directory_service(timeout=timeout)
 	except Exception:
 		if _embedded_directory_expected():
 			raise

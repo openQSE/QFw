@@ -95,17 +95,25 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	record = qpm_directory_record("qpm-iqm", fake_qpm)
 	dirsvc = FakeDirectoryService([record])
 	fake_defw = BindingDefwModule([record])
+	directory_timeouts = []
+
+	def get_directory_service(timeout=None):
+		directory_timeouts.append(timeout)
+		return dirsvc
 
 	monkeypatch.setattr(
-		lookup_service, "defw_get_directory_service", lambda: dirsvc)
+		lookup_service, "defw_get_directory_service",
+		get_directory_service)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	result = lookup_service.get_qpm(
 		qpm_type=DEFAULT_QPM_TYPE,
 		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
+		timeout=7,
 	)
 
 	assert result is fake_qpm
+	assert directory_timeouts == [7]
 	assert len(dirsvc.queries) == 1
 	assert dirsvc.queries[0]["service_name"] == "QPM"
 	assert dirsvc.queries[0]["service_type"] == "qfw.qpm"
@@ -129,7 +137,8 @@ def test_get_qpm_leaves_failed_service_probe_running(monkeypatch):
 	fake_defw = BindingDefwModule([record])
 
 	monkeypatch.setattr(
-		lookup_service, "defw_get_directory_service", lambda: dirsvc)
+		lookup_service, "defw_get_directory_service",
+		lambda timeout=None: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	result = lookup_service.get_qpm(
@@ -151,7 +160,7 @@ def test_get_qpm_propagates_directory_failures(monkeypatch):
 	monkeypatch.setattr(
 		lookup_service,
 		"defw_get_directory_service",
-		lambda: FailingDirectory(),
+		lambda timeout=None: FailingDirectory(),
 	)
 
 	try:
@@ -171,7 +180,7 @@ def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
 	fake_qpm = FakeQPM()
 	fake_defw = BindingDefwModule(default_qpm=fake_qpm)
 
-	def unavailable_directory_service():
+	def unavailable_directory_service(timeout=None):
 		raise RuntimeError("allocation-local directory service unavailable")
 
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
@@ -209,7 +218,8 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 
 	monkeypatch.setenv("QFW_QPM_IMPL", "shim")
 	monkeypatch.setattr(
-		lookup_service, "defw_get_directory_service", lambda: dirsvc)
+		lookup_service, "defw_get_directory_service",
+		lambda timeout=None: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	result = lookup_service.get_qpm(
@@ -234,7 +244,8 @@ def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):
 
 	monkeypatch.setenv("QFW_QPM_IMPL", "iqm")
 	monkeypatch.setattr(
-		lookup_service, "defw_get_directory_service", lambda: dirsvc)
+		lookup_service, "defw_get_directory_service",
+		lambda timeout=None: dirsvc)
 	monkeypatch.setattr(lookup_service, "defw", fake_defw)
 
 	try:
@@ -284,7 +295,7 @@ def test_resolver_normalizes_directory_service_records():
 	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
 
 	class DirectoryClient:
-		def resolve_service(self, **kwargs):
+		def resolve_services(self, **kwargs):
 			self.kwargs = kwargs
 			return {
 				"directory_scope": "site",

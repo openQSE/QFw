@@ -20,7 +20,7 @@ import sys
 from qfw_runtime._process_launcher import _defw_endpoint_ready_unbounded
 
 raise SystemExit(
-    0 if _defw_endpoint_ready_unbounded(sys.argv[1]) else 1)
+    0 if _defw_endpoint_ready_unbounded(sys.argv[1], sys.argv[2]) else 1)
 """
 
 
@@ -283,10 +283,9 @@ def start_qpm(argv):
             "service_ready_file": str(service_ready_file),
         },
         lambda: _service_ready(
-            service_id,
             f"{service_host}:{service_port}",
+            module,
             register,
-            dirsvc_endpoint,
             service_ready_file,
         ),
     )
@@ -391,12 +390,12 @@ def _write_ready(path, payload):
         json.dump(data, stream, sort_keys=True)
         stream.write("\n")
 
-def _service_ready(service_id, service_endpoint, register, dirsvc_endpoint,
+def _service_ready(service_endpoint, service_module, register,
                    service_ready_file=None):
     if _ready_file_ready(service_ready_file):
         return True
     if not register:
-        return _service_endpoint_ready(service_endpoint)
+        return _service_endpoint_ready(service_endpoint, service_module)
     return False
 
 
@@ -414,13 +413,6 @@ def _ready_file_ready(path):
     return bool(data.get("ready"))
 
 
-def _directory_endpoint_ready(endpoint):
-    records = _directory_query(endpoint)
-    if records is not None:
-        return True
-    return False
-
-
 def _tcp_endpoint_ready(endpoint):
     host, port = _split_endpoint(endpoint)
     if not port:
@@ -432,57 +424,15 @@ def _tcp_endpoint_ready(endpoint):
         return False
 
 
-def _directory_service_registered(endpoint, service_id):
-    records = _directory_query(endpoint, service_id=service_id)
-    if records is None:
-        return False
-    for record in records:
-        if _record_service_id(record) == service_id:
-            return True
-    return False
+def _service_endpoint_ready(endpoint, service_module):
+    return _defw_endpoint_ready(endpoint, service_module) is True
 
 
-def _directory_query(endpoint, service_id=None):
-    try:
-        client = _directory_client(endpoint)
-        if service_id and hasattr(client, "resolve_services"):
-            return _as_list(client.resolve_services(service_id=service_id))
-        if service_id and hasattr(client, "resolve_service"):
-            return _as_list(client.resolve_service(service_id=service_id))
-        if hasattr(client, "query_directory"):
-            return _as_list(client.query_directory())
-        if hasattr(client, "query"):
-            return _as_list(client.query())
-        if hasattr(client, "resolve_services"):
-            return _as_list(client.resolve_services(service_id="__qfw_ready__"))
-        if hasattr(client, "resolve_service"):
-            return _as_list(client.resolve_service(service_id="__qfw_ready__"))
-    except Exception:
-        return None
-    return None
-
-
-def _directory_client(endpoint):
-    import defw
-
-    if hasattr(defw, "connect_to_directory"):
-        return defw.connect_to_directory(endpoint)
-    if hasattr(defw, "connect_to_binding"):
-        return defw.connect_to_binding(_directory_binding_record(endpoint))
-    if hasattr(defw, "connect_to_endpoint"):
-        return defw.connect_to_endpoint(endpoint, _directory_api_binding())
-    raise RuntimeError("DEFw does not expose a directory client connector")
-
-
-def _service_endpoint_ready(endpoint):
-    return _defw_endpoint_ready(endpoint) is True
-
-
-def _defw_endpoint_ready(endpoint):
+def _defw_endpoint_ready(endpoint, service_module):
     try:
         result = subprocess.run(
             [sys.executable or "python3", "-c", DEFW_ENDPOINT_READY_PROBE,
-             str(endpoint)],
+             str(endpoint), str(service_module)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=DEFW_ENDPOINT_PROBE_TIMEOUT_SECONDS,
@@ -493,33 +443,25 @@ def _defw_endpoint_ready(endpoint):
     return result.returncode == 0
 
 
-def _defw_endpoint_ready_unbounded(endpoint):
+def _defw_endpoint_ready_unbounded(endpoint, service_module):
     try:
-        client = _endpoint_client(endpoint)
-        if hasattr(client, "is_ready"):
-            status = client.is_ready()
-            if isinstance(status, dict):
-                return bool(status.get("ready"))
-            return bool(status)
-        if hasattr(client, "ready"):
-            ready = client.ready
-            return bool(ready() if callable(ready) else ready)
-        return False
+        client = _endpoint_client(endpoint, service_module)
+        status = client.is_ready()
+        if isinstance(status, dict):
+            return bool(status.get("ready"))
+        return bool(status)
     except Exception:
         return False
 
 
-def _endpoint_client(endpoint):
+def _endpoint_client(endpoint, service_module):
     import defw
 
-    if hasattr(defw, "connect_to_endpoint"):
-        return defw.connect_to_endpoint(endpoint)
-    if hasattr(defw, "connect_to_binding"):
-        return defw.connect_to_binding(_endpoint_binding_record(endpoint))
-    raise RuntimeError("DEFw does not expose an endpoint connector")
+    return defw.connect_to_binding(
+        _endpoint_binding_record(endpoint, service_module))
 
 
-def _endpoint_binding_record(endpoint):
+def _endpoint_binding_record(endpoint, service_module):
     endpoint_record = _endpoint_record(endpoint, default_name="qfw-service")
     return {
         "service_record": {
@@ -532,44 +474,21 @@ def _endpoint_binding_record(endpoint):
             "properties": {},
         },
         "selected_binding": {
-            "binding_name": "readiness",
-            "client_module": "api_qpm_execution",
-            "client_class": "QPMExecution",
-            "service_module": "",
-            "service_class": "",
+            "binding_name": "control",
+            "client_module": "api_qpm_control",
+            "client_class": "QPMControl",
+            "service_module": _qpm_service_module(service_module),
+            "service_class": "QPM",
             "version": 1,
         },
     }
 
 
-def _directory_binding_record(endpoint):
-    endpoint_record = _endpoint_record(endpoint, default_name="dirsvc")
-    return {
-        "service_record": {
-            "service_id": f"dirsvc:{endpoint}",
-            "service_name": "DEFwDirSvc",
-            "service_type": "defw.dirsvc",
-            "runtime_id": endpoint_record["runtime_id"],
-            "endpoint": endpoint_record,
-            "selector": {
-                "resources": ["DEFwDirSvc"],
-                "aliases": ["dirsvc", "directory"],
-            },
-            "properties": {},
-        },
-        "selected_binding": _directory_api_binding(),
-    }
-
-
-def _directory_api_binding():
-    return {
-        "binding_name": "directory",
-        "client_module": "api_dirsvc",
-        "client_class": "DEFwDirSvc",
-        "service_module": "svc_dirsvc.svc_dirsvc",
-        "service_class": "DEFwDirSvc",
-        "version": 1,
-    }
+def _qpm_service_module(module):
+    module = str(module).strip()
+    if module.endswith(".svc_qpm"):
+        return module
+    return f"{module}.svc_qpm"
 
 
 def _endpoint_record(endpoint, default_name=None):
@@ -582,25 +501,6 @@ def _endpoint_record(endpoint, default_name=None):
         "hostname": host,
         "runtime_id": f"{host}:{port}",
     }
-
-
-def _record_service_id(record):
-    if not isinstance(record, dict):
-        return None
-    service = record.get("service_record")
-    if isinstance(service, dict):
-        return service.get("service_id")
-    return record.get("service_id")
-
-
-def _as_list(value):
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    return [value]
 
 
 def _resolve_service(args, site_service):

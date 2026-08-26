@@ -866,19 +866,6 @@ readiness only after registration with the application directory. If a
 required entry fails, setup stops all application-owned managers already
 started and reports a failed runtime.
 
-### Configure Profiles
-
-Install-profile files, such as the YAML files under `setup/config`, are inputs
-to `qfw_configure`. They select the source or install base, module or explicit
-dependency paths, virtual environment, MPI transport setup, dependency build
-version, and installation defaults. `qfw_configure` uses these profiles to
-generate activation and build helper scripts. Clients and QPM services do not
-read them during normal execution.
-
-The existing `runtime-mode` key in these profiles describes the configure
-environment, such as `cluster` or `container`. It is separate from client
-runtime behavior and resolver order.
-
 ### Site Service Manifest And QPM Policy
 
 Site-owned services use the manifest selected by `service.manifest` in
@@ -1723,7 +1710,7 @@ sequenceDiagram
     Driver->>QPM: reserve(user, allocation, device, scope)
     QPM-->>Driver: reservation_id and execution credential
     Driver-->>Client: reservation_id and execution credential
-    Client->>Dir: resolve_service(filters, api_category)
+    Client->>Dir: resolve_services(filters, api_category)
     Dir->>Dir: select authorized UP record
     Dir-->>Client: service record, API binding, endpoint, identity
     Client->>CT: connect(endpoint, service_id, runtime_id, generation)

@@ -160,26 +160,8 @@ class DEFwQPMConnector:
 		self._defw = defw_module
 
 	def connect(self, resolved):
-		if (hasattr(self._defw, "connect_to_binding") and
-				_can_use_binding_connector(resolved)):
-			return self._defw.connect_to_binding(
-				_defw_binding_record(resolved))
-		if resolved.directory_scope == "direct":
-			if hasattr(self._defw, "connect_to_endpoint"):
-				return self._defw.connect_to_endpoint(
-					resolved.endpoint,
-					resolved.api_binding,
-				)
-			raise QPMUnsupportedConfigurationError(
-				"direct QPM endpoint resolution requires DEFw "
-				"connect_to_binding or connect_to_endpoint support")
-		if hasattr(self._defw, "connect_to_endpoint"):
-			return self._defw.connect_to_endpoint(
-				resolved.endpoint,
-				resolved.api_binding,
-			)
-		raise DEFwReserveError(
-			f"resolved QPM {resolved.service_id!r} has no DEFw binding")
+		return self._defw.connect_to_binding(
+			_defw_binding_record(resolved))
 
 
 class DEFwDirectoryClient:
@@ -188,35 +170,15 @@ class DEFwDirectoryClient:
 		self._defw = defw_module
 		self._client = None
 
-	def resolve_service(self, **kwargs):
-		client = self._directory_client()
-		if hasattr(client, "resolve_service"):
-			return client.resolve_service(**kwargs)
-		if hasattr(client, "resolve_services"):
-			return client.resolve_services(**kwargs)
-		raise QPMUnsupportedConfigurationError(
-			f"site directory endpoint {self.endpoint!r} does not expose "
-			"resolve_service() or resolve_services()")
+	def resolve_services(self, **kwargs):
+		return self._directory_client().resolve_services(**kwargs)
 
 	def _directory_client(self):
 		if self._client is not None:
 			return self._client
-		if hasattr(self._defw, "connect_to_directory"):
-			self._client = self._defw.connect_to_directory(self.endpoint)
-			return self._client
-		if hasattr(self._defw, "connect_to_binding"):
-			self._client = self._defw.connect_to_binding(
-				_defw_directory_binding_record(self.endpoint))
-			return self._client
-		if hasattr(self._defw, "connect_to_endpoint"):
-			self._client = self._defw.connect_to_endpoint(
-				self.endpoint,
-				_directory_api_binding(),
-			)
-			return self._client
-		raise QPMUnsupportedConfigurationError(
-			"site-scoped QPM resolution requires a DEFw directory "
-			"client factory or binding support")
+		self._client = self._defw.connect_to_binding(
+			_defw_directory_binding_record(self.endpoint))
+		return self._client
 
 
 class DirectEndpointDirectory:
@@ -227,7 +189,7 @@ class DirectEndpointDirectory:
 		self.service_module = service_module
 		self.service_class = service_class
 
-	def resolve_service(self, **kwargs):
+	def resolve_services(self, **kwargs):
 		endpoint = _endpoint_record_from_value(
 			self.endpoint,
 			default_name="direct-qpm",
@@ -249,7 +211,7 @@ class DirectEndpointDirectory:
 		qpm_capabilities = kwargs.get("qpm_capabilities")
 		if qpm_capabilities not in (-1, None):
 			properties["qpm_capabilities"] = qpm_capabilities
-		return {
+		return [{
 			"directory_scope": "direct",
 			"directory_identity": "direct-endpoint",
 			"service_record": {
@@ -274,7 +236,7 @@ class DirectEndpointDirectory:
 				"service_class": self.service_class,
 				"version": 1,
 			},
-		}
+		}]
 
 
 class QPMResolver:
@@ -423,11 +385,7 @@ class QPMResolver:
 		if client is None:
 			return []
 		filters = self._query_filters(request)
-		if hasattr(client, "resolve_service"):
-			return _as_list(client.resolve_service(**filters))
-		if hasattr(client, "resolve_services"):
-			return _as_list(client.resolve_services(**filters))
-		return []
+		return _as_list(client.resolve_services(**filters))
 
 	def _query_filters(self, request):
 		return {
@@ -711,14 +669,6 @@ def _validate_directory_record(service, binding, record):
 		raise QPMInvalidDirectoryRecordError(
 			f"selected API binding for {service_id!r} is missing "
 			"binding_name")
-
-
-def _can_use_binding_connector(resolved):
-	return _endpoint_record_from_value(
-		resolved.endpoint,
-		default_name=resolved.service_name,
-		runtime_id=resolved.runtime_id,
-	) is not None
 
 
 def _defw_binding_record(resolved):

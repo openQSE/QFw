@@ -9,7 +9,6 @@ from qfw_qiskit.qpm_resolver import (
 	QPMResolver,
 	QPMSimulatorFallbackPolicyError,
 	QPMStaleGenerationError,
-	QPMUnsupportedConfigurationError,
 	binding_name_for_category,
 )
 
@@ -41,7 +40,7 @@ class DirectoryClient:
 		self.latest_generation = latest_generation
 		self.queries = []
 
-	def resolve_service(self, **kwargs):
+	def resolve_services(self, **kwargs):
 		self.kwargs = kwargs
 		self.queries.append(kwargs)
 		return list(self.records)
@@ -398,7 +397,7 @@ def test_site_directory_client_accepts_resolve_services_only():
 	fake_defw = FakeDefw()
 	client = DEFwDirectoryClient("site-a:8090", defw_module=fake_defw)
 
-	records = client.resolve_service(
+	records = client.resolve_services(
 		service_name="QPM",
 		service_type="qfw.qpm",
 		binding_name="execution")
@@ -439,28 +438,6 @@ def test_direct_endpoint_connect_uses_defw_binding(monkeypatch):
 		"svc_nwqsim_qpm.svc_qpm")
 	assert record["service_record"]["endpoint"]["address"] == "qpm-direct"
 	assert record["service_record"]["endpoint"]["listen_port"] == 9000
-
-
-def test_direct_endpoint_connect_reports_unsupported_without_binding(
-		monkeypatch):
-	class FakeDefw:
-		pass
-
-	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
-	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
-	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
-	resolver = QPMResolver.from_environment(
-		defw_module=FakeDefw(),
-		sleeper=lambda seconds: None,
-	)
-
-	try:
-		resolver.connect(service_type="qfw.qpm", timeout=1)
-	except QPMUnsupportedConfigurationError as exc:
-		assert "connect_to_binding" in str(exc)
-	else:
-		raise AssertionError("expected unsupported direct endpoint binding")
 
 
 def test_category_routing_maps_to_binding_without_token_policy():

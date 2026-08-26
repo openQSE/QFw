@@ -427,14 +427,11 @@ the object alive until the acknowledgement arrives.
 
 ## Configuration
 
-- Install configuration (`setup/config/*.yaml`): the existing
-  `libfabric-install` key locates the libfabric installation.
-Configuration is by environment variable, following the existing `DEFW_*`
-pattern. The `transport:` and `ofi-provider:` service-YAML keys originally
-proposed here were deferred: the DEFw YAML files interpolate the
-environment anyway, so the variable has to reach the agent regardless, and
-adding a second place to say the same thing earns nothing until there is a
-reason to vary it per service.
+Transport configuration uses environment variables that follow the existing
+`DEFW_*` pattern. The `transport:` and `ofi-provider:` service-YAML keys
+originally proposed here were deferred. DEFw agents already inherit these
+values from their launch environment, so a second configuration source is not
+needed.
 
 - `DEFW_TRANSPORT` - `tcp` (default) or `ofi`. With `ofi`, agents attempt
   OFI and fall back to TCP per peer as described above.
@@ -458,10 +455,9 @@ well below that and well above the small arrays that ride along with
 ordinary RPCs. It is worth revisiting with numbers when a bulk-data path
 adopts attachments.
 
-Because RMA is on by default, no new variable has to be threaded through
-the QFw launcher's curated environment (`get_external_defw_env()` in
-`setup/qfw_setup.py`) to reach the resmgr and service agents.
-`DEFW_TRANSPORT` and `DEFW_OFI_PROVIDER` do, and are already listed there.
+RMA is enabled by default and requires no additional launcher configuration.
+QFw service launchers preserve `DEFW_TRANSPORT` and `DEFW_OFI_PROVIDER` in the
+environment passed to DEFw agents.
 
 Slingshot tuning stays where it is today, in
 `environment/qfw_libfabric_env.sh` (`FI_LNX_PROV_LINKS`, `FI_CXI_RDZV_*`,

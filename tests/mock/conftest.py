@@ -271,7 +271,7 @@ def _install_defw_stubs():
 	if "defw_app_util" not in sys.modules:
 		defw_app_util = types.ModuleType("defw_app_util")
 
-		def defw_get_directory_service():
+		def defw_get_directory_service(timeout=None):
 			raise AssertionError(
 				"defw_get_directory_service must be patched in tests")
 

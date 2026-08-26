@@ -263,12 +263,6 @@ class DirectoryClient:
         with open(path, 'r', encoding='utf-8') as stream:
             return json.load(stream)
 
-    def query_directory(self, include_inactive=False):
-        return self._records()
-
-    def query(self):
-        return self._records()
-
     def resolve_services(self, **filters):
         service_id = filters.get('service_id')
         records = self._records()
@@ -281,21 +275,16 @@ class DirectoryClient:
                 matched.append(record)
         return matched
 
-    def resolve_service(self, **filters):
-        return self.resolve_services(**filters)
-
-
 class EndpointClient:
     def is_ready(self):
         return os.environ.get('QFW_FAKE_NO_LISTEN') != '1'
 
 
-def connect_to_binding(_record):
+def connect_to_binding(record):
+    binding = record.get('selected_binding', {})
+    if binding.get('client_class') == 'QPMControl':
+        return EndpointClient()
     return DirectoryClient()
-
-
-def connect_to_endpoint(_endpoint, _binding=None):
-    return EndpointClient()
 ")
 file(WRITE "${fake_service_script}"
 "import json
