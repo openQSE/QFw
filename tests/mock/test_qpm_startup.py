@@ -104,6 +104,9 @@ def test_service_record_enriches_metadata_advertisement(monkeypatch):
 	import util.qpm.startup as startup
 
 	class Runtime:
+		def __init__(self):
+			self.me = self
+
 		def my_endpoint(self):
 			return FakeEndpoint()
 

@@ -443,18 +443,13 @@ def _is_defw_service_endpoint(endpoint):
 	return endpoint is not None and hasattr(endpoint, "get_id")
 
 
-def _install_defw_directory_lifecycle_hook(defw_module):
-	directory_module = getattr(defw_module, "defw_directory", None)
-	if directory_module is None:
-		try:
-			import defw_directory as directory_module
-		except Exception:
-			return False
+def _install_defw_directory_lifecycle_hook():
+	try:
+		import defw_directory as directory_module
+	except Exception:
+		return False
 	add_listener = getattr(
 		directory_module, "add_lifecycle_listener", None)
-	if add_listener is None:
-		directory = getattr(directory_module, "directory", None)
-		add_listener = getattr(directory, "add_lifecycle_listener", None)
 	if add_listener is None:
 		return False
 	try:
@@ -544,12 +539,9 @@ def _directory_binding_record(endpoint):
 
 def _defw_endpoint(defw_module):
 	runtime = getattr(defw_module, "me", None)
-	if runtime is not None and hasattr(runtime, "my_endpoint"):
-		return runtime.my_endpoint()
-	method = getattr(defw_module, "my_endpoint", None)
-	if method is not None:
-		return method()
-	return "localhost:0"
+	if runtime is None or not hasattr(runtime, "my_endpoint"):
+		raise RuntimeError("DEFw runtime does not expose me.my_endpoint()")
+	return runtime.my_endpoint()
 
 
 def _endpoint_record(endpoint):
@@ -693,7 +685,7 @@ def initialize_qpm_service(defw_module, message):
 	if uq.qpm_initialized:
 		return "already-initialized"
 
-	_install_defw_directory_lifecycle_hook(defw_module)
+	_install_defw_directory_lifecycle_hook()
 	timeout = startup_timeout()
 	wait_reason = _startup_wait_reason(defw_module)
 	if wait_reason is not None:
