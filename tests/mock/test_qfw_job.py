@@ -31,9 +31,6 @@ class FakeBackend:
 	def my_version(self):
 		return "test-version"
 
-	def returns_statevector(self):
-		return False
-
 
 def _driver_options(**options):
 	return FakeSlurmDriver().execution_options(**options)

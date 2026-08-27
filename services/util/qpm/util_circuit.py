@@ -8,11 +8,6 @@ MAX_PPN = 8
 MAX_QUBITS_PP = 10
 
 
-def set_max_ppn(ppn):
-	global MAX_PPN
-	MAX_PPN = ppn
-
-
 def set_max_qubits_pp(max_qubits):
 	global MAX_QUBITS_PP
 	logging.debug(f"set_max_qubits_pp({max_qubits})")

@@ -262,16 +262,9 @@ def test_qpm_startup_long_running_site_registration_registers_payload(
 	assert context["api_bindings"][0]["binding_name"] == "execution"
 	assert context["api_bindings"][0]["client_class"] == "QPMExecution"
 
-	status = startup.startup_status(
-		FakeDefw(
-			site_ready={"site-a"},
-			site_dirsvc=site_dirsvc,
-			records=[site_qpm_record()],
-		)
-	)
-	assert status["operation_mode"] == "long-running"
-	assert status["register_with_dirsvc"] is True
-	assert status["site_registration_required"] is True
+	config = startup.startup_config()
+	assert config["operation_mode"] == "long-running"
+	assert config["register_with_dirsvc"] is True
 
 
 def test_qpm_startup_long_running_site_registration_uses_defw_api(
@@ -500,13 +493,10 @@ def test_qpm_startup_site_registration_waits_for_controller_before_registering(
 	)
 
 	state = startup.initialize_qpm_service(fake_defw, "ready")
-	status = startup.startup_status(fake_defw)
-
 	assert state == "waiting-for-controller"
 	assert uq.qpm_initialized is False
 	assert len(started) == 1
-	assert status["controller_ready"] is False
-	assert status["site_registration_ready"] is False
+	assert startup.controller_ready(fake_defw) is False
 	assert site_dirsvc.registrations == []
 
 	fake_defw.controller_is_ready = True
@@ -536,20 +526,19 @@ def test_qpm_startup_direct_endpoint_reports_listener_health(monkeypatch):
 	)
 
 	state = startup.initialize_qpm_service(fake_defw, "ready")
-	status = startup.startup_status(fake_defw)
+	config = startup.startup_config()
 
 	assert state == "waiting-for-listener"
 	assert uq.qpm_initialized is False
 	assert len(started) == 1
-	assert status["direct_endpoint_enabled"] is True
-	assert status["direct_qpm_endpoint"] == "qpm-direct:9000"
-	assert status["register_with_dirsvc"] is False
-	assert status["listener_ready"] is False
-	assert status["controller_ready"] is True
-	assert status["site_registration_required"] is False
+	assert config["direct_endpoint_enabled"] is True
+	assert config["direct_qpm_endpoint"] == "qpm-direct:9000"
+	assert config["register_with_dirsvc"] is False
+	assert startup.listener_ready(fake_defw) is False
+	assert startup.controller_ready(fake_defw) is True
 
 
-def test_qpm_startup_wait_for_dirsvc_times_out(monkeypatch):
+def test_qpm_startup_wait_for_startup_times_out(monkeypatch):
 	import util.qpm.startup as startup
 	import util.qpm.util_qpm as uq
 
@@ -558,6 +547,6 @@ def test_qpm_startup_wait_for_dirsvc_times_out(monkeypatch):
 	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", raising=False)
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 
-	startup.wait_for_dirsvc(FakeDefw(), "ready", timeout=0)
+	startup.wait_for_startup(FakeDefw(), "ready", timeout=0)
 
 	assert uq.qpm_initialized is False

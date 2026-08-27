@@ -198,13 +198,6 @@ install(DIRECTORY service-apis/
 		PATTERN "__pycache__" EXCLUDE)
 install(DIRECTORY share/qfw/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw")
-install(FILES
-	share/qfw/service-manager/env.sh
-	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/service-manager")
-install(FILES
-	share/qfw/service-manager/systemd/qfw-dirsvc@.service
-	share/qfw/service-manager/systemd/qfw-qpm@.service
-	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/service-manager/systemd")
 install(DIRECTORY examples/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/examples"
 	FILES_MATCHING

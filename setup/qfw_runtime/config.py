@@ -66,17 +66,6 @@ def qfw_prefix():
     return Path.cwd().resolve()
 
 
-def defw_prefix():
-    value = os.environ.get("DEFW_PREFIX")
-    if value:
-        return Path(value).expanduser().resolve()
-    prefix = qfw_prefix()
-    source_defw = prefix / "DEFw"
-    if source_defw.exists() and not (prefix / "bin" / "defwp").exists():
-        return source_defw
-    return prefix
-
-
 def qfw_share_dir(prefix=None):
     if prefix is not None:
         return Path(prefix).expanduser().resolve() / "share" / "qfw"
@@ -337,6 +326,15 @@ def site_service_config(site_config, site_config_path=None):
     service = site_config.get("service") or {}
     if not isinstance(service, dict):
         raise ValueError("service must be a mapping")
+    removed_keys = {
+        "service-manifest": "manifest",
+        "service_manifest": "manifest",
+        "device_access_config": "device-access-config",
+    }
+    for key, replacement in removed_keys.items():
+        if key in service:
+            raise ValueError(
+                f"unsupported service key {key!r}; use {replacement!r}")
     base = None
     if site_config_path is not None:
         base = Path(site_config_path).expanduser().resolve().parent
@@ -351,13 +349,6 @@ def site_service_config(site_config, site_config_path=None):
             continue
         result[canonical] = resolve_path(value, base=base)
     return result
-
-
-def site_qpm_config(site_config):
-    value = site_config.get("qpm") or {}
-    if not isinstance(value, dict):
-        raise ValueError("qpm must be a mapping")
-    return value
 
 
 def resolver_scope_order(runtime_config):

@@ -148,31 +148,19 @@ def test_site_directory_rejects_unready_connection_record(tmp_path):
         qfw_config.site_directory(site)
 
 
-def test_site_qpm_config_returns_common_qpm_settings():
-    qpm = {
-        "completion-queues": {
-            "retention": {"completion-ttl-seconds": 42},
-        },
-    }
-
-    assert qfw_config.site_qpm_config({"qpm": qpm}) == qpm
-
-
 def test_site_service_config_requires_mapping():
     with pytest.raises(ValueError, match="service must be a mapping"):
         qfw_config.site_service_config({"service": "invalid"})
 
 
-def test_site_service_config_ignores_removed_aliases():
-    selected = qfw_config.site_service_config({
-        "service": {
-            "service-manifest": "/legacy/services.yaml",
-            "service_manifest": "/legacy/services.yaml",
-            "device_access_config": "/legacy/devices.yaml",
-        },
-    })
-
-    assert selected == {}
+@pytest.mark.parametrize("key,replacement", [
+    ("service-manifest", "manifest"),
+    ("service_manifest", "manifest"),
+    ("device_access_config", "device-access-config"),
+])
+def test_site_service_config_rejects_removed_keys(key, replacement):
+    with pytest.raises(ValueError, match=replacement):
+        qfw_config.site_service_config({"service": {key: "/removed/path"}})
 
 
 def test_prepare_run_state_persists_resolver_environment_overrides(

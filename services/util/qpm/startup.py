@@ -92,20 +92,6 @@ def startup_config():
 	}
 
 
-def startup_status(defw_module):
-	status = startup_config()
-	status.update({
-		"listener_ready": listener_ready(defw_module),
-		"controller_ready": controller_ready(defw_module),
-		"site_dirsvc_ready": _site_dirsvc_ready(defw_module),
-		"local_registration_required": _local_registration_required(),
-		"local_registration_ready": _local_registration_complete(defw_module),
-		"site_registration_required": _site_registration_required(),
-		"site_registration_ready": _site_registration_complete(defw_module),
-	})
-	return status
-
-
 def should_wait_for_dirsvc(defw_module):
 	if not register_with_dirsvc():
 		return False
@@ -644,20 +630,6 @@ def _write_service_ready(message):
 			stream.write("\n")
 	except OSError:
 		logging.exception("failed to write QPM service readiness file")
-
-
-def wait_for_dirsvc(defw_module, message, timeout=None):
-	deadline = None
-	if timeout is not None and timeout >= 0:
-		deadline = monotonic() + timeout
-	while not _dirsvc_ready(defw_module) and not uq.qpm_shutdown:
-		if deadline is not None and monotonic() >= deadline:
-			logging.error("timed out waiting for QPM directory service")
-			return
-		logging.debug("still waiting for dirsvc to come up")
-		sleep(1)
-	if not uq.qpm_shutdown:
-		complete_qpm_initialization(message)
 
 
 def wait_for_startup(defw_module, message, timeout=None):

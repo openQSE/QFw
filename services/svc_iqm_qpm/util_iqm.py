@@ -183,22 +183,6 @@ def fetch_iqm_section(name, func):
 		}
 
 
-def summarize_observation_set(data):
-	if not isinstance(data, dict):
-		data = {}
-	observations = data.get("observations", {})
-	if not isinstance(observations, dict):
-		observations = {}
-	return {
-		"calibration_set_id": (
-			data.get("calibration_set_id")
-			or data.get("id")
-			or data.get("observation_set_id")),
-		"observation_count": len(observations),
-		"observation_names": sorted(str(name) for name in observations.keys()),
-	}
-
-
 def get_env_float(name, default):
 	value = os.environ.get(name)
 	if not value:
@@ -332,109 +316,6 @@ def get_dynamic_qubits(data):
 	if isinstance(qubits, dict):
 		return list(qubits.keys())
 	return qubits
-
-
-def get_dynamic_couplers(data):
-	couplers = data.get("couplers") or []
-	if isinstance(couplers, dict):
-		return list(couplers.values())
-	return couplers
-
-
-def normalize_locus(value):
-	if isinstance(value, str):
-		return [part.strip() for part in value.split(",") if part.strip()]
-	if isinstance(value, (list, tuple)):
-		return [str(part) for part in value]
-	return []
-
-
-def normalize_edge(locus):
-	if len(locus) != 2:
-		return None
-	a, b = locus
-	if a == b:
-		return None
-	return tuple(sorted((a, b)))
-
-
-def sorted_edges(edges):
-	return [list(edge) for edge in sorted(edges)]
-
-
-def collect_static_component_edges(static_arch):
-	edges = set()
-	for item in static_arch.get("connectivity", []):
-		edge = normalize_edge(normalize_locus(item))
-		if edge:
-			edges.add(edge)
-	return edges
-
-
-def collect_gate_loci(dynamic_arch):
-	gate_loci = {}
-	gates = dynamic_arch.get("gates", {})
-	if not isinstance(gates, dict):
-		return gate_loci
-
-	for gate_name, gate_info in gates.items():
-		loci = set()
-		if isinstance(gate_info, dict):
-			implementations = gate_info.get("implementations", {})
-			if isinstance(implementations, dict):
-				for implementation in implementations.values():
-					if not isinstance(implementation, dict):
-						continue
-					for locus in implementation.get("loci", []):
-						normalized = tuple(normalize_locus(locus))
-						if normalized:
-							loci.add(normalized)
-		gate_loci[str(gate_name)] = [
-			list(locus) for locus in sorted(loci)
-		]
-	return gate_loci
-
-
-def build_coupling_graph(static_arch, dynamic_arch):
-	qubits = sorted(str(q) for q in dynamic_arch.get("qubits")
-			or static_arch.get("qubits", []))
-	resonators = sorted(str(r) for r in dynamic_arch.get(
-		"computational_resonators",
-	) or static_arch.get("computational_resonators", []))
-	qubit_set = set(qubits)
-	component_edges = collect_static_component_edges(static_arch)
-	gate_loci = collect_gate_loci(dynamic_arch)
-
-	qubit_edges = set()
-	gate_edges = {}
-	for gate_name, loci in gate_loci.items():
-		edges = set()
-		for locus in loci:
-			edge = normalize_edge(locus)
-			if edge and edge[0] in qubit_set and edge[1] in qubit_set:
-				edges.add(edge)
-				qubit_edges.add(edge)
-		if edges:
-			gate_edges[gate_name] = sorted_edges(edges)
-
-	if not qubit_edges:
-		for edge in component_edges:
-			if edge[0] in qubit_set and edge[1] in qubit_set:
-				qubit_edges.add(edge)
-
-	return {
-		"qubits": qubits,
-		"computational_resonators": resonators,
-		"component_edges": sorted_edges(component_edges),
-		"qubit_edges": sorted_edges(qubit_edges),
-		"couplers": sorted_edges(qubit_edges),
-		"gate_loci": gate_loci,
-		"gate_edges": gate_edges,
-		"source_priority": [
-			"dynamic_architecture.gates.*.implementations.*.loci",
-			"static_architecture.connectivity",
-		],
-	}
 
 
 class IQMServiceClient:
