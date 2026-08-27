@@ -490,6 +490,11 @@ services:
   - name: nwqsim
     module: svc_nwqsim_qpm
     load-modules: svc_nwqsim_qpm,api_launcher
+    environment-modules:
+      - libfabric
+      - nwqsim
+    required-executables:
+      - circuit_runner.nwqsim
     agent-prefix: qpm_nwqsim
     target: group1-head
     assigned-hosts: group1
@@ -497,17 +502,23 @@ services:
     provider-launch:
       type: mpi
       wrapper: null
+      use-dvm: true
 
   - name: tnqvm
     module: svc_tnqvm_qpm
     load-modules: svc_tnqvm_qpm,api_launcher
+    environment-modules:
+      - libfabric
+      - tnqvm
+    required-executables:
+      - circuit_runner.tnqvm
     agent-prefix: qpm_tnqvm
     target: group1-head
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     provider-launch:
       type: mpi
-      wrapper: gpuwrapper.sh
+      wrapper: null
 
   - name: fake-iqm
     module: svc_fake_iqm_qpm
@@ -1074,7 +1085,10 @@ qfw-teardown
 ```
 
 The packaged local profile and service manifest provide the starting point.
-The selected simulator executable must be available in `PATH`.
+The selected service manifest names its required site environment modules and
+simulator executables. `qfw-setup` loads those modules for PRTE and QPM startup
+and fails before launching services if a module or executable is unavailable.
+The caller's shell environment is not modified.
 
 ### Heterogeneous Slurm Allocation
 

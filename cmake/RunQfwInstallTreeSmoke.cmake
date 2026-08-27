@@ -66,6 +66,17 @@ foreach(forbidden_config
 	endif()
 endforeach()
 
+foreach(source_only_dependency_path
+		tools/dependencies
+		bin/circuit_runner.nwqsim
+		bin/circuit_runner.tnqvm)
+	if(EXISTS "${QFW_INSTALL_PREFIX}/${source_only_dependency_path}")
+		message(FATAL_ERROR
+			"source-only simulator dependency was installed: "
+			"${source_only_dependency_path}")
+	endif()
+endforeach()
+
 set(qfw_install_pythonpath
 	"${QFW_INSTALL_PREFIX}/${QFW_PYTHON_INSTALL_DIR}")
 execute_process(

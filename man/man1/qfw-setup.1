@@ -19,6 +19,14 @@ Each selected QPM has an independent manager run directory. An optional PRTE
 DVM is owned by its QPM manager. A failure stops every application-owned
 manager already started by the invocation.
 .PP
+For a selected service with
+.B environment-modules
+or
+.BR required-executables ,
+setup resolves the module environment before PRTE and QPM startup. The module
+environment belongs to those managed processes and does not modify the calling
+shell. Missing modules or executables fail setup before a service is started.
+.PP
 When the selected runtime uses site services, setup records and validates the
 site directory connection but does not adopt or stop those services.
 .SH OPTIONS

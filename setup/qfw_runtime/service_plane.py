@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 
 from . import config as qfw_config
+from . import environment_modules as qfw_environment_modules
 
 
 SCHEMA = "qfw-service-plane-v1"
@@ -153,14 +154,19 @@ def start(args):
         _write_environment(state)
 
         try:
+            service_environment = os.environ.copy()
+            if plan["components"]["qpm"] and not args.dry_run:
+                service_environment = qfw_environment_modules.load_for_service(
+                    plan["services"][0]["manifest"], service_environment)
             if plan["components"]["prte"]:
-                _start_prte(state, args.timeout)
+                _start_prte(state, args.timeout, service_environment)
             if plan["components"]["directory"]:
                 _start_directory(state, args.timeout)
                 _publish_directory_connection(state, ready=True)
             if plan["components"]["qpm"]:
                 for service in plan["services"]:
-                    _start_qpm(state, service, args.timeout)
+                    _start_qpm(
+                        state, service, args.timeout, service_environment)
             state["state"] = "ready"
             state["ready_at_ns"] = time.time_ns()
             state["updated_at_ns"] = state["ready_at_ns"]
@@ -462,6 +468,10 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
             "listen_port": service_listen,
             "telnet_port": service_telnet,
             "provider_launch": service.get("provider-launch") or {},
+            "environment_modules": list(
+                service.get("environment-modules") or []),
+            "required_executables": list(
+                service.get("required-executables") or []),
             "manifest": service,
         })
     return resolved
@@ -591,7 +601,7 @@ def _new_state(plan, dry_run):
     }
 
 
-def _start_prte(state, timeout):
+def _start_prte(state, timeout, service_environment=None):
     dvm = state["dvm"]
     uri_path = Path(dvm["uri_path"])
     uri_path.parent.mkdir(parents=True, exist_ok=True)
@@ -610,8 +620,9 @@ def _start_prte(state, timeout):
     if state["dry_run"]:
         uri_path.write_text("dry-run-dvm-uri\n", encoding="utf-8")
     else:
+        process_environment = dict(service_environment or os.environ)
         command = [
-            _command_path("prte"),
+            _command_path("prte", env=process_environment),
             "--host", ",".join(f"{host}:*" for host in dvm["nodes"]),
             "--report-uri", str(uri_path),
         ]
@@ -625,7 +636,7 @@ def _start_prte(state, timeout):
         if os.geteuid() == 0:
             command.append("--allow-run-as-root")
         command.append("--daemonize")
-        _run_on_node(dvm["launch_node"], command, os.environ.copy(),
+        _run_on_node(dvm["launch_node"], command, process_environment,
                      state["allocation"])
         _wait_for(lambda: uri_path.exists() and uri_path.stat().st_size > 0,
                   timeout, f"PRTE DVM URI {uri_path}")
@@ -684,7 +695,7 @@ def _start_directory(state, timeout):
     _write_state(state)
 
 
-def _start_qpm(state, service, timeout):
+def _start_qpm(state, service, timeout, service_environment=None):
     service_id = service["service_id"]
     component_dir = Path(state["run_dir"]) / "services" / service_id
     pid_file = component_dir / "pid"
@@ -707,7 +718,7 @@ def _start_qpm(state, service, timeout):
     if state["dry_run"]:
         _write_dry_run_component(record)
     else:
-        env = os.environ.copy()
+        env = dict(service_environment or os.environ)
         env["QFW_SERVICE_SCOPE"] = (
             "allocation-local" if state["scope"] == "application" else "site")
         env["QFW_DVM_URI_PATH"] = state["dvm"]["uri_path"]
@@ -1077,13 +1088,14 @@ def _prte_runtime_args(allocation):
     return []
 
 
-def _command_path(name):
-    bin_path = os.environ.get("QFW_BIN_PATH")
+def _command_path(name, env=None):
+    env = env or os.environ
+    bin_path = env.get("QFW_BIN_PATH")
     if bin_path:
         candidate = Path(bin_path).expanduser().resolve() / name
         if candidate.exists():
             return str(candidate)
-    found = shutil.which(name)
+    found = shutil.which(name, path=env.get("PATH"))
     if found:
         return found
     raise ServicePlaneError(f"unable to find required command: {name}")

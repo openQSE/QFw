@@ -193,6 +193,11 @@ services:
   - name: nwqsim
     module: svc_nwqsim_qpm
     load-modules: svc_nwqsim_qpm,api_launcher
+    environment-modules:
+      - libfabric
+      - nwqsim
+    required-executables:
+      - circuit_runner.nwqsim
     agent-prefix: qpm_nwqsim
     assigned-hosts: ${QFW_SIMULATOR_NODES}
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
@@ -201,6 +206,7 @@ services:
     provider-launch:
       type: mpi
       wrapper: null
+      use-dvm: true
 ```
 
 Point `service.manifest` in `site.yaml` to that site-owned manifest. Configure

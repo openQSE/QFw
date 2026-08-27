@@ -839,6 +839,8 @@ Each manifest entry names one service and the information needed to start it:
 | `name` | Stable service name used by runtime profile selection and logs. |
 | `module` | QPM service module to start. |
 | `load-modules` | DEFw modules loaded into the service process. |
+| `environment-modules` | Site environment modules loaded into the PRTE and QPM process environment. |
+| `required-executables` | Commands validated after site module loading and before service startup. |
 | `agent-prefix` | Prefix used for the DEFw agent name. |
 | `target` | Launch target or placement group selected by the local runtime. |
 | `assigned-hosts` | Optional host group for simulator or local service placement. |

@@ -487,6 +487,18 @@ def load_service_manifest(path):
             if key in service:
                 raise ValueError(
                     f"unsupported service key {key!r}; use {replacement!r}")
+        for key in ("environment-modules", "required-executables"):
+            value = service.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, list):
+                raise ValueError(
+                    f"service {service.get('name', index)!r} {key} must be "
+                    "a list")
+            if any(not str(item).strip() for item in value):
+                raise ValueError(
+                    f"service {service.get('name', index)!r} {key} entries "
+                    "must not be empty")
     return services
 
 

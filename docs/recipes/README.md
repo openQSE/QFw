@@ -12,6 +12,7 @@ execution recipe.
 | Configure the QFw Docker/Slurm development environment | [Docker Slurm environment](docker-slurm-environment.md) |
 | Install into an arbitrary user or development prefix | [Non-standard installation](install-nonstandard-location.md) |
 | Install into the conventional site prefix | [Standard site installation](install-standard-location.md) |
+| Build optional NWQSim or TNQVM dependencies | [Simulator dependencies](build-simulator-dependencies.md) |
 | Prepare a reusable, site-owned QPM | [Site-owned QPM configuration](configure-long-running-qpm.md) |
 | Exercise a site-owned QPM from a normal allocation | [Site QPM, normal allocation](test-long-running-qpm-normal.md) |
 | Exercise a site-owned QPM from a heterogeneous allocation | [Site QPM, heterogeneous allocation](test-long-running-qpm-heterogeneous.md) |

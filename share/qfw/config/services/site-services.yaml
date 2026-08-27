@@ -2,6 +2,11 @@ services:
   - name: nwqsim
     module: svc_nwqsim_qpm
     load-modules: svc_nwqsim_qpm,api_launcher
+    environment-modules:
+      - libfabric
+      - nwqsim
+    required-executables:
+      - circuit_runner.nwqsim
     agent-prefix: qpm_nwqsim
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS

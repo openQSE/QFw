@@ -21,6 +21,16 @@ Primary DEFw QPM module.
 Comma-separated DEFw module load list. It normally includes the QPM module and
 .BR api_launcher .
 .TP
+.B environment-modules
+YAML sequence of site environment modules loaded before an optional PRTE DVM
+and the QPM start. This is separate from
+.BR load-modules ,
+which names Python modules loaded by DEFw. A missing module is a startup error.
+.TP
+.B required-executables
+YAML sequence of executable names that must be available after environment
+module loading. QFw validates them before starting PRTE or the QPM.
+.TP
 .B agent-prefix
 Prefix used for QPM agents created by the service.
 .TP
@@ -70,12 +80,18 @@ and
 .SH EXAMPLE
 .EX
 services:
-  - name: fake-iqm
-    module: svc_fake_iqm_qpm
-    load-modules: svc_fake_iqm_qpm,api_launcher
-    agent-prefix: qpm_fake_iqm
+  - name: nwqsim
+    module: svc_nwqsim_qpm
+    load-modules: svc_nwqsim_qpm,api_launcher
+    environment-modules:
+      - libfabric
+      - nwqsim
+    required-executables:
+      - circuit_runner.nwqsim
+    agent-prefix: qpm_nwqsim
     provider-launch:
-      type: internal
+      type: mpi
+      use-dvm: true
 .EE
 .SH SEE ALSO
 .BR qfw-qpm-svc (1),
