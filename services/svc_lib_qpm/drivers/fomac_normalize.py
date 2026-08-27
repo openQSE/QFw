@@ -179,13 +179,18 @@ def to_calibration_record(cal, provider, device_id, include_raw=False,
 
 
 def to_result_record(counts, shots, provider, device_id, job_id=None,
-		status="completed", validate=True):
+		status="completed", queue_position=None, validate=True):
 	"""Build a `qhw-result-v1` record from a QDMI counts histogram.
 
 	QDMI (via FoMaC) returns a plain {bitstring: count} histogram from
 	`Job.get_counts()`; normalize it to the same `qhw-result-v1` the QRMI/native
 	path produces via qhw-iqm, so a consumer sees one result shape regardless of
 	which library executed the circuit. Pure over the counts dict.
+
+	`queue_position` goes into the same metadata key qhw-iqm fills on the QRMI
+	path, so the two paths describe queueing the same way. It is the position
+	the job held when it was accepted, not a live depth, and it is None on a
+	device or library that does not report one.
 	"""
 	from qhw_data import new_result
 	counts = counts or {}
@@ -199,7 +204,11 @@ def to_result_record(counts, shots, provider, device_id, job_id=None,
 			num_circuits=1,
 			counts=counts,
 			success=(status == "completed"))
-		.metadata({"source": "qdmi", "via": "mqt.core.qdmi"})
+		.metadata({
+			"source": "qdmi",
+			"via": "mqt.core.qdmi",
+			"queue_position": queue_position,
+		})
 	)
 	return builder.build(validate_schema=validate)
 
