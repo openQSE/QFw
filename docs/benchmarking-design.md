@@ -1,12 +1,30 @@
 # QFw Benchmarking and Profiling Design (Proposal)
 
-Status: **draft, revision 3 — request for community input**
+Status: **draft, revision 4 — request for community input**
 
 This document proposes adding benchmarking and profiling support to QFw. It
 is intended as a starting point for discussion: the semantic conventions and
 suite-integration plans in particular are initial proposals, and community
 members are encouraged to suggest additions, removals, or changes. See
 [Open Questions and Community Input](#open-questions-and-community-input).
+
+Revision 4 records measured instrumentation cost and sequences the phases
+for production readiness:
+
+- **Instrumentation cost is measured, not asserted.** A new
+  [Instrumentation Cost](#instrumentation-cost) section replaces revision 3's
+  claim that perturbation is "well below run-to-run noise" with SDK
+  measurements and the per-job budget that follows from them.
+- **Sampling off is not free.** A sampled-out span still costs microseconds
+  in Python, because the call site runs whatever the sampler decides. High-rate
+  spans therefore need a **flag-guarded call site** rather than a sampler that
+  drops them. This changes the deployment rule for `qfw.transport.rpc`.
+- **The production default is stated where the profiles are introduced**, so
+  the always-on reading of "configuration decision, not a code change" no
+  longer survives as far as the sampling section.
+- **Phases are sequenced production-first.** Phase 1 is the lean slice that
+  makes overhead work possible, the per-hop duration histograms move into it
+  from phase 3, and phases 2 to 5 are explicitly deferred behind remediation.
 
 Revision 3 incorporates the second round of review feedback (PR #30):
 
@@ -54,7 +72,8 @@ Revision 2 incorporates the first round of review feedback (PR #30):
   - [Deployment Profiles](#deployment-profiles)
   - [Instrumentation Points](#instrumentation-points)
   - [Trace-Context Propagation Through DEFw RPC](#trace-context-propagation-through-defw-rpc)
-  - [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)
+  - [Clocks and Precision](#clocks-and-precision)
+  - [Instrumentation Cost](#instrumentation-cost)
   - [Sampling and Signal Tiers](#sampling-and-signal-tiers)
 - [Semantic Conventions (Initial Proposal)](#semantic-conventions-initial-proposal)
   - [Naming Rule](#naming-rule)
@@ -90,6 +109,13 @@ implementations under one scheduler with consistent metadata.
 At the same time, QFw is itself a piece of HPC middleware whose overhead
 matters, especially for hybrid quantum-classical algorithms where the
 framework sits inside the iteration loop.
+
+QFw is also deployed as a production interface to real quantum hardware, not
+only as a testbed. Where that is so, the Type B profiling below is not a
+benchmarking exercise. It is the measurement half of keeping a production
+system fast, and the overhead it finds is meant to be removed rather than
+reported. [Implementation Phases](#implementation-phases) sequences the work
+on that basis.
 
 This proposal covers both, with a shared telemetry and reporting
 infrastructure.
@@ -185,7 +211,7 @@ and SDKs for all benchmarking/profiling telemetry, using all three signals:
 - **Metrics** carry counters and duration histograms — both for throughput
   measurements and for timings that need distribution statistics or better
   effective precision than cross-node wall-clock spans provide (see
-  [Clocks, Precision, and Overhead](#clocks-precision-and-overhead)).
+  [Clocks and Precision](#clocks-and-precision)).
 - **Logs** remain ordinary DEFw logs; where useful, structured log entries
   are linked to the active trace ID so they can be stitched into the same
   timeline.
@@ -210,6 +236,13 @@ Adopting the standard has consequences the bespoke format could not offer:
 
 The same instrumentation supports three deployment profiles; choosing one
 is a configuration decision, not a code change.
+
+Instrumentation being present in every profile does not mean it is doing
+work. Traces default to **off** in production and sample at 100% only for
+deliberate benchmark runs, metrics are the always-on tier, and the one
+high-rate span source is guarded by a flag rather than merely sampled out.
+See [Sampling and Signal Tiers](#sampling-and-signal-tiers) and
+[Instrumentation Cost](#instrumentation-cost).
 
 **Profile 1 — file export (default, zero infrastructure).** Each
 instrumented process exports OTLP JSON to files on node-local storage
@@ -305,7 +338,7 @@ emitted by any service on any node join the correct trace automatically —
 and the same propagation must be preserved by the future libfabric
 transport.
 
-### Clocks, Precision, and Overhead
+### Clocks and Precision
 
 - **Span timestamps are wall-clock.** Within one process they yield
   accurate durations; *across* nodes, alignment is limited by clock
@@ -319,21 +352,79 @@ transport.
   the trace view. This is one of two reasons the design carries metrics
   alongside traces. The other is availability, covered in
   [Sampling and Signal Tiers](#sampling-and-signal-tiers).
-- **Overhead.** The SDKs' batch span processors move export off the hot
-  path, and expected span rates are modest (tens of spans per job; order
-  ten per iteration in hybrid loops with ≥100 ms iterations) —
-  perturbation well below run-to-run noise. Deployment rules: export to
-  node-local storage, never a shared filesystem; leave high-rate span
-  sources (`qfw.transport.rpc`) off unless the transport itself is under
-  study; do not run benchmarks with verbose DEFw debug logging enabled.
-- **Span rates must stay bounded per job.** The "tens of spans per job"
-  budget only holds if no span is emitted per unit of waiting. A job that
-  sits in a vendor queue for ten minutes behind a one-second poll interval
-  would emit roughly 600 spans if each poll were a span. This is why
-  `qfw.backend.collect` is one span per job covering result retrieval, with
-  individual polls recorded as span events carrying a poll count and
-  interval. Poll-level spans remain available as an opt-in for diagnosing
-  the polling loop itself.
+### Instrumentation Cost
+
+Revision 3 asserted that perturbation was "well below run-to-run noise"
+without measuring it. For a design whose Type B purpose is measuring
+framework overhead, an unmeasured overhead claim is the wrong thing to ship.
+These are measurements.
+
+Method: `opentelemetry-sdk` 1.44.0 on CPython 3.14, single-threaded, null
+exporter behind a `BatchSpanProcessor`, 200,000 iterations per case.
+
+| Operation | ns/op |
+| --- | --- |
+| baseline empty call | 28 |
+| flag-guarded call site, flag off | 24 |
+| metric histogram record, 3 labels | 1,552 |
+| API-only no-op tracer, no SDK configured | 2,738 |
+| span, sampled out (`ALWAYS_OFF`) | 3,570 |
+| span, recorded, 2 attributes | 9,921 |
+
+**The job path is not a concern.** The signal tiers below put roughly 11
+spans and 9 metric records on one job. That is about 55 µs per job with
+traces sampled off and about 123 µs with traces recording. Measured job
+durations on a 20-qubit device run from roughly 1 s to 4 s depending on the
+API path, so taking the fastest observed job as the conservative case, the
+instrumentation costs between 0.005% and 0.012% of a job. Against the
+fastest single phase measured, a 59 ms client-side preparation step, the
+entire per-job budget is about 0.2%.
+
+**Sampling off is not free.** A sampled-out span still costs about 3.6 µs,
+and an API-only no-op tracer with no SDK configured still costs about
+2.7 µs, because the call site runs whatever the sampler decides. In Python
+the context manager attaches and detaches a context variable either way. The
+sampler avoids the recording work, not the call-site work.
+
+That distinction does not matter on the job path, where the budget above
+already absorbs it. It matters wherever the operation being measured is
+itself only microseconds. If the libfabric work brings DEFw RPC round-trips
+into the tens of microseconds, an unconditional 3.6 µs call site becomes a
+double-digit percentage tax on exactly the quantity being measured.
+
+**So high-rate spans must be flag-guarded, not sampled off.** A call site
+behind a module-level flag costs 24 ns, roughly 150 times less than a
+sampled-out span. "Off by default" for `qfw.transport.rpc` therefore means
+the `with` block does not execute, not that the sampler returns a drop
+decision.
+
+**Attribute arguments are evaluated even when nothing is recording.**
+`span.set_attribute("qfw.circuit.depth_transpiled", circuit.depth())` pays
+for `circuit.depth()` regardless, because the argument is evaluated before
+the no-op method receives it. Any attribute whose value costs more than a
+field read belongs behind an `is_recording()` check.
+
+**Span rates must stay bounded per job.** The per-job budget above only
+holds if no span is emitted per unit of waiting. A job that sits in a vendor
+queue for ten minutes behind a one-second poll interval would emit roughly
+600 spans if each poll were a span. This is why `qfw.backend.collect` is one
+span per job covering result retrieval, with individual polls recorded as
+span events carrying a poll count and interval. Poll-level spans remain
+available as an opt-in for diagnosing the polling loop itself.
+
+Deployment rules: export to node-local storage, never a shared filesystem;
+leave flag-guarded span sources off unless what they measure is the subject
+of the run; do not run benchmarks with verbose DEFw debug logging enabled.
+
+**Caveats on these numbers.** They were taken on CPython 3.14 on arm64,
+which is not the Python version or the distribution any given deployment
+runs, so treat them as the right order of magnitude rather than as exact.
+They are single-threaded, so they do not capture the batch export thread
+contending for the GIL under concurrent load, which is the most likely way a
+real deployment comes out worse than this table. Re-measuring in the target
+environment is a Phase 1 deliverable, together with an
+instrumented-versus-uninstrumented delta on a real workload and a budget
+that later changes are checked against.
 
 ### Sampling and Signal Tiers
 
@@ -355,7 +446,19 @@ Sampling policy:
   propagates with `traceparent`, so a sampled trace is complete across every
   node rather than sampled independently per service.
 - **High-rate optional spans stay off** unless what they measure is the
-  subject of the run.
+  subject of the run, and they stay off by not executing rather than by
+  being sampled out.
+
+There are three states, not two, and the middle one is the one that
+surprises people:
+
+| State | Cost per call site | Used for |
+| --- | --- | --- |
+| **Flag-guarded off** | ~24 ns | High-rate spans whose call site must not run at all |
+| **Sampled out** | ~3.6 µs | Job-path spans in production, where the per-job budget absorbs it |
+| **Recording** | ~10 µs | Benchmark runs, and production traffic at a chosen sample ratio |
+
+Costs are from [Instrumentation Cost](#instrumentation-cost).
 
 Signal tiers per instrumentation point:
 
@@ -366,7 +469,7 @@ Signal tiers per instrumentation point:
 | `qfw.app.prepare` | yes | no | Per-job fixed cost, adequately characterized from sampled runs |
 | `qfw.qpm.*` | yes | duration histogram by op | Framework overhead attribution is the Type B headline, so it must not depend on sampling |
 | `qfw.backend.*` | yes | duration histogram by op | Same, and it carries the Type A API-path comparison |
-| `qfw.transport.rpc` | opt-in | opt-in | Only meaningful while the transport is under study |
+| `qfw.transport.rpc` | flag-guarded | flag-guarded | Only meaningful while the transport is under study, and the call site must not run otherwise |
 
 Attributes used as metric labels are restricted to the dimensional class.
 See [Cardinality Classes](#cardinality-classes).
@@ -473,9 +576,13 @@ is exactly this measurement. Defining it as an extension costs nothing,
 because OTel conventions extend backward-compatibly, and it avoids the
 transport work inventing a second, divergent vocabulary in the meantime.
 
-Deployment rules: off by default, enabled only when the transport itself is
-the subject of the run, and never enabled for a Type A comparison where it
-would perturb the numbers being compared.
+Deployment rules: **flag-guarded, not merely sampled off.** The call site
+must not execute unless the transport is the subject of the run. A
+sampled-out span still costs about 3.6 µs while an RPC round-trip on a fast
+transport is itself only tens of microseconds, so a sampler-based "off"
+would tax the very quantity this span exists to measure. See
+[Instrumentation Cost](#instrumentation-cost). Never enable it for a Type A
+comparison, where it would perturb the numbers being compared.
 
 ### Context Attributes
 
@@ -774,16 +881,35 @@ candidates here is copyleft.
 
 ## Implementation Phases
 
+**Sequencing follows production readiness, not roadmap order.** Where QFw
+runs as a production interface rather than only as a testbed, reducing
+framework overhead outranks extending the benchmarking surface. Phase 1 is
+therefore kept deliberately lean: it is the smallest slice that produces
+trustworthy per-hop numbers, and everything not needed for that is deferred
+behind the remediation work those numbers feed.
+
 | Phase | Deliverable |
 | --- | --- |
-| 1 | OTel SDK integration in the Python components; `traceparent` propagation through DEFw RPC; file-export profile; core span vocabulary (`qfw.app.job` path) and the sampling policy; `qfw_bench_extract` producing schema-v2 JSON from OTLP files. Tooling lands in a top-level `benchmarking/` directory with its own CODEOWNERS entry |
+| 1 | OTel SDK integration in the Python components; `traceparent` propagation through DEFw RPC; file-export profile; core span vocabulary (`qfw.app.job` path) and the sampling policy; **the per-hop duration histograms**, moved up from phase 3 because the always-on metrics tier is what production monitoring rests on; `qfw_bench_extract` producing schema-v2 JSON from OTLP files. Tooling lands in a top-level `benchmarking/` directory with its own CODEOWNERS entry |
+| — | **Overhead remediation.** Not a benchmarking phase, and tracked outside this roadmap. Profile the deployed system with Phase 1's output, rank hops by cost, open a targeted issue per hotspot, fix, and re-measure. The libfabric transport work is this loop already in flight: RPC cost was identified as overhead, and the OFI path is the resolution |
 | 2 | Context attributes from Qiskit, QRMI, QDMI/FoMaC, SLURM, environment; `qfw_bench_render`; **SupermarQ pilot** — extend the in-tree example with `score()` and conventions, run across back-ends |
-| 3 | `qfw_bench_compare`; hybrid-loop spans and the per-hop metric histograms; **QStone integration** (QFw connector or gateway) with trace-ID correlation |
+| 3 | `qfw_bench_compare`; hybrid-loop spans; **QStone integration** (QFw connector or gateway) with trace-ID correlation |
 | 4 | **mqssbench `DeviceAdapter`** (brings MQT Bench, QV, RB); suite-run automation; collector-profile reference deployment (Docker Compose) with the SLURM processor; streaming-profile validation against a site pipeline (Kafka → VictoriaMetrics) |
 | 5 | `qfw.transport.rpc` extension spans/metrics shared with the libfabric TCP-vs-OFI work; instrumentation below the shim via the Rust (QRMI) and C (QDMI) SDKs; report archiving and longitudinal comparison |
 
 Phase 1 alone is already useful: it produces the framework-overhead
 breakdown (Type B) and the measurement rig everything else builds on.
+
+**Phase 1 exit criteria.** The per-hop breakdown is produced from a real
+workload, and the instrumented-versus-uninstrumented delta is measured in
+the target environment and recorded as a budget, replacing the reference
+figures in [Instrumentation Cost](#instrumentation-cost) with local ones.
+Later changes are checked against that budget rather than re-argued.
+
+Phases 2 to 5 stay on the roadmap and none of them gates production. They
+are sequenced after remediation rather than alongside it, so that the
+benchmarking surface does not grow while the overhead it would measure is
+still there.
 
 ## Open Questions and Community Input
 
@@ -819,12 +945,13 @@ rather than this design, and it deserves its own discussion.
    stay bounded, and `qfw.device.calibration_set_id` is classed descriptive
    even though grouping by calibration is an obvious analysis axis. Anyone
    operating a shared metrics store is the right person to answer.
-3. **Sampling policy.** Is the split in
-   [Sampling and Signal Tiers](#sampling-and-signal-tiers) drawn in the
-   right place? Specifically, is every measurement that a site would want
-   with traces sampled off actually backed by a metric, and is
-   parent-based sampling at the run root the right default for production
-   traffic as well as for benchmark runs?
+3. **Sampling policy.** The cost side is now measured rather than assumed,
+   so what remains is placement. Is every measurement a site would want
+   with traces sampled off actually backed by a metric? Is parent-based
+   sampling at the run root the right default for production traffic as
+   well as for benchmark runs? And is `qfw.transport.rpc` the only span
+   that needs a flag-guarded call site rather than a sampler decision, or
+   are there others whose measured operation is fast enough to care?
 4. **Quality metrics.** For a small circuit whose ideal output distribution
    is classically computable, QFw could compute a distribution-distance
    score (for example Hellinger fidelity) directly from the returned
