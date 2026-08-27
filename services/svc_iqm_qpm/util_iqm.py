@@ -1,20 +1,21 @@
 from datetime import datetime, timezone
 from defw_exception import DEFwExecutionError
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from util.device_access import (
 	QPU_DEVICE_ENV, resolve_device_access, resolve_qpu_user)
 from util.iqm_transcode import (
 	build_iqm_circuit, to_jsonable)
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
-import inspect
 import logging
 import os
 import threading
 import time
 
 REQUIRED_ENV = ("QFW_QC_URL", "QFW_API_KEY")
-DEFAULT_REQUEST_TIMEOUT = 30.0
 DEFAULT_JOB_TIMEOUT = 300.0
+REQUIRED_IQM_CLIENT_VERSION = "34.0.1"
 
 
 def sanitize_url(url):
@@ -28,6 +29,16 @@ def sanitize_url(url):
 
 
 def load_iqm_client_module():
+	try:
+		installed_version = package_version("iqm-client")
+	except PackageNotFoundError as exc:
+		raise DEFwExecutionError(
+			"iqm-client is not installed. QFw IQM services require "
+			f"iqm-client=={REQUIRED_IQM_CLIENT_VERSION}.") from exc
+	if installed_version != REQUIRED_IQM_CLIENT_VERSION:
+		raise DEFwExecutionError(
+			f"unsupported iqm-client version {installed_version}; QFw IQM "
+			f"services require iqm-client=={REQUIRED_IQM_CLIENT_VERSION}")
 	try:
 		from iqm.iqm_client import IQMClient
 	except Exception as exc:
@@ -60,21 +71,6 @@ def normalize_qhw_iqm(kind, raw_payload, device_id=None, include_raw=False):
 		return normalize_result(
 			raw_payload, device_id=device_id, include_raw=include_raw)
 	raise DEFwExecutionError(f"unsupported qhw-iqm normalization kind {kind!r}")
-
-
-def method_accepts(method, name):
-	try:
-		signature = inspect.signature(method)
-	except (TypeError, ValueError):
-		return True
-	return name in signature.parameters
-
-
-def call_iqm_method(method, timeout, *args, **kwargs):
-	call_kwargs = dict(kwargs)
-	if method_accepts(method, "timeout_secs"):
-		call_kwargs["timeout_secs"] = timeout
-	return method(*args, **call_kwargs)
 
 
 def parse_calibration_set_id(value):
@@ -275,21 +271,11 @@ def load_iqm_service_config(credential=None):
 
 
 def create_iqm_client(client_type, config):
-	kwargs = {"token": config["api_key"]}
-	if config.get("quantum_computer") and method_accepts(
-			client_type, "quantum_computer"):
-		kwargs["quantum_computer"] = config["quantum_computer"]
-	return client_type(config["url"], **kwargs)
-
-
-def submit_run_request(client, run_request, use_timeslot):
-	submit = client.submit_run_request
-	if method_accepts(submit, "use_timeslot"):
-		return submit(run_request, use_timeslot=use_timeslot)
-	if use_timeslot:
-		raise DEFwExecutionError(
-			"this iqm-client version does not support use_timeslot")
-	return submit(run_request)
+	return client_type(
+		config["url"],
+		token=config["api_key"],
+		quantum_computer=config.get("quantum_computer"),
+	)
 
 
 def normalize_status(status):
@@ -320,10 +306,9 @@ def get_dynamic_qubits(data):
 
 class IQMServiceClient:
 	def __init__(self):
+		self._client_type = load_iqm_client_module()
 		self._clients = {}
 		self._client_lock = threading.Lock()
-		self._request_timeout = get_env_float(
-			"QFW_IQM_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 		self._job_timeout = get_env_float(
 			"QFW_IQM_JOB_TIMEOUT", DEFAULT_JOB_TIMEOUT)
 		self._include_raw_results = get_env_bool(
@@ -339,8 +324,7 @@ class IQMServiceClient:
 			if cache_key in self._clients:
 				return self._clients[cache_key]
 			config = load_iqm_service_config(credential=credential)
-			client_type = load_iqm_client_module()
-			client = create_iqm_client(client_type, config)
+			client = create_iqm_client(self._client_type, config)
 			self._clients[cache_key] = client
 			self._config = config
 			logging.debug(
@@ -373,17 +357,15 @@ class IQMServiceClient:
 			include_raw=include_raw)
 
 	def get_static_architecture(self, credential=None):
-		return call_iqm_method(
-			self.client(credential=credential).get_static_quantum_architecture,
-			self._request_timeout)
+		return self.client(
+			credential=credential).get_static_quantum_architecture()
 
 	def get_dynamic_architecture(self, calibration_set_id=None,
 				     credential=None):
 		calibration_set_id = parse_calibration_set_id(calibration_set_id)
-		return call_iqm_method(
-			self.client(credential=credential).get_dynamic_quantum_architecture,
-			self._request_timeout,
-			calibration_set_id)
+		return self.client(
+			credential=credential).get_dynamic_quantum_architecture(
+				calibration_set_id)
 
 	def get_backend_info(self):
 		static = to_jsonable(self.get_static_architecture())
@@ -428,15 +410,11 @@ class IQMServiceClient:
 			self.get_dynamic_architecture(requested_calibration_set_id))
 		calibration = fetch_iqm_section(
 			"calibration_set",
-			lambda: call_iqm_method(
-				self.client().get_calibration_set,
-				self._request_timeout,
+			lambda: self.client().get_calibration_set(
 				requested_calibration_set_id))
 		quality = fetch_iqm_section(
 			"quality_metric_set",
-			lambda: call_iqm_method(
-				self.client().get_quality_metric_set,
-				self._request_timeout,
+			lambda: self.client().get_quality_metric_set(
 				requested_calibration_set_id))
 		errors = {
 			result["name"]: result["error"]
@@ -517,11 +495,8 @@ class IQMServiceClient:
 			shots=shots)
 
 		submit_started = time.monotonic()
-		job = submit_run_request(client, run_request, use_timeslot)
-		if not hasattr(job, "wait_for_completion"):
-			raise DEFwExecutionError(
-				"iqm-client returned only a job id from submit_run_request. "
-				"QFw IQM execution requires CircuitJob polling support.")
+		job = client.submit_run_request(
+			run_request, use_timeslot=use_timeslot)
 		timing["submit_seconds"] = time.monotonic() - submit_started
 
 		wait_started = time.monotonic()
