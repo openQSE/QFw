@@ -223,6 +223,7 @@ class QdmiDriver(BaseDriver):
 		except Exception as exc:
 			raise DEFwExecutionError(f"QDMI submit_job failed: {exc}") from exc
 		timing["submit_seconds"] = time.monotonic() - start
+		queue_position = self._queue_position(job)
 
 		status = self._poll_job(job, timeout, poll)
 		timing["wait_seconds"] = (
@@ -242,7 +243,8 @@ class QdmiDriver(BaseDriver):
 		if status != "completed":
 			self._last_job = {
 				"id": job_id, "status": status, "cid": cid,
-				"timing": timing, "shots": shots}
+				"timing": timing, "shots": shots,
+				"queue_position": queue_position}
 			raise DEFwExecutionError(
 				f"QDMI job {job_id} finished with status {status!r}")
 
@@ -256,10 +258,11 @@ class QdmiDriver(BaseDriver):
 
 		record = fomac_normalize.to_result_record(
 			counts, shots, provider, device_id, job_id=job_id,
-			status="completed")
+			status="completed", queue_position=queue_position)
 		self._last_job = {
 			"id": job_id, "status": "completed", "cid": cid,
-			"timing": timing, "shots": shots}
+			"timing": timing, "shots": shots,
+			"queue_position": queue_position}
 		return record
 
 	def _serialize_program(self, iqm_circuit):
@@ -286,6 +289,29 @@ class QdmiDriver(BaseDriver):
 		except Exception as exc:
 			raise DEFwExecutionError(
 				f"failed to serialize the IQM circuit for QDMI: {exc}") from exc
+
+	def _queue_position(self, job):
+		# The job's position in the provider queue at submission. QDMI 1.3.3
+		# named QDMI_JOB_PROPERTY_QUEUEPOSITION, MQT Core 3.9 binds it, and
+		# QDMI-on-IQM serves it from 1.4.0 on. Before that the IQM device
+		# library parsed the value out of the submission response and only
+		# wrote it to a log line, so it existed and was unreachable.
+		#
+		# Read once, straight after submit. It is a snapshot taken when the job
+		# was accepted rather than a live depth, so re-reading it later would
+		# describe a different moment without saying so.
+		#
+		# Like Job.id this is a PROPERTY, not a method -- calling it raises
+		# TypeError, which is exactly the bug that silently emptied the job id
+		# for months. None is a legitimate answer here: the device may not
+		# report a position, and an older library will not have the property
+		# at all.
+		try:
+			position = job.queue_position
+		except Exception as exc:
+			logging.debug("shim: QDMI queue position unavailable: %s", exc)
+			return None
+		return int(position) if position is not None else None
 
 	def _poll_job(self, job, timeout, poll):
 		# Poll FoMaC job.check() until a terminal state; returns
@@ -326,6 +352,7 @@ class QdmiDriver(BaseDriver):
 			"cid": job.get("cid"),
 			"job_id": job.get("id"),
 			"status": job.get("status"),
+			"queue_position": job.get("queue_position"),
 			"timing": job.get("timing") or {}}
 
 	def get_task_metadata(self, cid=None):
@@ -335,4 +362,5 @@ class QdmiDriver(BaseDriver):
 			"job_id": job.get("id"),
 			"status": job.get("status"),
 			"shots": job.get("shots"),
+			"queue_position": job.get("queue_position"),
 			"backend": self._descriptor.get("provider", "iqm")}
