@@ -635,6 +635,7 @@ def _start_prte(state, timeout, service_environment=None):
         command.extend(_prte_runtime_args(state["allocation"]))
         if os.geteuid() == 0:
             command.append("--allow-run-as-root")
+        command.extend(["--keepalive", "0"])
         command.append("--daemonize")
         _run_on_node(dvm["launch_node"], command, process_environment,
                      state["allocation"])

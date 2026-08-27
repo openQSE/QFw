@@ -424,6 +424,43 @@ def test_application_prte_configuration_creates_and_stops_dvm_state(tmp_path):
     assert not uri_path.exists()
 
 
+def test_prte_start_uses_keepalive_mode(tmp_path, monkeypatch):
+    uri_path = tmp_path / "prte_dvm" / "dvm-uri"
+    state = {
+        "run_dir": str(tmp_path),
+        "owner": "application",
+        "dry_run": False,
+        "dvm": {
+            "launch_node": "sim-a",
+            "nodes": ["sim-a"],
+            "uri_path": str(uri_path),
+        },
+        "allocation": {
+            "mode": "local",
+            "group0": ["sim-a"],
+            "group1": ["sim-a"],
+        },
+        "components": {},
+    }
+    calls = []
+
+    def fake_run_on_node(node, command, env, allocation, check=True):
+        calls.append((node, list(command)))
+        uri_path.write_text("test-dvm-uri\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
+    monkeypatch.setattr(
+        service_plane, "_command_path", lambda name, env=None: name)
+
+    service_plane._start_prte(state, timeout=1)
+
+    assert calls == [("sim-a", [
+        "prte", "--host", "sim-a:*", "--report-uri", str(uri_path),
+        "--keepalive", "0", "--daemonize",
+    ])]
+
+
 def test_qpm_start_composes_private_process_launcher(tmp_path, monkeypatch):
     site, _manifest = write_site_configuration(tmp_path, [
         ("iqm-test", "svc_iqm_qpm", "remote-api"),
