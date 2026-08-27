@@ -168,20 +168,16 @@ def load_yaml(path):
 
 
 def select_device(config):
-	qpus = config.get("qpus") or config.get("devices")
+	qpus = config.get("qpus")
 	if not isinstance(qpus, dict):
-		raise ValueError("device access config does not define qpus/devices")
+		raise ValueError("device access config does not define qpus")
 	if target_device in qpus and isinstance(qpus[target_device], dict):
 		return target_device, qpus[target_device]
 	matches = []
 	for qpu_id, record in qpus.items():
 		if not isinstance(record, dict):
 			continue
-		provider_device_id = (
-			record.get("provider-device-id")
-			or record.get("provider_device_id")
-			or record.get("quantum-computer")
-			or record.get("quantum_computer"))
+		provider_device_id = record.get("provider-device-id")
 		aliases = record.get("aliases") or []
 		if isinstance(aliases, str):
 			aliases = [aliases]
@@ -241,19 +237,15 @@ def api_key_present(record, device_id, provider_device_id):
 			if isinstance(value, str):
 				return bool(value.strip())
 			if isinstance(value, dict):
-				return bool(value.get("api_key") or value.get("api-key"))
-	value = record.get("api_key") or record.get("api-key")
+				return bool(value.get("api_key"))
+	value = record.get("api_key")
 	return bool(value)
 
 
 try:
 	config = load_yaml(config_path)
 	device_id, device = select_device(config)
-	credential_db = (
-		device.get("credential-db")
-		or device.get("credential_db")
-		or config.get("credential-db")
-		or config.get("credential_db"))
+	credential_db = device.get("credential-db")
 	if not credential_db:
 		raise ValueError(f"device {device_id!r} does not define credential-db")
 	credential_db_path = resolve_relative(str(credential_db), config_path)
@@ -261,11 +253,7 @@ try:
 	users = db.get("users", db)
 	if not isinstance(users, dict):
 		raise ValueError("credential DB users entry is invalid")
-	provider_device_id = (
-		device.get("provider-device-id")
-		or device.get("provider_device_id")
-		or device.get("quantum-computer")
-		or device.get("quantum_computer"))
+	provider_device_id = device.get("provider-device-id")
 	candidates = []
 	for value in (
 			credential_handle_user(users),
