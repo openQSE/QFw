@@ -391,7 +391,7 @@ the job-lifecycle and reservation-binding complexity.
 
 It is a **composable** facet: both libraries serve it, so it is wired for both —
 but they are normalized differently, because they expose different things. QDMI
-is *vendor-neutral*: MQT Core's FoMaC query interface (`mqt.core.fomac`) exposes
+is *vendor-neutral*: MQT Core's FoMaC query interface (`mqt.core.qdmi`) exposes
 the device's real qubit labels, coupling map, gate loci, and calibration
 directly, so the QDMI driver reads them off the FoMaC `Device` and normalizes
 with `drivers/fomac_normalize.py` — no Qiskit `Target`, no raw vendor data.
@@ -408,6 +408,15 @@ calibration/quality *observation* identity (set ids, counts, timestamps) from
 `target()`, while QDMI populates the *measured values* — per-qubit T1/T2 and
 per-gate fidelity read live off the FoMaC `Device`, carried under the
 `qdmi.fomac.v1` extension. Both validate as `qhw-calibration-v1`.
+
+Both also carry `calibration.calibration_set_id`, so a snapshot from either
+library says which calibration it was taken under. QRMI reads it from the
+`target()` payload; QDMI reads it from the device's `CUSTOM1` property, which
+is where QDMI-on-IQM publishes it. That slot is the wrinkle worth knowing:
+QDMI's custom device properties are numbered, not named, so the neutral model
+carries provider calibration identity only for a consumer that already knows
+the provider's slot convention. `drivers/fomac_normalize.py` keeps that
+assumption in one constant.
 
 In the default IQM q20 descriptor both calls list `[qdmi, qrmi]` and the
 preference (QDMI) wins; on a QRMI-only resource they resolve to QRMI. The QDMI

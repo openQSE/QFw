@@ -143,8 +143,8 @@ The two libraries pay their network cost at different moments — QRMI on the
 first call (`target()`, then cached per driver instance), QDMI at open (session
 init fetches the device data) — so the report separates open, first call, and
 warm calls, and compares the cold totals. Each cold sample runs in a fresh
-subprocess, because both drivers cache on the instance and the FoMaC loader
-registers its device library process-wide.
+subprocess, because both drivers cache on the instance and the QDMI device
+registration and its loaded device library are process-wide.
 
 The script refuses to report a timing whose call returned no qubits. QRMI's
 `target()` does not raise when its fetches fail; it substitutes nulls, so an

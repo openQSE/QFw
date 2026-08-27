@@ -1,13 +1,13 @@
 # QDMI driver — device-introspection facet, via QDMI's FoMaC query interface.
 #
-# QDMI is vendor-neutral: MQT Core's FoMaC API (mqt.core.fomac) exposes the
-# device's sites (real qubit names + T1/T2), operations (loci + fidelity), and
-# coupling map through QDMI's query interface. This driver reads that directly
-# and normalizes it to the provider-neutral qhw schema (fomac_normalize) -- no
-# Qiskit Target, no raw vendor data. QDMI is session-based and strong on device
-# & calibration introspection, so this driver declares the introspection calls;
-# execution/job calls stay with QRMI (the reservation owner) in the default
-# wiring.
+# QDMI is vendor-neutral: MQT Core's FoMaC query interface (bound in Python as
+# mqt.core.qdmi) exposes the device's sites (real qubit names + T1/T2), the
+# operations (loci + fidelity), and the coupling map. This driver reads that
+# directly and normalizes it to the provider-neutral qhw schema
+# (fomac_normalize) -- no Qiskit Target, no raw vendor data. QDMI is
+# session-based and strong on device & calibration introspection, so this
+# driver declares the introspection calls; execution/job calls stay with QRMI
+# (the reservation owner) in the default wiring.
 #
 # Milestone status (design doc qpu-frontend-contract.md section 13):
 # get_device_info / get_coupling_graph normalize the device topology, and
@@ -105,39 +105,48 @@ class QdmiDriver(BaseDriver):
 		}
 
 	def _device(self):
-		# Lazy: open the QDMI device through MQT Core's FoMaC loader once. Import
+		# Lazy: open the QDMI device through MQT Core's QDMI driver once. Import
 		# and construction are deferred so the service/Frontend build and route
 		# even where the libraries are absent or credentials are unset; only a
 		# real introspection call needs a live device. The IQM device library is
-		# loaded by path with the "IQM" prefix; qc_alias is passed as the
+		# registered under the stable device ID iqm-qdmi publishes, then opened
+		# with this resource's connection settings; qc_alias is passed as the
 		# device session's custom2 parameter (as iqm.qdmi.qiskit does).
 		if self._device_obj is not None:
 			return self._device_obj
 		try:
-			from iqm.qdmi._paths import IQM_QDMI_LIBRARY_PATH
-			from mqt.core.fomac import add_dynamic_device_library
+			from iqm.qdmi import (IQM_QDMI_DEVICE_ID, IQM_QDMI_LIBRARY_PATH,
+					IQM_QDMI_PREFIX)
+			from mqt.core.qdmi.driver import (DeviceDefinition, open_device,
+					register_device_if_absent)
 		except Exception as exc:
 			raise DEFwExecutionError(
-				"failed to import the QDMI FoMaC loader (mqt.core.fomac / "
-				"iqm.qdmi). Install iqm-qdmi[qiskit] before using the QDMI "
-				f"driver: {exc}") from exc
+				"failed to import the QDMI driver API (mqt.core.qdmi.driver / "
+				"iqm.qdmi). Install iqm-qdmi and mqt-core >= 3.9 before using "
+				f"the QDMI driver: {exc}") from exc
 		access = self._access()
-		# add_dynamic_device_library allocates the QDMI device session, applies
-		# these parameters, and initializes it (the IQM library fetches the
+		# Registration only validates and stores the definition -- it loads no
+		# native code, and register_device_if_absent makes a second driver
+		# instance in the same process a no-op instead of a duplicate-ID error.
+		# open_device then allocates a fresh QDMI device session, applies these
+		# parameters, and initializes it (the IQM library fetches the
 		# device/calibration data during init). A query before a session is
 		# initialized returns a bad-session-state error, so surface an init
 		# failure here as exactly that: the session could not be opened.
 		try:
-			self._device_obj = add_dynamic_device_library(
-				library_path=str(IQM_QDMI_LIBRARY_PATH),
-				prefix="IQM",
+			register_device_if_absent(DeviceDefinition(
+				IQM_QDMI_DEVICE_ID,
+				str(IQM_QDMI_LIBRARY_PATH),
+				IQM_QDMI_PREFIX))
+			self._device_obj = open_device(
+				IQM_QDMI_DEVICE_ID,
 				base_url=access.get("base_url"),
 				token=access.get("token"),
 				custom2=access.get("qc_alias"),
 			)
 		except Exception as exc:
 			raise DEFwExecutionError(
-				"failed to open the QDMI device session (FoMaC could not "
+				"failed to open the QDMI device session (MQT Core could not "
 				"initialize it; device introspection requires an initialized "
 				f"session): {exc}") from exc
 		logging.debug("shim: QDMI device opened (%s)",
@@ -162,9 +171,10 @@ class QdmiDriver(BaseDriver):
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
 		# FoMaC exposes the device's live per-qubit coherence (T1/T2) and
-		# per-gate fidelity; normalize them to qhw-calibration-v1. The device
-		# session already reflects the active calibration set, so selecting a
-		# specific calibration_set_id is a follow-up.
+		# per-gate fidelity; normalize them to qhw-calibration-v1. The record
+		# names the calibration set it was read under when the device publishes
+		# one. Selecting a *different* set is still a follow-up: the device
+		# session always reflects the active one, so the argument is a no-op.
 		provider, device_id = self._ids()
 		cal = fomac_normalize.extract_calibration(self._device())
 		return fomac_normalize.to_calibration_record(cal, provider, device_id)
@@ -201,10 +211,10 @@ class QdmiDriver(BaseDriver):
 		program = self._serialize_program(iqm_circuit)
 
 		try:
-			from mqt.core.fomac import ProgramFormat
+			from mqt.core.qdmi import ProgramFormat
 		except Exception as exc:
 			raise DEFwExecutionError(
-				f"failed to import mqt.core.fomac ProgramFormat: {exc}") from exc
+				f"failed to import mqt.core.qdmi ProgramFormat: {exc}") from exc
 
 		timing = {}
 		start = time.monotonic()

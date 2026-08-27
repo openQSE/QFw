@@ -11,7 +11,7 @@ cost lands in different places:
          caches the parsed document per driver instance. The network cost is
          paid by the FIRST introspection call; later calls read the cache.
 
-  QDMI   opening the device (FoMaC add_dynamic_device_library) initializes a
+  QDMI   opening the device (mqt.core.qdmi.driver.open_device) initializes a
          session, and the IQM device library fetches its data during that init.
          The network cost is paid at OPEN; later property queries are local.
 
@@ -33,8 +33,9 @@ answer. That is the number that matters to a scheduler deciding whether it can
 afford to introspect per job.
 
 A true cold sample needs a fresh process -- both drivers cache on the instance,
-and the FoMaC loader registers the device library process-wide. --repeat
-therefore re-executes this script in subprocesses rather than looping in-place.
+and the QDMI device registration and its loaded device library are process-wide.
+--repeat therefore re-executes this script in subprocesses rather than looping
+in-place.
 
 Run it inside the container, with device access configured (see the
 QFw-SLURM-Cluster IQM-ACCESS.md):
@@ -153,8 +154,8 @@ def run_once(args):
 
 def run_repeated(args):
 	# Each cold sample needs a clean process: both drivers cache per instance,
-	# and the FoMaC loader registers its device library process-wide, so a
-	# second in-process "cold" open would not be cold.
+	# and the QDMI device registration and its loaded device library are
+	# process-wide, so a second in-process "cold" open would not be cold.
 	child = [
 		sys.executable, "-u", os.path.abspath(__file__),
 		"--json",
