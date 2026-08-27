@@ -160,6 +160,93 @@ def test_application_configuration_controls_optional_prte(tmp_path):
     assert state["services"][0]["provider_launch"]["type"] == "internal"
 
 
+def test_application_service_manifest_enables_required_prte(tmp_path):
+    site, manifest = write_site_configuration(tmp_path, [
+        ("mpi-smoke", "svc_mpi_smoke", "mpi"),
+    ])
+    runtime = tmp_path / "runtime.yaml"
+    runtime.write_text(
+        "\n".join([
+            "resolver:",
+            "  scope-order:",
+            "    - local",
+            "local-services:",
+            "  start-dirsvc: true",
+            "  start-qpm: true",
+            "  services:",
+            "    - mpi-smoke",
+            f"  service-manifest: {manifest}",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "localhost:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+
+    state = service_plane.start(parse_role_start_args(
+        "qpm",
+        "--run-dir", str(tmp_path / "mpi-run"),
+        "--site-config", str(site),
+        "--runtime-config", str(runtime),
+        "--scope", "application",
+        "--service-id", "mpi-smoke",
+        "--directory-service-info", str(connection_file),
+        "--dry-run",
+    ))
+
+    assert state["configuration"]["components"]["prte"] is True
+    assert state["components"]["prte-dvm"]["state"] == "ready"
+
+
+def test_application_service_without_provider_does_not_enable_prte(tmp_path):
+    site, manifest = write_site_configuration(tmp_path, [
+        ("shim", "svc_lib_qpm", ""),
+    ])
+    runtime = tmp_path / "runtime.yaml"
+    runtime.write_text(
+        "\n".join([
+            "resolver:",
+            "  scope-order:",
+            "    - local",
+            "local-services:",
+            "  start-qpm: true",
+            "  services:",
+            "    - shim",
+            f"  service-manifest: {manifest}",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "localhost:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+
+    state = service_plane.start(parse_role_start_args(
+        "qpm",
+        "--run-dir", str(tmp_path / "shim-run"),
+        "--site-config", str(site),
+        "--runtime-config", str(runtime),
+        "--scope", "application",
+        "--service-id", "shim",
+        "--directory-service-info", str(connection_file),
+        "--dry-run",
+    ))
+
+    assert state["configuration"]["components"]["prte"] is False
+    assert "prte-dvm" not in state["components"]
+
+
 def test_directory_lifecycle_publishes_connection_record(
         tmp_path, monkeypatch):
     site, _manifest = write_site_configuration(tmp_path, [

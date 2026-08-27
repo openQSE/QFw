@@ -4,3 +4,6 @@ services:
     load-modules: svc_mpi_smoke
     agent-prefix: mpi_smoke
     target: group1-head
+    provider-launch:
+      type: mpi
+      use-dvm: true

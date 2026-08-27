@@ -327,6 +327,7 @@ def _resolve_plan(args, run_dir):
     if component_mode == "directory":
         components = {"prte": False, "directory": True, "qpm": False}
     elif component_mode == "qpm":
+        prte_configured = "start-prte" in component_config
         components = {
             "prte": qfw_config.bool_config(
                 component_config.get("start-prte"), False),
@@ -370,13 +371,17 @@ def _resolve_plan(args, run_dir):
         services = _resolve_services(
             selected, manifest_services, local, allocation, args, qpm_node,
             default_target)
-        if component_mode == "qpm" and components["prte"]:
-            components["prte"] = any(
-                service["provider_launch"].get("type") not in {
-                    "internal", "remote-api"
-                }
+        if component_mode == "qpm":
+            service_requires_prte = any(
+                service["provider_launch"].get("type") == "mpi"
+                and qfw_config.bool_config(
+                    service["provider_launch"].get("use-dvm"), True)
                 for service in services
             )
+            if not prte_configured:
+                components["prte"] = service_requires_prte
+            elif components["prte"]:
+                components["prte"] = service_requires_prte
     if components["qpm"] and not directory.get("endpoint"):
         registered = any(
             qfw_config.bool_config(
