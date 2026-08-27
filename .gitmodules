@@ -1,16 +1,20 @@
 [submodule "DEFw"]
 	path = DEFw
 	url = git@github.com:openQSE/DEFw.git
-	branch = master
+	branch = release/v0.1
 [submodule "external/qhw-data"]
 	path = external/qhw-data
 	url = git@github.com:openQSE/qhw-data.git
+	branch = release/v0.1
 [submodule "external/qhw-iqm"]
 	path = external/qhw-iqm
 	url = git@github.com:openQSE/qhw-iqm.git
+	branch = release/v0.1
 [submodule "external/qhw-admission"]
 	path = external/qhw-admission
 	url = git@github.com:openQSE/qhw-admission.git
+	branch = release/v0.1
 [submodule "external/qhw-scheduler"]
 	path = external/qhw-scheduler
 	url = git@github.com:openQSE/qhw-scheduler.git
+	branch = release/v0.1
