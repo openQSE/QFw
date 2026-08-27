@@ -22,4 +22,7 @@ tools/dependencies/tnqvm/build.sh \
 TNQVM accepts `--rocm auto`, `--rocm on`, or `--rocm off`. Automatic mode
 selects ROCm only when `hipcc`, HIP headers, and hipBLAS are all available.
 Common compatibility patches are applied in both modes. The CPU and ROCm
-paths then apply their own previously validated patch sets.
+paths then apply their own previously validated patch sets. TNQVM installs
+into the XACC prefix because its accelerator and visitor libraries are XACC
+plugins. The top-level `bin/circuit_runner.tnqvm` link resolves to the runner
+under that XACC prefix so plugin discovery uses the same installation root.

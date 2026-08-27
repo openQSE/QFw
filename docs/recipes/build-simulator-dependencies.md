@@ -39,6 +39,9 @@ HIP headers, and hipBLAS. Use `--rocm on` to require that toolchain or
 
 The builders install `circuit_runner.nwqsim` or `circuit_runner.tnqvm` beneath
 the requested prefix. They do not write into the QFw source or installation.
+The TNQVM builder installs TNQVM and its visitor libraries in the XACC prefix
+because they are XACC plugins. Its top-level runner is a link to the executable
+under that prefix, which lets XACC discover both its own plugins and TNQVM.
 Create site modulefiles that expose the corresponding `bin` and library
 directories, then verify them before starting QFw:
 

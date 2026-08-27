@@ -10,6 +10,8 @@ XACC_REF="d1edaa7ae53edc7e335f46d33160f93d6020aaa3"
 EXATN_REF="c528f7ec7323ab5f4485b85efcefa016c32e1a2d"
 TNQVM_REF="a70eed190a4448dbe3dae94189d066ac694dc798"
 PYBIND_REF="v3.0.2"
+BOOST_URL="https://archives.boost.io/release/1.75.0/source/"\
+"boost_1_75_0.tar.bz2"
 WORK_DIR=""
 INSTALL_PREFIX=""
 MPI_PREFIX=""
@@ -115,7 +117,9 @@ EXATN_SOURCE="${SOURCE_ROOT}/exatn"
 TNQVM_SOURCE="${SOURCE_ROOT}/tnqvm"
 XACC_PREFIX="${INSTALL_PREFIX}/xacc"
 EXATN_PREFIX="${INSTALL_PREFIX}/exatn"
-TNQVM_PREFIX="${INSTALL_PREFIX}/tnqvm"
+# TNQVM is an XACC plugin. Install it into the XACC prefix so XACC discovers
+# the accelerator and visitor plugins from its canonical plugins directory.
+TNQVM_PREFIX="${XACC_PREFIX}"
 
 for source in "${XACC_SOURCE}" "${EXATN_SOURCE}" "${TNQVM_SOURCE}"; do
 	[[ ! -e "${source}" ]] || fail \
@@ -223,6 +227,7 @@ cmake -S "${XACC_SOURCE}" -B "${BUILD_ROOT}/xacc" \
 	-DCMAKE_CXX_COMPILER="${CXX_BIN}" \
 	-DCMAKE_Fortran_COMPILER="${FC_BIN}" \
 	-DPython_EXECUTABLE="${PYTHON_BIN}" \
+	-DBOOST_URL="${BOOST_URL}" \
 	-DXACC_BUILD_EXAMPLES=FALSE \
 	-DBLAS_LIB=OPENBLAS \
 	-DBLAS_PATH="${BLAS_LIB_DIR}" \
@@ -246,8 +251,14 @@ cmake -S "${TNQVM_SOURCE}" -B "${BUILD_ROOT}/tnqvm" \
 	-DWITH_LAPACK=YES
 cmake --build "${BUILD_ROOT}/tnqvm" --parallel "${BUILD_JOBS}" --target install
 
+install -d "${XACC_PREFIX}/bin"
 install -m 0755 "${BUILD_ROOT}/tnqvm/examples/mpi/circuit_runner" \
+	"${XACC_PREFIX}/bin/circuit_runner.tnqvm"
+ln -sfn ../xacc/bin/circuit_runner.tnqvm \
 	"${INSTALL_PREFIX}/bin/circuit_runner.tnqvm"
+
+test -f "${XACC_PREFIX}/plugins/libtnqvm.so"
+test -x "${XACC_PREFIX}/bin/circuit_runner.tnqvm"
 
 printf 'TNQVM installed in %s (ROCm: %s)\n' \
 	"${INSTALL_PREFIX}" "${ROCM_ENABLED}"
