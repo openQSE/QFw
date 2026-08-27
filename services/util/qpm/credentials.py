@@ -9,7 +9,6 @@ from .. import device_access
 
 CREDENTIAL_BINDING_SCHEMA = "qfw-provider-credential-binding-v1"
 CREDENTIAL_PROVIDER_CONFIG_KEYS = (
-	"credential-provider",
 	"credential_provider",
 )
 FILE_PROVIDER_TYPES = ("file", "json", "file-backed", "development-file")
@@ -113,8 +112,7 @@ class FileCredentialProvider(CredentialProvider):
 			"bound_at_ns": now_ns,
 			"expires_at_ns": expires_at_ns,
 			"refresh_policy": self.provider_config.get(
-				"refresh-policy",
-				self.provider_config.get("refresh_policy", "none")),
+				"refresh-policy", "none"),
 			"source": {
 				"type": "file",
 				"config": self.config_path,
@@ -140,7 +138,6 @@ class FileCredentialProvider(CredentialProvider):
 	def _credential_db_path(self):
 		value = (
 			self.provider_config.get("credential-db") or
-			self.provider_config.get("credential_db") or
 			self.provider_config.get("path") or
 			self.device.get("credential_db"))
 		if not value:
@@ -149,13 +146,9 @@ class FileCredentialProvider(CredentialProvider):
 		return device_access.resolve_relative_path(value, self.config_path)
 
 	def _expires_at_ns(self, now_ns):
-		ttl_ns = (
-			self.provider_config.get("ttl_ns") or
-			self.provider_config.get("ttl-ns"))
+		ttl_ns = self.provider_config.get("ttl-ns")
 		if ttl_ns is None:
-			ttl_s = (
-				self.provider_config.get("ttl_seconds") or
-				self.provider_config.get("ttl-seconds"))
+			ttl_s = self.provider_config.get("ttl-seconds")
 			if ttl_s is None:
 				return 0
 			ttl_ns = int(float(ttl_s) * 1_000_000_000)
@@ -246,9 +239,7 @@ def _selected_device(config, config_path, request):
 
 def _provider_config_for_device(config, device):
 	providers = (
-		config.get("credential-providers") or
-		config.get("credential_providers") or
-		{})
+		config.get("credential-providers") or {})
 	provider_ref = None
 	for key in CREDENTIAL_PROVIDER_CONFIG_KEYS:
 		if key in device:
@@ -272,11 +263,9 @@ def _provider_config_for_device(config, device):
 
 def _load_plugin_provider(provider_config, config_path, device):
 	module_name = (
-		provider_config.get("module") or
-		provider_config.get("plugin_module"))
+		provider_config.get("module"))
 	class_name = (
 		provider_config.get("class") or
-		provider_config.get("class_name") or
 		"CredentialProvider")
 	if not module_name:
 		raise QPMCredentialProviderUnavailable(

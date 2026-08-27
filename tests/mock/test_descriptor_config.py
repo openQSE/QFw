@@ -13,7 +13,10 @@ import importlib.util
 import pathlib
 import sys
 
+import pytest
 import yaml
+
+from defw_exception import DEFwExecutionError
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -42,7 +45,7 @@ BARE_DEVICE = {
 }
 
 DESCRIPTOR_KEYS = (
-	"libraries", "preference", "caps", "execution-owner", "execution_owner")
+	"libraries", "preference", "caps", "execution_owner")
 
 
 def _config(device, device_id="dev"):
@@ -80,7 +83,7 @@ def test_select_qpu_passes_through_descriptor_fields(monkeypatch):
 		_config(DEVICE_WITH_DESCRIPTOR), "cfg.yaml", provider="iqm")
 	assert selected["libraries"] == ["qrmi"]
 	assert selected["preference"] == "qrmi"
-	assert selected["execution-owner"] == "qrmi"
+	assert selected["execution_owner"] == "qrmi"
 	assert selected["caps"] == {
 		"get_device_info": ["qrmi"], "run_circuit": ["qrmi"]}
 
@@ -120,19 +123,57 @@ def test_select_qpu_accepts_named_provider_without_credential_file(
 	selected = device_access.select_qpu(
 		_config(device), "cfg.yaml", provider="iqm")
 
-	assert selected["credential-provider"] == "shim-no-secret"
+	assert selected["credential_provider"] == "shim-no-secret"
 	assert "credential_db" not in selected
 
 
-def test_select_qpu_accepts_execution_owner_underscore(monkeypatch):
-	# Both spellings are honored; libraries pass through raw (resolve_descriptor
-	# splits a comma string via _as_list).
+@pytest.mark.parametrize("key", [
+	"provider_device_id",
+	"quantum-computer",
+	"quantum_computer",
+	"credential_db",
+	"credential_provider",
+	"execution_owner",
+])
+def test_select_qpu_rejects_removed_device_keys(monkeypatch, key):
 	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
-	device = dict(BARE_DEVICE, execution_owner="qdmi", libraries="qrmi, qdmi")
-	selected = device_access.select_qpu(
-		_config(device), "cfg.yaml", provider="iqm")
-	assert selected["execution_owner"] == "qdmi"
-	assert selected["libraries"] == "qrmi, qdmi"
+	device = dict(BARE_DEVICE)
+	device[key] = "removed-value"
+	with pytest.raises(DEFwExecutionError, match="unsupported QPU device"):
+		device_access.select_qpu(
+			_config(device), "cfg.yaml", provider="iqm")
+
+
+@pytest.mark.parametrize("key,replacement", [
+	("devices", "qpus"),
+	("credential_providers", "credential-providers"),
+])
+def test_select_qpu_rejects_removed_top_level_keys(
+		monkeypatch, key, replacement):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	config = _config(BARE_DEVICE)
+	config[key] = {}
+	with pytest.raises(DEFwExecutionError, match=replacement):
+		device_access.select_qpu(config, "cfg.yaml", provider="iqm")
+
+
+@pytest.mark.parametrize("key", [
+	"credential_db",
+	"refresh_policy",
+	"ttl_ns",
+	"ttl_seconds",
+	"plugin_module",
+	"class_name",
+])
+def test_select_qpu_rejects_removed_credential_provider_keys(
+		monkeypatch, key):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	config = _config(BARE_DEVICE)
+	config["credential-providers"] = {
+		"site-provider": {key: "removed-value"},
+	}
+	with pytest.raises(DEFwExecutionError, match="credential provider"):
+		device_access.select_qpu(config, "cfg.yaml", provider="iqm")
 
 
 # --- resolve_descriptor(): end-to-end over select_qpu ----------------------

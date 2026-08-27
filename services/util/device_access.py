@@ -7,6 +7,27 @@ import yaml
 DEVICE_ACCESS_CONFIG_ENV = "QFW_DEVICE_ACCESS_CFG"
 QPU_DEVICE_ENV = "QFW_QPU_DEVICE_ID"
 
+REMOVED_TOP_LEVEL_KEYS = {
+	"devices": "qpus",
+	"credential_providers": "credential-providers",
+}
+REMOVED_DEVICE_KEYS = {
+	"provider_device_id": "provider-device-id",
+	"quantum-computer": "provider-device-id",
+	"quantum_computer": "provider-device-id",
+	"credential_db": "credential-db",
+	"credential_provider": "credential-provider",
+	"execution_owner": "execution-owner",
+}
+REMOVED_CREDENTIAL_PROVIDER_KEYS = {
+	"credential_db": "credential-db",
+	"refresh_policy": "refresh-policy",
+	"ttl_ns": "ttl-ns",
+	"ttl_seconds": "ttl-seconds",
+	"plugin_module": "module",
+	"class_name": "class",
+}
+
 
 def services_dir():
 	return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,11 +98,37 @@ def resolve_qpu_user():
 		"failed to resolve QPU user. Set QFW_USER for device access.")
 
 
+def _reject_removed_keys(mapping, removed_keys, context):
+	for key, replacement in removed_keys.items():
+		if key in mapping:
+			raise DEFwExecutionError(
+				f"unsupported {context} key {key!r}; use {replacement!r}")
+
+
 def select_qpu(device_config, path, provider=None, device_id=None):
-	qpus = device_config.get("qpus") or device_config.get("devices")
+	_reject_removed_keys(
+		device_config, REMOVED_TOP_LEVEL_KEYS,
+		f"QFw device access config {path}")
+	qpus = device_config.get("qpus")
 	if not isinstance(qpus, dict) or not qpus:
 		raise DEFwExecutionError(
 			f"QFw device access config {path} does not define any qpus")
+
+	for candidate_id, candidate in qpus.items():
+		if isinstance(candidate, dict):
+			_reject_removed_keys(
+				candidate, REMOVED_DEVICE_KEYS,
+				f"QPU device {candidate_id!r}")
+	credential_providers = device_config.get("credential-providers") or {}
+	if not isinstance(credential_providers, dict):
+		raise DEFwExecutionError(
+			f"QFw device access config {path} credential-providers must be a "
+			"mapping")
+	for provider_name, provider_config in credential_providers.items():
+		if isinstance(provider_config, dict):
+			_reject_removed_keys(
+				provider_config, REMOVED_CREDENTIAL_PROVIDER_KEYS,
+				f"credential provider {provider_name!r}")
 
 	provider = provider.lower() if provider else None
 	device_id = device_id or os.environ.get(QPU_DEVICE_ENV)
@@ -117,11 +164,7 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 		for candidate_id, candidate in qpus.items():
 			if not isinstance(candidate, dict):
 				continue
-			provider_device_id = (
-				candidate.get("provider-device-id")
-				or candidate.get("provider_device_id")
-				or candidate.get("quantum-computer")
-				or candidate.get("quantum_computer"))
+			provider_device_id = candidate.get("provider-device-id")
 			aliases = candidate.get("aliases", [])
 			if isinstance(aliases, str):
 				aliases = [aliases]
@@ -149,25 +192,14 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 		raise DEFwExecutionError(
 			f"QPU device {device_id!r} in {path} does not define url")
 
-	credential_db = (
-		device.get("credential-db")
-		or device.get("credential_db")
-		or device_config.get("credential-db")
-		or device_config.get("credential_db"))
-	credential_provider = (
-		device.get("credential-provider")
-		or device.get("credential_provider"))
+	credential_db = device.get("credential-db")
+	credential_provider = device.get("credential-provider")
 	if not credential_db and not credential_provider:
 		raise DEFwExecutionError(
 			f"QPU device {device_id!r} in {path} does not define "
 			"credential-db or credential-provider")
 
-	provider_device_id = (
-		device.get("provider-device-id")
-		or device.get("provider_device_id")
-		or device.get("quantum-computer")
-		or device.get("quantum_computer")
-		or device_id)
+	provider_device_id = device.get("provider-device-id") or device_id
 
 	selected = {
 		"device_id": device_id,
@@ -175,8 +207,7 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 		"provider": device_provider or (provider.lower() if provider else ""),
 		"url": str(url).strip(),
 		"quantum_computer": str(provider_device_id).strip(),
-		"credential-provider": device.get("credential-provider"),
-		"credential_provider": device.get("credential_provider"),
+		"credential_provider": credential_provider,
 	}
 	if credential_db:
 		selected["credential_db"] = resolve_relative_path(
@@ -189,9 +220,11 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 	# rest -- a key present with a None value would otherwise defeat the
 	# `device.get(key, DEFAULT)` fallbacks. The native resolve_device_access
 	# path ignores these keys, so forwarding them here is harmless.
-	for key in ("libraries", "preference", "caps", "execution-owner", "execution_owner"):
+	for key in ("libraries", "preference", "caps"):
 		if key in device:
 			selected[key] = device[key]
+	if "execution-owner" in device:
+		selected["execution_owner"] = device["execution-owner"]
 
 	return selected
 
@@ -281,12 +314,10 @@ def get_api_key_from_user_record(record, device_id, provider_device_id=None):
 			if isinstance(device_record, str):
 				return device_record.strip()
 			if isinstance(device_record, dict):
-				value = (
-					device_record.get("api_key")
-					or device_record.get("api-key"))
-				return str(value).strip() if value else None
+					value = device_record.get("api_key")
+					return str(value).strip() if value else None
 
-	value = record.get("api_key") or record.get("api-key")
+	value = record.get("api_key")
 	return str(value).strip() if value else None
 
 

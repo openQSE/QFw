@@ -66,7 +66,6 @@ def resolve_descriptor(device_id=None):
 		"libraries": _as_list(device.get("libraries"), DEFAULT_LIBRARIES),
 		"preference": device.get("preference", DEFAULT_PREFERENCE),
 		"execution_owner": device.get(
-			"execution-owner",
-			device.get("execution_owner", DEFAULT_EXECUTION_OWNER)),
+			"execution_owner", DEFAULT_EXECUTION_OWNER),
 		"caps": _copy_caps(device.get("caps")),
 	}

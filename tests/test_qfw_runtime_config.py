@@ -38,6 +38,31 @@ def test_site_service_config_resolves_environment_paths(tmp_path, monkeypatch):
     }
 
 
+@pytest.mark.parametrize("key,replacement", [
+    ("qfw_prefix", "qfw-prefix"),
+    ("defw_prefix", "defw-prefix"),
+    ("prefix", "qfw-prefix"),
+])
+def test_site_install_prefixes_rejects_removed_keys(key, replacement):
+    with pytest.raises(ValueError, match=replacement):
+        qfw_config.site_install_prefixes({"install": {key: "/opt/qfw"}})
+
+
+@pytest.mark.parametrize("key,replacement", [
+    ("listen_port", "listen-port"),
+    ("telnet_port", "telnet-port"),
+])
+def test_service_manifest_rejects_removed_port_keys(
+        tmp_path, key, replacement):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        f"services:\n  - name: test\n    {key}: 8090\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match=replacement):
+        qfw_config.load_service_manifest(manifest)
+
+
 def test_expand_config_value_requires_braced_environment_reference(
         monkeypatch):
     monkeypatch.setenv("QFW_PREFIX", "/opt/qfw")
@@ -51,7 +76,7 @@ def test_expand_config_value_requires_braced_environment_reference(
     "<qfw-prefix>",
     "<defw-prefix>",
 ])
-def test_expand_config_value_rejects_legacy_placeholders(placeholder):
+def test_expand_config_value_rejects_removed_placeholders(placeholder):
     with pytest.raises(ValueError, match="unsupported configuration"):
         qfw_config.expand_config_value(placeholder)
 

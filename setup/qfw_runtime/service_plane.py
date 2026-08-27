@@ -450,9 +450,9 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
         if not assigned_hosts:
             assigned_hosts = target
         service_listen = int(service.get(
-            "listen-port", service.get("listen_port", listen_port + index * stride)))
+            "listen-port", listen_port + index * stride))
         service_telnet = int(service.get(
-            "telnet-port", service.get("telnet_port", telnet_port + index * stride)))
+            "telnet-port", telnet_port + index * stride))
         resolved.append({
             "service_id": service_id,
             "module": service.get("module", ""),

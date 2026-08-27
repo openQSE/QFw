@@ -29,7 +29,7 @@ CALLER_ENVIRONMENT_KEYS = (
 ENVIRONMENT_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 UNBRACED_ENVIRONMENT_REFERENCE = re.compile(
     r"\$([A-Za-z_][A-Za-z0-9_]*)")
-LEGACY_PATH_PLACEHOLDERS = {
+UNSUPPORTED_PATH_PLACEHOLDERS = {
     "<prefix>": "${QFW_PREFIX}",
     "<qfw-prefix>": "${QFW_PREFIX}",
     "<defw-prefix>": "${DEFW_PREFIX}",
@@ -117,7 +117,7 @@ def expand_config_value(value):
         return None
     text = str(value)
 
-    for placeholder, replacement in LEGACY_PATH_PLACEHOLDERS.items():
+    for placeholder, replacement in UNSUPPORTED_PATH_PLACEHOLDERS.items():
         if placeholder in text:
             raise ValueError(
                 f"unsupported configuration placeholder {placeholder!r}; "
@@ -197,17 +197,22 @@ def site_install_prefixes(site_config):
     install = site_config.get("install") or {}
     if not isinstance(install, dict):
         raise ValueError("install must be a mapping")
-    qfw_value = (
-        install.get("qfw-prefix") or
-        install.get("qfw_prefix") or
-        install.get("prefix")
-    )
+    removed_keys = {
+        "qfw_prefix": "qfw-prefix",
+        "defw_prefix": "defw-prefix",
+        "prefix": "qfw-prefix",
+    }
+    for key, replacement in removed_keys.items():
+        if key in install:
+            raise ValueError(
+                f"unsupported install key {key!r}; use {replacement!r}")
+    qfw_value = install.get("qfw-prefix")
     qfw_path = (
         resolve_path(qfw_value)
         if qfw_value is not None else
         qfw_prefix()
     )
-    defw_value = install.get("defw-prefix") or install.get("defw_prefix")
+    defw_value = install.get("defw-prefix")
     if defw_value is not None:
         defw_path = resolve_path(defw_value)
     else:
@@ -480,6 +485,17 @@ def load_service_manifest(path):
     services = data.get("services") or []
     if not isinstance(services, list):
         raise ValueError(f"services must be a list: {path}")
+    for index, service in enumerate(services):
+        if not isinstance(service, dict):
+            raise ValueError(
+                f"service entry {index} must be a mapping: {path}")
+        for key, replacement in {
+                "listen_port": "listen-port",
+                "telnet_port": "telnet-port",
+        }.items():
+            if key in service:
+                raise ValueError(
+                    f"unsupported service key {key!r}; use {replacement!r}")
     return services
 
 
