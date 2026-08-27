@@ -5,7 +5,7 @@ from defw_exception import DEFwExecutionError, DEFwOutOfResources
 from tests.mock.fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
-	clear_target_controllers,
+	_clear_target_controllers_for_tests,
 )
 from util.qpm.request import parse_execution_request
 from util.qpm.util_qpm import UTIL_QPM
@@ -34,6 +34,13 @@ class FakeQRC:
 
 	def shutdown(self):
 		self.shutdown_called = True
+
+
+def _bind_scheduler_task_for_test(controller, runtime, scheduler_task_id):
+	with controller.lock:
+		runtime.scheduler_task_id = scheduler_task_id
+		controller.qtask_id_by_scheduler_task_id[
+			scheduler_task_id] = runtime.qtask_id
 
 
 class FakeAdmissionContext:
@@ -130,7 +137,7 @@ class RetryOnceQPM(HookQPM):
 
 
 def _setup_qpm(monkeypatch):
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
 
@@ -301,7 +308,7 @@ def test_cancellation_lookup_and_cleanup(monkeypatch):
 	runtime = qpm.controller.task_for_cid(cid)
 
 	qpm.controller.set_provider_canceller(lambda provider_handle: "cancelled")
-	qpm.controller.bind_scheduler_task(runtime.qtask_id, "sched-1")
+	_bind_scheduler_task_for_test(qpm.controller, runtime, "sched-1")
 	qpm.controller.bind_provider_handle(runtime.qtask_id, "provider-1")
 	cancelled = qpm.cancel_provider_submission(cid, reason="test")
 

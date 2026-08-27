@@ -67,9 +67,6 @@ if [[ -n "${_QFW_ACTIVE:-}" ]]; then
 	fi
 	if declare -F qfw-deactivate >/dev/null 2>&1; then
 		qfw-deactivate
-	elif declare -F qfw_deactivate >/dev/null 2>&1; then
-		# Clean up shells activated by an older QFw installation.
-		qfw_deactivate
 	else
 		unset _QFW_ACTIVE
 	fi

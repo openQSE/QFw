@@ -65,19 +65,3 @@ def test_parse_execution_request_moves_scoped_payload_metadata(monkeypatch):
 		"run_context": {"priority": "normal"},
 	}
 	assert request.context.auth_disabled is True
-
-
-def test_status_envelope_omits_empty_fields():
-	import util.qpm.request as qpm_request
-
-	envelope = qpm_request.status_envelope(
-		"rejected",
-		reason="invalid-reservation",
-		reservation_id="reservation-1",
-	)
-
-	assert envelope == {
-		"status": "rejected",
-		"reason": "invalid-reservation",
-		"reservation_id": "reservation-1",
-	}

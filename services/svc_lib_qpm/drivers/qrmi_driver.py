@@ -20,8 +20,8 @@
 # get_device_info / get_coupling_graph (-> qhw-iqm device/coupling),
 # get_calibration_snapshot (-> qhw-iqm calibration), get_dynamic_backend_info
 # (the dynamic architecture, native shape), and get_backend_info (native
-# composite with an embedded qhw device). Execution remains stubbed for a later
-# milestone.
+# composite with an embedded qhw device). Circuit execution uses QRMI's task
+# lifecycle and returns normalized qhw results.
 
 from .base_driver import BaseDriver
 from defw_exception import DEFwExecutionError

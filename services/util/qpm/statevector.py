@@ -28,13 +28,6 @@ class QFwStatevector:
 		return cls(amplitudes, num_qubits=num_qubits, source=source,
 				   metadata=metadata)
 
-	@classmethod
-	def from_real_imag_pairs(cls, pairs, num_qubits=None, source=None,
-							 metadata=None):
-		amplitudes = [complex(real, imag) for real, imag in pairs]
-		return cls(amplitudes, num_qubits=num_qubits, source=source,
-				   metadata=metadata)
-
 	def to_dict(self):
 		payload = {
 			"type": "statevector",

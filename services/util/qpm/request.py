@@ -74,20 +74,6 @@ def parse_execution_request(info, **overrides):
 	return QPMExecutionRequest(payload=payload, context=context)
 
 
-def status_envelope(status, *, reason=None, message=None, data=None,
-		    reservation_id=None, qtask_id=None):
-	envelope = {
-		"status": status,
-		"reason": reason,
-		"message": message,
-		"reservation_id": reservation_id,
-		"qtask_id": qtask_id,
-		"data": data or {},
-	}
-	return {key: value for key, value in envelope.items()
-		if value not in (None, {})}
-
-
 def _context_from_payload(payload, overrides):
 	values = {}
 	for key in REQUEST_CONTEXT_KEYS:

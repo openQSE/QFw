@@ -12,7 +12,7 @@ from tests.mock.fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_FAILED,
-	clear_target_controllers,
+	_clear_target_controllers_for_tests,
 )
 from util.qpm.util_qpm import UTIL_QPM
 import util.qpm.admission as qpm_admission
@@ -41,6 +41,19 @@ class FakeQRC:
 
 	def shutdown(self):
 		pass
+
+
+def _close_expired_reservation_for_test(controller, reservation_id, now_ns):
+	deliveries = []
+	with controller.lock:
+		result = controller._close_reservation(
+			reservation_id,
+			"expire",
+			now_ns=now_ns,
+			deliveries=deliveries,
+		)
+	controller._dispatch_completion_deliveries(deliveries)
+	return result
 
 
 class FakeAdmissionContext:
@@ -248,7 +261,7 @@ class NonCancellableAdmissionQPM(UTIL_QPM):
 
 
 def _setup(monkeypatch):
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	FakeAdmissionContext.next_reservation_id = 100
 	FakeAdmissionContext.decision_status = "accepted"
 	FakeAdmissionContext.usage_status = "accepted"
@@ -984,8 +997,8 @@ def test_reservation_close_cancelled_tasks_do_not_block_completion_queue_gc(
 			now_ns = time.time_ns()
 			qpm.controller.admission_context.reservations[
 				reservation_id]["expires_at_ns"] = now_ns - 1
-			result = qpm.controller.close_expired_reservation(
-				reservation_id, now_ns=now_ns)
+			result = _close_expired_reservation_for_test(
+				qpm.controller, reservation_id, now_ns)
 
 		runtime = qpm.controller.task_for_cid(response["cid"])
 
@@ -1014,8 +1027,8 @@ def test_expiration_sweep_reconciles_all_expired_holds_before_expire(
 		qpm.controller.admission_context.reservations[
 			reservation_id]["expires_at_ns"] = now_ns - 1
 
-	result = qpm.controller.close_expired_reservation(
-		reservation_a, now_ns=now_ns)
+	result = _close_expired_reservation_for_test(
+		qpm.controller, reservation_a, now_ns)
 	calls = qpm.controller.admission_context.calls
 	expire_index = next(
 		index for index, call in enumerate(calls)

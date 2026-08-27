@@ -422,7 +422,7 @@ composite / the dynamic architecture, from `target()`); they stay QRMI-only for
 now because their shape carries raw IQM architecture data QDMI's neutral model
 does not expose.
 
-Execution is wired on QRMI as of the next milestone: `run_circuit` takes the
+Execution is implemented on QRMI: `run_circuit` takes the
 canonical **OpenQASM** form, transcodes it to an IQM circuit with the shared
 `util/iqm_transcode.py` (the same transcode the native `svc_iqm_qpm` path uses),
 submits it through QRMI's task lifecycle (`Payload.IQMServer` → `task_start` →

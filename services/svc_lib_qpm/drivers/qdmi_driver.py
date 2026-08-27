@@ -5,17 +5,16 @@
 # coupling map through QDMI's query interface. This driver reads that directly
 # and normalizes it to the provider-neutral qhw schema (fomac_normalize) -- no
 # Qiskit Target, no raw vendor data. QDMI is session-based and strong on device
-# & calibration introspection, so this driver declares the introspection calls;
-# execution/job calls stay with QRMI (the reservation owner) in the default
-# wiring.
+# & calibration introspection. QRMI remains the default execution owner, while
+# this driver also implements execution for explicit QDMI comparisons.
 #
 # Milestone status (design doc qpu-frontend-contract.md section 13):
 # get_device_info / get_coupling_graph normalize the device topology, and
 # get_calibration_snapshot reads the device's live per-qubit coherence (T1/T2)
 # and per-gate fidelity through FoMaC -- all with the device's real qubit labels
-# (e.g. "QB1"). get_backend_info / get_dynamic_backend_info stay with QRMI for
-# now (their native shape carries raw IQM architecture data QDMI does not
-# expose); binding them to QDMI's neutral model is a later milestone.
+# (e.g. "QB1"). get_backend_info / get_dynamic_backend_info stay with QRMI
+# because their native shape carries raw IQM architecture data that QDMI does
+# not expose.
 
 from .base_driver import BaseDriver
 from . import fomac_normalize

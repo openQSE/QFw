@@ -95,13 +95,6 @@ TELEMETRY_CALLER_OWNED = "caller-owned"
 TELEMETRY_MANAGER_AGGREGATE = "manager-aggregate"
 TELEMETRY_OPERATOR = "operator"
 
-TELEMETRY_ACCESS_CLASSES = (
-	TELEMETRY_BASIC_DISCOVERY,
-	TELEMETRY_CALLER_OWNED,
-	TELEMETRY_MANAGER_AGGREGATE,
-	TELEMETRY_OPERATOR,
-)
-
 RESERVATION_BINDING_SCHEMA = "qfw-reservation-binding-v1"
 SENSITIVE_METADATA_KEY_PARTS = (
 	"api_key",
@@ -128,7 +121,6 @@ TELEMETRY_METHOD_LABELS = {
 	"get_calibration_snapshot": TELEMETRY_BASIC_DISCOVERY,
 	"get_coupling_graph": TELEMETRY_BASIC_DISCOVERY,
 	"get_task_timing": TELEMETRY_CALLER_OWNED,
-	"get_task_metadata": TELEMETRY_CALLER_OWNED,
 	"get_task_metadata": TELEMETRY_CALLER_OWNED,
 	"get_capacity_snapshot": TELEMETRY_MANAGER_AGGREGATE,
 	"get_queue_metrics": TELEMETRY_MANAGER_AGGREGATE,
@@ -1368,15 +1360,6 @@ class QPMTargetController:
 			},
 		}
 
-	def close_expired_reservation(self, reservation_id, now_ns=None):
-		deliveries = []
-		with self.lock:
-			result = self._close_reservation(
-				reservation_id, "expire", now_ns=now_ns or time.time_ns(),
-				deliveries=deliveries)
-		self._dispatch_completion_deliveries(deliveries)
-		return result
-
 	def configure_device_profile(self, profile=None):
 		with self.lock:
 			normalized = self._normalize_device_profile(profile or {})
@@ -1564,13 +1547,6 @@ class QPMTargetController:
 					runtime.qtask_id, None)
 			return runtime
 
-	def bind_scheduler_task(self, qtask_id, scheduler_task_id):
-		with self.lock:
-			runtime = self.runtime_by_qtask_id[qtask_id]
-			runtime.scheduler_task_id = scheduler_task_id
-			self.qtask_id_by_scheduler_task_id[scheduler_task_id] = qtask_id
-			return runtime
-
 	def bind_provider_handle(self, qtask_id, provider_handle):
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
@@ -1589,14 +1565,6 @@ class QPMTargetController:
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
 			runtime.state = state
-			return runtime
-
-	def record_result(self, qtask_id, result):
-		with self.lock:
-			runtime = self.runtime_by_qtask_id[qtask_id]
-			self.result_state[qtask_id] = result
-			self.timeout_state.pop(qtask_id, None)
-			runtime.state = QPM_TASK_COMPLETED
 			return runtime
 
 	def complete_scheduled_task(self, circuit, result=None):
@@ -3790,7 +3758,8 @@ def find_target_controller(target_id):
 		return _CONTROLLERS.get(target_id)
 
 
-def clear_target_controllers():
+def _clear_target_controllers_for_tests():
+	"""Reset process-global controllers for isolated unit tests."""
 	with _CONTROLLERS_LOCK:
 		controllers = list(_CONTROLLERS.values())
 		_CONTROLLERS.clear()

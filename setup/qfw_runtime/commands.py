@@ -381,29 +381,6 @@ def _adopt_managed_directory(state, directory_state):
         })
 
 
-def _target_launch_command(command, allocation, target):
-    command = list(command)
-    mode = allocation["mode"]
-    if mode == "heterogeneous":
-        return [
-            "srun",
-            "--het-group=1",
-            "--nodes=1",
-            "--ntasks=1",
-            "--nodelist", str(target),
-            *command,
-        ]
-    if mode == "slurm":
-        return [
-            "srun",
-            "--nodes=1",
-            "--ntasks=1",
-            "--nodelist", str(target),
-            *command,
-        ]
-    return command
-
-
 def _application_launch_command(command, allocation, launch_options=None):
     command = list(command)
     mode = allocation["mode"]

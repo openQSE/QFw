@@ -5,7 +5,7 @@ from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_FAILED,
 	QPM_TASK_QUEUED,
-	clear_target_controllers,
+	_clear_target_controllers_for_tests,
 )
 from util.qpm.util_qpm import UTIL_QPM
 
@@ -142,7 +142,7 @@ class DuplicateLoadNativeScheduler:
 
 
 def _setup(monkeypatch):
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	FakeAdmissionContext.usage_status = "accepted"
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
 	monkeypatch.delenv(

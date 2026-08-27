@@ -13,7 +13,6 @@ from .controller import find_target_controller
 OPERATION_MODE_ENV = "QFW_QPM_OPERATION_MODE"
 REGISTER_WITH_DIRSVC_ENV = "QFW_QPM_REGISTER_WITH_DIRSVC"
 DIRECT_ENDPOINT_ENABLED_ENV = "QFW_QPM_DIRECT_ENDPOINT_ENABLED"
-DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
 SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 STARTUP_TIMEOUT_ENV = "QFW_STARTUP_TIMEOUT"
 LOCAL_DIRSVC_ENDPOINT_ENV = "QFW_LOCAL_DIRSVC_ENDPOINT"
@@ -77,19 +76,6 @@ def register_with_dirsvc():
 	if long_running_mode_enabled():
 		return site_dirsvc_endpoints_configured()
 	return True
-
-
-def startup_config():
-	return {
-		"operation_mode": os.environ.get(
-			OPERATION_MODE_ENV,
-			DEFAULT_OPERATION_MODE,
-		).strip().lower(),
-		"register_with_dirsvc": register_with_dirsvc(),
-		"direct_endpoint_enabled": direct_endpoint_enabled(),
-		"direct_qpm_endpoint": os.environ.get(DIRECT_QPM_ENDPOINT_ENV, ""),
-		"site_dirsvc_endpoints": os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV, ""),
-	}
 
 
 def should_wait_for_dirsvc(defw_module):
@@ -175,16 +161,6 @@ def _local_registration_ready(defw_module):
 	return _ensure_local_registration(defw_module)
 
 
-def _local_registration_complete(defw_module):
-	if not _local_registration_required():
-		return True
-	endpoint = _local_dirsvc_endpoint()
-	state = getattr(defw_module, LOCAL_REGISTRATION_STATE_ATTR, {})
-	if not isinstance(state, dict):
-		return False
-	return endpoint in state
-
-
 def _ensure_local_registration(defw_module):
 	records = _site_registration_records(defw_module)
 	if not records:
@@ -233,15 +209,6 @@ def _site_registration_ready(defw_module):
 	if not _site_dirsvc_ready(defw_module):
 		return False
 	return _ensure_site_registration(defw_module)
-
-
-def _site_registration_complete(defw_module):
-	if not _site_registration_required():
-		return True
-	state = getattr(defw_module, SITE_REGISTRATION_STATE_ATTR, {})
-	if not isinstance(state, dict):
-		return False
-	return all(endpoint in state for endpoint in _site_dirsvc_endpoints())
 
 
 def _ensure_site_registration(defw_module):

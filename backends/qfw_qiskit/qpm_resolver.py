@@ -250,17 +250,6 @@ class QPMResolver:
 		self._allow_ambiguous = allow_ambiguous
 
 	@classmethod
-	def from_directory_service(cls, dirsvc, defw_module=defw, sleeper=sleep):
-		directory = DirectoryScope(
-			name="allocation-local",
-			scope="allocation-local",
-			client=dirsvc,
-			identity="allocation-local",
-			priority=100,
-		)
-		return cls([directory], DEFwQPMConnector(defw_module), sleeper)
-
-	@classmethod
 	def from_environment(cls, dirsvc=None, defw_module=defw, sleeper=sleep,
 						 directory_client_factory=None):
 		directories = []

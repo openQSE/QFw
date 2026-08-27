@@ -3,9 +3,6 @@
 # calls it implements (its capability set). Unimplemented calls are NULL-ed
 # out — the Frontend never routes a call to a driver that does not implement it.
 
-from defw_exception import DEFwExecutionError
-
-
 class BaseDriver:
 	# Subclasses set `name` (the library key used for routing/preference) and
 	# `CAPABILITIES` (the subset of contract calls they cover).
@@ -14,10 +11,3 @@ class BaseDriver:
 
 	def implements(self, call):
 		return call in self.CAPABILITIES
-
-	def _pending(self, call, lib):
-		# Routing is wired; binding the call to the concrete library is the
-		# next milestone (docs/qpu-frontend-contract.md §13).
-		raise DEFwExecutionError(
-			f"{self.name}.{call}: routing wired; binding to {lib} is the "
-			"next milestone")

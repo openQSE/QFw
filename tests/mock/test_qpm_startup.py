@@ -262,9 +262,8 @@ def test_qpm_startup_long_running_site_registration_registers_payload(
 	assert context["api_bindings"][0]["binding_name"] == "execution"
 	assert context["api_bindings"][0]["client_class"] == "QPMExecution"
 
-	config = startup.startup_config()
-	assert config["operation_mode"] == "long-running"
-	assert config["register_with_dirsvc"] is True
+	assert startup.operation_mode() == "long-running"
+	assert startup.register_with_dirsvc() is True
 
 
 def test_qpm_startup_long_running_site_registration_uses_defw_api(
@@ -306,13 +305,13 @@ def test_qpm_startup_registration_records_lifecycle_telemetry(monkeypatch):
 	import util.qpm.startup as startup
 	import util.qpm.util_qpm as uq
 	from util.qpm.controller import (
-		clear_target_controllers,
+		_clear_target_controllers_for_tests,
 		controller_config,
 		get_target_controller,
 	)
 
 	reset_qpm_state(uq)
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	site_dirsvc = FakeSiteDirSvc()
 	controller = get_target_controller(
 		controller_config(None, target_id="startup-target"),
@@ -354,13 +353,13 @@ def test_qpm_startup_records_real_defw_directory_lifecycle(monkeypatch):
 	import util.qpm.startup as startup
 	import util.qpm.util_qpm as uq
 	from util.qpm.controller import (
-		clear_target_controllers,
+		_clear_target_controllers_for_tests,
 		controller_config,
 		get_target_controller,
 	)
 
 	reset_qpm_state(uq)
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	controller = get_target_controller(
 		controller_config(None, target_id="directory-target"),
 		1,
@@ -526,14 +525,11 @@ def test_qpm_startup_direct_endpoint_reports_listener_health(monkeypatch):
 	)
 
 	state = startup.initialize_qpm_service(fake_defw, "ready")
-	config = startup.startup_config()
-
 	assert state == "waiting-for-listener"
 	assert uq.qpm_initialized is False
 	assert len(started) == 1
-	assert config["direct_endpoint_enabled"] is True
-	assert config["direct_qpm_endpoint"] == "qpm-direct:9000"
-	assert config["register_with_dirsvc"] is False
+	assert startup.direct_endpoint_enabled() is True
+	assert startup.register_with_dirsvc() is False
 	assert startup.listener_ready(fake_defw) is False
 	assert startup.controller_ready(fake_defw) is True
 

@@ -7,7 +7,7 @@ from svc_fake_iqm_qpm.svc_qpm import (
 	FAKE_IQM_TARGET_ID,
 	QPM,
 )
-from util.qpm.controller import clear_target_controllers
+from util.qpm.controller import _clear_target_controllers_for_tests
 
 
 class FakeAdmissionContext:
@@ -92,7 +92,7 @@ class FakeAdmissionContext:
 
 
 def _setup(monkeypatch):
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_FAKE_QPM_MIN_SLEEP_SECONDS", "0.001")
 	monkeypatch.setenv("QFW_FAKE_QPM_MAX_SLEEP_SECONDS", "0.01")

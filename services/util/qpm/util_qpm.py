@@ -30,7 +30,6 @@ from .admission import (
 from .scheduler import QPMSchedulerError, QPMSchedulerUnavailable
 from .util_circuit import Circuit, CircuitStates, MAX_PPN
 from .request import parse_execution_request
-from statistics import mean, median, stdev
 
 QPM_SERVICE_TYPE = "qfw.qpm"
 MANAGED_SUBMISSION_FAILURE_REASONS = (
@@ -586,16 +585,6 @@ class UTIL_QPM:
 			event_type, service_record=service_record,
 			peer_event=peer_event, reason=reason, details=details)
 
-	def _cancel_provider_handle(self, status):
-		provider_handle = status.get("provider_handle")
-		if provider_handle is None or self.qrc is None:
-			return
-		cancel = getattr(self.qrc, "cancel", None)
-		if cancel is not None:
-			status["provider_cancel_status"] = cancel(provider_handle)
-			return
-		status["provider_cancel_status"] = "unsupported"
-
 	def sync_run(self, info, reservation_id=None, token=None, timeout=None,
 				 cancel_on_timeout=False):
 		if not qpm_initialized:
@@ -789,20 +778,6 @@ class UTIL_QPM:
 		return self.controller.peek_completion(
 			reservation_id=reservation_id, cid=cid,
 			operation="peek_cq")
-
-	def _result_selector_reservation_error(self, cid, reservation_id):
-		if reservation_id is not None and cid is None:
-			return {
-				"outcome": "INVALID_RESERVATION",
-				"lifecycle_state": "invalid-reservation",
-				"reservation_id": reservation_id,
-				"reason": "task-selector-required",
-				"message": (
-					"reservation-scoped result retrieval requires cid"),
-			}
-		return self.controller.task_reservation_error(
-			cid=cid, reservation_id=reservation_id,
-			require_reservation=True)
 
 	def register_event_notification(self, ep, evtype, class_id,
 					token=None, reservation_id=None, filters=None):
@@ -1017,20 +992,6 @@ class UTIL_QPM:
 			self.qrc.shutdown()
 			self.qrc = None
 		pass
-
-	def schedule_shutdown(self, timeout=5):
-		logging.debug(f"Shutting down in {timeout} seconds")
-		time.sleep(timeout)
-		me.exit()
-
-	def compute_stats(self, data, label):
-		logging.critical(f"Statistical Analysis for {label}:")
-		logging.critical(f"Count: {len(data)}")
-		logging.critical(f"Mean: {mean(data):.6f} seconds")
-		logging.critical(f"Median: {median(data):.6f} seconds")
-		logging.critical(f"Standard Deviation: {stdev(data):.6f} seconds" if len(data) > 1 else "N/A")
-		logging.critical(f"Min: {min(data):.6f} seconds")
-		logging.critical(f"Max: {max(data):.6f} seconds")
 
 	def test(self, token=None):
 		status = self.get_service_status(token=token)

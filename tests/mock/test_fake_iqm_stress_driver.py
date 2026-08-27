@@ -10,7 +10,7 @@ from tests.mock.test_fake_iqm_qpm import (
 	FakeAdmissionContext,
 	configure_fake_credentials,
 )
-from util.qpm.controller import clear_target_controllers
+from util.qpm.controller import _clear_target_controllers_for_tests
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -125,7 +125,7 @@ def test_ordered_scheduler_aliases_use_ordered_plugin_options():
 
 def test_startup_scenario_runs_against_fake_qpm(monkeypatch, tmp_path):
 	driver = _driver()
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_FAKE_QPM_MIN_SLEEP_SECONDS", "0.001")
 	monkeypatch.setenv("QFW_FAKE_QPM_MAX_SLEEP_SECONDS", "0.01")
@@ -162,7 +162,7 @@ def test_startup_scenario_runs_against_fake_qpm(monkeypatch, tmp_path):
 
 def test_scheduler_scenario_asserts_policy_order(monkeypatch, tmp_path):
 	driver = _driver()
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_FAKE_QPM_MIN_SLEEP_SECONDS", "0.001")
 	monkeypatch.setenv("QFW_FAKE_QPM_MAX_SLEEP_SECONDS", "0.01")
