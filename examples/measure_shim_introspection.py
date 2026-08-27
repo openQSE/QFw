@@ -36,12 +36,14 @@ A true cold sample needs a fresh process -- both drivers cache on the instance,
 and the FoMaC loader registers the device library process-wide. --repeat
 therefore re-executes this script in subprocesses rather than looping in-place.
 
-Run it inside the container, with device access configured (see the
-QFw-SLURM-Cluster IQM-ACCESS.md):
+Run it from an activated QFw installation with device access configured:
 
-  docker exec c5 bash -c 'source /opt/qfw/qhpc/QFw/setup/qfw_activate \\
-      >/dev/null 2>&1 && source "$QFW_IMAGE_VENV/bin/activate" \\
-      && python -u /opt/qfw/qhpc/QFw/examples/measure_shim_introspection.py'
+  export QFW_INSTALL_PREFIX=/path/to/qfw
+  export QFW_VENV=/path/to/qfw-venv
+  source "${QFW_INSTALL_PREFIX}/bin/qfw-activate" --venv "${QFW_VENV}"
+  cd "${QFW_SHARE_DIR}/examples"
+  python -u measure_shim_introspection.py
+  qfw-deactivate
 
 No SLURM allocation is required: QRMI's target() is not reservation-bound and
 QDMI needs only an initialized session.

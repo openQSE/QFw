@@ -516,11 +516,10 @@ Primary requirements: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`,
    - Replace the implicit `service_apis[res_name].res_name` construction
      pattern with a binding-aware helper that imports the selected
      `client_module.client_class`.
-   - Extend `BaseRemote` with optional remote module and remote class
-     overrides from the selected binding. Use those overrides for
+   - Require `BaseRemote` remote module and remote class targets from the
+     selected binding. Use those targets for
      `instantiate_class`, `method_call`, and `destroy_class` RPCs.
-   - Preserve the existing class-name convention as the compatibility fallback
-     when no explicit binding target override is supplied.
+   - Reject remote proxy construction when either binding target is absent.
    - Reqs: `DISC-001`, `CAT-005`.
 
 14. PH1.14 Implement the directory lifecycle state machine.

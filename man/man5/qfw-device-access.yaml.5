@@ -55,8 +55,19 @@ The optional
 mapping defines named credential integrations. Supported provider types include
 .BR file ,
 .BR no-secret ,
-and Python plugin providers. Provider-specific fields select the credential
-database, scope, lifetime, or plugin implementation.
+and Python plugin providers. A file provider uses
+.B credential-db
+or
+.BR path .
+Its optional fields include
+.BR refresh-policy ,
+.BR ttl-ns ,
+and
+.BR ttl-seconds .
+A plugin provider uses
+.B module
+and may select a class with
+.BR class .
 .SH SECURITY
 The device-access file contains device endpoints and credential-provider
 references. A referenced file credential database contains provider secrets

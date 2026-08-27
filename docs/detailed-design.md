@@ -115,12 +115,11 @@ DEFw/
   swig/
     defw.i
     typemaps/
-      compat_charpp.i
-      compat_charppp.i
       owned_string.i
       owned_string_list_counted.i
       opaque_handle.i
-  python/defw/
+      rma_buffer.i
+  python/infra/
   tests/
 ```
 
@@ -149,28 +148,21 @@ directories, library targets, runtime search path behavior, Python extension
 install location, and the installed SWIG typemap directory for optional
 downstream wrappers.
 
-The SWIG cleanup should preserve current DEFw Python API behavior unless an
-individual wrapper is explicitly migrated with tests. Existing broad typemaps
-remain available as compatibility includes for the current API surface, but new
-or refactored interfaces should opt in to narrower typemaps. This lets DEFw
-wrap external libraries, such as libfabric, without forcing every interface to
-inherit DEFw-specific pointer semantics by default.
-
-The target typemap set should separate compatibility from new contracts:
+DEFw wrappers use narrow, opt-in typemaps so one interface cannot impose
+pointer semantics on unrelated interfaces. The installed typemap set is:
 
 | Typemap include | Purpose |
 | --- | --- |
-| `compat_charpp.i` | Preserve existing `char **` output behavior for audited current DEFw APIs. |
-| `compat_charppp.i` | Preserve existing `char ***` pointer-return behavior until each API is migrated. |
 | `owned_string.i` | Convert malloc/calloc-owned `char **` output to a Python string and free the transferred buffer. A NULL output means allocation failure and raises a Python memory/allocation exception. |
 | `owned_string_list_counted.i` | Convert counted `char ***out, size_t *count` output to `list[str]`, then free each transferred string and the transferred array. |
 | `opaque_handle.i` | Expose typed opaque handles without enabling arbitrary global `void *` conversion. |
+| `rma_buffer.i` | Map Python byte buffers to RMA input buffers and return malloc-owned RMA output buffers as Python bytes. |
 
 New string-list APIs should prefer an explicit count, such as
 `char ***out, size_t *count`, over an uncounted `char ***`. The counted typemap
 returns a Python list of strings and owns cleanup for malloc/calloc-transferred
-memory. Existing uncounted `char ***` wrappers should keep their current return
-shape until a targeted migration changes that API and adds tests.
+memory. Uncounted `char ***` outputs are not part of the supported wrapper
+contract.
 
 The commented global `void *` typemap should be removed rather than carried as
 dead code. Peer handles and future libfabric handles should use typed opaque
@@ -181,8 +173,8 @@ pointers.
 CMake validation should include build-tree imports and install-tree imports.
 Tests should cover generated SWIG outputs, installed Python package imports,
 exported CMake targets, runtime search paths, string output typemaps, counted
-string-list typemaps, compatibility typemaps used by current wrappers, NULL
-allocation-failure handling, and typed opaque-handle round trips.
+string-list typemaps, NULL allocation-failure handling, RMA byte-buffer
+round trips, and typed opaque-handle round trips.
 
 </details>
 
@@ -365,8 +357,7 @@ keeps user dependencies in the user's virtual environment while avoiding the
 source-mode practice of replacing `python`, `python3`, and `pythonX.Y` inside
 the virtual environment.
 
-The venv-rewriting behavior can remain as an explicit legacy development
-option. Installed deployments use `defw-python` and leave the Python
+Both source and installed deployments use `defw-python` and leave the Python
 environment intact.
 
 ### Runtime Roles
@@ -915,9 +906,8 @@ should fail QPM readiness rather than silently disabling queue bounds.
 Device-access configuration contains provider endpoints, provider device
 aliases, library preferences, per-device capability overrides, and credential
 provider selection. Source-tree files under `services/dev-config` are
-development templates. Development installations place them under
-`<prefix>/lib/qfw/services/dev-config`. Production configuration belongs under
-a protected site-owned path such as
+development templates and are not installed. Production configuration belongs
+under a protected site-owned path such as
 `/etc/openqse/qfw/device/device-access.yaml`. The
 `service.device-access-config` field in `site.yaml` selects the active file.
 User jobs should not receive the credential store referenced by that file.
@@ -964,22 +954,29 @@ qpus:
 
 credential-providers:
   iqm-site:
-    type: site-plugin
-    plugin: openqse_qfw_iqm_credentials
-  iqm-dev-yaml:
-    type: yaml-file
-    path: /path/to/dev/qpu-users.yaml
+    type: plugin
+    module: openqse_qfw_iqm_credentials
+    class: CredentialProvider
+  iqm-dev-json:
+    type: file
+    path: /path/to/dev/qpu-users.json
 ```
 
-The YAML credential provider is a reference and development implementation.
-Its input file can be written as:
+The file credential provider is a reference and development implementation.
+Its JSON input file can be written as:
 
-```yaml
-users:
-  alice:
-    devices:
-      ornl-iqm-20q:
-        api-key: iqm-token-reference-or-secret
+```json
+{
+  "users": {
+    "alice": {
+      "devices": {
+        "ornl-iqm-20q": {
+          "api_key": "iqm-token-reference-or-secret"
+        }
+      }
+    }
+  }
+}
 ```
 
 ### Reservation-Scoped Provider Credentials
@@ -1953,12 +1950,9 @@ filters and requested binding filters, then creates the client proxy from the
 selected binding's `client_module` and `client_class`. The proxy sends RPCs to
 the selected binding's `service_module` and `service_class`.
 
-The old connection helper constructed the proxy by looking up
-`service_apis[service_name]` and then instantiating a class with the same name
-as `service_name`. `BaseRemote` then sends `type(self).__name__` as the remote
-service class during `instantiate_class` and `method_call` RPCs. The
-binding-aware path keeps that convention as a compatibility fallback, but it
-adds an explicit RPC target override.
+Every remote proxy requires an explicit service module and service class from
+its selected binding. `BaseRemote` rejects remote construction without both
+values, so RPC routing cannot fall back to an inferred local class name.
 
 The binding-aware construction path is:
 
@@ -2214,7 +2208,7 @@ The QPM API keeps a `token` parameter on control, admission, execution, and
 telemetry methods so the call signatures are ready for the later
 authentication feature. In the current milestone, authentication is disabled.
 QPM treats the token as opaque request metadata. It accepts, stores, and
-forwards the value where useful for compatibility, but does not parse it,
+forwards the value for later authentication integration, but does not parse it,
 verify it, derive caller identity from it, or reject requests because of it.
 
 Reservation IDs remain the mechanism that ties execution calls to admission
@@ -2707,12 +2701,11 @@ as a configured direct endpoint, depending on the selected runtime profile.
 Direct unregistered listener mode should set `DEFW_DISABLE_DIRSVC=yes`, leave
 registration disabled, and use the listener/controller readiness gate.
 
-Provider QPM modules that currently wait in `qpm_wait_dirsvc()` need a
-configuration-aware readiness path. In registered mode they may keep the
-existing directory-service wait after it is renamed. In direct endpoint mode
-they should call the common QPM completion routine after listener and
-controller initialization, then expose health and metadata over DEFw RPC so the
-direct resolver can validate the service.
+Provider QPM modules use the common configuration-aware readiness path. In
+registered mode they wait for directory-service registration. In direct
+endpoint mode they complete after listener and controller initialization, then
+expose health and metadata over DEFw RPC so the direct resolver can validate
+the service.
 
 </details>
 

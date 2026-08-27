@@ -118,8 +118,8 @@ services:
   dispatch-depth control, completion accounting, cancellation, and telemetry.
 - It registers as a normal QPM service through DEFw-dirsvc and advertises an
   explicit provider such as `fake-iqm`, a stable `service_id`, a stable target
-  ID such as `fake-iqm-20q`, `QPM_TYPE_IQM | QPM_TYPE_HARDWARE` compatibility
-  bits, and selector metadata that can distinguish it from live IQM services.
+  ID such as `fake-iqm-20q`, the required QPM type bits, and selector metadata
+  that can distinguish it from live IQM services.
 - Its QRC or provider adapter never calls production hardware or a simulator.
   It accepts a real QFw circuit record, derives execution metadata from the
   circuit payload and any supplied annotations, sleeps for a bounded
