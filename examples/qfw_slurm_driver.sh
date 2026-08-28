@@ -556,6 +556,7 @@ qfw_slurm_release() {
 	output="$(
 		qfw_example_srun "${qfw_srun_control[@]}" \
 			"${release_command[@]}" \
+			--service-id "${service_id}" \
 			--reservation-id "${reservation_id}"
 	)"
 	rc=$?

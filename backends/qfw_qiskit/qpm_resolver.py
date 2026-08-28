@@ -139,7 +139,15 @@ class QPMResolvedBinding:
 
 
 @dataclass(frozen=True)
+class QPMReservedBinding:
+	resolved: QPMResolvedBinding
+	client: Any
+	reservation_id: int
+
+
+@dataclass(frozen=True)
 class QPMResolutionRequest:
+	service_id: Optional[str] = None
 	service_name: str = DEFAULT_SERVICE_NAME
 	service_type: str = DEFAULT_SERVICE_TYPE
 	api_category: str = "execution"
@@ -358,6 +366,35 @@ class QPMResolver:
 				f"({request.qpm_type}, {request.qpm_capabilities})")
 		return self._select_candidate(candidates, request)
 
+	def connect_reserved(
+			self, service_id, reservation_id, timeout=10,
+			api_category="execution", binding_name=None):
+		request = QPMResolutionRequest(
+			service_id=service_id,
+			api_category=api_category,
+			binding_name=binding_name)
+		wait = 0
+		candidates = []
+		while wait < timeout:
+			candidates = self._collect_candidates(request)
+			if candidates:
+				break
+			wait += 1
+			self._sleep(1)
+		if not candidates:
+			raise QPMResolverError(
+				f"reserved QPM service {service_id!r} is unavailable")
+		if len(candidates) != 1:
+			raise QPMAmbiguousResolutionError(
+				f"reserved QPM service {service_id!r} appears in multiple "
+				"visible directories")
+		resolved = candidates[0]
+		self._reject_stale_generation(resolved)
+		return QPMReservedBinding(
+			resolved=resolved,
+			client=self._connector.connect(resolved),
+			reservation_id=reservation_id)
+
 	def _collect_candidates(self, request):
 		candidates = []
 		for directory in self._directories:
@@ -386,6 +423,7 @@ class QPMResolver:
 
 	def _query_filters(self, request):
 		return {
+			"service_id": request.service_id,
 			"service_name": request.service_name,
 			"service_type": request.service_type,
 			"binding_name": request.binding_filter(),
@@ -453,6 +491,8 @@ class QPMResolver:
 		)
 
 	def _matches_request(self, candidate, request):
+		if request.service_id and candidate.service_id != request.service_id:
+			return False
 		if request.service_type and candidate.service_type != request.service_type:
 			return False
 		if not _candidate_bits_match(

@@ -191,6 +191,34 @@ def test_resolver_filters_real_directory_records_by_provider_metadata():
 	assert resolved.properties["provider"] == "nwqsim"
 
 
+def test_reserved_resolution_uses_exact_service_without_substitution():
+	import defw_directory
+	from api_qpm_common import QPMCapability, QPMType
+	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
+
+	directory = defw_directory.Directory()
+	_register_directory_qpm(
+		directory, "qpm-a", QPMType.QPM_TYPE_SIMULATOR,
+		QPMCapability.QPM_CAP_STATEVECTOR, provider="nwqsim")
+	_register_directory_qpm(
+		directory, "qpm-b", QPMType.QPM_TYPE_SIMULATOR,
+		QPMCapability.QPM_CAP_STATEVECTOR, provider="nwqsim")
+
+	class Connector:
+		def connect(self, resolved):
+			return f"client:{resolved.service_id}"
+
+	resolver = QPMResolver([
+		DirectoryScope("site-a", "site", client=directory, priority=50),
+	], connector=Connector(), selection_order=["site"],
+		sleeper=lambda seconds: None)
+	binding = resolver.connect_reserved("qpm-b", 17, timeout=1)
+
+	assert binding.resolved.service_id == "qpm-b"
+	assert binding.client == "client:qpm-b"
+	assert binding.reservation_id == 17
+
+
 def test_resolver_rejects_real_directory_stale_generation_before_binding():
 	import defw_directory
 	from api_qpm_common import QPMCapability, QPMType

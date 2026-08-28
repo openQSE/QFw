@@ -19,10 +19,14 @@ def normalize_reservation_id(value):
 	return value
 
 
-def resolve_qpm(provider, timeout):
+def resolve_qpm(provider, timeout, service_id=None):
 	selection = qpm_selection_for_provider(provider, default_provider=provider)
 	dirsvc = defw_get_directory_service()
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
+	if service_id:
+		binding = resolver.connect_reserved(
+			service_id, 1, timeout=timeout, binding_name="admission")
+		return binding.resolved, binding.client
 	return resolver.resolve_and_connect(
 		service_type="qfw.qpm",
 		binding_name="admission",
@@ -132,7 +136,8 @@ def reserve(args):
 
 
 def release(args):
-	_resolved, qpm = resolve_qpm(args.backend, args.timeout)
+	_resolved, qpm = resolve_qpm(
+		args.backend, args.timeout, service_id=args.service_id)
 	reservation_id = normalize_reservation_id(args.reservation_id)
 	result = qpm.release(reservation_id=reservation_id, reason=args.reason)
 	emit(
@@ -182,6 +187,7 @@ def build_parser():
 	release_parser = subparsers.add_parser("release")
 	release_parser.add_argument("--backend", required=True)
 	release_parser.add_argument("--reservation-id", required=True)
+	release_parser.add_argument("--service-id", required=True)
 	release_parser.add_argument("--reason", type=int, default=0)
 	release_parser.add_argument("--timeout", type=float, default=40.0)
 	release_parser.set_defaults(func=release)
