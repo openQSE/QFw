@@ -51,6 +51,7 @@ from .credentials import (
 	bind_reservation_credential,
 	validate_reservation_credential,
 )
+from .reservation_sequence import PersistentReservationSequence
 
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -250,6 +251,7 @@ class QPMTargetController:
 		self.reservation_credentials_by_id = {}
 		self.credential_cleanup_queue = []
 		self.reservation_close_state = {}
+		self.reservation_sequence = self._create_reservation_sequence()
 		self.device_profile = None
 		self.admission_configuration = {}
 		self.scheduler_policy = normalize_scheduler_policy(None)
@@ -957,6 +959,16 @@ class QPMTargetController:
 					"reason": "credential-eligibility-failed",
 					"message": str(error),
 				}
+			if request.get("reservation_id") not in (None, 0, "0"):
+				return {
+					"status": "rejected",
+					"request_id": admission_request.get("request_id"),
+					"reason": "caller-selected-reservation-id",
+				}
+			if self.reservation_sequence is not None:
+				admission_request["reservation_id"] = (
+					self.reservation_sequence.allocate(
+						self._active_reservation_ids_locked()))
 			decision = reserve_request(self.admission_context, admission_request)
 			reservation_id = decision.get("reservation_id")
 			if (decision.get("status") == "accepted" and
@@ -1161,6 +1173,23 @@ class QPMTargetController:
 						**error,
 					})
 		return errors
+
+	def _create_reservation_sequence(self):
+		run_dir = os.environ.get("QFW_QPM_RUN_DIR", "").strip()
+		if not run_dir:
+			return None
+		return PersistentReservationSequence(run_dir)
+
+	def _active_reservation_ids_locked(self):
+		try:
+			reservations = list_reservations(self.admission_context, {})
+		except Exception:
+			return set()
+		return {
+			int(record["reservation_id"])
+			for record in reservations
+			if record.get("state") == "active"
+		}
 
 	def _fallback_provider_credential_locked(self, reservation_id):
 		request_metadata = self.reservation_metadata_by_id.get(reservation_id)

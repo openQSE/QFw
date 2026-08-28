@@ -121,8 +121,10 @@ class FakeAdmissionContext:
 
 	def reserve_request(self, request):
 		with self.lock:
-			reservation_id = FakeAdmissionContext.next_reservation_id
-			FakeAdmissionContext.next_reservation_id += 1
+			reservation_id = request.get("reservation_id") or (
+				FakeAdmissionContext.next_reservation_id)
+			if not request.get("reservation_id"):
+				FakeAdmissionContext.next_reservation_id += 1
 		self.requests.append(("reserve", dict(request)))
 		self.reservations[reservation_id] = {
 			"reservation_id": reservation_id,
@@ -476,6 +478,21 @@ def test_reserve_rejects_ineligible_user_before_admission(
 	assert decision["status"] == "rejected"
 	assert decision["reason"] == "credential-eligibility-failed"
 	assert qpm.controller.admission_context.requests == []
+
+
+def test_qpm_allocates_persistent_reservation_identifiers(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	monkeypatch.setenv("QFW_QPM_RUN_DIR", str(tmp_path))
+	first_qpm = AdmissionQPM(target_id="sequence-first")
+	first_id = first_qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	_clear_target_controllers_for_tests()
+	second_qpm = AdmissionQPM(target_id="sequence-second")
+	second_id = second_qpm.reserve(request={"num_qubits": 2})[
+		"reservation_id"]
+
+	assert first_id == 1
+	assert second_id == 2
 
 
 def test_release_cleans_reservation_owned_credentials(monkeypatch):
