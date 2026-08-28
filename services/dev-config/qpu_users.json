@@ -1,21 +1,27 @@
 {
   "users": {
     "dummy-user": {
+      "enabled": true,
       "devices": {
         "fake-iqm-20q": {
+          "enabled": true,
           "api_key": "dummy-fake-iqm-api-key"
         },
         "ornl-iqm-20q": {
+          "enabled": true,
           "api_key": "dummy-api-key"
         }
       }
     },
     "root": {
+      "enabled": true,
       "devices": {
         "fake-iqm-20q": {
+          "enabled": true,
           "api_key": "root-fake-iqm-api-key"
         },
         "ornl-iqm-20q": {
+          "enabled": true,
           "api_key": "dummy-api-key"
         }
       }

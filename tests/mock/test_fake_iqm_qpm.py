@@ -103,8 +103,10 @@ def configure_fake_credentials(monkeypatch, tmp_path, *users):
 	credential_db = {
 		"users": {
 			user: {
+				"enabled": True,
 				"devices": {
 					FAKE_IQM_TARGET_ID: {
+						"enabled": True,
 						"api_key": f"fake-api-key-{user}",
 					}
 				}
@@ -213,6 +215,7 @@ def test_fake_iqm_qpm_uses_reservation_provider_credential(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)
 	configure_fake_credentials(monkeypatch, tmp_path, "stress-user")
+	monkeypatch.setenv("QFW_QPM_CREDENTIAL_MODE", "required")
 
 	qpm = QPM(
 		admission_context_factory=FakeAdmissionContext,

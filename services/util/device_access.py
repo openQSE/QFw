@@ -265,10 +265,9 @@ def select_user_record(
 			continue
 		if get_api_key_from_user_record(record, device_id, provider_device_id):
 			return record_key, record
-	if user and user in users:
-		return user, users[user]
 	raise DEFwExecutionError(
-		f"QPU credential DB does not contain credentials for user {user!r}")
+		f"QPU credential DB does not contain an enabled entitlement and "
+		f"API key for user {user!r} and device {device_id!r}")
 
 
 def _credential_record_candidates(
@@ -318,9 +317,9 @@ def _credential_hint_user(credential_hint):
 
 
 def get_api_key_from_user_record(record, device_id, provider_device_id=None):
-	if isinstance(record, str):
-		return record.strip()
 	if not isinstance(record, dict):
+		return None
+	if record.get("enabled") is not True:
 		return None
 
 	devices = record.get("devices")
@@ -329,14 +328,12 @@ def get_api_key_from_user_record(record, device_id, provider_device_id=None):
 			if not key or key not in devices:
 				continue
 			device_record = devices[key]
-			if isinstance(device_record, str):
-				return device_record.strip()
 			if isinstance(device_record, dict):
-					value = device_record.get("api_key")
-					return str(value).strip() if value else None
-
-	value = record.get("api_key")
-	return str(value).strip() if value else None
+				if device_record.get("enabled") is not True:
+					return None
+				value = device_record.get("api_key")
+				return str(value).strip() if value else None
+	return None
 
 
 def resolve_qpu_credentials(device, user=None, credential_hint=None,

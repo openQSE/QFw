@@ -336,8 +336,10 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 		json.dumps({
 			"users": {
 				"alice": {
+					"enabled": True,
 					"devices": {
 						"ornl-iqm-20q": {
+							"enabled": True,
 							"api_key": "alice-provider-api-key",
 						}
 					}
