@@ -548,10 +548,13 @@ for stream in (sys.stdout, sys.stderr):
 \tif reconfigure is not None:
 \t\treconfigure(line_buffering=True)
 
-reservation_id = os.environ.get("QFW_RESERVATION_ID")
-if not reservation_id:
-\tprint("ERROR: QFW_RESERVATION_ID is not set", file=sys.stderr)
-\tsys.exit(2)
+from qfw_qiskit.reservation_set import (
+\tparse_qfw_reservations,
+\tselect_qpm_reservation,
+)
+
+reservation_id = select_qpm_reservation(
+\tparse_qfw_reservations()).reservation_id
 
 script_path = {json.dumps(script_path)}
 script_args = {json.dumps(script_args)}

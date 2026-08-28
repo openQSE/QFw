@@ -325,10 +325,18 @@ class QPMResolver:
 		)
 
 	def connect(self, timeout=10, require_current_generation=True, **kwargs):
+		_resolved, client = self.resolve_and_connect(
+			timeout=timeout,
+			require_current_generation=require_current_generation,
+			**kwargs)
+		return client
+
+	def resolve_and_connect(
+			self, timeout=10, require_current_generation=True, **kwargs):
 		resolved = self.resolve(timeout=timeout, **kwargs)
 		if require_current_generation:
 			self._reject_stale_generation(resolved)
-		return self._connector.connect(resolved)
+		return resolved, self._connector.connect(resolved)
 
 	def resolve(self, timeout=10, **kwargs):
 		if ("allow_simulator_fallback" not in kwargs and

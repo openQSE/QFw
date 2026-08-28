@@ -214,8 +214,8 @@ contract. See the recipes for canonical site-service startup and recovery.
 
 Examples that need a managed reservation should be launched through
 `qfw_slurm_driver.sh`. This script is the test stand-in for the future
-Slurm/SPANK integration: it reserves capacity, exports only
-`QFW_RESERVATION_ID` to the application step, runs the application through
+Slurm/SPANK integration: it reserves capacity, exports the service and
+reservation tuple in `QFW_RESERVATIONS`, runs the application through
 `qfw-srun`, and releases the reservation afterward.
 
 The driver request carries the standardized reservation shape used by QPM

@@ -14,6 +14,6 @@ def _load_example_context():
 def test_qfw_reservation_options_normalizes_numeric_env_value(monkeypatch):
 	context = _load_example_context()
 
-	monkeypatch.setenv("QFW_RESERVATION_ID", "42")
+	monkeypatch.setenv("QFW_RESERVATIONS", '[["qpm-a","42"]]')
 
 	assert context.qfw_reservation_options() == {"reservation_id": 42}

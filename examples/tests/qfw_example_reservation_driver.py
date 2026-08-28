@@ -23,7 +23,7 @@ def resolve_qpm(provider, timeout):
 	selection = qpm_selection_for_provider(provider, default_provider=provider)
 	dirsvc = defw_get_directory_service()
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
-	return resolver.connect(
+	return resolver.resolve_and_connect(
 		service_type="qfw.qpm",
 		binding_name="admission",
 		qpm_type=selection["qpm_type"],
@@ -64,7 +64,7 @@ def json_object(value, label):
 
 
 def reserve(args):
-	qpm = resolve_qpm(args.backend, args.timeout)
+	resolved, qpm = resolve_qpm(args.backend, args.timeout)
 	alloc_id = args.allocation_id or allocation_id()
 	job_id = args.job_id or alloc_id
 	measurement_count = args.measurements
@@ -122,7 +122,9 @@ def reserve(args):
 	if args.credential_scope:
 		request["credential_scope"] = args.credential_scope
 	decision = qpm.reserve(request=request)
-	emit("reserve", backend=args.backend, request=request, decision=decision)
+	emit(
+		"reserve", backend=args.backend, service_id=resolved.service_id,
+		request=request, decision=decision)
 	if decision.get("status") != "accepted" or not decision.get(
 			"reservation_id"):
 		raise DEFwError(f"reservation was not accepted: {decision}")
@@ -130,7 +132,7 @@ def reserve(args):
 
 
 def release(args):
-	qpm = resolve_qpm(args.backend, args.timeout)
+	_resolved, qpm = resolve_qpm(args.backend, args.timeout)
 	reservation_id = normalize_reservation_id(args.reservation_id)
 	result = qpm.release(reservation_id=reservation_id, reason=args.reason)
 	emit(
