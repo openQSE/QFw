@@ -14,7 +14,6 @@ SCOPE_ALIASES = {
     "local": "allocation-local",
     "allocation-local": "allocation-local",
     "site": "site",
-    "direct": "direct",
 }
 CALLER_ENVIRONMENT_KEYS = (
     "PATH",
@@ -488,9 +487,23 @@ def load_service_manifest(path):
             if key in service:
                 raise ValueError(
                     f"unsupported service key {key!r}; use {replacement!r}")
+        for key in (
+                "direct-endpoint-enabled",
+                "direct-qpm-endpoint",
+                "register-with-dirsvc",
+        ):
+            if key in service:
+                raise ValueError(
+                    f"unsupported service key {key!r}; every QPM registers "
+                    "with a directory service")
         name = str(service.get("name") or "").strip()
         if not name:
             raise ValueError(f"service entry {index} requires name: {path}")
+        operation_mode = str(service.get("operation-mode") or "").strip()
+        if operation_mode and operation_mode not in {
+                "long-running", "qfw-managed"}:
+            raise ValueError(
+                f"unsupported QPM operation-mode {operation_mode!r}")
         credential_mode = str(
             service.get("credential-mode") or "").strip().lower()
         if credential_mode not in CREDENTIAL_MODES:

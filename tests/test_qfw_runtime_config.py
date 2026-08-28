@@ -83,6 +83,42 @@ def test_service_manifest_requires_device_for_credentials(tmp_path):
         qfw_config.load_service_manifest(manifest)
 
 
+@pytest.mark.parametrize("key", [
+    "direct-endpoint-enabled",
+    "direct-qpm-endpoint",
+    "register-with-dirsvc",
+])
+def test_service_manifest_rejects_unregistered_qpm_options(tmp_path, key):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "services:\n"
+        "  - name: test\n"
+        "    credential-mode: no-secret\n"
+        f"    {key}: value\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match="every QPM registers"):
+        qfw_config.load_service_manifest(manifest)
+
+
+def test_resolver_scope_rejects_direct_endpoint_mode():
+    with pytest.raises(ValueError, match="unsupported resolver scope"):
+        qfw_config.normalize_resolver_scope_order(["direct"])
+
+
+def test_service_manifest_rejects_direct_operation_mode(tmp_path):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "services:\n"
+        "  - name: test\n"
+        "    credential-mode: no-secret\n"
+        "    operation-mode: direct\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsupported QPM operation-mode"):
+        qfw_config.load_service_manifest(manifest)
+
+
 def test_expand_config_value_requires_braced_environment_reference(
         monkeypatch):
     monkeypatch.setenv("QFW_PREFIX", "/opt/qfw")
@@ -208,7 +244,7 @@ def test_prepare_run_state_persists_resolver_environment_overrides(
         "QFW_SITE_DIRSVC_ENDPOINTS",
         "override-site-a:9000;override-site-b:9001",
     )
-    monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct,site")
+    monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
 
     state = qfw_config.prepare_run_state(
         site_path,
@@ -220,8 +256,8 @@ def test_prepare_run_state_persists_resolver_environment_overrides(
         dry_run=True,
     )
 
-    assert state["resolver_scope_order"] == ["direct", "site"]
-    assert state["environment"]["QFW_QPM_RESOLVER_SCOPE_ORDER"] == "direct,site"
+    assert state["resolver_scope_order"] == ["site"]
+    assert state["environment"]["QFW_QPM_RESOLVER_SCOPE_ORDER"] == "site"
     assert state["environment"]["QFW_SITE_DIRSVC_ENDPOINTS"] == (
         "override-site-a:9000,override-site-b:9001")
     assert state["site_directory"]["endpoint"] == "override-site-a:9000"
@@ -358,10 +394,13 @@ def test_prepare_run_state_persists_user_python_environment(
             "qfw-prefix": str(tmp_path / "qfw"),
             "defw-prefix": str(tmp_path / "defw"),
         },
+        "directory-service": {
+            "endpoint": "site-a:8090",
+        },
     }
     runtime = {
         "resolver": {
-            "scope-order": ["direct"],
+            "scope-order": ["site"],
         },
     }
     monkeypatch.setenv("PATH", "/shared/venv/bin:/usr/bin")

@@ -17,29 +17,16 @@ DEFAULT_SERVICE_TYPE = "qfw.qpm"
 LOCAL_DIRSVC_ENDPOINT_ENV = "QFW_LOCAL_DIRSVC_ENDPOINT"
 SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 RESOLVER_SCOPE_ORDER_ENV = "QFW_QPM_RESOLVER_SCOPE_ORDER"
-DIRECT_ENDPOINT_ENABLED_ENV = "QFW_QPM_DIRECT_ENDPOINT_ENABLED"
-DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
-DIRECT_QPM_SERVICE_MODULE_ENV = "QFW_DIRECT_QPM_SERVICE_MODULE"
-DIRECT_QPM_SERVICE_CLASS_ENV = "QFW_DIRECT_QPM_SERVICE_CLASS"
 SIMULATOR_FALLBACK_ENV = "QFW_QPM_ALLOW_SIMULATOR_FALLBACK"
-DEFAULT_SCOPE_ORDER = ("site", "allocation-local", "direct")
+DEFAULT_SCOPE_ORDER = ("site", "allocation-local")
 SCOPE_ALIASES = {
 	"local": "allocation-local",
 	"allocation-local": "allocation-local",
 	"site": "site",
-	"direct": "direct",
 }
 QPM_TYPE_HARDWARE = 1 << 0
 QPM_TYPE_SIMULATOR = 1 << 1
 SIMULATOR_PROVIDERS = {"simulator", "nwqsim", "tnqvm", "qb"}
-PROVIDER_SERVICE_MODULES = {
-	"iqm": "svc_iqm_qpm.svc_qpm",
-	"fake-iqm": "svc_fake_iqm_qpm.svc_qpm",
-	"shim": "svc_lib_qpm.svc_qpm",
-	"nwqsim": "svc_nwqsim_qpm.svc_qpm",
-	"tnqvm": "svc_tnqvm_qpm.svc_qpm",
-	"qb": "svc_qb_qpm.svc_qpm",
-}
 ZERO_UUID = str(uuid.UUID(int=0))
 
 API_CATEGORY_BINDINGS = {
@@ -189,64 +176,6 @@ class DEFwDirectoryClient:
 		return self._client
 
 
-class DirectEndpointDirectory:
-	def __init__(self, endpoint, provider=None, service_module=None,
-		     service_class="QPM"):
-		self.endpoint = endpoint
-		self.provider = provider
-		self.service_module = service_module
-		self.service_class = service_class
-
-	def resolve_services(self, **kwargs):
-		endpoint = _endpoint_record_from_value(
-			self.endpoint,
-			default_name="direct-qpm",
-		)
-		if endpoint is None:
-			raise QPMUnsupportedConfigurationError(
-				f"direct QPM endpoint {self.endpoint!r} must include "
-				"a listen port")
-		provider = kwargs.get("provider") or self.provider
-		service_module = (
-			self.service_module or
-			_provider_service_module(provider)
-		)
-		properties = {}
-		if provider:
-			properties["provider"] = provider
-		if kwargs.get("qpm_type") not in (-1, None):
-			properties["qpm_type"] = kwargs.get("qpm_type")
-		qpm_capabilities = kwargs.get("qpm_capabilities")
-		if qpm_capabilities not in (-1, None):
-			properties["qpm_capabilities"] = qpm_capabilities
-		return [{
-			"directory_scope": "direct",
-			"directory_identity": "direct-endpoint",
-			"service_record": {
-				"service_id": str(self.endpoint),
-				"service_name": kwargs.get("service_name", DEFAULT_SERVICE_NAME),
-				"service_type": kwargs.get("service_type", DEFAULT_SERVICE_TYPE),
-				"runtime_id": endpoint["runtime_id"],
-				"endpoint": self.endpoint,
-				"selector": {},
-				"properties": properties,
-				"qpm_type": properties.get("qpm_type", -1),
-				"qpm_capabilities": properties.get(
-					"qpm_capabilities", -1),
-			},
-			"selected_api_binding": {
-				"binding_name": kwargs.get("binding_name", "execution"),
-				"client_module": API_BINDING_CLIENTS[
-					kwargs.get("binding_name", "execution")][0],
-				"client_class": API_BINDING_CLIENTS[
-					kwargs.get("binding_name", "execution")][1],
-				"service_module": service_module,
-				"service_class": self.service_class,
-				"version": 1,
-			},
-		}]
-
-
 class QPMResolver:
 	def __init__(self, directories, connector=None, sleeper=sleep,
 				 selection_order=None, allow_ambiguous=False):
@@ -302,29 +231,6 @@ class QPMResolver:
 				identity=endpoint,
 				priority=50,
 			))
-		if (_env_enabled(DIRECT_ENDPOINT_ENABLED_ENV) and
-				_names_allowed(("direct", "direct-endpoint"), order)):
-			endpoint = os.environ.get(DIRECT_QPM_ENDPOINT_ENV)
-			if endpoint:
-				provider = os.environ.get(
-					QPM_IMPL_ENV, DEFAULT_QPM_IMPL).strip()
-				directories.append(DirectoryScope(
-					name="direct",
-					scope="direct",
-					client=DirectEndpointDirectory(
-						endpoint,
-						provider=provider,
-						service_module=os.environ.get(
-							DIRECT_QPM_SERVICE_MODULE_ENV,
-							_provider_service_module(provider)),
-						service_class=os.environ.get(
-							DIRECT_QPM_SERVICE_CLASS_ENV,
-							"QPM"),
-					),
-					endpoint=endpoint,
-					identity="direct-endpoint",
-					priority=-100,
-				))
 		return cls(
 			directories,
 			DEFwQPMConnector(defw_module),
@@ -978,12 +884,6 @@ def _provider_is_simulator(provider):
 	if provider is None:
 		return False
 	return str(provider).strip().lower() in SIMULATOR_PROVIDERS
-
-
-def _provider_service_module(provider):
-	if provider is None:
-		return None
-	return PROVIDER_SERVICE_MODULES.get(str(provider).strip().lower())
 
 
 def _truthy(value):

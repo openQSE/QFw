@@ -315,8 +315,7 @@ Primary requirements: `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`,
    - Rename public and internal directory APIs so registration, deregistration,
      service lookup, endpoint resolution, and API-binding lookup no longer use
      resource reservation terminology.
-   - Use configuration names such as `register-with-dirsvc` and
-     `dirsvc-endpoint` for directory-service registration.
+   - Use `dirsvc-endpoint` for directory-service registration.
    - Remove the superseded discovery-manager names. Runtime and integration
      code must use the `dirsvc` names.
    - Keep QPM reservation, admission, scheduler, and capacity ownership out of
@@ -654,8 +653,8 @@ Primary requirements: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`,
    - Cover QFw-managed allocation-local discovery, site-scoped long-running
      discovery, simultaneous allocation-local and site-scoped directories,
      directory ordering, scope annotation, deterministic tie-breaking,
-     ambiguity errors, explicit simulator fallback policy, direct endpoint
-     fallback/debug behavior, service-record and API binding validation, stale
+     ambiguity errors, explicit simulator fallback policy, service-record and
+     API binding validation, stale
      generation rejection, and identical QPM API behavior after binding.
    - Reqs: `OPM-001`, `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`,
      `DISC-005`, `API-003`.

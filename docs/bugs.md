@@ -710,9 +710,8 @@ Resolution:
 - Moved all six remote API classes into independent category packages and
   moved shared enum flags and the DEFw remote base into `api_qpm_common`.
 - Removed the aggregate `api_qpm.QPM` package and the `default` QPM binding.
-- Updated registration, direct-endpoint resolution, applications, test
-  drivers, Qiskit lookup, provider metadata, startup records, and tests to
-  select explicit category bindings.
+- Updated registration, applications, test drivers, Qiskit lookup, provider
+  metadata, startup records, and tests to select explicit category bindings.
 - Renamed provider-side last-job helpers to task-scoped operations and removed
   stale compatibility expectations from the active design and test plan.
 - Added package import, signature, multi-binding resolver, one-time event

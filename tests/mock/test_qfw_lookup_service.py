@@ -174,38 +174,6 @@ def test_get_qpm_propagates_directory_failures(monkeypatch):
 		raise AssertionError("expected directory lookup failure to propagate")
 
 
-def test_get_qpm_uses_direct_endpoint_without_allocation_directory(monkeypatch):
-	import qfw_qiskit.qfw_lookup_service as lookup_service
-
-	fake_qpm = FakeQPM()
-	fake_defw = BindingDefwModule(default_qpm=fake_qpm)
-
-	def unavailable_directory_service(timeout=None):
-		raise RuntimeError("allocation-local directory service unavailable")
-
-	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.delenv("QFW_QPM_IMPL", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_ENABLED", "yes")
-	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
-	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
-	monkeypatch.setattr(
-		lookup_service, "defw_get_directory_service",
-		unavailable_directory_service)
-	monkeypatch.setattr(lookup_service, "defw", fake_defw)
-
-	result = lookup_service.get_qpm(
-		qpm_type=DEFAULT_QPM_TYPE,
-		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
-	)
-
-	assert result is fake_qpm
-	assert len(fake_defw.binding_connections) == 1
-	binding = fake_defw.binding_connections[0]
-	assert binding["service_record"]["endpoint"]["address"] == "qpm-direct"
-	assert binding["service_record"]["endpoint"]["listen_port"] == 9000
-	assert binding["selected_binding"]["binding_name"] == "execution"
-
-
 def test_get_qpm_selects_requested_provider(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 

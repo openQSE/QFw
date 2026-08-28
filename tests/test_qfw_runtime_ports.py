@@ -32,62 +32,6 @@ def hetero_allocation():
     }
 
 
-def test_direct_qpm_readiness_uses_qpm_control_binding():
-    binding = process_launcher._endpoint_binding_record(
-        "qpm.example:9020", "svc_iqm_qpm")
-
-    assert binding["selected_binding"] == {
-        "binding_name": "control",
-        "client_module": "api_qpm_control",
-        "client_class": "QPMControl",
-        "service_module": "svc_iqm_qpm.svc_qpm",
-        "service_class": "QPM",
-        "version": 1,
-    }
-
-
-def test_direct_qpm_readiness_preserves_qualified_service_module():
-    binding = process_launcher._endpoint_binding_record(
-        "qpm.example:9020", "svc_iqm_qpm.svc_qpm")
-
-    assert (
-        binding["selected_binding"]["service_module"]
-        == "svc_iqm_qpm.svc_qpm"
-    )
-
-
-def test_direct_qpm_readiness_calls_is_ready(monkeypatch):
-    class QPMControl:
-        def is_ready(self):
-            return {"ready": True}
-
-    class DEFw:
-        def connect_to_binding(self, binding):
-            self.binding = binding
-            return QPMControl()
-
-    fake_defw = DEFw()
-    monkeypatch.setitem(sys.modules, "defw", fake_defw)
-
-    assert process_launcher._defw_endpoint_ready_unbounded(
-        "qpm.example:9020", "svc_iqm_qpm")
-    assert fake_defw.binding["selected_binding"]["client_class"] == "QPMControl"
-
-
-def test_direct_qpm_readiness_rejects_ready_alias(monkeypatch):
-    class ObsoleteQPMClient:
-        ready = True
-
-    class DEFw:
-        def connect_to_binding(self, binding):
-            return ObsoleteQPMClient()
-
-    monkeypatch.setitem(sys.modules, "defw", DEFw())
-
-    assert not process_launcher._defw_endpoint_ready_unbounded(
-        "qpm.example:9020", "svc_iqm_qpm")
-
-
 def test_private_qpm_launcher_loads_service_paths_from_site(
         tmp_path, monkeypatch):
     device_path = tmp_path / "device-access.yaml"
@@ -135,7 +79,7 @@ def test_private_qpm_launcher_loads_service_paths_from_site(
         "--service-id", "iqm",
         "--site-config", str(site_path),
         "--run-dir", str(tmp_path / "run"),
-        "--operation-mode", "direct",
+        "--operation-mode", "long-running",
     ])
 
     assert rc == 0

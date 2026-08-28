@@ -11,8 +11,6 @@ from .controller import find_target_controller
 
 
 OPERATION_MODE_ENV = "QFW_QPM_OPERATION_MODE"
-REGISTER_WITH_DIRSVC_ENV = "QFW_QPM_REGISTER_WITH_DIRSVC"
-DIRECT_ENDPOINT_ENABLED_ENV = "QFW_QPM_DIRECT_ENDPOINT_ENABLED"
 SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 STARTUP_TIMEOUT_ENV = "QFW_STARTUP_TIMEOUT"
 LOCAL_DIRSVC_ENDPOINT_ENV = "QFW_LOCAL_DIRSVC_ENDPOINT"
@@ -25,31 +23,11 @@ ZERO_UUID = str(uuid.UUID(int=0))
 SITE_REGISTRATION_STATE_ATTR = "_qfw_site_dirsvc_registrations"
 LOCAL_REGISTRATION_STATE_ATTR = "_qfw_local_dirsvc_registrations"
 
-FALSE_VALUES = {"0", "false", "no", "off", "n"}
-TRUE_VALUES = {"1", "true", "yes", "on", "y"}
-
-
 def startup_timeout():
 	try:
 		return int(os.environ.get(STARTUP_TIMEOUT_ENV, DEFAULT_STARTUP_TIMEOUT))
 	except ValueError:
 		return DEFAULT_STARTUP_TIMEOUT
-
-
-def _env_flag(name, default=None):
-	value = os.environ.get(name)
-	if value is None:
-		return default
-	value = value.strip().lower()
-	if value in TRUE_VALUES:
-		return True
-	if value in FALSE_VALUES:
-		return False
-	return default
-
-
-def direct_endpoint_enabled():
-	return bool(_env_flag(DIRECT_ENDPOINT_ENABLED_ENV, False))
 
 
 def operation_mode():
@@ -67,20 +45,7 @@ def site_dirsvc_endpoints_configured():
 	return bool(_site_dirsvc_endpoints())
 
 
-def register_with_dirsvc():
-	configured = _env_flag(REGISTER_WITH_DIRSVC_ENV, None)
-	if configured is not None:
-		return configured
-	if direct_endpoint_enabled():
-		return False
-	if long_running_mode_enabled():
-		return site_dirsvc_endpoints_configured()
-	return True
-
-
 def should_wait_for_dirsvc(defw_module):
-	if not register_with_dirsvc():
-		return False
 	return not _dirsvc_ready(defw_module)
 
 
@@ -122,7 +87,7 @@ def _startup_wait_reason(defw_module):
 def _dirsvc_ready(defw_module):
 	if long_running_mode_enabled():
 		if not site_dirsvc_endpoints_configured():
-			return True
+			return False
 		return _site_dirsvc_ready(defw_module)
 	return getattr(defw_module, "dirsvc", None) is not None
 
@@ -142,13 +107,12 @@ def _site_dirsvc_endpoint_ready(defw_module, endpoint):
 def _site_registration_required():
 	return (
 		long_running_mode_enabled() and
-		register_with_dirsvc() and
 		site_dirsvc_endpoints_configured()
 	)
 
 
 def _local_registration_required():
-	return register_with_dirsvc() and not long_running_mode_enabled()
+	return not long_running_mode_enabled()
 
 
 def _local_registration_ready(defw_module):

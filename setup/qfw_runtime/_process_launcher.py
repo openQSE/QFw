@@ -15,16 +15,6 @@ from . import config as qfw_config
 from util import device_access
 
 
-DEFW_ENDPOINT_PROBE_TIMEOUT_SECONDS = 1.0
-DEFW_ENDPOINT_READY_PROBE = r"""
-import sys
-from qfw_runtime._process_launcher import _defw_endpoint_ready_unbounded
-
-raise SystemExit(
-    0 if _defw_endpoint_ready_unbounded(sys.argv[1], sys.argv[2]) else 1)
-"""
-
-
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] not in {"directory", "qpm"}:
@@ -133,7 +123,11 @@ def start_qpm(argv):
     parser.add_argument("--site-config")
     parser.add_argument("--module")
     parser.add_argument("--load-modules")
-    parser.add_argument("--operation-mode", default="long-running")
+    parser.add_argument(
+        "--operation-mode",
+        choices=("long-running", "qfw-managed"),
+        default="long-running",
+    )
     parser.add_argument("--run-dir")
     parser.add_argument("--listen-port", type=int, default=8290)
     parser.add_argument("--telnet-port", type=int, default=8291)
@@ -181,14 +175,6 @@ def start_qpm(argv):
     load_modules = args.load_modules or service.get("load-modules") or module
     credential_mode = str(service.get("credential-mode") or "").strip()
     operation_mode = service.get("operation-mode", args.operation_mode)
-    register = qfw_config.bool_config(
-        service.get("register-with-dirsvc"),
-        default=operation_mode != "direct",
-    )
-    direct_enabled = qfw_config.bool_config(
-        service.get("direct-endpoint-enabled"),
-        default=False,
-    )
     dirsvc_endpoint = (
         service.get("dirsvc-endpoint") or
         os.environ.get("QFW_LOCAL_DIRSVC_ENDPOINT") or
@@ -228,7 +214,7 @@ def start_qpm(argv):
         "DEFW_PARENT_PORT": str(dirsvc_port),
         "DEFW_PARENT_NAME": dirsvc_name,
         "DEFW_LOG_LEVEL": service.get("log-level", "error"),
-        "DEFW_DISABLE_DIRSVC": "no" if register else "yes",
+        "DEFW_DISABLE_DIRSVC": "no",
         "DEFW_LOG_DIR": str(log_dir),
         "DEFW_PY_LOGLEVEL": "debug,DEFW_ALL",
         "QFW_QPM_OPERATION_MODE": operation_mode,
@@ -236,9 +222,6 @@ def start_qpm(argv):
         "QFW_QPM_SERVICE_MODULE": module,
         "QFW_QPM_CREDENTIAL_MODE": credential_mode,
         "QFW_QPM_RUN_DIR": str(run_dir),
-        "QFW_QPM_REGISTER_WITH_DIRSVC": "yes" if register else "no",
-        "QFW_QPM_DIRECT_ENDPOINT_ENABLED": (
-            "yes" if direct_enabled else "no"),
         "QFW_STARTUP_TIMEOUT": str(startup_timeout),
         "QFW_SERVICE_READY_FILE": str(service_ready_file),
     })
@@ -270,8 +253,6 @@ def start_qpm(argv):
                 env["QFW_DEVICE_ACCESS_CFG"], service["device-id"])
         except Exception as exc:
             raise SystemExit(str(exc)) from exc
-    if service.get("direct-qpm-endpoint"):
-        env["QFW_DIRECT_QPM_ENDPOINT"] = str(service["direct-qpm-endpoint"])
     env["QFW_SITE_CONFIG"] = str(site_config_path)
     return _start_defw_owned_process(
         service_id,
@@ -289,15 +270,10 @@ def start_qpm(argv):
             "dirsvc_name": dirsvc_name,
             "dirsvc_endpoint": dirsvc_endpoint,
             "startup_timeout": startup_timeout,
-            "register_with_dirsvc": register,
+            "register_with_dirsvc": True,
             "service_ready_file": str(service_ready_file),
         },
-        lambda: _service_ready(
-            f"{service_host}:{service_port}",
-            module,
-            register,
-            service_ready_file,
-        ),
+        lambda: _service_ready(service_ready_file),
     )
 
 def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
@@ -400,13 +376,8 @@ def _write_ready(path, payload):
         json.dump(data, stream, sort_keys=True)
         stream.write("\n")
 
-def _service_ready(service_endpoint, service_module, register,
-                   service_ready_file=None):
-    if _ready_file_ready(service_ready_file):
-        return True
-    if not register:
-        return _service_endpoint_ready(service_endpoint, service_module)
-    return False
+def _service_ready(service_ready_file=None):
+    return _ready_file_ready(service_ready_file)
 
 
 def _ready_file_ready(path):
@@ -432,85 +403,6 @@ def _tcp_endpoint_ready(endpoint):
             return True
     except OSError:
         return False
-
-
-def _service_endpoint_ready(endpoint, service_module):
-    return _defw_endpoint_ready(endpoint, service_module) is True
-
-
-def _defw_endpoint_ready(endpoint, service_module):
-    try:
-        result = subprocess.run(
-            [sys.executable or "python3", "-c", DEFW_ENDPOINT_READY_PROBE,
-             str(endpoint), str(service_module)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=DEFW_ENDPOINT_PROBE_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
-
-
-def _defw_endpoint_ready_unbounded(endpoint, service_module):
-    try:
-        client = _endpoint_client(endpoint, service_module)
-        status = client.is_ready()
-        if isinstance(status, dict):
-            return bool(status.get("ready"))
-        return bool(status)
-    except Exception:
-        return False
-
-
-def _endpoint_client(endpoint, service_module):
-    import defw
-
-    return defw.connect_to_binding(
-        _endpoint_binding_record(endpoint, service_module))
-
-
-def _endpoint_binding_record(endpoint, service_module):
-    endpoint_record = _endpoint_record(endpoint, default_name="qfw-service")
-    return {
-        "service_record": {
-            "service_id": f"service:{endpoint}",
-            "service_name": "QFwService",
-            "service_type": "qfw.service",
-            "runtime_id": endpoint_record["runtime_id"],
-            "endpoint": endpoint_record,
-            "selector": {},
-            "properties": {},
-        },
-        "selected_binding": {
-            "binding_name": "control",
-            "client_module": "api_qpm_control",
-            "client_class": "QPMControl",
-            "service_module": _qpm_service_module(service_module),
-            "service_class": "QPM",
-            "version": 1,
-        },
-    }
-
-
-def _qpm_service_module(module):
-    module = str(module).strip()
-    if module.endswith(".svc_qpm"):
-        return module
-    return f"{module}.svc_qpm"
-
-
-def _endpoint_record(endpoint, default_name=None):
-    host, port = _split_endpoint(endpoint)
-    return {
-        "address": host,
-        "listen_port": port,
-        "pid": 0,
-        "node_name": default_name or host,
-        "hostname": host,
-        "runtime_id": f"{host}:{port}",
-    }
 
 
 def _resolve_service(args, site_service):

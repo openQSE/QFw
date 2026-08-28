@@ -45,21 +45,17 @@ client
 ```
 
 The target design separates these concerns. DEFw-dirsvc owns registered-service
-discovery for services that choose to register, while QPM owns the active
-reservation flow and uses qhw-admission as the authoritative reservation store.
-Long-running QPM services remain DEFw-wrapped RPC services. Depending on site
-configuration, they either register with a selected DEFw-dirsvc or expose a
-configured direct DEFw endpoint that clients resolve without directory-service
-registration.
+discovery, while QPM owns the active reservation flow and uses qhw-admission as
+the authoritative reservation store. Every QPM registers with either the
+application-owned or site-owned directory service. Long-running QPM services
+remain DEFw-wrapped RPC services.
 
 Relevant implementation points:
 
 - `backends/qfw_qiskit/qfw_lookup_service.py` resolves QPM through
-  `QPMResolver`, using configured DEFw-dirsvc scopes or a configured direct
-  endpoint scope.
-- `backends/qfw_qiskit/qpm_resolver.py` resolves service records, selected API
-  bindings, and direct endpoint records, then asks DEFw to construct the
-  requested service API wrapper.
+  `QPMResolver`, using configured DEFw-dirsvc scopes.
+- `backends/qfw_qiskit/qpm_resolver.py` resolves service records and selected
+  API bindings, then asks DEFw to construct the requested service API wrapper.
 - `DEFw/python/infra/defw.py` implements `connect_to_binding()` by connecting
   to the selected endpoint and constructing the requested service API wrapper.
 - `DEFw/python/services/svc_dirsvc/svc_dirsvc.py` implements registration,
@@ -1098,19 +1094,12 @@ Client and resolver variables:
 | `QFW_RUNTIME_PROFILE` | Optional profile name, such as `local` or `hybrid`, used when no explicit runtime path is supplied. |
 | `QFW_SITE_DIRSVC_ENDPOINTS` | Override for site directory endpoints from `site.yaml`; normally unset. |
 | `QFW_QPM_RESOLVER_SCOPE_ORDER` | Override for `resolver.scope-order` from runtime configuration. |
-| `QFW_QPM_DIRECT_ENDPOINT_ENABLED` | Enables the configured direct-endpoint resolver scope for an explicitly configured direct QPM. |
-| `QFW_DIRECT_QPM_ENDPOINT` | Configured direct DEFw endpoint for an unregistered or directly selected long-running QPM. |
-| `QFW_DIRECT_QPM_SERVICE_MODULE` | Optional service module override for a direct endpoint binding. |
-| `QFW_DIRECT_QPM_SERVICE_CLASS` | Optional service class override for a direct endpoint binding. |
 
 Service-launch variables:
 
 | Variable | Purpose |
 | --- | --- |
 | `QFW_QPM_OPERATION_MODE` | QPM operation-mode override, such as `long-running` or `qfw-managed`. |
-| `QFW_QPM_REGISTER_WITH_DIRSVC` | Override controlling whether a QPM registers with a directory service. |
-| `QFW_QPM_DIRECT_ENDPOINT_ENABLED` | Enables direct listener readiness when a service runs without directory-service registration. |
-| `QFW_DIRECT_QPM_ENDPOINT` | Stable endpoint advertised to direct clients for long-running listener mode. |
 | `DEFW_DISABLE_DIRSVC` | Low-level DEFw listener setting written by wrappers; users should not set it directly. |
 
 Activation variables:
@@ -2113,13 +2102,10 @@ among endpoints based on load, admission estimates, scheduler state, or policy.
 That scheduler is a higher-level selection component rather than the baseline
 resolver behavior.
 
-Direct configured QPM endpoint resolution is the supported model for
-unregistered long-running QPM services and also remains useful for diagnostics
-and controlled fallback. It still uses DEFw RPC and the same selected QPM API
-binding model; it only bypasses directory-service registration and lookup.
-Runtime profiles decide whether clients use site directory discovery, job-local
-directory discovery, direct endpoint resolution, or an ordered combination of
-those scopes.
+Runtime profiles decide whether clients use site directory discovery,
+application-local directory discovery, or an ordered combination of those
+scopes. An endpoint that has not registered with a directory service is never
+eligible for client resolution.
 
 ### QPM Override Handling
 
@@ -2680,34 +2666,26 @@ endpoint. QPM reservation should be exposed only through the QPM admission API.
 
 ### DISC-003
 
-DEFw service startup should distinguish job-local registration,
-site-global registration, and direct listener mode. Registration settings should
-be explicit so accidental unregistered services are easy to diagnose.
+DEFw service startup should distinguish application-local and site-global
+registration. Every QPM must register before it becomes ready.
 
 Candidate configuration fields:
 
 | Field | Meaning |
 | --- | --- |
-| `register-with-dirsvc` | Boolean controlling whether the service registers with a DEFw-dirsvc. |
 | `listen-endpoint` | Stable endpoint or port used by long-running clients. |
 | `dirsvc-endpoint` | DEFw-dirsvc endpoint used for job-local or site-global registration. |
-| `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for direct endpoint mode. |
+| `startup-readiness-gate` | `dirsvc-ready` after listener and controller initialization. |
 
 The option must map to the existing DEFw startup behavior. `defwp-wrapper`
 defaults `DEFW_DISABLE_DIRSVC` to `yes`, and the C listener attempts a parent
 directory-service connection only when directory-service use is enabled and a
 parent name is configured. QFw-managed service launch sets
-`DEFW_DISABLE_DIRSVC=no` and provides parent host, port, and name. A
-long-running QPM may register with the configured production DEFw-dirsvc or run
-as a configured direct endpoint, depending on the selected runtime profile.
-Direct unregistered listener mode should set `DEFW_DISABLE_DIRSVC=yes`, leave
-registration disabled, and use the listener/controller readiness gate.
+`DEFW_DISABLE_DIRSVC=no` and provides the parent host, port, and name. A
+long-running QPM registers with the configured production DEFw-dirsvc.
 
-Provider QPM modules use the common configuration-aware readiness path. In
-registered mode they wait for directory-service registration. In direct
-endpoint mode they complete after listener and controller initialization, then
-expose health and metadata over DEFw RPC so the direct resolver can validate
-the service.
+Provider QPM modules use the common configuration-aware readiness path. They
+wait for listener and controller initialization and directory registration.
 
 </details>
 
@@ -2717,12 +2695,10 @@ the service.
 ### DISC-004
 
 QFw should provide a QPM resolver layer between clients and QPM discovery. The
-resolver queries one or more DEFw-dirsvc instances and can also synthesize a
-binding record from a configured direct endpoint. QFw-managed local services
+resolver queries one or more DEFw-dirsvc instances. QFw-managed local services
 register with the job-local directory service started by `qfw-setup`.
-Long-running services either register with the shared directory service whose
-resolved endpoint is published in its connection record or listen on a
-configured direct DEFw endpoint without registration.
+Long-running services register with the shared directory service whose resolved
+endpoint is published in its connection record.
 
 The resolver input is the site configuration plus client runtime profile rather
 than a list of primary QPM endpoints. `site.yaml` provides the site-global
@@ -2735,30 +2711,23 @@ directory-service:
   connection-file: /shared/openqse/qfw/directory-service.json
 ```
 
-The selected runtime configuration provides lookup order. Directory scopes and
-direct endpoint scopes are explicit entries in that order:
+The selected runtime configuration provides directory lookup order:
 
 ```yaml
 resolver:
   scope-order:
     - local
     - site
-    - direct
 ```
 
 The implicit profile uses only `site`. The local profile uses only `local`.
-The hybrid profile uses `local` first and then `site`. A direct long-running
-profile can use only `direct`, while a controlled fallback profile can place
-`direct` after the permitted directory scopes.
+The hybrid profile uses `local` first and then `site`.
 
 The resolver path should:
 
-1. Read enabled directory-service endpoints, configured direct endpoints, and
-   selection policy.
-2. Connect to each enabled DEFw-dirsvc or synthesize direct endpoint records as
-   required by ordered policy.
-3. Query service records and selected API bindings, or build the selected
-   binding for a direct endpoint.
+1. Read enabled directory-service endpoints and selection policy.
+2. Connect to each enabled DEFw-dirsvc in the configured order.
+3. Query service records and selected API bindings.
 4. Annotate candidates with resolver scope and resolver identity.
 5. Filter by service type, selector resource, selector alias, API binding,
    caller policy, and operation mode.
@@ -2784,9 +2753,8 @@ deterministic policy or returns a structured ambiguity error. Scheduler-driven
 or load-aware selection is outside this resolver layer.
 
 After resolution, reservation and release behavior should be identical for
-QFw-managed and long-running QPM services. Directory-service discovery and
-configured direct endpoint resolution are both supported resolver contracts; the
-selected runtime profile determines which scopes are allowed and in what order.
+QFw-managed and long-running QPM services. The selected runtime profile
+determines which directory scopes are allowed and in what order.
 
 Load-aware selection among multiple matching QPM endpoints belongs to a later
 QFw scheduler layer. The DISC-004 resolver should only apply deterministic
@@ -3492,9 +3460,9 @@ production behavior should require the reservation ID.
 
 The Qiskit adapter uses the same reservation-scoped API path. The current
 `qfw_lookup_service.get_qpm()` path is a QPM resolver wrapper. The resolver
-talks to the enabled DEFw-dirsvc instances or configured direct endpoint scopes
-from the selected runtime profile. It may use the site-global directory, the
-job-local directory, direct endpoint resolution, or an ordered combination. It
+talks to the enabled DEFw-dirsvc instances from the selected runtime profile.
+It may use the site-global directory, the job-local directory, or an ordered
+combination. It
 resolves the selected service record and API binding, then constructs the same
 QPM client binding regardless of which configured scope returned the record.
 

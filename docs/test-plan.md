@@ -30,9 +30,6 @@ coverage to exercise these runtime modes:
   managers register a long-running QPM with the site-scoped DEFw-dirsvc.
 - Hybrid runtime: a job starts local services while also allowing discovery
   through a site-scoped directory service.
-- Direct endpoint diagnostic runtime: a DEFw-wrapped QPM listens on an
-  explicitly configured endpoint and is used only when the direct endpoint
-  resolver scope is explicitly enabled.
 
 The environment must provide:
 
@@ -542,8 +539,8 @@ by the admission and scheduler fixture. Site services are started with
 | Test ID | Scenario | Requirements |
 | --- | --- | --- |
 | ST-001 | QFw-managed service discovery. Start an allocation-local DEFw-dirsvc and QPM service, verify QPM registers service records and API bindings, resolve execution and telemetry bindings, and confirm DEFw-dirsvc performs no QPM admission capacity accounting. | `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`, `DISC-004`, `API-003` |
-| ST-002 | Long-running QPM discovery. Start a long-running DEFw-wrapped QPM, register it with a site-scoped DEFw-dirsvc, inject directory configuration into a client allocation, resolve and call it through DEFw RPC, and verify an unregistered direct endpoint is callable only when the direct endpoint resolver scope is explicitly enabled. | `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003` |
-| ST-003 | Multi-scope resolver policy. Present local, site-scoped, hybrid, and direct-endpoint candidates, verify scope annotation, deterministic ordering, tie-breaking, ambiguity errors, stale generation rejection, selected API binding validation, and no silent hardware-to-simulator fallback. | `DISC-004`, `DISC-005`, `API-003` |
+| ST-002 | Long-running QPM discovery. Start a long-running DEFw-wrapped QPM, register it with a site-scoped DEFw-dirsvc, inject directory configuration into a client allocation, and resolve and call it through DEFw RPC. | `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003` |
+| ST-003 | Multi-scope resolver policy. Present local, site-scoped, and hybrid candidates, then verify scope annotation, deterministic ordering, tie-breaking, ambiguity errors, stale generation rejection, selected API binding validation, and no silent hardware-to-simulator fallback. | `DISC-004`, `DISC-005`, `API-003` |
 | ST-004 | API category separation and token placeholders. Resolve and call execution, admission control, admission policy configuration, scheduler control, and telemetry/discovery bindings. Verify tokens are preserved as opaque metadata and are not parsed, validated, or used for authorization. | `CAT-001` through `CAT-007`, `API-001` through `API-004`, `CTRL-001` |
 | ST-005 | Client pass-through. Submit through QFw backend, job, sampler, and estimator paths with `reservation_id`, token, timeout, and execution options. Verify context reaches QPM unchanged and production resource-affecting execution without a reservation ID is rejected. | `API-001`, `API-003`, `CAT-002` |
 | ST-006 | Admission reservation workflows. Exercise `evaluate`, `reserve`, `renew`, `release`, `cancel`, `get_reservation`, and `list_reservations`. Verify accepted, delayed, and rejected outcomes include machine-readable reasons and that qhw-admission is the authoritative reservation store. | `ADM-001` through `ADM-004`, `ADM-016`, `ADM-017`, `CAT-003` |
@@ -638,8 +635,6 @@ by the admission and scheduler fixture. Site services are started with
 - Inspect telemetry and audit records for registration, deregistration, peer
   loss, restart, generation change, policy change,
   reconciliation fault, and reservation close events.
-- Review direct endpoint fallback configuration and confirm unmanaged execution
-  cannot be selected in production workflows.
 - Inspect the installed prefix and confirm commands, private helpers, service
   modules, service API bindings, Python packages, examples, and configuration
   templates are installed under the expected package-owned locations.
@@ -675,8 +670,7 @@ by the admission and scheduler fixture. Site services are started with
   emergency service operation.
 - Confirm operator documentation or runbook notes identify which command-line
   options, environment variables, and site or runtime files select local
-  directories, site-scoped directories, hybrid lookup, and direct fallback
-  endpoints.
+  directories, site-scoped directories, and hybrid lookup.
 
 ## Acceptance Criteria
 

@@ -383,15 +383,9 @@ def _resolve_plan(args, run_dir):
             elif components["prte"]:
                 components["prte"] = service_requires_prte
     if components["qpm"] and not directory.get("endpoint"):
-        registered = any(
-            qfw_config.bool_config(
-                service["manifest"].get("register-with-dirsvc"), True)
-            for service in services
+        raise ServicePlaneError(
+            "QPM startup requires a directory endpoint"
         )
-        if registered:
-            raise ServicePlaneError(
-                "registered QPM startup requires a directory endpoint"
-            )
 
     dvm_nodes = _dvm_nodes(
         local, services, allocation, directory, args.scope)
