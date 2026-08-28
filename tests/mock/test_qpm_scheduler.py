@@ -218,7 +218,7 @@ def test_scheduler_control_state_is_target_scoped(monkeypatch):
 def test_admitted_qtask_enters_scheduler_before_provider(monkeypatch):
 	_setup(monkeypatch)
 	qpm = SchedulerQPM()
-	qpm.controller.reservation_metadata_by_id["reservation-1"] = {
+	qpm.controller.reservation_metadata_by_id[1] = {
 		"owner": {"user": "alice"},
 		"external_user_id": "alice",
 		"external_job_id": "job-1",
@@ -227,7 +227,7 @@ def test_admitted_qtask_enters_scheduler_before_provider(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 	runtime = qpm.controller.task_for_cid(response["cid"])
 	scheduler = qpm.controller.scheduler_context
@@ -250,7 +250,7 @@ def test_delayed_capacity_stays_out_of_scheduler(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	assert response["outcome"] == "DELAYED"
@@ -267,12 +267,12 @@ def test_dispatch_depth_keeps_later_qtasks_queued(monkeypatch):
 	first = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 	second = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	assert qpm.fake_qrc.async_cids == [first["cid"]]
@@ -292,7 +292,7 @@ def test_provider_queue_depth_bounds_dispatch_and_reports_limits(monkeypatch):
 	responses = [qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	}) for _ in range(3)]
 	status = qpm.get_scheduler_status()
 
@@ -334,7 +334,7 @@ def test_lowering_provider_limit_does_not_cancel_inflight_work(monkeypatch):
 	responses = [qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	}) for _ in range(3)]
 
 	qpm.controller.device_profile = {
@@ -356,14 +356,14 @@ def test_async_run_reports_new_qtask_when_older_work_dispatches(monkeypatch):
 	first = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	qpm.resume_execution_target()
 	second = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	assert second["cid"] != first["cid"]
@@ -380,10 +380,10 @@ def test_sync_timeout_returns_task_handles(monkeypatch):
 	response = qpm.sync_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	}, timeout=0)
 	status = qpm.task_status(
-		qtask_id=response["qtask_id"], reservation_id="reservation-1")
+		qtask_id=response["qtask_id"], reservation_id="1")
 
 	assert response["outcome"] == "TIMEOUT"
 	assert response["lifecycle_state"] == QPM_TASK_QUEUED
@@ -410,7 +410,7 @@ def test_completion_accounting_precedes_terminal_response(monkeypatch):
 		"actual_credits": 2,
 		"rate_units": 5,
 		"actual_rate_units": 1,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 	context = qpm.controller.admission_context
 	scheduler = qpm.controller.scheduler_context
@@ -436,12 +436,12 @@ def test_scheduler_submission_failure_reconciles_capacity_hold(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
-	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	status = qpm.task_status(qtask_id=1, reservation_id="1")
 	completion = qpm.read_cq(
-		cid=response["cid"], reservation_id="reservation-1")
+		cid=response["cid"], reservation_id="1")
 	context = qpm.controller.admission_context
 
 	assert response["outcome"] == "FAILED"
@@ -482,16 +482,16 @@ def test_scheduler_failed_task_does_not_block_completion_queue_gc(
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
-	qpm.release(reservation_id="reservation-1", reason=9)
+	qpm.release(reservation_id="1", reason=9)
 
 	assert response["outcome"] == "FAILED"
 	assert response["qtask_id"] in (
-		qpm.controller.qtask_ids_by_reservation["reservation-1"])
+		qpm.controller.qtask_ids_by_reservation[1])
 	_assert_terminal_queue_garbage_collected(
-		qpm, "reservation-1", response["cid"])
+		qpm, 1, response["cid"])
 
 
 def test_async_provider_failure_preserves_failed_terminal_state(monkeypatch):
@@ -502,12 +502,12 @@ def test_async_provider_failure_preserves_failed_terminal_state(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
-	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	status = qpm.task_status(qtask_id=1, reservation_id="1")
 	completion = qpm.read_cq(
-		cid=response["cid"], reservation_id="reservation-1")
+		cid=response["cid"], reservation_id="1")
 	context = qpm.controller.admission_context
 	scheduler = qpm.controller.scheduler_context
 
@@ -549,14 +549,14 @@ def test_provider_failed_task_does_not_block_completion_queue_gc(
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
-	qpm.release(reservation_id="reservation-1", reason=10)
+	qpm.release(reservation_id="1", reason=10)
 
 	assert response["outcome"] == "FAILED"
 	_assert_terminal_queue_garbage_collected(
-		qpm, "reservation-1", response["cid"])
+		qpm, 1, response["cid"])
 
 
 def test_sync_provider_failure_preserves_failed_terminal_state(monkeypatch):
@@ -567,10 +567,10 @@ def test_sync_provider_failure_preserves_failed_terminal_state(monkeypatch):
 	response = qpm.sync_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
-	status = qpm.task_status(qtask_id=1, reservation_id="reservation-1")
+	status = qpm.task_status(qtask_id=1, reservation_id="1")
 	context = qpm.controller.admission_context
 	scheduler = qpm.controller.scheduler_context
 
@@ -603,14 +603,14 @@ def test_cancel_task_reconciles_scheduler_admission_and_provider(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	cancelled = qpm.cancel_task(
-		qtask_id=response["qtask_id"], reservation_id="reservation-1",
+		qtask_id=response["qtask_id"], reservation_id="1",
 		reason="user-request")
 	completion = qpm.read_cq(
-		cid=response["cid"], reservation_id="reservation-1")
+		cid=response["cid"], reservation_id="1")
 
 	assert cancelled["outcome"] == "CANCELLED"
 	assert cancelled["lifecycle_state"] == QPM_TASK_CANCELLED
@@ -633,19 +633,19 @@ def test_cancelled_task_does_not_block_completion_queue_gc(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	cancelled = qpm.cancel_task(
-		qtask_id=response["qtask_id"], reservation_id="reservation-1",
+		qtask_id=response["qtask_id"], reservation_id="1",
 		reason="user-request")
-	qpm.release(reservation_id="reservation-1", reason=11)
+	qpm.release(reservation_id="1", reason=11)
 
 	assert cancelled["outcome"] == "CANCELLED"
 	assert response["qtask_id"] in (
-		qpm.controller.qtask_ids_by_reservation["reservation-1"])
+		qpm.controller.qtask_ids_by_reservation[1])
 	_assert_terminal_queue_garbage_collected(
-		qpm, "reservation-1", response["cid"])
+		qpm, 1, response["cid"])
 
 
 def test_cancel_task_keeps_provider_pending_nonterminal(monkeypatch):
@@ -655,11 +655,11 @@ def test_cancel_task_keeps_provider_pending_nonterminal(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	pending = qpm.cancel_task(
-		qtask_id=response["qtask_id"], reservation_id="reservation-1",
+		qtask_id=response["qtask_id"], reservation_id="1",
 		reason="user-request")
 	runtime = qpm.controller.task_for_cid(response["cid"])
 
@@ -680,12 +680,12 @@ def test_cancel_task_keeps_unsupported_provider_work_nonterminal(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 	qpm.controller.set_provider_canceller(None)
 
 	pending = qpm.cancel_task(
-		qtask_id=response["qtask_id"], reservation_id="reservation-1",
+		qtask_id=response["qtask_id"], reservation_id="1",
 		reason="user-request")
 	runtime = qpm.controller.task_for_cid(response["cid"])
 
@@ -704,11 +704,11 @@ def test_task_status_exposes_queue_observations(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	status = qpm.task_status(
-		cid=response["cid"], reservation_id="reservation-1")
+		cid=response["cid"], reservation_id="1")
 	queue_state = qpm.get_scheduler_queue_state()
 
 	assert status["outcome"] == "DELAYED"
@@ -725,15 +725,15 @@ def test_lifecycle_telemetry_records_controls_and_reconciliation(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	qpm.controller.admission_context.reservation_states[
-		"reservation-1"] = "expired"
+		1] = "expired"
 	summary = qpm.reconcile_runtime_state(reason="test-lifecycle")
 	telemetry = qpm.get_service_lifecycle_telemetry()
 	status = qpm.task_status(
-		qtask_id=response["qtask_id"], reservation_id="reservation-1")
+		qtask_id=response["qtask_id"], reservation_id="1")
 
 	events = [record["event"] for record in telemetry["lifecycle_events"]]
 	assert "binding-attached" in events
@@ -756,11 +756,11 @@ def test_reconciliation_keeps_provider_active_hold_until_cancel_terminal(
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	qpm.controller.admission_context.reservation_states[
-		"reservation-1"] = "expired"
+		1] = "expired"
 	summary = qpm.reconcile_runtime_state(reason="test-provider-cancel")
 	runtime = qpm.controller.task_for_cid(response["cid"])
 

@@ -194,52 +194,52 @@ def test_util_qpm_execution_methods_accept_phase3_positional_order():
 	qpm.process_oor_queue = lambda: None
 
 	assert qpm.task_status(
-		"cid-1", "reservation-1", "opaque-token") == {
+		"cid-1", "1", "opaque-token") == {
 			"cid": "cid-1",
 		}
 	assert qpm.controller.cid_status_kwargs == {
 		"cid": "cid-1",
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 		"require_reservation": True,
 	}
 
 	assert qpm.cancel_task(
-		"cid-1", "reservation-1", "opaque-token", "stop") == {
+		"cid-1", "1", "opaque-token", "stop") == {
 			"outcome": "CANCELLED",
 		}
-	assert qpm.controller.validated[-1].reservation_id == "reservation-1"
+	assert qpm.controller.validated[-1].reservation_id == 1
 	assert qpm.controller.validated[-1].token == "opaque-token"
 	assert qpm.controller.cancel_kwargs == {
 		"cid": "cid-1",
 		"qtask_id": None,
 		"reason": "stop",
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 		"require_reservation": True,
 	}
 
 	assert qpm.task_status(
-		qtask_id=7, reservation_id="reservation-2",
+		qtask_id=7, reservation_id="2",
 		token={"opaque": "token"}) == {
 			"qtask_id": 7,
 		}
 	assert qpm.controller.qtask_status_kwargs == {
 		"qtask_id": 7,
-		"reservation_id": "reservation-2",
+		"reservation_id": "2",
 		"require_reservation": True,
 	}
 
 	assert qpm.cancel_task(
-		qtask_id=7, reservation_id="reservation-2",
+		qtask_id=7, reservation_id="2",
 		token={"opaque": "token"}, reason="keyword-stop") == {
 			"outcome": "CANCELLED",
 		}
-	assert qpm.controller.validated[-1].reservation_id == "reservation-2"
+	assert qpm.controller.validated[-1].reservation_id == 2
 	assert qpm.controller.validated[-1].token == {"opaque": "token"}
 	assert qpm.controller.cancel_kwargs == {
 		"cid": None,
 		"qtask_id": 7,
 		"reason": "keyword-stop",
-		"reservation_id": "reservation-2",
+		"reservation_id": "2",
 		"require_reservation": True,
 	}
 
