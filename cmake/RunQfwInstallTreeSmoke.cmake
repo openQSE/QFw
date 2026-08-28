@@ -15,6 +15,8 @@ if(NOT QFW_PYTHON_INSTALL_DIR)
 endif()
 
 find_program(QFW_BASH bash REQUIRED)
+get_filename_component(qfw_python_bin_dir "${QFW_PYTHON}" DIRECTORY)
+set(ENV{PATH} "${qfw_python_bin_dir}:$ENV{PATH}")
 
 function(qfw_free_port out_var)
 	get_property(next_port GLOBAL PROPERTY QFW_NEXT_FAKE_PORT)

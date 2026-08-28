@@ -337,6 +337,7 @@ _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/backends"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/services"
 _qfw_prepend_path PYTHONPATH "${QFW_PREFIX}/service-apis"
 _qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/python"
+_qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/python/infra"
 _qfw_prepend_path PYTHONPATH "${DEFW_PREFIX}/src"
 
 if [[ -d "${QFW_PREFIX}/lib/qfw/services" ]]; then
