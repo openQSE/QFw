@@ -289,7 +289,7 @@ def test_qpm_startup_registration_records_lifecycle_telemetry(monkeypatch):
 			lambda threading_mode, target_id=None: object()),
 	)
 	record = site_qpm_record()
-	record["properties"]["controller"] = {"target_id": "startup-target"}
+	record["properties"]["controller_target_id"] = "startup-target"
 	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 
@@ -336,7 +336,7 @@ def test_qpm_startup_records_real_defw_directory_lifecycle(monkeypatch):
 	directory = defw_directory.Directory(retention_seconds=0.01)
 	monkeypatch.setattr(defw_directory, "directory", directory)
 	record = site_qpm_record()
-	record["properties"]["controller"] = {"target_id": "directory-target"}
+	record["properties"]["controller_target_id"] = "directory-target"
 	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
 	local_dirsvc = FakeSiteDirSvc()
 
@@ -356,7 +356,7 @@ def test_qpm_startup_records_real_defw_directory_lifecycle(monkeypatch):
 	restart["runtime_id"] = "qpm-runtime-2"
 	restart["peer_handle"] = "qpm-peer-2"
 	restart["endpoint"]["runtime_id"] = "qpm-runtime-2"
-	restart["properties"]["controller"] = {"target_id": "directory-target"}
+	restart["properties"]["controller_target_id"] = "directory-target"
 	restarted = defw_directory.register_service(restart)
 	defw_directory.deregister_service(
 		restarted["service_id"],

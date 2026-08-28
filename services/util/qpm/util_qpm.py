@@ -832,9 +832,10 @@ class UTIL_QPM:
 		service_module = self.__class__.__module__
 		service_class = self.__class__.__name__
 		provider = properties.get("provider")
-		properties.setdefault("service_type", QPM_SERVICE_TYPE)
-		properties.setdefault("service_id", _qpm_service_id(
-			svc_name, service_module, provider, properties))
+		service_type = QPM_SERVICE_TYPE
+		service_id = _qpm_service_id(
+			svc_name, service_module, provider, properties)
+		properties.pop("selector", None)
 		properties.setdefault("qpm_type", int(type_bits))
 		properties.setdefault("qpm_capabilities", int(caps_bits))
 		properties.setdefault(
@@ -843,16 +844,14 @@ class UTIL_QPM:
 		properties.setdefault(
 			"hardware",
 			_qpm_type_bit_enabled(type_bits, QPMType.QPM_TYPE_HARDWARE))
-		properties.setdefault("selector", _qpm_selector(
-			properties, svc_name, provider))
-		properties.setdefault("api_bindings", _qpm_api_bindings(
-			service_module, service_class))
-		properties.setdefault("binding_name", "execution")
-		properties.setdefault("client_module", "api_qpm_execution")
-		properties.setdefault("client_class", "QPMExecution")
-		properties.setdefault("service_module", service_module)
-		properties.setdefault("service_class", service_class)
-		properties.setdefault("controller", self.controller_telemetry())
+		selector = _qpm_selector(properties, svc_name, provider)
+		api_bindings = _qpm_api_bindings(service_module, service_class)
+		controller_target_id = self.controller_telemetry().get("target_id")
+		if controller_target_id:
+			properties.setdefault(
+				"controller_target_id", controller_target_id)
+		properties.setdefault("service_id", service_id)
+		properties.setdefault("service_type", service_type)
 		type_names = [
 			name for name, member in QPMType.__members__.items()
 			if int(member) & int(type_bits)
@@ -862,11 +861,11 @@ class UTIL_QPM:
 			if int(member) & int(caps_bits)
 		]
 		return {
-			"service_id": properties["service_id"],
+			"service_id": service_id,
 			"service_name": svc_name,
-			"service_type": properties["service_type"],
-			"api_bindings": list(properties["api_bindings"]),
-			"selector": dict(properties["selector"]),
+			"service_type": service_type,
+			"api_bindings": list(api_bindings),
+			"selector": dict(selector),
 			"properties": properties,
 			"capability": {
 				"type": int(type_bits),

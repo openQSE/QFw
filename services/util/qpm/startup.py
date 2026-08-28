@@ -406,10 +406,7 @@ def _controller_for_service_record(record):
 	properties = record.get("properties") or {}
 	if not isinstance(properties, dict):
 		return None
-	controller_telemetry = properties.get("controller") or {}
-	if not isinstance(controller_telemetry, dict):
-		return None
-	target_id = controller_telemetry.get("target_id")
+	target_id = properties.get("controller_target_id")
 	if target_id is None:
 		return None
 	return find_target_controller(target_id)

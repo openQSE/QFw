@@ -101,6 +101,9 @@ def test_qpm_metadata_resolves_through_defw_directory_shape():
 	assert resolved.properties["qpm_type"] == int(QPMType.QPM_TYPE_HARDWARE)
 	assert resolved.properties["qpm_capabilities"] == int(
 		QPMCapability.QPM_CAP_SUPERCONDUCTING)
+	assert resolved.properties["controller_target_id"] == "iqm-target"
+	assert "controller" not in resolved.properties
+	assert "api_bindings" not in resolved.properties
 	assert resolved.selector_metadata["resources"] == ["IQM-20q"]
 	assert resolved.api_binding.binding_name == "execution"
 	assert resolved.api_binding.client_module == "api_qpm_execution"
