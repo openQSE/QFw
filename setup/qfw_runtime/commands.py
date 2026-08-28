@@ -315,8 +315,12 @@ def _start_job_local_services(state):
         services = qfw_config.load_service_manifest(manifest_path)
         selected = qfw_config.selected_service_names(local_config, services)
         launches = []
-        for service_id in selected:
-            service_run_dir = lifecycle_root / "qpm" / service_id
+        runtime_service_ids = []
+        for service_name in selected:
+            service_id = qfw_config.application_service_id(
+                service_name, state["run_id"])
+            runtime_service_ids.append(service_id)
+            service_run_dir = lifecycle_root / "qpm" / service_name
             service_state = qfw_service_plane.start_role(
                 "qpm",
                 run_dir=service_run_dir,
@@ -324,6 +328,7 @@ def _start_job_local_services(state):
                 runtime_config=state["runtime_config"],
                 scope="application",
                 service_id=service_id,
+                manifest_service_name=service_name,
                 directory_service_info=directory_info,
                 timeout=local_timeout,
                 allocation=allocation,
@@ -332,13 +337,15 @@ def _start_job_local_services(state):
                 "owner": "application",
                 "role": "qpm",
                 "service_id": service_id,
+                "manifest_service_name": service_name,
                 "run_dir": str(service_run_dir),
             })
             launches.append(dict(service_state["services"][0]))
             state["service_managers"] = managers
             state["local_service_launches"] = launches
             qfw_config.write_state(state)
-        state["environment"]["QFW_QPM_SERVICE_IDS"] = ",".join(selected)
+        state["environment"]["QFW_QPM_SERVICE_IDS"] = ",".join(
+            runtime_service_ids)
         if launches:
             state["environment"]["QFW_DVM_URI_PATH"] = str(
                 Path(managers[-1]["run_dir"]) / "prte_dvm" / "dvm-uri")

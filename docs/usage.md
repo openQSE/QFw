@@ -849,7 +849,8 @@ Neither packaged local profile contains a `services` list. A direct
 selected manifest. Backend-aware example wrappers add
 `--service-id <backend-service>` so they start only the requested QPM without
 generating another runtime file. `--service-id` requires a runtime with a
-`local-services` section.
+`local-services` section. QFw uses that value to select the manifest entry and
+generates a run-unique directory service ID for the application-owned QPM.
 
 Runtime selection uses this order:
 

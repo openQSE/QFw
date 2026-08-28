@@ -471,6 +471,14 @@ def selected_service_names(local_config, manifest_services):
     return [str(item) for item in selected]
 
 
+def application_service_id(service_name, run_id):
+    identity = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"qfw-application-service:{run_id}:{service_name}",
+    )
+    return f"{service_name}-{identity.hex}"
+
+
 def load_service_manifest(path):
     data = load_yaml(path)
     services = data.get("services") or []

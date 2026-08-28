@@ -120,6 +120,7 @@ def start_directory(argv):
 def start_qpm(argv):
     parser = argparse.ArgumentParser(prog="qfw-qpm-svc")
     parser.add_argument("--service-id", required=True)
+    parser.add_argument("--manifest-service-name")
     parser.add_argument("--site-config")
     parser.add_argument("--module")
     parser.add_argument("--load-modules")
@@ -432,7 +433,9 @@ def _resolve_service(args, site_service):
 
     manifest_path = qfw_config.resolve_path(manifest)
     services = qfw_config.load_service_manifest(manifest_path)
-    return qfw_config.service_by_name(services, args.service_id), manifest_path
+    manifest_service_name = args.manifest_service_name or args.service_id
+    return qfw_config.service_by_name(
+        services, manifest_service_name), manifest_path
 
 def _allocation_context_from_env(env=None):
     env = env or os.environ

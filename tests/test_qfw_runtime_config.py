@@ -342,6 +342,15 @@ def test_prepare_run_state_selects_one_profile_service(tmp_path):
     assert state["local_services"]["services"] == ["nwqsim"]
 
 
+def test_application_service_id_is_stable_within_one_run_and_unique():
+    first = qfw_config.application_service_id("nwqsim", "run-a")
+
+    assert first == qfw_config.application_service_id("nwqsim", "run-a")
+    assert first != qfw_config.application_service_id("nwqsim", "run-b")
+    assert first != qfw_config.application_service_id("tnqvm", "run-a")
+    assert first.startswith("nwqsim-")
+
+
 def test_prepare_run_state_rejects_service_without_local_profile(tmp_path):
     with pytest.raises(ValueError, match="requires a runtime profile"):
         qfw_config.prepare_run_state(

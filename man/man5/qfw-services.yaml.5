@@ -9,10 +9,9 @@ placement, provider launcher, and optional device identity.
 .SH SERVICE KEYS
 .TP
 .B name
-Stable service identifier passed to
-.BR qfw-qpm-svc (1)
-and published through
-.BR QFW_QPM_SERVICE_ID .
+Manifest selector for the QPM implementation. A site-owned QPM also uses this
+as its stable service ID. QFw combines this name with the application run ID
+to create a unique service ID for an application-owned QPM.
 .TP
 .B module
 Primary DEFw QPM module.

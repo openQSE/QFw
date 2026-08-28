@@ -420,6 +420,7 @@ class QPMResolver:
 		return candidate.api_binding.binding_name == request.binding_filter()
 
 	def _select_candidate(self, candidates, request):
+		self._reject_duplicate_service_ids(candidates)
 		candidates = self._apply_simulator_fallback_policy(
 			candidates, request)
 		ordered = sorted(
@@ -445,6 +446,22 @@ class QPMResolver:
 			return matching_provider[0]
 		self._reject_ambiguous_resolution(ordered, request)
 		return ordered[0]
+
+	def _reject_duplicate_service_ids(self, candidates):
+		locations = {}
+		for candidate in candidates:
+			locations.setdefault(candidate.service_id, []).append(candidate)
+		duplicates = {
+			service_id: records
+			for service_id, records in locations.items()
+			if service_id is not None and len(records) > 1
+		}
+		if not duplicates:
+			return
+		service_id = sorted(duplicates)[0]
+		raise QPMAmbiguousResolutionError(
+			f"QPM service_id {service_id!r} appears in multiple visible "
+			"directories")
 
 	def _apply_simulator_fallback_policy(self, candidates, request):
 		if _simulator_fallback_allowed(request):

@@ -1606,16 +1606,17 @@ The transport layer and the directory layer need separate identities:
 
 | Identity | Owner | Stability | Purpose |
 | --- | --- | --- | --- |
-| `service_id` | Python directory and service registration | Stable across service restarts | Identifies the logical service or client registration. |
+| `service_id` | Python directory and service registration | Stable for a site service; unique to one application run for a local service | Identifies one logical service across all directories visible to a client. |
 | `runtime_id` | Service process | Stable for one process lifetime | Identifies one running instance of a logical service. |
 | `peer_handle` | C transport abstraction exposed to Python | Stable while C considers a peer callable | Lets Python associate registration and liveness with an opaque transport peer. |
 | `generation` | Python directory | Increments when a new runtime registers for a known `service_id` | Separates stale endpoints from the active runtime. |
 
-`service_id` should come from deployment configuration or another stable
-registration source. A generated `service_id` is acceptable only for ephemeral
-services that do not need restart continuity. Services should register with a
-stable `service_id`, service type, concrete API bindings, selector metadata,
-and endpoint metadata.
+Site service IDs come from deployment configuration and remain stable across
+restarts. QFw derives each application-owned service ID from its manifest name
+and application run ID. A resolver rejects a service ID found in more than one
+visible directory instead of choosing by scope priority. Services register
+their service ID, service type, concrete API bindings, selector metadata, and
+endpoint metadata.
 
 C manages connection state, sockets, heartbeat transmission, heartbeat failure
 detection, connection block UUIDs, and low-level connection events. It exports

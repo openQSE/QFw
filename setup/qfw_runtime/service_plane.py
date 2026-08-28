@@ -46,6 +46,7 @@ def qpm_service_main(argv=None):
 
 def start_role(role, *, run_dir, site_config=None, runtime_config=None,
                profile=None, scope="site", service_id=None,
+               manifest_service_name=None,
                directory_service_info=None, node=None, timeout=120,
                poll_interval=2.0, dry_run=False, allocation=None):
     """Start one lifecycle role through the shared service-plane engine."""
@@ -74,6 +75,8 @@ def start_role(role, *, run_dir, site_config=None, runtime_config=None,
             if directory_service_info else None
         ),
         service_id=str(service_id) if service_id else None,
+        manifest_service_name=(
+            str(manifest_service_name) if manifest_service_name else None),
         allocation=allocation,
     )
     return start(args)
@@ -125,12 +128,14 @@ def _role_argument_parser(program, role):
             qpm_node=None,
             directory_service_info=None,
             service_id=None,
+            manifest_service_name=None,
         )
         if role == "directory":
             command.set_defaults(directory_node=None)
         else:
             command.add_argument(
                 "--service-id", required=True, action=_StoreOnce)
+            command.add_argument("--manifest-service-name")
             command.add_argument("--directory-service-info")
     for name in ("status", "stop"):
         command = actions.add_parser(name)
@@ -363,14 +368,18 @@ def _resolve_plan(args, run_dir):
             raise ServicePlaneError("QPM startup requires a service manifest")
         manifest_services = qfw_config.load_service_manifest(manifest_path)
         selected = _selected_service_ids(
-            getattr(args, "service_id", None), local, manifest_services)
+            getattr(args, "manifest_service_name", None) or
+            getattr(args, "service_id", None),
+            local,
+            manifest_services)
         default_target = (
             socket.gethostname() if args.scope == "site"
             else directory.get("target", "")
         )
         services = _resolve_services(
             selected, manifest_services, local, allocation, args, qpm_node,
-            default_target)
+            default_target,
+            runtime_service_id=getattr(args, "service_id", None))
         if component_mode == "qpm":
             service_requires_prte = any(
                 service["provider_launch"].get("type") == "mpi"
@@ -432,7 +441,7 @@ def _selected_service_ids(explicit, local, manifest_services):
 
 
 def _resolve_services(selected, manifest_services, local, allocation, args,
-                      qpm_node, default_target):
+                      qpm_node, default_target, runtime_service_id=None):
     listen_port = int(local.get("service-listen-port-base", 8290))
     telnet_port = int(local.get("service-telnet-port-base", 8291))
     stride = int(local.get("service-port-stride", 100))
@@ -441,9 +450,9 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
         str(service.get("name", "")): index
         for index, service in enumerate(manifest_services)
     }
-    for service_id in selected:
-        service = qfw_config.service_by_name(manifest_services, service_id)
-        index = manifest_indexes[service_id]
+    for service_name in selected:
+        service = qfw_config.service_by_name(manifest_services, service_name)
+        index = manifest_indexes[service_name]
         if args.scope == "application":
             target = allocation["group1"][0]
         else:
@@ -459,7 +468,8 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
         service_telnet = int(service.get(
             "telnet-port", telnet_port + index * stride))
         resolved.append({
-            "service_id": service_id,
+            "service_id": runtime_service_id or service_name,
+            "manifest_service_name": service_name,
             "module": service.get("module", ""),
             "target": target,
             "assigned_hosts": assigned_hosts,
@@ -741,6 +751,7 @@ def _start_qpm(state, service, timeout, service_environment=None):
             "--background",
             "--run-dir", state["run_dir"],
             "--service-id", service_id,
+            "--manifest-service-name", service["manifest_service_name"],
             "--site-config", state["configuration"]["site_config"],
             "--operation-mode", (
                 "qfw-managed" if state["scope"] == "application"

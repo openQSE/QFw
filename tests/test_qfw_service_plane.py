@@ -21,6 +21,7 @@ def write_site_configuration(tmp_path, services):
         "services:\n" + "".join(
             f"  - name: {name}\n"
             f"    module: {module}\n"
+            f"    credential-mode: no-secret\n"
             f"    provider-launch:\n"
             f"      type: {provider}\n"
             for name, module, provider in services

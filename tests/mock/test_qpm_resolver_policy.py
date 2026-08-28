@@ -153,6 +153,33 @@ def test_resolver_reports_ambiguous_same_rank_candidates():
 		raise AssertionError("expected ambiguous QPM resolution")
 
 
+def test_resolver_rejects_duplicate_service_id_across_scopes():
+	local = DirectoryClient([directory_record("shared-qpm")])
+	site = DirectoryClient([directory_record("shared-qpm")])
+	resolver = QPMResolver(
+		[
+			DirectoryScope(
+				"local", "allocation-local", client=local, priority=100),
+			DirectoryScope("site", "site", client=site, priority=50),
+		],
+		connector=Connector(),
+		selection_order=["site", "allocation-local"],
+		sleeper=lambda seconds: None,
+	)
+
+	try:
+		resolver.resolve(
+			service_type="qfw.qpm",
+			selector_resource="IQM-20q",
+			api_category="execution",
+			timeout=1,
+		)
+	except QPMAmbiguousResolutionError as exc:
+		assert "appears in multiple visible directories" in str(exc)
+	else:
+		raise AssertionError("expected duplicate service ID rejection")
+
+
 def test_resolver_rejects_stale_generation_before_connecting():
 	directory = DirectoryClient(
 		[directory_record("qpm-iqm", generation=1)],

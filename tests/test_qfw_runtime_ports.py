@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
 
 from qfw_runtime import commands
+from qfw_runtime import config as qfw_config
 from qfw_runtime import _process_launcher as process_launcher
 
 
@@ -76,14 +77,15 @@ def test_private_qpm_launcher_loads_service_paths_from_site(
         process_launcher, "_start_defw_owned_process", fake_start)
 
     rc = process_launcher.start_qpm([
-        "--service-id", "iqm",
+        "--service-id", "iqm-runtime",
+        "--manifest-service-name", "iqm",
         "--site-config", str(site_path),
         "--run-dir", str(tmp_path / "run"),
         "--operation-mode", "long-running",
     ])
 
     assert rc == 0
-    assert captured["name"] == "iqm"
+    assert captured["name"] == "iqm-runtime"
     assert captured["env"]["QFW_SERVICE_CONFIG"] == str(manifest_path)
     assert captured["env"]["QFW_DEVICE_ACCESS_CFG"] == str(device_path)
     assert captured["env"]["QFW_SITE_CONFIG"] == str(site_path)
@@ -142,7 +144,7 @@ def test_start_job_local_services_delegates_to_split_managers(
                         "directory-service.json"),
                 },
             }
-        index = 0 if kwargs["service_id"] == "nwqsim" else 1
+        index = 0 if kwargs["manifest_service_name"] == "nwqsim" else 1
         return {
             "services": [{
                 "service_id": kwargs["service_id"],
@@ -187,8 +189,15 @@ def test_start_job_local_services_delegates_to_split_managers(
         "qpm",
         "qpm",
     ]
+    expected_ids = [
+        qfw_config.application_service_id(name, "test")
+        for name in ("nwqsim", "tnqvm")
+    ]
     assert [
         kwargs.get("service_id") for _role, kwargs in calls[1:]
+    ] == expected_ids
+    assert [
+        kwargs.get("manifest_service_name") for _role, kwargs in calls[1:]
     ] == ["nwqsim", "tnqvm"]
     directory_info = str(
         run_dir / "service-plane" / "directory" /
@@ -204,7 +213,8 @@ def test_start_job_local_services_delegates_to_split_managers(
         directory_info)
     assert state["environment"]["QFW_LOCAL_DIRSVC_ENDPOINT"] == (
         "svc-a:18090")
-    assert state["environment"]["QFW_QPM_SERVICE_IDS"] == "nwqsim,tnqvm"
+    assert state["environment"]["QFW_QPM_SERVICE_IDS"] == ",".join(
+        expected_ids)
     assert [launch["listen_port"] for launch in
             state["local_service_launches"]] == [8290, 8390]
 
