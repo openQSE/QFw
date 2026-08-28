@@ -322,6 +322,12 @@ else
 fi
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/lib"
 _qfw_prepend_path LD_LIBRARY_PATH "${DEFW_PREFIX}/src"
+if [[ "${_qfw_script_prefix}" == "${_qfw_cmake_generated_prefix}" ]]; then
+	_qfw_defw_runtime="$(_qfw_resolve_script_dir \
+		"${_qfw_script_prefix}/../DEFw/runtime/src/cdefw_global.py")"
+	_qfw_prepend_path LD_LIBRARY_PATH "${_qfw_defw_runtime}"
+	_qfw_prepend_path PYTHONPATH "${_qfw_defw_runtime}"
+fi
 while IFS= read -r _qfw_venv_path; do
 	[[ -n "${_qfw_venv_path}" ]] || continue
 	_qfw_prepend_path PYTHONPATH "${_qfw_venv_path}"
@@ -402,5 +408,5 @@ PS1="(qfw) ${PS1-}"
 
 unset _qfw_script_dir _qfw_script_prefix
 unset _qfw_cmake_source_prefix _qfw_cmake_generated_prefix
-unset _qfw_man_dir _qfw_venv_path
+unset _qfw_defw_runtime _qfw_man_dir _qfw_venv_path
 unset _qfw_requested_venv _qfw_parse_args
