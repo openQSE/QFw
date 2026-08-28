@@ -877,6 +877,7 @@ file(WRITE "${service_manifest}"
   - name: smoke-qpm
     module: svc_nwqsim_qpm
     load-modules: svc_nwqsim_qpm
+    credential-mode: no-secret
     listen-port: ${service_port}
     provider-launch:
       type: internal
@@ -950,7 +951,9 @@ file(WRITE "${partial_manifest}"
 "services:
   - name: first
     module: svc_nwqsim_qpm
+    credential-mode: no-secret
   - name: second
+    credential-mode: no-secret
 ")
 file(WRITE "${partial_runtime}"
 "resolver:
