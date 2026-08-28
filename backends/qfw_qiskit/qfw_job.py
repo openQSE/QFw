@@ -24,20 +24,15 @@ def normalize_reservation_id(value):
 	if value is None:
 		return None
 	if isinstance(value, str):
-		value = value.strip()
-		if not value:
-			raise DEFwError("reservation_id must not be empty")
-		try:
-			value = int(value, 0)
-		except ValueError as exc:
+		if not value or not value.isdecimal():
 			raise DEFwError(
-				f"reservation_id must be an unsigned 64-bit integer: "
-				f"{value!r}") from exc
+				f"reservation_id must be a decimal uint64_t value: {value!r}")
+		value = int(value, 10)
 	if isinstance(value, bool) or not isinstance(value, int):
 		raise DEFwError(
 			f"reservation_id must be an unsigned 64-bit integer: "
 			f"{value!r}")
-	if value < 0 or value > 0xffffffffffffffff:
+	if value < 1 or value > 0xffffffffffffffff:
 		raise DEFwError(
 			f"reservation_id must fit in uint64_t: {value!r}")
 	return value

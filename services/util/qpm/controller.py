@@ -20,6 +20,7 @@ from .admission import (
 	expire_reservations,
 	get_reservation,
 	list_reservations,
+	normalize_reservation_id,
 	record_actual,
 	register_device_profile,
 	release_reservation,
@@ -134,6 +135,12 @@ TELEMETRY_METHOD_LABELS = {
 	"get_telemetry_access_model": TELEMETRY_BASIC_DISCOVERY,
 	"reconcile_runtime_state": TELEMETRY_OPERATOR,
 }
+
+
+def _normalize_optional_reservation_id(reservation_id):
+	if reservation_id is None:
+		return None
+	return normalize_reservation_id(reservation_id)
 
 
 @dataclass(frozen=True)
@@ -547,6 +554,7 @@ class QPMTargetController:
 	def task_status_for_cid(self, cid, outcome=None, reason=None,
 				message=None, result=None, reservation_id=None,
 				require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			runtime = self.runtime_by_cid.get(cid)
 			if runtime is None:
@@ -570,6 +578,7 @@ class QPMTargetController:
 	def task_status_for_qtask_id(self, qtask_id, outcome=None, reason=None,
 				     message=None, result=None, reservation_id=None,
 				     require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
 			if runtime is None:
@@ -739,6 +748,7 @@ class QPMTargetController:
 
 	def cancel_task(self, cid=None, qtask_id=None, reason=None,
 			reservation_id=None, require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		deliveries = []
 		with self.lock:
 			runtime = self._runtime_for_task_selector_locked(
@@ -799,6 +809,7 @@ class QPMTargetController:
 	def task_reservation_error(self, cid=None, qtask_id=None,
 				   reservation_id=None,
 				   require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			runtime = self._runtime_for_task_selector_locked(
 				cid=cid, qtask_id=qtask_id)
@@ -872,6 +883,7 @@ class QPMTargetController:
 
 	def peek_completion(self, reservation_id=None, cid=None, qtask_id=None,
 			    operation="peek_cq"):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			self._purge_completion_queues_locked(time.time_ns())
 			return self._poll_completion_locked(
@@ -880,6 +892,7 @@ class QPMTargetController:
 
 	def read_completion(self, reservation_id=None, cid=None, qtask_id=None,
 			    operation="read_cq"):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			self._purge_completion_queues_locked(time.time_ns())
 			return self._poll_completion_locked(
@@ -993,12 +1006,14 @@ class QPMTargetController:
 			return decision
 
 	def renew_admission(self, reservation_id, request=None, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		with self.lock:
 			result = renew_reservation(
 				self.admission_context, reservation_id, request or {})
 			return result
 
 	def release_admission(self, reservation_id, reason_code=0, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		deliveries = []
 		with self.lock:
 			result = self._close_reservation(
@@ -1014,6 +1029,7 @@ class QPMTargetController:
 		return result
 
 	def cancel_admission(self, reservation_id, reason_code=0, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		deliveries = []
 		with self.lock:
 			result = self._close_reservation(
@@ -1029,6 +1045,7 @@ class QPMTargetController:
 		return result
 
 	def get_admission_reservation(self, reservation_id, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		with self.lock:
 			reservation = get_reservation(self.admission_context, reservation_id)
 			metadata = self.reservation_metadata_by_id.get(reservation_id)
@@ -1049,10 +1066,8 @@ class QPMTargetController:
 
 	def validate_reservation_for_context(self, request_context,
 					     operation="execution"):
-		reservation_id = request_context.reservation_id
-		if reservation_id is None:
-			raise QPMAdmissionValidationError(
-				"reservation_id is required")
+		reservation_id = normalize_reservation_id(
+			request_context.reservation_id)
 		try:
 			with self.lock:
 				reservation = get_reservation(
@@ -1071,11 +1086,9 @@ class QPMTargetController:
 
 	def provider_credential_for_reservation(self, reservation_id,
 						operation="execution"):
+		reservation_id = normalize_reservation_id(reservation_id)
 		try:
 			with self.lock:
-				if reservation_id is None:
-					raise QPMAdmissionValidationError(
-						"reservation_id is required for provider credentials")
 				reservation = get_reservation(
 					self.admission_context, reservation_id)
 				self._require_reservation_active(reservation, operation)

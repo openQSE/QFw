@@ -36,6 +36,14 @@ def _driver_options(**options):
 	return FakeSlurmDriver().execution_options(**options)
 
 
+@pytest.mark.parametrize("value", ["0", "0x1", "-1", "1.0", True])
+def test_qfw_job_rejects_noncanonical_reservation_ids(value):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	with pytest.raises(qfw_job.DEFwError):
+		qfw_job.normalize_reservation_id(value)
+
+
 def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 

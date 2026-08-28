@@ -2,6 +2,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from .admission import normalize_reservation_id
+
 
 AUTH_DISABLED_ENV = "QFW_QPM_AUTH_DISABLED"
 
@@ -28,7 +30,7 @@ SCOPED_METADATA_KEYS = (
 
 @dataclass(frozen=True)
 class QPMRequestContext:
-	reservation_id: Optional[str] = None
+	reservation_id: Optional[int] = None
 	token: Any = None
 	timeout: Any = None
 	cancel_on_timeout: bool = False
@@ -79,6 +81,9 @@ def _context_from_payload(payload, overrides):
 	for key in REQUEST_CONTEXT_KEYS:
 		value = _request_value(key, payload, overrides)
 		values[key] = value
+	if values["reservation_id"] is not None:
+		values["reservation_id"] = normalize_reservation_id(
+			values["reservation_id"])
 	values["cancel_on_timeout"] = bool(values["cancel_on_timeout"])
 	values["metadata"] = _scoped_metadata(payload, overrides)
 	values["auth_disabled"] = auth_disabled()

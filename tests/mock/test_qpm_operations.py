@@ -632,7 +632,7 @@ def test_completion_polling_rejects_missing_reservation(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="ops-missing-reservation")
 
-	result = qpm.peek_cq(reservation_id="missing-reservation")
+	result = qpm.peek_cq(reservation_id="999")
 
 	assert result["outcome"] == "MISSING_RESERVATION"
 	assert result["lifecycle_state"] == "missing-reservation"

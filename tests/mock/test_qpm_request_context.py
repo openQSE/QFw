@@ -1,3 +1,15 @@
+import pytest
+
+
+@pytest.mark.parametrize("value", ["0", "0x1", "-1", "1.0", True])
+def test_parse_execution_request_rejects_invalid_reservation_id(value):
+	import util.qpm.request as qpm_request
+	from util.qpm.admission import QPMAdmissionValidationError
+
+	with pytest.raises(QPMAdmissionValidationError):
+		qpm_request.parse_execution_request({}, reservation_id=value)
+
+
 def test_parse_execution_request_preserves_opaque_token(monkeypatch):
 	import util.qpm.request as qpm_request
 
@@ -6,14 +18,14 @@ def test_parse_execution_request_preserves_opaque_token(monkeypatch):
 	request = qpm_request.parse_execution_request(
 		{"qasm": "OPENQASM 2.0;", "num_shots": 8,
 		 "token": {"payload": "ignored"}},
-		reservation_id="reservation-1",
+		reservation_id="1",
 		token=token,
 	)
 
-	assert request.context.reservation_id == "reservation-1"
+	assert request.context.reservation_id == 1
 	assert request.context.token is token
 	assert request.context.auth_disabled is True
-	assert request.payload["reservation_id"] == "reservation-1"
+	assert request.payload["reservation_id"] == 1
 	assert "token" not in request.payload
 
 
@@ -25,13 +37,13 @@ def test_parse_execution_request_preserves_scoped_metadata(monkeypatch):
 	run_context = {"priority": "normal"}
 	request = qpm_request.parse_execution_request(
 		{"qasm": "OPENQASM 2.0;"},
-		reservation_id="reservation-1",
+		reservation_id="1",
 		owner=owner,
 		job_id="job-7",
 		run_context=run_context,
 	)
 
-	assert request.context.reservation_id == "reservation-1"
+	assert request.context.reservation_id == 1
 	assert request.context.metadata == {
 		"owner": owner,
 		"job_id": "job-7",

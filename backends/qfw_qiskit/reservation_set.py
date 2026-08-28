@@ -12,7 +12,7 @@ UINT64_MAX = (1 << 64) - 1
 @dataclass(frozen=True)
 class QPMReservation:
 	service_id: str
-	reservation_id: int
+	reservation_id: str
 
 
 def parse_qfw_reservations(value=None, required=True):
@@ -63,7 +63,7 @@ def select_qpm_reservation(reservations, service_id=None):
 
 def encode_qfw_reservations(reservations):
 	return json.dumps([
-		[item.service_id, str(item.reservation_id)]
+		[item.service_id, item.reservation_id]
 		for item in reservations
 	], separators=(",", ":"))
 
@@ -85,4 +85,4 @@ def _parse_tuple(value, index):
 		raise DEFwError(
 			f"{QFW_RESERVATIONS_ENV} entry {index} reservation_id must be "
 			"between 1 and UINT64_MAX")
-	return QPMReservation(service_id.strip(), number)
+	return QPMReservation(service_id.strip(), reservation_id)
