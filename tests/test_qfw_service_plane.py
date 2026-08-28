@@ -540,6 +540,7 @@ def test_prte_start_uses_keepalive_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
     monkeypatch.setattr(
         service_plane, "_command_path", lambda name, env=None: name)
+    monkeypatch.setattr(service_plane.os, "geteuid", lambda: 1000)
 
     service_plane._start_prte(state, timeout=1)
 
