@@ -248,6 +248,7 @@ class QPMTargetController:
 		self.admission_request_id_next = 1
 		self.reservation_metadata_by_id = {}
 		self.reservation_credentials_by_id = {}
+		self.credential_cleanup_queue = []
 		self.reservation_close_state = {}
 		self.device_profile = None
 		self.admission_configuration = {}
@@ -995,6 +996,9 @@ class QPMTargetController:
 				self.reservation_metadata_by_id.pop(reservation_id, None)
 				self._remove_provider_credential_locked(reservation_id)
 		self._dispatch_completion_deliveries(deliveries)
+		cleanup_errors = self._drain_provider_credential_cleanup()
+		if cleanup_errors:
+			result["credential_cleanup_errors"] = cleanup_errors
 		return result
 
 	def cancel_admission(self, reservation_id, reason_code=0, token=None):
@@ -1007,6 +1011,9 @@ class QPMTargetController:
 				self.reservation_metadata_by_id.pop(reservation_id, None)
 				self._remove_provider_credential_locked(reservation_id)
 		self._dispatch_completion_deliveries(deliveries)
+		cleanup_errors = self._drain_provider_credential_cleanup()
+		if cleanup_errors:
+			result["credential_cleanup_errors"] = cleanup_errors
 		return result
 
 	def get_admission_reservation(self, reservation_id, token=None):
@@ -1034,42 +1041,48 @@ class QPMTargetController:
 		if reservation_id is None:
 			raise QPMAdmissionValidationError(
 				"reservation_id is required")
-		with self.lock:
-			reservation = get_reservation(
-				self.admission_context, reservation_id)
-			if reservation_id in self.reservation_close_state:
-				raise QPMAdmissionValidationError(
-					f"reservation is closing: "
-					f"reservation_id={reservation_id}")
-			self._require_reservation_active(reservation, operation)
-			self._require_reservation_not_expired(reservation)
-			self._require_reservation_matches_context_locked(
-				reservation, request_context)
-			return reservation
+		try:
+			with self.lock:
+				reservation = get_reservation(
+					self.admission_context, reservation_id)
+				if reservation_id in self.reservation_close_state:
+					raise QPMAdmissionValidationError(
+						f"reservation is closing: "
+						f"reservation_id={reservation_id}")
+				self._require_reservation_active(reservation, operation)
+				self._require_reservation_not_expired(reservation)
+				self._require_reservation_matches_context_locked(
+					reservation, request_context)
+				return reservation
+		finally:
+			self._drain_provider_credential_cleanup()
 
 	def provider_credential_for_reservation(self, reservation_id,
 						operation="execution"):
-		with self.lock:
-			if reservation_id is None:
-				raise QPMAdmissionValidationError(
-					"reservation_id is required for provider credentials")
-			reservation = get_reservation(
-				self.admission_context, reservation_id)
-			self._require_reservation_active(reservation, operation)
-			self._require_reservation_not_expired(reservation)
-			record = self.reservation_credentials_by_id.get(reservation_id)
-			if record is None:
-				record = self._fallback_provider_credential_locked(
-					reservation_id)
-			expires_at_ns = record["metadata"].get("expires_at_ns")
-			if expires_at_ns and expires_at_ns <= time.time_ns():
-				raise QPMAdmissionValidationError(
-					"provider credential binding expired for "
-					f"reservation_id={reservation_id}")
-			return {
-				"secret": dict(record.get("secret") or {}),
-				"metadata": dict(record.get("metadata") or {}),
-			}
+		try:
+			with self.lock:
+				if reservation_id is None:
+					raise QPMAdmissionValidationError(
+						"reservation_id is required for provider credentials")
+				reservation = get_reservation(
+					self.admission_context, reservation_id)
+				self._require_reservation_active(reservation, operation)
+				self._require_reservation_not_expired(reservation)
+				record = self.reservation_credentials_by_id.get(reservation_id)
+				if record is None:
+					record = self._fallback_provider_credential_locked(
+						reservation_id)
+				expires_at_ns = record["metadata"].get("expires_at_ns")
+				if expires_at_ns and expires_at_ns <= time.time_ns():
+					raise QPMAdmissionValidationError(
+						"provider credential binding expired for "
+						f"reservation_id={reservation_id}")
+				return {
+					"secret": dict(record.get("secret") or {}),
+					"metadata": dict(record.get("metadata") or {}),
+				}
+		finally:
+			self._drain_provider_credential_cleanup()
 
 	def attach_provider_credential(self, circuit):
 		reservation_id = circuit.info.get("reservation_id")
@@ -1089,6 +1102,7 @@ class QPMTargetController:
 		with self.lock:
 			for reservation_id in list(self.reservation_credentials_by_id):
 				self._remove_provider_credential_locked(reservation_id)
+		return self._drain_provider_credential_cleanup()
 
 	def _bind_provider_credential_locked(self, reservation_id, metadata):
 		reservation_binding = dict(metadata.get("reservation_binding") or {})
@@ -1110,13 +1124,43 @@ class QPMTargetController:
 
 	def _remove_provider_credential_locked(self, reservation_id):
 		record = self.reservation_credentials_by_id.pop(reservation_id, None)
-		if record is not None:
-			provider = record.pop("provider", None)
-			if provider is not None:
-				provider.release(record)
-		if self.provider_credential_evictor is not None:
-			self.provider_credential_evictor(reservation_id)
+		if record is not None or self.provider_credential_evictor is not None:
+			self.credential_cleanup_queue.append((reservation_id, record))
 		return record
+
+	def _drain_provider_credential_cleanup(self):
+		with self.lock:
+			queued = self.credential_cleanup_queue
+			self.credential_cleanup_queue = []
+		errors = []
+		for reservation_id, record in queued:
+			provider = record.pop("provider", None) if record else None
+			try:
+				if provider is not None:
+					provider.release(record)
+			except Exception as error:
+				errors.append({
+					"reservation_id": reservation_id,
+					"stage": "credential-provider-release",
+					"error": str(error),
+				})
+			try:
+				if self.provider_credential_evictor is not None:
+					self.provider_credential_evictor(reservation_id)
+			except Exception as error:
+				errors.append({
+					"reservation_id": reservation_id,
+					"stage": "provider-client-eviction",
+					"error": str(error),
+				})
+		if errors:
+			with self.lock:
+				for error in errors:
+					self._record_reconciliation_fault_locked({
+						"reason": "credential-cleanup-failed",
+						**error,
+					})
+		return errors
 
 	def _fallback_provider_credential_locked(self, reservation_id):
 		request_metadata = self.reservation_metadata_by_id.get(reservation_id)
@@ -1347,6 +1391,7 @@ class QPMTargetController:
 					"status": "accepted",
 					"decision": dict(committed),
 				})
+		self._drain_provider_credential_cleanup()
 		return results
 
 	def _require_pending_capacity_reservation_valid_locked(

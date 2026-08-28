@@ -74,6 +74,7 @@ def _close_expired_reservation_for_test(controller, reservation_id, now_ns):
 			deliveries=deliveries,
 		)
 	controller._dispatch_completion_deliveries(deliveries)
+	controller._drain_provider_credential_cleanup()
 	return result
 
 
@@ -502,6 +503,38 @@ def test_release_cleans_reservation_owned_credentials(monkeypatch):
 	assert "provider" not in released[0]
 	assert reservation_id not in qpm.controller.reservation_credentials_by_id
 	assert qpm.fake_qrc.evicted_reservations == [reservation_id]
+
+
+def test_release_failure_does_not_reopen_reservation(monkeypatch):
+	_setup(monkeypatch)
+	callback_lock_states = []
+
+	class Provider:
+		def release(self, binding):
+			callback_lock_states.append(
+				qpm.controller.lock._is_owned())
+			raise RuntimeError("provider cleanup unavailable")
+
+	response = qpm_credentials.CredentialProviderResponse(
+		secret={"api_key": "reservation-secret"},
+		metadata={"provider_type": "test"})
+	monkeypatch.setattr(
+		qpm_controller, "bind_reservation_credential",
+		lambda *args, **kwargs: (Provider(), response))
+	qpm = AdmissionQPM(target_id="credential-cleanup-failure")
+	reservation_id = qpm.reserve(
+		request={"num_qubits": 2})["reservation_id"]
+
+	result = qpm.release(reservation_id=reservation_id)
+
+	assert result["status"] == "accepted"
+	assert result["credential_cleanup_errors"][0]["stage"] == (
+		"credential-provider-release")
+	assert callback_lock_states == [False]
+	assert reservation_id not in qpm.controller.reservation_credentials_by_id
+	assert qpm.fake_qrc.evicted_reservations == [reservation_id]
+	assert qpm.get_reservation(
+		reservation_id=reservation_id)["state"] == "released"
 
 
 def test_completion_retention_loads_site_config(
