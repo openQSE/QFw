@@ -67,6 +67,24 @@ def load_json_config(path):
 			f"failed to parse QPU credential DB {path}: {exc}") from exc
 
 
+def validate_credential_configuration(path, device_id):
+	config = load_yaml_config(path)
+	device = select_qpu(config, path, device_id=device_id)
+	provider_name = device.get("credential_provider")
+	if provider_name:
+		providers = config.get("credential-providers") or {}
+		provider = providers.get(provider_name)
+		if not isinstance(provider, dict) or not provider:
+			raise DEFwExecutionError(
+				f"credential provider {provider_name!r} for QPU "
+				f"{device_id!r} is not configured")
+		provider_type = str(provider.get("type") or "").strip().lower()
+		if provider_type in ("none", "no-secret"):
+			raise DEFwExecutionError(
+				f"QPU {device_id!r} requires a credential provider")
+	return device
+
+
 def resolve_relative_path(path, base_path):
 	if os.path.isabs(path):
 		return path

@@ -63,6 +63,26 @@ def test_service_manifest_rejects_removed_port_keys(
         qfw_config.load_service_manifest(manifest)
 
 
+def test_service_manifest_requires_explicit_credential_mode(tmp_path):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "services:\n  - name: test\n    module: svc_test\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match="credential-mode"):
+        qfw_config.load_service_manifest(manifest)
+
+
+def test_service_manifest_requires_device_for_credentials(tmp_path):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "services:\n  - name: test\n    credential-mode: required\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match="device-id"):
+        qfw_config.load_service_manifest(manifest)
+
+
 def test_expand_config_value_requires_braced_environment_reference(
         monkeypatch):
     monkeypatch.setenv("QFW_PREFIX", "/opt/qfw")

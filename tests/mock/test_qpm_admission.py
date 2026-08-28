@@ -16,7 +16,24 @@ from util.qpm.controller import (
 )
 from util.qpm.util_qpm import UTIL_QPM
 import util.qpm.admission as qpm_admission
+import util.qpm.credentials as qpm_credentials
 from util.qpm.admission import QPMAdmissionValidationError
+
+
+def test_credential_provider_requires_explicit_mode(monkeypatch):
+	monkeypatch.delenv("QFW_QPM_CREDENTIAL_MODE", raising=False)
+
+	with pytest.raises(
+			qpm_credentials.QPMCredentialProviderUnavailable,
+			match="explicitly configured"):
+		qpm_credentials.provider_for_request({})
+
+
+def test_no_secret_credential_provider_is_explicit():
+	provider = qpm_credentials.provider_for_request(
+		{}, credential_mode="no-secret")
+
+	assert isinstance(provider, qpm_credentials.NoSecretCredentialProvider)
 
 
 class FakeQRC:
@@ -341,6 +358,7 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 		]),
 		encoding="utf-8")
 	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
+	monkeypatch.setenv("QFW_QPM_CREDENTIAL_MODE", "required")
 	qpm = AdmissionQPM()
 
 	decision = qpm.reserve(request={

@@ -35,6 +35,7 @@ UNSUPPORTED_PATH_PLACEHOLDERS = {
     "<defw-prefix>": "${DEFW_PREFIX}",
 }
 DIRECTORY_SERVICE_CONNECTION_SCHEMA = "qfw-directory-service-v1"
+CREDENTIAL_MODES = ("no-secret", "required")
 
 
 def _split_config_list(value):
@@ -487,6 +488,19 @@ def load_service_manifest(path):
             if key in service:
                 raise ValueError(
                     f"unsupported service key {key!r}; use {replacement!r}")
+        name = str(service.get("name") or "").strip()
+        if not name:
+            raise ValueError(f"service entry {index} requires name: {path}")
+        credential_mode = str(
+            service.get("credential-mode") or "").strip().lower()
+        if credential_mode not in CREDENTIAL_MODES:
+            raise ValueError(
+                f"service {name!r} credential-mode must be one of "
+                f"{', '.join(CREDENTIAL_MODES)}")
+        if credential_mode == "required" and not service.get("device-id"):
+            raise ValueError(
+                f"service {name!r} with required credentials needs "
+                "device-id")
         for key in ("environment-modules", "required-executables"):
             value = service.get(key)
             if value is None:

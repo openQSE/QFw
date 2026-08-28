@@ -1,5 +1,6 @@
 services:
   - name: nwqsim
+    credential-mode: no-secret
     module: svc_nwqsim_qpm
     load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
@@ -17,6 +18,7 @@ services:
       wrapper: null
 
   - name: fake-iqm
+    credential-mode: no-secret
     module: svc_fake_iqm_qpm
     load-modules: svc_fake_iqm_qpm,api_launcher
     agent-prefix: qpm_fake_iqm
@@ -29,6 +31,7 @@ services:
       type: internal
 
   - name: iqm-ornl-20q
+    credential-mode: required
     module: svc_iqm_qpm
     load-modules: svc_iqm_qpm,api_launcher
     agent-prefix: qpm_iqm
@@ -39,6 +42,7 @@ services:
       type: remote-api
 
   - name: shim-ornl-20q
+    credential-mode: required
     module: svc_lib_qpm
     load-modules: svc_lib_qpm,api_launcher
     agent-prefix: qpm_shim

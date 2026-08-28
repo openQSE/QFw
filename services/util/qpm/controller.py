@@ -135,6 +135,7 @@ TELEMETRY_METHOD_LABELS = {
 @dataclass(frozen=True)
 class QPMControllerConfig:
 	target_id: str
+	credential_mode: str = "no-secret"
 	admission_threading_mode: str = DEFAULT_ADMISSION_THREADING_MODE
 	scheduler_threading_mode: str = DEFAULT_SCHEDULER_THREADING_MODE
 	serialization_mode: str = DEFAULT_CONTROLLER_SERIALIZATION_MODE
@@ -142,6 +143,7 @@ class QPMControllerConfig:
 	def telemetry(self):
 		return {
 			"target_id": self.target_id,
+			"credential_mode": self.credential_mode,
 			"admission_threading_mode": self.admission_threading_mode,
 			"scheduler_threading_mode": self.scheduler_threading_mode,
 			"serialization_mode": self.serialization_mode,
@@ -1069,7 +1071,9 @@ class QPMTargetController:
 
 	def _bind_provider_credential_locked(self, reservation_id, metadata):
 		reservation_binding = dict(metadata.get("reservation_binding") or {})
-		response = bind_reservation_credential(reservation_binding)
+		response = bind_reservation_credential(
+			reservation_binding,
+			credential_mode=self.config.credential_mode)
 		secret = dict(response.secret or {})
 		credential_metadata = _drop_none(_redacted_metadata(
 			dict(response.metadata or {})))
@@ -3725,6 +3729,8 @@ def controller_config(qrc, target_id=None, admission_threading_mode=None,
 		      scheduler_threading_mode=None, serialization_mode=None):
 	return QPMControllerConfig(
 		target_id=_target_id(qrc, target_id),
+		credential_mode=os.environ.get(
+			"QFW_QPM_CREDENTIAL_MODE", "no-secret"),
 		admission_threading_mode=(
 			admission_threading_mode or
 			os.environ.get(ADMISSION_THREADING_ENV) or

@@ -13,6 +13,7 @@ mpi-launch:
 
 services:
   - name: nwqsim
+    credential-mode: no-secret
     module: svc_nwqsim_qpm
     load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
@@ -30,6 +31,7 @@ services:
       use-dvm: true
 
   - name: tnqvm
+    credential-mode: no-secret
     module: svc_tnqvm_qpm
     load-modules: svc_tnqvm_qpm,api_launcher
     environment-modules:
@@ -46,6 +48,7 @@ services:
       wrapper: null
 
   - name: fake-iqm
+    credential-mode: no-secret
     module: svc_fake_iqm_qpm
     load-modules: svc_fake_iqm_qpm,api_launcher
     agent-prefix: qpm_fake_iqm

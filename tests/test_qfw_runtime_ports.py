@@ -91,9 +91,21 @@ def test_direct_qpm_readiness_rejects_ready_alias(monkeypatch):
 def test_private_qpm_launcher_loads_service_paths_from_site(
         tmp_path, monkeypatch):
     device_path = tmp_path / "device-access.yaml"
+    device_path.write_text(
+        "qpus:\n"
+        "  iqm:\n"
+        "    provider: iqm\n"
+        "    url: https://iqm.invalid/\n"
+        "    credential-db: qpu-users.json\n",
+        encoding="utf-8",
+    )
     manifest_path = tmp_path / "site-services.yaml"
     manifest_path.write_text(
-        "services:\n  - name: iqm\n    module: svc_iqm_qpm\n",
+        "services:\n"
+        "  - name: iqm\n"
+        "    module: svc_iqm_qpm\n"
+        "    credential-mode: required\n"
+        "    device-id: iqm\n",
         encoding="utf-8",
     )
     site_path = tmp_path / "site.yaml"
@@ -159,8 +171,10 @@ def test_start_job_local_services_delegates_to_split_managers(
             "services:",
             "  - name: nwqsim",
             "    module: svc_nwqsim_qpm",
+            "    credential-mode: no-secret",
             "  - name: tnqvm",
             "    module: svc_tnqvm_qpm",
+            "    credential-mode: no-secret",
             "",
         ]),
         encoding="utf-8",
@@ -257,7 +271,8 @@ def test_start_job_local_services_places_every_role_on_group1(
     manifest.write_text(
         "services:\n"
         "  - name: nwqsim\n"
-        "    module: svc_nwqsim_qpm\n",
+        "    module: svc_nwqsim_qpm\n"
+        "    credential-mode: no-secret\n",
         encoding="utf-8",
     )
     state_dir = tmp_path / "state"

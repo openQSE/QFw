@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from . import config as qfw_config
+from util import device_access
 
 
 DEFW_ENDPOINT_PROBE_TIMEOUT_SECONDS = 1.0
@@ -178,6 +179,7 @@ def start_qpm(argv):
     if not module:
         raise SystemExit("qfw-qpm-svc requires --module or a manifest entry")
     load_modules = args.load_modules or service.get("load-modules") or module
+    credential_mode = str(service.get("credential-mode") or "").strip()
     operation_mode = service.get("operation-mode", args.operation_mode)
     register = qfw_config.bool_config(
         service.get("register-with-dirsvc"),
@@ -232,6 +234,7 @@ def start_qpm(argv):
         "QFW_QPM_OPERATION_MODE": operation_mode,
         "QFW_QPM_SERVICE_ID": service_id,
         "QFW_QPM_SERVICE_MODULE": module,
+        "QFW_QPM_CREDENTIAL_MODE": credential_mode,
         "QFW_QPM_REGISTER_WITH_DIRSVC": "yes" if register else "no",
         "QFW_QPM_DIRECT_ENDPOINT_ENABLED": (
             "yes" if direct_enabled else "no"),
@@ -254,12 +257,18 @@ def start_qpm(argv):
     if device_access_config:
         env["QFW_DEVICE_ACCESS_CFG"] = str(qfw_config.resolve_path(
             device_access_config))
-    elif service.get("device-id"):
+    elif credential_mode == "required":
         raise SystemExit(
-            "device-backed services require "
+            "services with required credentials need "
             "service.device-access-config in site.yaml")
     if service.get("device-id"):
         env["QFW_QPU_DEVICE_ID"] = str(service["device-id"])
+    if credential_mode == "required":
+        try:
+            device_access.validate_credential_configuration(
+                env["QFW_DEVICE_ACCESS_CFG"], service["device-id"])
+        except Exception as exc:
+            raise SystemExit(str(exc)) from exc
     if service.get("direct-qpm-endpoint"):
         env["QFW_DIRECT_QPM_ENDPOINT"] = str(service["direct-qpm-endpoint"])
     env["QFW_SITE_CONFIG"] = str(site_config_path)

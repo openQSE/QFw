@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import importlib
+import os
 import time
 
 from defw_exception import DEFwExecutionError
@@ -13,6 +14,7 @@ CREDENTIAL_PROVIDER_CONFIG_KEYS = (
 )
 FILE_PROVIDER_TYPES = ("file", "json", "file-backed", "development-file")
 NO_SECRET_PROVIDER = "no-secret"
+CREDENTIAL_MODE_ENV = "QFW_QPM_CREDENTIAL_MODE"
 
 
 class QPMCredentialError(DEFwExecutionError):
@@ -158,9 +160,9 @@ class FileCredentialProvider(CredentialProvider):
 		return now_ns + ttl_ns
 
 
-def bind_reservation_credential(binding):
+def bind_reservation_credential(binding, credential_mode=None):
 	request = credential_request_from_binding(binding)
-	provider = provider_for_request(request)
+	provider = provider_for_request(request, credential_mode=credential_mode)
 	return provider.bind(request)
 
 
@@ -192,29 +194,34 @@ def credential_request_from_binding(binding):
 	}
 
 
-def provider_for_request(request):
+def provider_for_request(request, credential_mode=None):
+	credential_mode = (
+		credential_mode or os.environ.get(CREDENTIAL_MODE_ENV) or ""
+	).strip().lower()
+	if credential_mode == NO_SECRET_PROVIDER:
+		return NoSecretCredentialProvider()
+	if credential_mode != "required":
+		raise QPMCredentialProviderUnavailable(
+			"QPM credential mode must be explicitly configured")
 	config_path = device_access.device_access_config_path()
 	try:
 		config = device_access.load_yaml_config(config_path)
 	except DEFwExecutionError as exc:
-		if _credential_context_required(request):
-			raise QPMCredentialProviderUnavailable(
-				"credential provider configuration is required but could not "
-				f"be loaded: {exc}") from exc
-		return NoSecretCredentialProvider()
+		raise QPMCredentialProviderUnavailable(
+			"credential provider configuration is required but could not "
+			f"be loaded: {exc}") from exc
 	device = _selected_device(config, config_path, request)
 	if device is None:
-		if _credential_context_required(request):
-			raise QPMCredentialProviderUnavailable(
-				"credential context was supplied, but no matching QPU device "
-				f"was found for target {request.get('target_device_id')!r}")
-		return NoSecretCredentialProvider()
+		raise QPMCredentialProviderUnavailable(
+			"no matching QPU device was found for target "
+			f"{request.get('target_device_id')!r}")
 	provider_config = _provider_config_for_device(config, device)
 	provider_type = str(provider_config.get("type", "file")).strip().lower()
 	if provider_type in FILE_PROVIDER_TYPES:
 		return FileCredentialProvider(config_path, device, provider_config)
 	if provider_type in ("none", "no-secret"):
-		return NoSecretCredentialProvider()
+		raise QPMCredentialProviderUnavailable(
+			"hardware QPM cannot use a no-secret credential provider")
 	if provider_type in ("python", "plugin", "module"):
 		return _load_plugin_provider(provider_config, config_path, device)
 	raise QPMCredentialProviderUnavailable(

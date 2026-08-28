@@ -67,6 +67,7 @@ def test_service_manifest_requires_module_lists(tmp_path):
     manifest.write_text(
         "services:\n"
         "  - name: nwqsim\n"
+        "    credential-mode: no-secret\n"
         "    environment-modules: nwqsim\n",
         encoding="utf-8",
     )
