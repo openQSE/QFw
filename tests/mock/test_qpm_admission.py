@@ -480,7 +480,7 @@ def test_reserve_rejects_ineligible_user_before_admission(
 	assert qpm.controller.admission_context.requests == []
 
 
-def test_qpm_allocates_persistent_reservation_identifiers(
+def test_qpm_restart_invalidates_old_reservation_and_advances_identifier(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)
 	monkeypatch.setenv("QFW_QPM_RUN_DIR", str(tmp_path))
@@ -493,6 +493,8 @@ def test_qpm_allocates_persistent_reservation_identifiers(
 
 	assert first_id == 1
 	assert second_id == 2
+	with pytest.raises(KeyError):
+		second_qpm.get_reservation(reservation_id=first_id)
 
 
 def test_release_cleans_reservation_owned_credentials(monkeypatch):
