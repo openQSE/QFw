@@ -429,6 +429,48 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 	assert resolved_binding["secret_material"] == "cached-in-qpm"
 	assert "secret-value" not in str(metadata)
 	assert "alice-provider-api-key" not in str(metadata)
+	assert qpm.controller.admission_context.requests[0][0] == "reserve"
+
+
+def test_reserve_rejects_ineligible_user_before_admission(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	(tmp_path / "qpu_users.json").write_text(
+		json.dumps({
+			"users": {
+				"alice": {
+					"enabled": False,
+					"devices": {
+						"ornl-iqm-20q": {
+							"enabled": True,
+							"api_key": "configured-key",
+						},
+					},
+				},
+			},
+		}), encoding="utf-8")
+	config_path = tmp_path / "config.yaml"
+	config_path.write_text(
+		"qpus:\n"
+		"  ornl-iqm-20q:\n"
+		"    provider: iqm\n"
+		"    url: https://iqm.invalid/\n"
+		"    credential-db: qpu_users.json\n",
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
+	monkeypatch.setenv("QFW_QPM_CREDENTIAL_MODE", "required")
+	qpm = AdmissionQPM()
+
+	decision = qpm.reserve(request={
+		"owner": {"user": "alice"},
+		"job_id": "job-denied",
+		"scope_id": "scope-a",
+		"target_device_id": "ornl-iqm-20q",
+	})
+
+	assert decision["status"] == "rejected"
+	assert decision["reason"] == "credential-eligibility-failed"
+	assert qpm.controller.admission_context.requests == []
 
 
 def test_completion_retention_loads_site_config(

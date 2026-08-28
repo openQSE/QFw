@@ -47,7 +47,10 @@ from .scheduler import (
 	QPMSchedulerError,
 	QPMSchedulerQueueEmpty,
 )
-from .credentials import bind_reservation_credential
+from .credentials import (
+	bind_reservation_credential,
+	validate_reservation_credential,
+)
 
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -937,6 +940,17 @@ class QPMTargetController:
 					"state": self.service_state,
 				}
 			admission_request = self._admission_request(request, token=token)
+			try:
+				validate_reservation_credential(
+					admission_request["metadata"]["reservation_binding"],
+					credential_mode=self.config.credential_mode)
+			except Exception as error:
+				return {
+					"status": "rejected",
+					"request_id": admission_request.get("request_id"),
+					"reason": "credential-eligibility-failed",
+					"message": str(error),
+				}
 			decision = reserve_request(self.admission_context, admission_request)
 			reservation_id = decision.get("reservation_id")
 			if (decision.get("status") == "accepted" and

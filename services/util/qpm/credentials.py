@@ -38,6 +38,9 @@ class CredentialProviderResponse:
 class CredentialProvider:
 	name = "base"
 
+	def validate(self, request):
+		raise NotImplementedError
+
 	def bind(self, request):
 		raise NotImplementedError
 
@@ -50,6 +53,9 @@ class CredentialProvider:
 
 class NoSecretCredentialProvider(CredentialProvider):
 	name = NO_SECRET_PROVIDER
+
+	def validate(self, request):
+		return None
 
 	def bind(self, request):
 		now_ns = time.time_ns()
@@ -79,24 +85,12 @@ class FileCredentialProvider(CredentialProvider):
 		self.device = dict(device or {})
 		self.provider_config = dict(provider_config or {})
 
+	def validate(self, request):
+		self._select_credential(request)
+
 	def bind(self, request):
-		credential_db_path = self._credential_db_path()
-		credential_db = device_access.load_json_config(credential_db_path)
-		record_key, user_record = device_access.select_user_record(
-			credential_db,
-			request.get("user"),
-			device_id=self.device.get("device_id"),
-			provider_device_id=self.device.get("provider_device_id"),
-			credential_hint=request.get("credential_hint"),
-			credential_handle=request.get("credential_handle"))
-		api_key = device_access.get_api_key_from_user_record(
-			user_record,
-			self.device.get("device_id"),
-			self.device.get("provider_device_id"))
-		if not api_key:
-			raise QPMCredentialBindingMissing(
-				"file credential provider did not return an API key for "
-				f"user={record_key!r} device={self.device.get('device_id')!r}")
+		record_key, api_key, credential_db_path = self._select_credential(
+			request)
 		now_ns = time.time_ns()
 		expires_at_ns = self._expires_at_ns(now_ns)
 		metadata = {
@@ -137,6 +131,26 @@ class FileCredentialProvider(CredentialProvider):
 				if value not in (None, "")},
 			metadata=_drop_none(metadata))
 
+	def _select_credential(self, request):
+		credential_db_path = self._credential_db_path()
+		credential_db = device_access.load_json_config(credential_db_path)
+		record_key, user_record = device_access.select_user_record(
+			credential_db,
+			request.get("user"),
+			device_id=self.device.get("device_id"),
+			provider_device_id=self.device.get("provider_device_id"),
+			credential_hint=request.get("credential_hint"),
+			credential_handle=request.get("credential_handle"))
+		api_key = device_access.get_api_key_from_user_record(
+			user_record,
+			self.device.get("device_id"),
+			self.device.get("provider_device_id"))
+		if not api_key:
+			raise QPMCredentialBindingMissing(
+				"file credential provider did not return an API key for "
+				f"user={record_key!r} device={self.device.get('device_id')!r}")
+		return record_key, api_key, credential_db_path
+
 	def _credential_db_path(self):
 		value = (
 			self.provider_config.get("credential-db") or
@@ -164,6 +178,12 @@ def bind_reservation_credential(binding, credential_mode=None):
 	request = credential_request_from_binding(binding)
 	provider = provider_for_request(request, credential_mode=credential_mode)
 	return provider.bind(request)
+
+
+def validate_reservation_credential(binding, credential_mode=None):
+	request = credential_request_from_binding(binding)
+	provider = provider_for_request(request, credential_mode=credential_mode)
+	provider.validate(request)
 
 
 def credential_request_from_binding(binding):
