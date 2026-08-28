@@ -227,6 +227,7 @@ class QPMTargetController:
 		self.event_endpoints = {}
 		self.callback_endpoints = {}
 		self.provider_canceller = None
+		self.provider_credential_evictor = None
 		self.timeout_state = {}
 		self.result_state = {}
 		self.completion_retention = completion_retention_config()
@@ -285,6 +286,10 @@ class QPMTargetController:
 	def set_provider_canceller(self, provider_canceller):
 		with self.lock:
 			self.provider_canceller = provider_canceller
+
+	def set_provider_credential_evictor(self, evictor):
+		with self.lock:
+			self.provider_credential_evictor = evictor
 
 	def telemetry(self):
 		info = self.config.telemetry()
@@ -1071,6 +1076,7 @@ class QPMTargetController:
 		record = self.provider_credential_for_reservation(
 			reservation_id, operation="execution")
 		secret = dict(record.get("secret") or {})
+		secret["reservation_id"] = reservation_id
 		metadata = _drop_none(_redacted_metadata(
 			dict(record.get("metadata") or {})))
 		setattr(circuit, "provider_credential", secret)
@@ -1081,11 +1087,12 @@ class QPMTargetController:
 
 	def clear_provider_credentials(self):
 		with self.lock:
-			self.reservation_credentials_by_id.clear()
+			for reservation_id in list(self.reservation_credentials_by_id):
+				self._remove_provider_credential_locked(reservation_id)
 
 	def _bind_provider_credential_locked(self, reservation_id, metadata):
 		reservation_binding = dict(metadata.get("reservation_binding") or {})
-		response = bind_reservation_credential(
+		provider, response = bind_reservation_credential(
 			reservation_binding,
 			credential_mode=self.config.credential_mode)
 		secret = dict(response.secret or {})
@@ -1095,13 +1102,21 @@ class QPMTargetController:
 			"secret": secret,
 			"metadata": credential_metadata,
 			"binding": reservation_binding,
+			"provider": provider,
 		}
 		if credential_metadata:
 			metadata["provider_credential_binding"] = credential_metadata
 		return credential_metadata
 
 	def _remove_provider_credential_locked(self, reservation_id):
-		self.reservation_credentials_by_id.pop(reservation_id, None)
+		record = self.reservation_credentials_by_id.pop(reservation_id, None)
+		if record is not None:
+			provider = record.pop("provider", None)
+			if provider is not None:
+				provider.release(record)
+		if self.provider_credential_evictor is not None:
+			self.provider_credential_evictor(reservation_id)
+		return record
 
 	def _fallback_provider_credential_locked(self, reservation_id):
 		request_metadata = self.reservation_metadata_by_id.get(reservation_id)

@@ -41,6 +41,7 @@ class FakeQRC:
 		self.async_cids = []
 		self.cancelled = []
 		self.push_info = None
+		self.evicted_reservations = []
 
 	def async_run(self, circuit):
 		self.async_cids.append(circuit.get_cid())
@@ -58,6 +59,9 @@ class FakeQRC:
 
 	def shutdown(self):
 		pass
+
+	def evict_reservation_client(self, reservation_id):
+		self.evicted_reservations.append(reservation_id)
 
 
 def _close_expired_reservation_for_test(controller, reservation_id, now_ns):
@@ -471,6 +475,33 @@ def test_reserve_rejects_ineligible_user_before_admission(
 	assert decision["status"] == "rejected"
 	assert decision["reason"] == "credential-eligibility-failed"
 	assert qpm.controller.admission_context.requests == []
+
+
+def test_release_cleans_reservation_owned_credentials(monkeypatch):
+	_setup(monkeypatch)
+	released = []
+
+	class Provider:
+		def release(self, binding):
+			released.append(binding)
+
+	response = qpm_credentials.CredentialProviderResponse(
+		secret={"api_key": "reservation-secret"},
+		metadata={"provider_type": "test"})
+	monkeypatch.setattr(
+		qpm_controller, "bind_reservation_credential",
+		lambda *args, **kwargs: (Provider(), response))
+	qpm = AdmissionQPM(target_id="credential-cleanup")
+	reservation_id = qpm.reserve(
+		request={"num_qubits": 2})["reservation_id"]
+
+	result = qpm.release(reservation_id=reservation_id)
+
+	assert result["status"] == "accepted"
+	assert len(released) == 1
+	assert "provider" not in released[0]
+	assert reservation_id not in qpm.controller.reservation_credentials_by_id
+	assert qpm.fake_qrc.evicted_reservations == [reservation_id]
 
 
 def test_completion_retention_loads_site_config(

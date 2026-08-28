@@ -177,7 +177,7 @@ class FileCredentialProvider(CredentialProvider):
 def bind_reservation_credential(binding, credential_mode=None):
 	request = credential_request_from_binding(binding)
 	provider = provider_for_request(request, credential_mode=credential_mode)
-	return provider.bind(request)
+	return provider, provider.bind(request)
 
 
 def validate_reservation_credential(binding, credential_mode=None):

@@ -158,6 +158,9 @@ class UTIL_QPM:
 			scheduler_context_factory=scheduler_context_factory)
 		self.controller.set_provider_canceller(
 			getattr(qrc, "cancel", None) if qrc is not None else None)
+		self.controller.set_provider_credential_evictor(
+			getattr(qrc, "evict_reservation_client", None)
+			if qrc is not None else None)
 		self.circuits = self.controller.circuits
 		self.oor_queue = self.controller.oor_queue
 		if self.oor_queue is None:

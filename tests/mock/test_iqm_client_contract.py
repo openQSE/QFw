@@ -91,3 +91,32 @@ def test_iqm_client_creation_uses_required_api():
 		"token": "protected-token",
 		"quantum_computer": "qpu-1",
 	}
+
+
+def test_iqm_clients_are_owned_by_reservation(monkeypatch):
+	class FakeIQMClient:
+		def __init__(self, *args, **kwargs):
+			self.closed = False
+
+		def close(self):
+			self.closed = True
+
+	monkeypatch.setattr(
+		util_iqm, "load_iqm_client_module", lambda: FakeIQMClient)
+	monkeypatch.setattr(
+		util_iqm, "load_iqm_service_config", lambda credential=None: {
+			"url": "https://iqm.invalid",
+			"api_key": credential["api_key"],
+			"quantum_computer": "qpu-1",
+			"user": "alice",
+		})
+	service = util_iqm.IQMServiceClient()
+	credential = {"api_key": "shared-key"}
+	client_a = service.client(dict(credential, reservation_id="41"))
+	client_b = service.client(dict(credential, reservation_id="42"))
+
+	assert client_a is not client_b
+	assert service.evict_reservation("41") is True
+	assert client_a.closed is True
+	assert client_b.closed is False
+	assert ("reservation", "42") in service._clients

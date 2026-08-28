@@ -336,6 +336,9 @@ class IQMServiceClient:
 		credential = dict(credential or {})
 		if not credential:
 			return ("default",)
+		reservation_id = credential.get("reservation_id")
+		if reservation_id is not None:
+			return ("reservation", str(reservation_id))
 		return (
 			credential.get("url"),
 			credential.get("provider_device_id"),
@@ -343,6 +346,17 @@ class IQMServiceClient:
 			credential.get("user"),
 			credential.get("api_key") or credential.get("token"),
 		)
+
+	def evict_reservation(self, reservation_id):
+		cache_key = ("reservation", str(reservation_id))
+		with self._client_lock:
+			client = self._clients.pop(cache_key, None)
+		if client is None:
+			return False
+		close = getattr(client, "close", None)
+		if callable(close):
+			close()
+		return True
 
 	def device_id(self):
 		if self._config is None:
