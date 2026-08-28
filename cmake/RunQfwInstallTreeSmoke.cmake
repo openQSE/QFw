@@ -1000,7 +1000,10 @@ endif()
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
-		first_pid_file='${partial_run_dir}/service-plane/qpm/first/services/first/pid'
+		first_pid_file=\$(find \
+			'${partial_run_dir}/service-plane/qpm/first/services' \
+			-mindepth 2 -maxdepth 2 -name pid -print -quit)
+		test -n \"\${first_pid_file}\"
 		test -s \"\${first_pid_file}\"
 		first_pid=\$(cat \"\${first_pid_file}\")
 		for _attempt in \$(seq 1 30); do
