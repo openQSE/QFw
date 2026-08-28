@@ -31,7 +31,17 @@ def parse_qfw_reservations(value=None, required=True):
 	if not isinstance(parsed, list) or not parsed:
 		raise DEFwError(
 			f"{QFW_RESERVATIONS_ENV} must be a non-empty JSON list")
-	return [_parse_tuple(item, index) for index, item in enumerate(parsed)]
+	reservations = [
+		_parse_tuple(item, index) for index, item in enumerate(parsed)
+	]
+	seen = set()
+	for reservation in reservations:
+		if reservation.service_id in seen:
+			raise DEFwError(
+				f"{QFW_RESERVATIONS_ENV} contains duplicate service_id "
+				f"{reservation.service_id!r}")
+		seen.add(reservation.service_id)
+	return reservations
 
 
 def select_qpm_reservation(reservations, service_id=None):

@@ -41,3 +41,9 @@ def test_multiple_reservations_require_service_selection():
 		select_qpm_reservation(reservations)
 	assert select_qpm_reservation(
 		reservations, service_id="qpm-b").reservation_id == 17
+
+
+def test_duplicate_service_reservations_are_rejected():
+	with pytest.raises(DEFwError, match="duplicate service_id"):
+		parse_qfw_reservations(
+			'[["qpm-a","41"],["qpm-a","42"]]')
