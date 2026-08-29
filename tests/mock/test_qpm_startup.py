@@ -66,19 +66,14 @@ class FakeDefw:
 	def __init__(self, dirsvc=None, site_ready=None, site_dirsvc=None,
 		     records=None, listener_ready=True, controller_ready=True,
 		     endpoint=None):
-		self.dirsvc = dirsvc
 		self.site_ready = set(site_ready or [])
 		self.site_dirsvc = site_dirsvc
+		self.dirsvc = dirsvc or (
+			site_dirsvc if self.site_ready else None)
 		self.records = list(records or [])
 		self.listener_is_ready = listener_ready
 		self.controller_is_ready = controller_ready
 		self.endpoint = endpoint or FakeEndpoint()
-
-	def connect_to_binding(self, binding):
-		endpoint = binding["service_record"]["endpoint"]["address"]
-		if endpoint not in self.site_ready:
-			return None
-		return self.site_dirsvc
 
 	def qpm_site_service_records(self):
 		return list(self.records)

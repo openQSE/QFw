@@ -306,15 +306,8 @@ def _service_record(defw_module, advertisement):
 	}
 
 
-def _site_dirsvc_client(defw_module, endpoint):
-	connect_to_binding = getattr(defw_module, "connect_to_binding", None)
-	if connect_to_binding is None:
-		raise AttributeError(
-			"DEFw runtime does not expose connect_to_binding")
-	try:
-		return connect_to_binding(_directory_binding_record(endpoint))
-	except Exception:
-		return None
+def _site_dirsvc_client(defw_module, _endpoint):
+	return getattr(defw_module, "dirsvc", None)
 
 
 def _register_site_record(client, record, defw_module):
@@ -422,32 +415,6 @@ def _site_registration_peer(defw_module):
 		"runtime_id": endpoint_record["runtime_id"],
 		"peer_handle": _endpoint_attr(endpoint, "blk_uuid", ZERO_UUID),
 		"endpoint": endpoint_record,
-	}
-
-
-def _directory_binding_record(endpoint):
-	endpoint_record = _endpoint_record(endpoint)
-	return {
-		"service_record": {
-			"service_id": f"dirsvc:{endpoint}",
-			"service_name": "DEFwDirSvc",
-			"service_type": "defw.dirsvc",
-			"runtime_id": endpoint_record["runtime_id"],
-			"endpoint": endpoint_record,
-			"selector": {
-				"resources": ["DEFwDirSvc"],
-				"aliases": ["dirsvc", "directory"],
-			},
-			"properties": {},
-		},
-		"selected_binding": {
-			"binding_name": "directory",
-			"client_module": "api_dirsvc",
-			"client_class": "DEFwDirSvc",
-			"service_module": "svc_dirsvc.svc_dirsvc",
-			"service_class": "DEFwDirSvc",
-			"version": 1,
-		},
 	}
 
 
