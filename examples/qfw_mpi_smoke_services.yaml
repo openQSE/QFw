@@ -2,6 +2,7 @@ services:
   - name: mpi-smoke
     module: svc_mpi_smoke
     load-modules: svc_mpi_smoke
+    credential-mode: no-secret
     agent-prefix: mpi_smoke
     target: group1-head
     provider-launch:
