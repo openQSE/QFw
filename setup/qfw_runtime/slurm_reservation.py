@@ -120,7 +120,8 @@ def build_parser():
 def main(argv=None):
 	args = build_parser().parse_args(argv)
 	try:
-		return args.func(args) or 0
+		result = args.func(args)
+		return result if isinstance(result, int) else 0
 	except Exception as exc:
 		print(f"qfw-slurm-reservation: {exc}", file=sys.stderr)
 		return 1

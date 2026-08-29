@@ -103,3 +103,14 @@ def test_release_attempts_every_qpm():
 	assert slurm_reservation.release(args, resolver=resolver) == 0
 	assert first.released == [("41", 0)]
 	assert second.released == [("17", 0)]
+
+
+def test_main_treats_reservation_output_as_success(monkeypatch):
+	class Parser:
+		@staticmethod
+		def parse_args(argv):
+			return argparse.Namespace(func=lambda args: '[["nwqsim","1"]]')
+
+	monkeypatch.setattr(slurm_reservation, "build_parser", Parser)
+
+	assert slurm_reservation.main([]) == 0
