@@ -146,6 +146,9 @@ calls the shim service over DEFw RPC. The test covers device introspection,
 coupling graph, calibration snapshot, backend info, async circuit execution,
 completion notification, and last-job metadata.
 
+This specialized case is not part of a simulator-backed `qfw_run_all.sh`
+matrix. Select it explicitly with `--service-mode local --backend shim`.
+
 ```bash
 ./qfw_shim_smoke.sh --lib qdmi
 ./qfw_shim_smoke.sh --lib qrmi

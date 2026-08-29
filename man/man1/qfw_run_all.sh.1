@@ -73,7 +73,9 @@ SuperMarQ shot count. The default is 128.
 Qiskit VQE optimizer iterations. The default is 1.
 .TP
 .B QFW_RUN_ALL_SHIM_LIB
-Shim library for the local shim smoke case. Use
+Shim library for the specialized shim smoke case. That case runs only with
+.BR "--service-mode local --backend shim" .
+Use
 .B qrmi
 or
 .BR qdmi .

@@ -229,10 +229,11 @@ run_case() {
 }
 
 run_case init-test ./qfw_init_test.sh "${common_args[@]}"
-if [[ "${service_mode}" == "local" ]]; then
+if [[ "${service_mode}" == "local" && "${backend}" == "shim" ]]; then
 	run_case shim-smoke ./qfw_shim_smoke.sh --lib "${shim_lib}"
 else
-	skip_case shim-smoke "shim smoke owns its specialized local service"
+	skip_case shim-smoke \
+		"requires --service-mode local --backend shim"
 fi
 run_case qiskit-simple ./qfw_qiskit_simple.sh "${common_args[@]}" "${qubits}"
 run_case ghz-qiskit ./qfw_ghz.sh "${common_args[@]}" \
