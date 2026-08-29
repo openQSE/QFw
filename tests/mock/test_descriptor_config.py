@@ -64,10 +64,13 @@ def _load_descriptor():
 
 
 def test_shim_example_uses_no_secret_credential_provider():
+	manifest_path = REPO_ROOT / "examples" / "qfw_shim_smoke_services.yaml"
+	manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
 	config_path = REPO_ROOT / "examples" / "qfw_shim_device_access.yaml"
 	config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 	device = config["qpus"]["ornl-iqm-20q"]
 
+	assert manifest["services"][0]["credential-mode"] == "no-secret"
 	assert device["credential-provider"] == "shim-no-secret"
 	assert "credential-db" not in device
 	assert config["credential-providers"]["shim-no-secret"] == {
