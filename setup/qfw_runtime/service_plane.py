@@ -566,10 +566,11 @@ def _dvm_nodes(local, services, allocation, directory, scope):
         return list(allocation["group1"])
     configured = (local.get("prte") or {}).get("hosts")
     if configured:
-        return _expand_hosts(str(configured))
+        return _expand_hosts(qfw_config.expand_config_value(configured))
     nodes = []
     for service in services:
-        nodes.extend(_expand_hosts(service.get("assigned_hosts", "")))
+        nodes.extend(_expand_hosts(qfw_config.expand_config_value(
+            service.get("assigned_hosts", ""))))
     nodes = list(dict.fromkeys(nodes))
     if nodes:
         return nodes
@@ -1064,6 +1065,7 @@ def _resolve_node_policy(policy, allocation):
 def _resolve_host_policy(policy, allocation):
     if not policy:
         return ""
+    policy = qfw_config.expand_config_value(policy)
     if policy == "group1":
         return ",".join(allocation["group1"])
     if policy == "group0":

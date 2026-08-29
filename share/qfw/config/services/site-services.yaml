@@ -9,7 +9,7 @@ services:
     required-executables:
       - circuit_runner.nwqsim
     agent-prefix: qpm_nwqsim
-    assigned-hosts: group1
+    assigned-hosts: ${QFW_SIMULATOR_NODES}
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     listen-port: 8490
     telnet-port: 8491

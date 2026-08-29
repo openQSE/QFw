@@ -365,6 +365,21 @@ def test_site_qpm_defaults_to_manager_host_without_allocation(
     assert state["services"][0]["target"] == "iqm-head"
 
 
+def test_site_simulator_nodes_expand_from_environment(monkeypatch):
+    allocation = {
+        "mode": "local",
+        "group0": ["qpm-a"],
+        "group1": ["qpm-a"],
+    }
+    monkeypatch.setenv("QFW_SIMULATOR_NODES", "sim-a,sim-b")
+
+    assert service_plane._resolve_host_policy(
+        "${QFW_SIMULATOR_NODES}", allocation) == "sim-a,sim-b"
+    assert service_plane._dvm_nodes(
+        {"prte": {"hosts": "${QFW_SIMULATOR_NODES}"}},
+        [], allocation, {}, "site") == ["sim-a", "sim-b"]
+
+
 def test_independent_application_qpms_use_manifest_port_offsets(tmp_path):
     site, manifest = write_site_configuration(tmp_path, [
         ("nwqsim", "svc_nwqsim_qpm", "mpi"),

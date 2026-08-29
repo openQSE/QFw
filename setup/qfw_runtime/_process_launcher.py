@@ -200,8 +200,10 @@ def start_qpm(argv):
     service_host = str(service.get(
         "bind-host", service.get("host", target or "127.0.0.1")))
     service_port = int(service.get("listen-port", args.listen_port))
-    assigned_hosts = _resolve_host_policy(
-        service.get("assigned-hosts"), allocation)
+    assigned_hosts = (
+        os.environ.get("QFW_SERVICE_ASSIGNED_HOSTS") or
+        _resolve_host_policy(service.get("assigned-hosts"), allocation)
+    )
     env = os.environ.copy()
     env.update({
         "DEFW_AGENT_NAME": service_id,
@@ -534,6 +536,7 @@ def _resolve_node_policy(policy, allocation):
 def _resolve_host_policy(policy, allocation):
     if not policy:
         return ""
+    policy = qfw_config.expand_config_value(policy)
     if policy == "group1":
         return ",".join(allocation["group1"])
     if policy == "group0":

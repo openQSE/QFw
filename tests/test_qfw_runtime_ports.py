@@ -395,6 +395,16 @@ def test_private_process_launcher_uses_defw_python_wrapper(
         "service")
 
 
+def test_process_launcher_expands_site_simulator_nodes(monkeypatch):
+    monkeypatch.setenv("QFW_SIMULATOR_NODES", "sim-a,sim-b")
+
+    assert process_launcher._resolve_host_policy(
+        "${QFW_SIMULATOR_NODES}", {
+            "group0": ["qpm-a"],
+            "group1": ["qpm-a"],
+        }) == "sim-a,sim-b"
+
+
 def test_qfw_srun_uses_group0_for_heterogeneous_allocation(
         tmp_path, monkeypatch):
     run_dir = tmp_path / "run"
