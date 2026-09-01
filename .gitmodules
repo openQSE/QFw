@@ -1,7 +1,10 @@
 [submodule "DEFw"]
 	path = DEFw
 	url = git@github.com:openQSE/DEFw.git
-	branch = master
+	# The submodule pointer tracks release/v0.1, not master. master is many
+	# commits behind and does not contain the pinned commit, so declaring it
+	# here made "git submodule update --remote" move DEFw backwards.
+	branch = release/v0.1
 [submodule "external/qhw-data"]
 	path = external/qhw-data
 	url = git@github.com:openQSE/qhw-data.git
