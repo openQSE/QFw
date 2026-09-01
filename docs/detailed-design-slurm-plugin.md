@@ -2,29 +2,74 @@
 
 **Status:** draft
 
-## DES-SLURM-001. Design Scope and Dependency Direction
+## Table of Contents
 
-This design implements the Slurm quantum lifecycle through two cooperating
-processes. A native SPANK plugin owns Slurm callbacks, option processing,
-reservation transaction order, job environment updates, and allocation
-cleanup. A persistent gateway owns the temporary C-to-Python boundary. The
-gateway speaks a small native protocol to the plugin and uses existing DEFw
-bindings to call the directory service and QPMd.
+- [Design Scope and Dependency Direction](#design-scope-and-dependency-direction)
+- [Repository and Package Layout](#repository-and-package-layout)
+- [Site Configuration](#site-configuration)
+- [Plugin Internal State](#plugin-internal-state)
+- [Option Registration and Validation](#option-registration-and-validation)
+- [SPANK Lifecycle](#spank-lifecycle)
+- [Reservation Transaction](#reservation-transaction)
+- [Gateway Process Model](#gateway-process-model)
+- [Directory and QPM Binding](#directory-and-qpm-binding)
+- [QPM Request Translation](#qpm-request-translation)
+- [QSGP Protocol Specification](#qsgp-protocol-specification)
+  - [Logical Operations and Response Contracts](#logical-operations-and-response-contracts)
+  - [Request and Response Data Transfer](#request-and-response-data-transfer)
+  - [Reservation Response Mapping](#reservation-response-mapping)
+  - [Allocation and Reservation Sequence](#allocation-and-reservation-sequence)
+  - [QSGP Wire Encoding](#qsgp-wire-encoding)
+  - [QSGP Field Registry](#qsgp-field-registry)
+  - [MUNGE and TCP Envelope](#munge-and-tcp-envelope)
+  - [Synchronous Client Operation](#synchronous-client-operation)
+- [Gateway Journal and Idempotency](#gateway-journal-and-idempotency)
+- [Job Verification and Authorization Boundary](#job-verification-and-authorization-boundary)
+- [Release and Failure Recovery](#release-and-failure-recovery)
+- [Heterogeneous and Concurrent Allocations](#heterogeneous-and-concurrent-allocations)
+- [Logging and Operational Status](#logging-and-operational-status)
+- [Build, Deployment, and Upgrade](#build-deployment-and-upgrade)
+- [Slurm Cluster Development Readiness](#slurm-cluster-development-readiness)
+- [Validation Design](#validation-design)
+- [Requirements Traceability](#requirements-traceability)
+
+**Status:** draft
+
+## Design Scope and Dependency Direction
+
+This design implements the Slurm quantum lifecycle through three cooperating
+roles. A native SPANK plugin owns Slurm callbacks, option processing,
+reservation transaction order, and job environment updates. A controller-level
+`qfw-slurm-epilog` helper owns once-per-allocation cleanup through
+`EpilogSlurmctld`. A persistent gateway owns the temporary C-to-Python
+boundary. The plugin and epilog helper speak a small native protocol to the
+gateway, which uses existing DEFw bindings to call the directory service and
+QPMd.
+
+That native interface is the Quantum Scheduler Gateway Protocol (QSGP). QSGP
+is independent of DEFw RPC and carries only scheduler lifecycle requests and
+their normalized results.
 
 The dependency direction is:
 
 ```text
-Slurm
+Slurm step lifecycle
     -> native SPANK plugin
         -> QSGP client
-            -> qfw-slurm-gateway
-                -> DEFw directory client
-                -> QPM admission-control client
-                    -> qhw-admission
+
+Slurm allocation completion
+    -> qfw-slurm-epilog
+        -> QSGP client
+
+QSGP client
+    -> qfw-slurm-gateway
+        -> DEFw directory client
+        -> QPM admission-control client
+            -> qhw-admission
 ```
 
-QFw does not import or build the Slurm plugin. The plugin repository consumes
-an installed QFw environment only for the gateway. The Slurm-cluster
+QFw does not import or build the Slurm integration. The plugin repository
+consumes an installed QFw environment only for the gateway. The Slurm-cluster
 repository installs and configures released artifacts but contains no plugin
 implementation.
 
@@ -41,7 +86,7 @@ QFw-specific workload option names.
 
 **Status:** draft
 
-## DES-SLURM-002. Repository and Package Layout
+## Repository and Package Layout
 
 The separate OpenQSE repository uses the following ownership layout:
 
@@ -57,6 +102,8 @@ qfw-slurm/
     plugin_config.c
     reservation_transaction.c
     environment.c
+  src/epilog/
+    qfw_slurm_epilog.c
   src/protocol/
     qsgp_encode.c
     qsgp_decode.c
@@ -83,13 +130,14 @@ qfw-slurm/
 ```
 
 The C protocol library is private to this repository during the gateway
-phase. It is not installed as a general QFw client API. The gateway Python
-package is installed into the site QFw virtual environment or into a dedicated
-service environment containing compatible QFw and DEFw packages.
+phase. It is shared by the SPANK plugin and controller epilog helper, but it is
+not installed as a general QFw client API. The gateway Python package is
+installed into the site QFw virtual environment or into a dedicated service
+environment containing compatible QFw and DEFw packages.
 
-The build produces `spank_quantum.so`, protocol unit tests, and gateway package
-artifacts. Building the plugin requires Slurm headers and libmunge. It does not
-require Python headers or QFw source.
+The build produces `spank_quantum.so`, `qfw-slurm-epilog`, protocol unit tests,
+and gateway package artifacts. Building the native artifacts requires Slurm
+headers and libmunge. It does not require Python headers or QFw source.
 
 **Requirements:**
 - SLPARCH-001
@@ -99,7 +147,7 @@ require Python headers or QFw source.
 
 **Status:** draft
 
-## DES-SLURM-003. Site Configuration
+## Site Configuration
 
 The plugin reads `/etc/qfw-slurm/plugin.conf`. The file is root-owned and not
 writable by application users. It contains no provider credential.
@@ -159,7 +207,7 @@ identities, and generations remain directory-service concerns.
 
 **Status:** draft
 
-## DES-SLURM-004. Plugin Internal State
+## Plugin Internal State
 
 Each loaded plugin instance holds only process-local parsing and request state:
 
@@ -207,7 +255,7 @@ components of the same application.
 
 **Status:** draft
 
-## DES-SLURM-005. Option Registration and Validation
+## Option Registration and Validation
 
 `slurm_spank_init()` registers every option in allocator, local, and remote
 contexts. The same table is used by `salloc`, `sbatch`, `srun`, and
@@ -255,7 +303,7 @@ cap.
 
 **Status:** draft
 
-## DES-SLURM-006. SPANK Lifecycle
+## SPANK Lifecycle
 
 The plugin uses the following callbacks:
 
@@ -264,27 +312,32 @@ The plugin uses the following callbacks:
 | `slurm_spank_init`, all applicable contexts | Load immutable plugin configuration and register options. No gateway call occurs. |
 | Option callback, local or allocator | Parse and validate user values before Slurm accepts the command. |
 | Option callback, remote | Reconstruct the same validated option state received from Slurm. |
-| `slurm_spank_init_post_opt`, remote | Resolve Slurm metadata, acquire or retrieve reservations through QSGP, and set `QFW_RESERVATIONS`. |
+| `slurm_spank_init_post_opt`, remote | Send `QFW_GW_RESERVE_REQUEST`, decode its synchronous response, and set `QFW_RESERVATIONS` after acceptance. |
 | `slurm_spank_task_init`, remote | Return `SLURM_ERROR` when acquisition failed, preventing task execution without treating a healthy node as failed. |
 | `slurm_spank_exit`, local or remote | Free process-local buffers only. It never releases allocation reservations. |
-| `slurm_spank_job_epilog`, job-script context | List the canonical job's reservations and issue one release for each tuple. Log failures while returning success to avoid draining the node. |
+| `slurm_spank_job_epilog`, job-script context | Free node-local state and emit diagnostics only. It never releases allocation reservations because this callback is not allocation-global. |
 | `slurm_spank_slurmd_exit`, slurmd context | Release daemon-local configuration and protocol resources only. |
 
-For `sbatch`, remote initialization occurs before the batch task executes. For
-`salloc`, no reservation is created merely because an interactive allocation
-exists. The first `srun` triggers remote initialization and acquires the QPM
-before its task starts. Subsequent steps repeat the same idempotent reserve
-keys and receive the existing reservation tuples.
+For `sbatch`, remote initialization occurs before the batch task executes. The
+interactive `salloc` path uses lazy acquisition. Creating the allocation does
+not reserve QPM capacity. The first managed `srun` sends
+`QFW_GW_RESERVE_REQUEST` and acquires the reservation before its task starts.
+Subsequent managed steps send the same operation for the canonical allocation
+and service set and receive the existing tuples.
 
-If a later `srun` does not repeat the allocation's option values, the plugin
-uses `LIST_RESERVATIONS` for the canonical job and exports the existing tuple
-set. A step with neither propagated options nor an existing tuple set is not a
-managed quantum step.
+A later `srun` may omit the original workload envelope after Slurm has already
+propagated and validated it for the allocation. The reserve request still
+carries the canonical allocation identity and service set. The gateway returns
+the stored tuple set when it exists. It returns a structured error when no set
+exists and the request lacks the fields needed to create one. Version 1 has no
+separate list operation.
 
-The job epilog is an independent process. It therefore queries the gateway
-journal rather than relying on globals created during remote initialization.
-Multiple epilog invocations caused by multinode execution are safe because
-list and release are idempotent.
+Allocation cleanup is controller-owned. Slurmctld invokes
+`qfw-slurm-epilog` through `EpilogSlurmctld` after the complete allocation is
+terminal. The helper sends `QFW_GW_RELEASE_REQUEST` for the canonical allocation
+key. Node-local SPANK epilogs never release QPM capacity, so an early node
+completion in a multinode job cannot terminate a reservation still used
+elsewhere in the allocation.
 
 **Requirements:**
 - SLPLIFE-001
@@ -296,33 +349,39 @@ list and release are idempotent.
 
 **Status:** draft
 
-## DES-SLURM-007. Reservation Transaction
+## Reservation Transaction
 
 Remote initialization builds the ordered list of exact service IDs from the
-root-owned resource mapping. It then executes this algorithm:
+root-owned resource mapping. It then executes one allocation-level transaction:
 
 ```text
-accepted = []
-for service_id in requested_services:
-    response = qsgp_reserve(job, service_id, workload)
-    if response.outcome != ACCEPTED:
-        for tuple in reverse(accepted):
-            qsgp_release(job, tuple, ROLLBACK)
-        defer task-launch failure using response diagnostic
-        return
-    accepted.append(response.tuple)
+request_id = stable_uint64_id(cluster, job, allocation_epoch, RESERVE)
+response = qfw_gw_reserve(job, requested_services, workload, request_id)
+if response.type == QFW_GW_ERROR_RESPONSE:
+    defer task-launch failure using response.gateway_error
+    return
+if response.decision != QFW_GW_ADMISSION_ACCEPTED:
+    defer task-launch failure using response.reason_code and diagnostic
+    return
 
-QFW_RESERVATIONS = canonical_json(accepted)
+QFW_RESERVATIONS = canonical_json(response.reservation_tuples)
 spank_setenv(QFW_RESERVATIONS)
 ```
 
-The plugin, not the gateway, owns ordering and rollback. It attempts every
-rollback even after one release fails and reports all failures. The gateway
-receives one service operation at a time.
+The gateway owns set atomicity, deterministic service ordering, and rollback of
+QPM reservations created while processing the request. The plugin receives the
+complete accepted tuple set or a structured non-accepted response. It never
+receives a partially accepted set as success. Every SPANK process derives the
+same nonzero `uint64` request ID, so later steps and transport retries use the
+same canonical request identity.
 
-The environment value is a compact JSON list of two-element arrays. Service
-IDs are JSON strings. Reservation IDs are decimal strings so their `uint64_t`
-range does not lose precision in JSON consumers.
+The gateway passes that request ID through to qhw-admission for each resolved
+QPM service. The QSGP transport correlation ID remains separate and may change
+for each network attempt.
+
+The environment value is a compact JSON list of two-element arrays ordered by
+service ID. Service IDs are JSON strings. Reservation IDs are decimal strings
+so their `uint64_t` range does not lose precision in JSON consumers.
 
 ```bash
 QFW_RESERVATIONS='[["iqm-ornl-20q","41"],["nwqsim-site","17"]]'
@@ -343,7 +402,7 @@ application.
 
 **Status:** draft
 
-## DES-SLURM-008. Gateway Process Model
+## Gateway Process Model
 
 `qfw-slurm-gateway` is a persistent service managed by systemd or an
 equivalent site service manager. It runs under a dedicated account, has a
@@ -382,7 +441,7 @@ reservations merely because the gateway service is restarting.
 
 **Status:** draft
 
-## DES-SLURM-009. Directory and QPM Binding
+## Directory and QPM Binding
 
 The gateway adapter maintains a resolver bound to the configured directory
 service. A reserve operation includes one exact `service_id`. Resolution uses
@@ -414,7 +473,7 @@ the requested service ID or erase journaled tuples.
 
 **Status:** draft
 
-## DES-SLURM-010. QPM Request Translation
+## QPM Request Translation
 
 After resolving the exact QPM, the gateway constructs the existing QPM
 reservation request. Trusted values and user-declared workload values remain
@@ -422,6 +481,7 @@ separate during construction.
 
 | QPM request value | Source |
 | --- | --- |
+| `request_id` | QSGP `uint64` request ID |
 | `owner.user` | Username resolved from the verified Slurm UID |
 | `job_id` | Canonical Slurm job ID |
 | `allocation_id` | Cluster name and canonical job ID |
@@ -441,17 +501,16 @@ credentials, and calls qhw-admission. The gateway forwards none of the test
 driver's credential hints, arbitrary parameter JSON, or user-selected scope
 overrides.
 
-The normalized QPM decision maps as follows:
+A completed QPM call yields one of the three qhw-admission decisions. Accepted
+requires a nonzero reservation ID. Delayed carries retry guidance when QPM
+provides it. Rejected covers entitlement, credential, policy, and capacity
+refusals. The gateway maps these values into `QFW_GW_RESERVE_RESPONSE`.
 
-| QPM result | QSGP outcome |
-| --- | --- |
-| Accepted with nonzero reservation ID | `ACCEPTED` |
-| Delayed with retry information | `DELAYED` |
-| Rejected by entitlement, credentials, policy, or limits | `REJECTED` |
-| RPC, directory, malformed-result, or gateway failure | `ERROR` |
-
-The gateway copies only bounded diagnostics. It never serializes Python
-exceptions, tracebacks, credentials, or arbitrary result objects into QSGP.
+RPC, directory, malformed-result, qhw-admission API, and internal gateway
+failures return `QFW_GW_ERROR_RESPONSE`. They do not add an `ERROR` value to
+the admission decision enumeration. The gateway copies only bounded
+diagnostics and never serializes Python exceptions, tracebacks, credentials,
+or arbitrary result objects into QSGP.
 
 **Requirements:**
 - SLPCLI-010
@@ -464,7 +523,280 @@ exceptions, tracebacks, credentials, or arbitrary result objects into QSGP.
 
 **Status:** draft
 
-## DES-SLURM-011. QSGP Wire Encoding
+## QSGP Protocol Specification
+
+QSGP is the narrow allocation-lifecycle contract between the native Slurm
+integration and `qfw-slurm-gateway`. The native side includes the SPANK plugin
+for step startup and the controller epilog helper for allocation cleanup. The
+gateway is the only QSGP component that imports DEFw or translates requests to
+QPM admission-control calls.
+
+Version 1 contains only the two state-changing operations used by the Slurm
+lifecycle. `QFW_GW_RESERVE` acquires or returns an allocation's reservation
+set. `QFW_GW_RELEASE` releases that set after allocation completion. A common
+`QFW_GW_ERROR_RESPONSE` reports failures that prevented either operation from
+producing its normal response.
+
+QSGP carries scheduler lifecycle metadata and normalized admission results. It
+does not carry provider credentials, circuit payloads, provider job results,
+Python objects, arbitrary DEFw calls, or general QFw service traffic.
+
+The protocol defines required, optional, and forbidden fields for each message.
+Enumeration values, bounds, version rules, and golden vectors are part of the
+versioned contract.
+
+**Requirements:**
+- SLPARCH-004
+- SLPPROTO-001
+- SLPPROTO-002
+- SLPPROTO-003
+- SLPPROTO-012
+
+**Status:** draft
+
+### Logical Operations and Response Contracts
+
+Version 1 exposes these messages:
+
+| Request | Caller and purpose | Normal response |
+| --- | --- | --- |
+| `QFW_GW_RESERVE_REQUEST` | Remote SPANK initialization acquires or retrieves the atomic ordered reservation set for one allocation. | `QFW_GW_RESERVE_RESPONSE` carries an `ACCEPTED`, `DELAYED`, or `REJECTED` admission decision and the applicable per-service results. |
+| `QFW_GW_RELEASE_REQUEST` | The controller epilog helper releases every nonterminal reservation after allocation completion. | `QFW_GW_RELEASE_RESPONSE` reports every terminal and unresolved reservation. |
+
+`QFW_GW_ERROR_RESPONSE` is the common failure response. It is returned when the
+gateway cannot produce the normal operation response because of a parseable
+protocol error, authorization failure, directory failure, QPM RPC failure,
+qhw-admission API error, timeout, or internal failure. Admission outcomes and
+gateway errors use separate enumerations. `ERROR` is not an admission decision.
+
+Every authenticated, well-formed request receives one response on the same TCP
+connection with the same transport correlation ID. QSGP has no unsolicited
+server messages. Authentication or framing failures that prevent safe parsing
+of the correlation ID close the connection without an application response.
+
+Both state-changing requests carry a nonzero `uint64` request ID in network
+byte order. Every native process derives the same value from the verified
+cluster name, canonical allocation ID, allocation epoch, and operation domain.
+The reserve value is passed to QPM as the qhw-admission `request_id`. The gateway
+keys idempotency by authenticated sender, operation, and request ID and stores a
+canonical request fingerprint. The same key and fingerprint return the stored
+response. Reusing the key with different fields returns
+`QFW_GW_ERROR_REQUEST_CONFLICT`. The transport correlation ID identifies one
+network exchange and may change on retry.
+
+`QFW_GW_RESERVE` is atomic at the QSGP boundary. It returns `ACCEPTED` only
+after every requested service has an active reservation. A rejected or delayed
+service causes rollback of reservations created by that request before the
+normal non-accepted response is returned. The plugin never receives a partial
+set as an accepted result.
+
+A later step uses `QFW_GW_RESERVE_REQUEST` again. The allocation identity and
+canonical service set select the existing journal rows, so the same operation
+returns the complete stored tuple set without creating another QPM reservation.
+There is no list-reservations or request-result message in version 1.
+
+`QFW_GW_RELEASE` is exhaustive. The gateway attempts every nonterminal tuple
+and reports all terminal and unresolved items in one response.
+
+**Requirements:**
+- SLPPROTO-004
+- SLPPROTO-006
+- SLPPROTO-007
+- SLPPROTO-009
+- SLPGW-003
+- SLPGW-004
+- SLPFAIL-002
+
+**Status:** draft
+
+### Request and Response Data Transfer
+
+QSGP transfers one typed request and one typed response per TCP connection.
+The native caller and gateway exchange only bounded primitive fields and nested
+QSGP records. Provider credentials, Python serialization, and native QPM
+objects remain inside the gateway boundary.
+
+```text
+SPANK plugin or controller epilog
+    -> construct typed native request
+    -> encode fixed QSGP header and TLV payload
+    -> MUNGE-encode the complete QSGP frame
+    -> send uint32 credential length plus credential bytes over TCP
+    -> gateway validates length, MUNGE identity, frame, and fields
+    -> gateway maps trusted and declared values into a typed internal request
+    -> DEFw directory lookup and QPM admission operation
+    -> gateway maps the QPM result into a typed QSGP response
+    -> MUNGE-encode and return the response on the same TCP connection
+    -> native caller validates gateway identity, correlation, and response type
+    -> decode the response into a bounded native C result
+    -> close the connection
+```
+
+MUNGE authenticates the native daemon identity and protects the credential in
+the cluster trust domain. The gateway separately verifies the cluster,
+allocation, job UID and GID, job state, account or QoS mapping, and requested
+QPU resources against authoritative Slurm state. User-declared workload bounds
+remain labeled as declarations when the gateway constructs QPM requests.
+
+The outer MUNGE credential limit and inner decoded QSGP frame limit are separate
+configuration values. Both endpoints reject an oversized length before
+allocating or decoding its content. One absolute operation deadline covers
+connect, framing, MUNGE processing, request handling, response transfer, and
+decode. A connection carries no ambient session state. Request state lives in
+the protected gateway journal and is recovered by retrying the same operation
+with the same `uint64` request ID.
+
+**Requirements:**
+- SLPPROTO-002
+- SLPPROTO-003
+- SLPPROTO-008
+- SLPSEC-001
+- SLPSEC-002
+- SLPSEC-003
+
+**Status:** draft
+
+### Reservation Response Mapping
+
+QPM reserve returns a structured qhw-admission decision. The gateway maps the
+fields needed by the Slurm lifecycle into each service result. It does not
+reduce the decision to a Boolean.
+
+| QSGP field | QPM or gateway source | Presence and use |
+| --- | --- | --- |
+| `request_id` | qhw-admission `decision.request_id` | Required. It equals the `uint64` ID from `QFW_GW_RESERVE_REQUEST`. |
+| `service_id` | Gateway directory resolution context | Required. It identifies the QPM service associated with the result. |
+| `decision` | qhw-admission `decision.decision` | Required. Values are `ACCEPTED`, `DELAYED`, and `REJECTED`. |
+| `reservation_id` | qhw-admission `decision.reservation_id` | Required and nonzero for an accepted result. Forbidden for delayed and rejected results. |
+| `reason_code` | qhw-admission `decision.reason_code` | Required. The numeric qhw-admission reason is authoritative. |
+| `retry_after_ns` | qhw-admission `decision.retry_after_ns` | Optional for a delayed result and omitted when zero. |
+| `estimated_start_ns` | qhw-admission `decision.estimated_start_ns` | Optional scheduling diagnostic and omitted when unavailable. |
+| `estimated_finish_ns` | qhw-admission `decision.estimated_finish_ns` | Optional scheduling diagnostic and omitted when unavailable. |
+| `diagnostic` | Bounded copy of qhw-admission `decision.message` | Optional human-readable detail. It never replaces `reason_code`. |
+
+The gateway omits qhw-admission policy internals that the plugin does not use.
+These include credits required, rate required, available capacity, granted
+capacity, quantum budget, compliance action, confidence, scope ID, and arbitrary
+metadata. The QPM adapter must preserve every mapped field above when it
+normalizes the native decision.
+
+The top-level reserve decision is `ACCEPTED` only when every service result is
+accepted. It is `REJECTED` when any service is rejected. Otherwise it is
+`DELAYED` when at least one service is delayed. An accepted response contains
+the complete ordered service and reservation tuple set. A delayed or rejected
+response contains the decisive normalized service result and no exportable
+reservation tuple set.
+
+A nonzero qhw-admission API return code does not produce a decision record. QPM
+propagates that condition as an operation failure, and the gateway returns
+`QFW_GW_ERROR_RESPONSE` with a gateway error code and bounded diagnostic. This
+keeps gateway failures separate from valid qhw-admission rejection or delay.
+
+QPM release returns an API status rather than a qhw-admission decision.
+`QFW_GW_RELEASE_RESPONSE` therefore reports the gateway journal's per-service
+terminal state. A release API failure is an unresolved item with a gateway
+error code; it is not represented as a rejected admission decision.
+
+**Requirements:**
+- SLPGW-003
+- SLPGW-004
+- SLPPROTO-004
+- SLPPROTO-006
+- SLPPROTO-007
+- SLPPROTO-009
+
+**Status:** draft
+
+### Allocation and Reservation Sequence
+
+The sequence begins at the first managed job step. Each QSGP request receives
+its response on the same authenticated TCP connection.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Slurm
+    participant Plugin as SPANK plugin
+    participant Gateway as qfw-slurm-gateway
+    participant Journal
+    participant Dir as DEFw directory
+    participant QPM as QPMd
+    participant Adm as qhw-admission
+    participant Epilog as qfw-slurm-epilog
+    participant App
+
+    User->>Slurm: sbatch or first managed srun
+    Slurm->>Plugin: slurm_spank_init_post_opt
+    Plugin->>Gateway: QFW_GW_RESERVE_REQUEST
+    Gateway->>Gateway: Verify allocation and request
+    Gateway->>Journal: Find allocation reservation set
+
+    alt Existing accepted set
+        Journal-->>Gateway: Stored response and tuples
+    else New reservation set
+        Gateway->>Dir: Resolve exact service IDs
+        Dir-->>Gateway: QPM registrations
+        loop Each requested service
+            Gateway->>QPM: reserve(request_id, metadata, workload)
+            QPM->>Adm: qhw_adm_reserve
+            Adm-->>QPM: Structured decision
+            QPM-->>Gateway: Normalized decision
+        end
+        alt All services accepted
+            Gateway->>Journal: Commit accepted set
+        else Delayed or rejected
+            Gateway->>QPM: Roll back reservations created by request
+            QPM-->>Gateway: Rollback results
+            Gateway->>Journal: Commit non-accepted result
+        end
+    end
+
+    alt Accepted
+        Gateway-->>Plugin: QFW_GW_RESERVE_RESPONSE (ACCEPTED, tuples)
+        Plugin->>Plugin: Set QFW_RESERVATIONS
+        Plugin-->>Slurm: Allow task launch
+        Slurm->>App: Start task
+    else Delayed or rejected
+        Gateway-->>Plugin: QFW_GW_RESERVE_RESPONSE (DELAYED or REJECTED)
+        Plugin-->>Slurm: Fail task launch with admission reason
+    else Gateway or QPM API failure
+        Gateway-->>Plugin: QFW_GW_ERROR_RESPONSE
+        Plugin-->>Slurm: Fail task launch with gateway error
+    end
+
+    Note over Plugin,Gateway: Later steps repeat QFW_GW_RESERVE_REQUEST with the same request ID.
+
+    Slurm->>Epilog: EpilogSlurmctld after allocation termination
+    Epilog->>Gateway: QFW_GW_RELEASE_REQUEST
+    Gateway->>Journal: Load nonterminal reservations
+    loop Each nonterminal reservation
+        Gateway->>QPM: release(reservation_id)
+        QPM->>Adm: qhw_adm_release
+        Adm-->>QPM: API status
+        QPM-->>Gateway: Release result
+        Gateway->>Journal: Commit terminal or unresolved state
+    end
+    Gateway-->>Epilog: QFW_GW_RELEASE_RESPONSE
+```
+
+**Requirements:**
+- SLPLIFE-001
+- SLPLIFE-002
+- SLPLIFE-004
+- SLPLIFE-005
+- SLPLIFE-006
+- SLPLIFE-007
+- SLPGW-003
+- SLPGW-004
+- SLPGW-005
+- SLPPROTO-002
+- SLPPROTO-004
+- SLPPROTO-008
+- SLPFAIL-002
+
+**Status:** draft
+
+### QSGP Wire Encoding
 
 The C encoder writes every field explicitly. It does not transmit a native C
 structure with `send(fd, &header, sizeof(header), ...)`. This keeps the gateway
@@ -484,18 +816,16 @@ The 32-byte fixed header has these offsets:
 0x1c  reserved          uint32, network order, zero
 ```
 
-Operation codes reserve the high bit for responses:
+Operation codes reserve the high bit for responses. Version 1 assigns only the
+messages used by the Slurm reservation lifecycle.
 
 | Code | Message |
 | ---: | --- |
-| `0x0001` | `HEALTH_REQUEST` |
-| `0x0002` | `RESERVE_REQUEST` |
-| `0x0003` | `LIST_RESERVATIONS_REQUEST` |
-| `0x0004` | `RELEASE_REQUEST` |
-| `0x8001` | `HEALTH_RESPONSE` |
-| `0x8002` | `RESERVE_RESPONSE` |
-| `0x8003` | `LIST_RESERVATIONS_RESPONSE` |
-| `0x8004` | `RELEASE_RESPONSE` |
+| `0x0001` | `QFW_GW_RESERVE_REQUEST` |
+| `0x0002` | `QFW_GW_RELEASE_REQUEST` |
+| `0x8001` | `QFW_GW_RESERVE_RESPONSE` |
+| `0x8002` | `QFW_GW_RELEASE_RESPONSE` |
+| `0x8fff` | `QFW_GW_ERROR_RESPONSE` |
 
 Each TLV uses this header:
 
@@ -523,9 +853,10 @@ all padding bytes to be zero.
 
 **Status:** draft
 
-## DES-SLURM-012. QSGP Field Registry
+### QSGP Field Registry
 
-Version 1 assigns the following TLV identifiers:
+Version 1 reserves the following common TLV identifiers. The operation matrix
+defines the required, optional, and forbidden fields for each message.
 
 | ID | Name | Encoding |
 | ---: | --- | --- |
@@ -547,23 +878,36 @@ Version 1 assigns the following TLV identifiers:
 | `0x0010` | Maximum measurements | `uint64` |
 | `0x0011` | Reservation ID | `uint64` |
 | `0x0012` | Release reason | `uint32` enumeration |
-| `0x0013` | Outcome | `uint32` enumeration |
-| `0x0014` | Reason code | `uint64` |
+| `0x0013` | Admission decision | `uint32` enumeration |
+| `0x0014` | qhw-admission reason code | `uint64` |
 | `0x0015` | Retry delay nanoseconds | `uint64` |
 | `0x0016` | Diagnostic | UTF-8 string, maximum 4096 bytes |
 | `0x0017` | QPM runtime ID | UTF-8 string |
 | `0x0018` | QPM generation | `uint64` |
 | `0x0019` | Reservation state | `uint32` enumeration |
-| `0x0020` | Reservation record | Nested TLV container |
+| `0x001a` | Request ID | `uint64` |
+| `0x001b` | Service request record | Nested TLV container |
+| `0x001c` | Estimated start nanoseconds | `uint64` |
+| `0x001d` | Estimated finish nanoseconds | `uint64` |
+| `0x001e` | Gateway error code | `uint32` enumeration |
+| `0x001f` | Service result record | Nested TLV container |
+| `0x0020` | Release result record | Nested TLV container |
 
-`LIST_RESERVATIONS_RESPONSE` repeats reservation-record containers. Each
-container carries service ID, reservation ID, runtime ID, generation, and
-state. Nested depth is limited to one in version 1.
+`QFW_GW_RESERVE_REQUEST` requires one request ID and repeats service-request
+containers. A create request includes the workload envelope. A retrieve request
+may omit that envelope only when matching allocation and service rows already
+exist.
 
-Outcomes use `1=ACCEPTED`, `2=DELAYED`, `3=REJECTED`, and `4=ERROR`.
-Release results use the reservation-state TLV and a reason code to distinguish
+`QFW_GW_RESERVE_RESPONSE` requires the same request ID and an admission
+decision. It repeats service-result containers. An accepted service result
+contains service ID and reservation ID. Delayed and rejected results contain
+the qhw-admission reason and may contain retry and estimate fields.
+
+Admission decisions use `1=ACCEPTED`, `2=DELAYED`, and `3=REJECTED`. Gateway
+errors use a separate registry and appear only in `QFW_GW_ERROR_RESPONSE`.
+`QFW_GW_RELEASE_RESPONSE` repeats release-result containers and distinguishes
 released, already terminal, not found, stale runtime, authorization failure,
-QPM failure, and gateway failure.
+QPM failure, and gateway failure. Nested depth is limited to one in version 1.
 
 **Requirements:**
 - SLPPROTO-004
@@ -575,9 +919,9 @@ QPM failure, and gateway failure.
 
 **Status:** draft
 
-## DES-SLURM-013. MUNGE and TCP Envelope
+### MUNGE and TCP Envelope
 
-The plugin encodes the complete QSGP frame as the payload of a MUNGE
+The native client encodes the complete QSGP frame as the payload of a MUNGE
 credential. It then connects to the configured gateway and sends:
 
 ```text
@@ -585,21 +929,24 @@ credential_length  uint32, network order
 credential_bytes   credential_length bytes, no trailing nul
 ```
 
-The gateway reads exactly four bytes, validates the configured size bound,
-reads the complete credential, decodes it with MUNGE, validates its age and
-origin UID, and parses the decoded QSGP frame. The response follows the same
-format and is MUNGE-encoded by the gateway service identity. The plugin
-validates that identity before parsing the response.
+The gateway reads exactly four bytes, validates the outer credential-size
+bound before allocation, reads the complete credential, decodes it with MUNGE,
+validates its age and origin UID, and then validates the independent decoded
+QSGP frame-size bound. The response follows the same format and is
+MUNGE-encoded by the gateway service identity. The native client validates that
+identity before parsing the response. The encoded-credential limit is larger
+than the decoded-frame limit because MUNGE encoding adds metadata and expansion.
 
 MUNGE supplies message authentication and confidentiality inside the cluster
-trust domain. The gateway also keeps a bounded replay cache keyed by MUNGE
-credential identity and QSGP correlation ID until the credential expires. An
-identical retry with the same logical reserve key reaches idempotency handling;
-a replay that changes the decoded operation or fields is rejected.
+trust domain. Logical idempotency is independent of MUNGE credential replay
+detection. The gateway keys its bounded logical-request cache by authenticated
+sender identity and the stable QSGP request ID. It stores a canonical decoded
+request fingerprint with the request state and normalized response. Reusing a
+request ID with the same fingerprint returns the stored or in-progress result;
+reusing it with different fields returns a conflict error.
 
 The listener accepts only the QSGP protocol. It does not expose HTTP, pickle,
-YAML, Python object serialization, or DEFw framing. Requests and responses are
-limited to 64 KiB by default.
+YAML, Python object serialization, or DEFw framing.
 
 **Requirements:**
 - SLPPROTO-002
@@ -611,14 +958,14 @@ limited to 64 KiB by default.
 
 **Status:** draft
 
-## DES-SLURM-014. Synchronous Client Operation
+### Synchronous Client Operation
 
-Each plugin operation uses a new nonblocking socket with blocking semantics
+Each native operation uses a new nonblocking socket with blocking semantics
 implemented through `poll()`. The client applies one absolute deadline across
-DNS or address resolution, connect, send, receive, authentication, and decode.
+address resolution, connect, send, receive, authentication, and decode.
 
 ```text
-encode QSGP frame
+encode typed request as QSGP frame
     -> munge_encode(frame)
     -> connect with deadline
     -> write_all(length + credential)
@@ -632,14 +979,18 @@ encode QSGP frame
 
 `write_all()` and `read_exact()` handle `EINTR`, short operations, peer close,
 and deadline expiry. They never retry a partial transaction on a new socket.
-The operation layer retries the complete request with the same correlation and
-idempotency identity when policy permits.
+The operation layer retries the complete request with the same `uint64` request
+ID and canonical fields when policy permits. A correlation ID identifies one
+transport exchange and may change on retry.
 
-The plugin receives the result directly on the calling stack. No background
-thread, callback, file polling, or second query is needed for a successful
-request. A timeout after the request may have reached the gateway is reported
-as unknown outcome. The retry uses the same cluster, job, and service key, so
-the gateway returns the accepted tuple rather than reserving twice.
+The caller receives the result directly on its calling stack. There is no
+background thread, callback, file polling, or result-query operation. A timeout
+after the request may have reached the gateway produces an unknown transport
+outcome. The caller opens a new connection and resends the same
+`QFW_GW_RESERVE_REQUEST` or `QFW_GW_RELEASE_REQUEST`. The gateway returns the
+stored normal response when processing already completed, waits within the
+operation deadline when the request remains in progress, or returns a bounded
+gateway error.
 
 **Requirements:**
 - SLPGW-004
@@ -650,7 +1001,7 @@ the gateway returns the accepted tuple rather than reserving twice.
 
 **Status:** draft
 
-## DES-SLURM-015. Gateway Journal and Idempotency
+## Gateway Journal and Idempotency
 
 SQLite stores one row per allocation and service. The database and its parent
 directory are readable only by the gateway account.
@@ -660,12 +1011,13 @@ reservation_journal
   cluster_name             TEXT
   canonical_job_id         INTEGER-as-decimal-text
   service_id               TEXT
+  reserve_request_id       INTEGER-as-decimal-text
   request_fingerprint      BLOB
   state                    TEXT
   reservation_id           INTEGER-as-decimal-text nullable
   qpm_runtime_id            TEXT nullable
   qpm_generation            INTEGER-as-decimal-text nullable
-  outcome                  TEXT
+  decision                 TEXT
   reason_code              INTEGER-as-decimal-text nullable
   created_at_ns             INTEGER-as-decimal-text
   updated_at_ns             INTEGER-as-decimal-text
@@ -675,22 +1027,27 @@ reservation_journal
 Unsigned 64-bit values use validated decimal text because SQLite signed
 integers do not cover the complete `uint64_t` range.
 
-Reserve processing acquires a per-key lock and starts with a journal lookup.
-An accepted row with the same request fingerprint returns its tuple. A
-different fingerprint for the same job and service is rejected as a
-conflicting duplicate. A pending row is completed by its existing owner or
-waited on within the request deadline.
+Reserve processing acquires a per-allocation lock and starts with a journal
+lookup. Accepted rows for the same canonical service set return their complete
+tuple set. A create request with different service or workload fields for
+existing rows returns a conflict. A pending row is completed by its existing
+owner or waited on within the request deadline.
+
+The gateway also stores the normalized operation response by authenticated
+sender, operation, and `uint64` request ID. A retry with the same canonical
+fingerprint returns that response. A different fingerprint for the same key
+returns `QFW_GW_ERROR_REQUEST_CONFLICT`.
 
 Before calling QPMd, the gateway commits a pending row. After acceptance it
-commits the reservation ID, runtime ID, generation, and accepted state before
-sending the response. If the accepted update cannot be committed, the gateway
-attempts an immediate QPM release and returns an error without acknowledging
-the tuple.
+commits the reservation ID, runtime ID, generation, normalized decision, and
+accepted state before sending the response. If the accepted update cannot be
+committed, the gateway attempts an immediate QPM release and returns
+`QFW_GW_ERROR_RESPONSE` without acknowledging the tuple.
 
-Release validates that the tuple belongs to the requesting job. A successful
-or already-terminal QPM response advances the journal to a terminal state.
-Rows remain for a configurable audit and retry interval. The journal does not
-hold capacity or reconstruct QPM state.
+Release validates that each tuple belongs to the requesting allocation. A
+successful or already-terminal QPM result advances the journal to a terminal
+state. Rows and stored operation responses remain for a configurable audit and
+retry interval. The journal does not hold capacity or reconstruct QPM state.
 
 **Requirements:**
 - SLPARCH-008
@@ -703,7 +1060,7 @@ hold capacity or reconstruct QPM state.
 
 **Status:** draft
 
-## DES-SLURM-016. Job Verification and Authorization Boundary
+## Job Verification and Authorization Boundary
 
 MUNGE authenticates the process sending QSGP. The gateway accepts lifecycle
 requests only from configured privileged identities used by Slurm daemons.
@@ -738,34 +1095,40 @@ handles provider API keys.
 
 **Status:** draft
 
-## DES-SLURM-017. Release and Failure Recovery
+## Release and Failure Recovery
 
-The job epilog sends `LIST_RESERVATIONS` using the canonical allocation key.
-It then sends one `RELEASE` for each nonterminal record. A release failure does
-not stop later releases. Duplicate epilogs observe terminal rows and complete
-without a second QPM state transition.
+The controller-level `qfw-slurm-epilog` helper sends
+`QFW_GW_RELEASE_REQUEST` using the canonical allocation key and a stable
+nonzero `uint64` request ID after Slurm marks the complete allocation terminal.
+The gateway finds every nonterminal reservation, attempts each release, and
+returns `QFW_GW_RELEASE_RESPONSE` with a per-reservation result. A release
+failure does not stop later releases. Repeated controller epilog or operator
+invocations return the stored response and terminal rows without causing a
+second QPM state transition. Node-local SPANK epilogs never send a release.
 
-The epilog logs unresolved releases and returns success. Returning an error
-from a required SPANK job-epilog hook can cause Slurm to treat a healthy node
-as failed. Capacity safety instead comes from QPM reservation TTL, explicit
-operator retry, and the durable gateway journal.
+The controller helper logs unresolved releases and returns success after it
+attempts the allocation-level operation. Capacity safety comes from QPM
+reservation TTL, explicit operator retry, and the durable gateway journal
+rather than from treating a healthy compute node as failed.
 
 The gateway provides an administrative command that lists nonterminal journal
-rows and resubmits explicit release requests. This command invokes the same
-release handler as the plugin. The gateway does not run an autonomous reaper
+rows and resubmits `QFW_GW_RELEASE_REQUEST`. This command invokes the same
+handler as the controller helper. The gateway does not run an autonomous reaper
 that decides a Slurm job has ended.
 
 Failure mapping follows these rules:
 
-| Failure | Plugin behavior | Journal behavior |
+| Failure | Integration behavior | Journal behavior |
 | --- | --- | --- |
 | Local option error | Reject command before launch. | No row. |
 | Gateway unavailable before reserve | Fail task launch. | No new acknowledged row. |
-| Reserve timeout | Retry same idempotent key, then fail with unknown outcome. | Pending or accepted row remains discoverable. |
-| QPM delayed or rejected | Roll back earlier services and fail task launch. | Store normalized terminal outcome. |
+| Reserve timeout | Retry `QFW_GW_RESERVE_REQUEST` with the same request ID and canonical fields. Fail with an unknown transport outcome if the deadline remains unresolved. | The stored response remains available to the same retry. |
+| QPM delayed or rejected | Return `QFW_GW_RESERVE_RESPONSE` with the normalized admission decision after rollback. | Store the decision and per-service reconciliation state. |
+| qhw-admission API or gateway failure | Return `QFW_GW_ERROR_RESPONSE`; do not manufacture an admission decision. | Preserve pending or reconciliation state for retry. |
+| Early node completion | Perform no release from the node-local epilog. | Allocation rows remain active. |
 | QPM restart | Fail old tuple as stale. | Mark stale runtime. |
-| Release timeout | Continue releasing other tuples and report failure. | Nonterminal row remains. |
-| Gateway restart | Reconnect on retry. | Recover rows from SQLite. |
+| Release timeout | Retry `QFW_GW_RELEASE_REQUEST` with the same request ID and report unresolved items. | Nonterminal rows remain. |
+| Gateway restart | Reconnect and retry the same operation. | Recover rows and stored responses from SQLite. |
 
 **Requirements:**
 - SLPLIFE-004
@@ -778,7 +1141,7 @@ Failure mapping follows these rules:
 
 **Status:** draft
 
-## DES-SLURM-018. Heterogeneous and Concurrent Allocations
+## Heterogeneous and Concurrent Allocations
 
 Heterogeneous components can invoke remote initialization independently. The
 plugin normalizes each component to the leader's canonical job ID and carries
@@ -787,8 +1150,9 @@ allocation-and-service uniqueness key prevents the same QPM service from being
 reserved twice by two components.
 
 If a component requests a different QPU service, its reservation joins the
-same allocation tuple set. Every application step receives the complete set
-returned by `LIST_RESERVATIONS`, ordered lexically by service ID for stable
+same allocation tuple set. Every managed application step sends
+`QFW_GW_RESERVE_REQUEST` and receives the complete stored set in its accepted
+response. The gateway orders tuples lexically by service ID for stable
 environment generation.
 
 Concurrent jobs use different canonical job IDs and therefore independent
@@ -805,26 +1169,24 @@ serialization prevents reserve and release races for one job and service.
 
 **Status:** draft
 
-## DES-SLURM-019. Logging and Operational Status
+## Logging and Operational Status
 
 The plugin uses Slurm logging and includes the plugin version, protocol
-version, cluster, job ID, component, service ID, operation, correlation ID,
-outcome, reason code, and duration. User-visible errors remain bounded and
-actionable.
+version, cluster, job ID, component, service ID, operation, request ID,
+correlation ID, decision or gateway error code, reason code, and duration.
+User-visible errors remain bounded and actionable.
 
 The gateway emits structured records with the same correlation fields plus
 directory generation and journal transition. It records no MUNGE credential,
 provider credential, device-access content, user circuit, or QPM result
 payload.
 
-The gateway exposes `HEALTH` through QSGP. A successful response reports
-protocol compatibility, journal readiness, DEFw initialization, and directory
-connectivity. It does not enumerate credentials or reservations. Systemd
-readiness is asserted only after the same local checks pass.
-
-An administrative status command reads the journal through a protected local
-gateway operation or directly under the gateway account. Application users do
-not receive journal access.
+Gateway readiness is an administrative service check rather than a QSGP
+message. The service manager asserts readiness after the journal, DEFw
+initialization, directory connectivity, and configured QPM resolution checks
+pass. A protected local status command reports the same checks and can inspect
+nonterminal journal rows. Application users do not receive status or journal
+access.
 
 **Requirements:**
 - SLPPROTO-007
@@ -834,30 +1196,44 @@ not receive journal access.
 
 **Status:** draft
 
-## DES-SLURM-020. Build, Deployment, and Upgrade
+## Build, Deployment, and Upgrade
 
-The plugin is built separately for each supported Slurm ABI and installed in
-the site's Slurm plugin directory. `plugstack.conf` marks it required and
-passes only the root-owned configuration path:
+The plugin is built separately for each supported Slurm ABI. The development
+cluster uses Slurm 25.05, so its image builds the native artifacts against that
+release and libmunge. `spank_quantum.so` is installed in the site Slurm plugin
+directory on slurmctld, allocation-command hosts, and every compute node.
+`qfw-slurm-epilog` is installed on slurmctld. Slurm major-version changes
+require rebuilding both native artifacts.
+
+A shared, root-owned `plugstack.conf` marks the plugin required and passes only
+the root-owned configuration path:
 
 ```text
 required /usr/lib64/slurm/spank_quantum.so \
     config=/etc/qfw-slurm/plugin.conf
 ```
 
+The cluster either uses Slurm's default plugstack path or sets
+`PlugStackConfig=/etc/slurm/plugstack.conf` explicitly. Slurmctld also sets
+`EpilogSlurmctld` to the installed controller helper.
+
 The gateway is installed as an independent service. Its unit selects the QFw
 installation and virtual environment before executing the gateway module. The
 service starts after MUNGE and the site DEFw directory service are available.
+In the Docker development cluster it runs as a dedicated Compose service, not
+as an unmanaged background process inside slurmctld.
 
 Plugin and gateway releases declare the QSGP major and supported minor range.
 A rolling upgrade begins with a gateway that accepts both old and new minor
-versions, followed by plugin replacement. A major-version mismatch fails
-`HEALTH` and reservation without attempting partial interpretation.
+versions, followed by plugin and epilog-helper replacement. A parseable major
+version mismatch returns `QFW_GW_ERROR_UNSUPPORTED_VERSION` without invoking
+QPM.
 
-The QFw Slurm Docker cluster builds and installs both artifacts, provisions
-MUNGE trust and root-owned configuration, starts the gateway, and enables the
-plugstack entry. The official QFw installation remains independently
-replaceable through its normal prefix and virtual-environment mechanism.
+The QFw Slurm Docker cluster builds and installs the native and gateway
+artifacts, provisions MUNGE trust and root-owned configuration, starts the
+gateway, and enables the plugstack and controller epilog entries. The official
+QFw installation remains independently replaceable through its normal prefix
+and virtual-environment mechanism.
 
 **Requirements:**
 - SLPARCH-001
@@ -867,36 +1243,125 @@ replaceable through its normal prefix and virtual-environment mechanism.
 
 **Status:** draft
 
-## DES-SLURM-021. Validation Design
+## Slurm Cluster Development Readiness
+
+The development-cluster review on 2026-08-31 established the following
+baseline. This table records environment readiness, not implementation status
+inside the future `qfw-slurm` repository.
+
+| Area | Status | Development implication |
+| --- | --- | --- |
+| MUNGE packages and daemon | Ready | `munge`, `munge-devel`, and `munged` are present on the controller and checked compute nodes. |
+| Shared MUNGE trust | Ready | Controller and compute nodes share a key, and cross-node credentials preserve the test-user UID and GID. |
+| Test users | Ready locally | `user-a`, `user-b`, and `user-c` have consistent identities, shared homes, and Slurm associations. |
+| Source reproducibility | Blocked | The cluster branch is two commits ahead of upstream; those commits must be published before a fresh upstream build can reproduce user provisioning. |
+| Whole-node isolation | Blocked | `select/cons_tres` with `CR_CPU_Memory` and `OverSubscribe=NO` makes allocated CPUs exclusive but still permits another job on unused CPUs. |
+| Container resource model | Blocked | Docker limits the compute containers to four CPUs, `slurm.conf` advertises eight, and `slurmd -C` observes twenty host CPUs. |
+| Native integration | Missing | `spank_quantum.so` and `qfw-slurm-epilog` are not built or installed. The existing IBM `spank_qrmi.so` is unrelated. |
+| Slurm integration configuration | Missing | `plugstack.conf`, `PlugStackConfig`, `EpilogSlurmctld`, and `/etc/qfw-slurm/plugin.conf` are not provisioned. |
+| QSGP gateway | Missing | No service identity, Compose service, gateway configuration, listener, or persistent journal exists. |
+
+The cluster retains `SelectType=select/cons_tres` and
+`SelectTypeParameters=CR_CPU_Memory`. Whole-node isolation is enabled on every
+partition used by the integration with the partition value
+`OverSubscribe=EXCLUSIVE`:
+
+```text
+PartitionName=normal  ... OverSubscribe=EXCLUSIVE
+PartitionName=quantum ... OverSubscribe=EXCLUSIVE
+```
+
+`OverSubscribe=NO` prevents sharing of an allocated consumable resource, not
+sharing of unused CPUs on the same node. `Exclusive=NODE` is not the partition
+setting for this Slurm configuration. The applicable Slurm references are the
+[partition configuration](https://slurm.schedmd.com/slurm.conf.html) and
+[consumable-resource sharing](https://slurm.schedmd.com/cons_tres_share.html)
+documentation. Switching to `select/linear` is unnecessary.
+
+The Compose CPU limit or cpuset, the node `CPUs` and memory values in
+`slurm.conf`, and the resources reported inside each container by `slurmd -C`
+must describe the same resources before isolation and concurrency tests are
+credible. The Compose definition is the deployment source of truth, and the
+Slurm node configuration is derived from those assigned limits.
+
+The gateway runs as an internal-only dedicated Compose service with a stable
+`qfw-slurm` UID and GID, the official QFw installation, the directory-service
+connection record, `/etc/qfw-slurm/gateway.yaml`, a persistent
+`/var/lib/qfw-slurm-gateway` volume, the shared MUNGE key material, a local
+`munged` socket, and the QSGP listener. The default development listener is
+TCP port 18095 on the internal cluster network. Provider credentials remain
+outside the gateway.
+
+Development can start when all of these gates pass:
+
+1. Publish the two cluster commits needed by fresh builds.
+2. Align Compose and Slurm CPU and memory descriptions.
+3. Configure relevant partitions with `OverSubscribe=EXCLUSIVE` and prove that two jobs cannot share a node.
+4. Build against the cluster's Slurm 25.05 headers and libmunge.
+5. Install the plugin on slurmctld, allocation-command hosts, and every compute node; install the controller epilog helper on slurmctld.
+6. Provision root-owned plugstack, plugin, controller-epilog, and gateway configuration.
+7. Start the gateway service with persistent journal and MUNGE access.
+8. Run local MUNGE checks on every node and at least one cross-container encode/decode.
+9. Verify plugin loading and run the administrative readiness check for journal access, directory connectivity, and exact resolution of every configured QPM service ID.
+
+Existing MUNGE and test-user provisioning should be preserved rather than
+reimplemented. The remaining work is isolation, resource consistency, native
+artifact implementation and packaging, Slurm configuration, gateway
+deployment, and reproducible publication of the current cluster changes.
+
+**Requirements:**
+- SLPARCH-001
+- SLPARCH-002
+- SLPARCH-006
+- SLPSEC-001
+- SLPSEC-005
+- SLPVAL-008
+
+**Status:** draft
+
+## Validation Design
 
 The C unit suite invokes option callbacks with valid, missing, repeated,
 conflicting, zero, boundary, overflow, and malformed values. Protocol tests
-share golden vectors between the C encoder and Python decoder. Fuzz targets
+share golden vectors between the C encoder and Python decoder. They verify the
+`uint64` request ID, formal message codes, qhw-admission decision mapping, and
+the separation between admission decisions and gateway errors. Fuzz targets
 exercise the frame and TLV decoders with authentication disabled only inside
 the test harness.
 
 Gateway tests provide fake directory and QPM bindings. They cover accepted,
-delayed, rejected, malformed, timeout, generation-change, concurrent reserve,
-partial rollback support, journal-write failure, restart, list, and release
-paths.
+delayed, rejected, QPM API error, malformed request, timeout, generation
+change, concurrent reserve, partial rollback support, journal-write failure,
+restart, idempotent reserve retrieval, and release paths. A lost response test
+retries the same request ID and proves that no result-query operation is needed.
 
 The Docker Slurm suite runs these scenarios as `user-a`, `user-b`, and
 `user-c`:
 
 1. `sbatch` acquires one NWQSim reservation, exports it, runs a QFw example,
-   and releases it in the epilog.
-2. `salloc` runs two sequential `srun` steps against one reservation and proves
-   the reservation remains active between steps.
-3. A heterogeneous allocation obtains the same tuple set in each application
+   and releases it through the controller epilog helper.
+2. `salloc` proves that no QPM reservation exists before the first managed
+   `srun`, then runs two sequential `srun` steps against one reservation and
+   proves that the reservation remains active between steps.
+3. A multinode job completes one node while work remains on another and proves
+   that node-local SPANK epilogs do not release the allocation reservation.
+   The controller epilog releases it only after the complete allocation is
+   terminal.
+4. A heterogeneous allocation obtains the same tuple set in each application
    component without duplicate reservation.
-4. A two-service request forces the second reserve to fail and confirms that
-   the plugin releases the first.
-5. Concurrent users reserve the same long-running QPM under separate job IDs
+5. A two-service request forces the second reserve to fail and confirms that
+   the gateway releases the first before returning a non-accepted response.
+6. Concurrent users reserve the same long-running QPM under separate job IDs
    without seeing each other's journal state.
-6. Gateway restart between reserve and release preserves explicit cleanup.
-7. NWQSim and fakeIQM pass before a bounded real-IQM chemistry job is enabled.
+7. Gateway restart between reserve and release preserves explicit cleanup.
+8. NWQSim and fakeIQM pass before a bounded real-IQM chemistry job is enabled.
 
-Tests also verify filesystem permissions, log redaction, invalid MUNGE
+Cluster preflight tests also prove that two jobs cannot share a node, Compose
+resource limits agree with `slurm.conf` and `slurmd -C`, MUNGE credentials
+decode locally and across containers, and the required plugin loads in every
+SPANK context. The administrative readiness check must confirm journal access,
+directory connectivity, and exact resolution of every configured QPM service
+ID. Tests also verify filesystem permissions, log redaction, invalid MUNGE
 credentials, replay handling, response-correlation mismatches, and gateway
 timeouts.
 
@@ -912,19 +1377,19 @@ timeouts.
 
 **Status:** draft
 
-## DES-SLURM-022. Requirements Traceability
+## Requirements Traceability
 
 | Requirement group | Design sections |
 | --- | --- |
-| `SLPARCH-*` | DES-SLURM-001, DES-SLURM-002, DES-SLURM-004, DES-SLURM-008, DES-SLURM-020 |
-| `SLPCLI-*` | DES-SLURM-005, DES-SLURM-010 |
-| `SLPADM-*` | DES-SLURM-003, DES-SLURM-007, DES-SLURM-009, DES-SLURM-010 |
-| `SLPLIFE-*` | DES-SLURM-004, DES-SLURM-006, DES-SLURM-007, DES-SLURM-017, DES-SLURM-018 |
-| `SLPPROTO-*` | DES-SLURM-011, DES-SLURM-012, DES-SLURM-013, DES-SLURM-014, DES-SLURM-019, DES-SLURM-020 |
-| `SLPGW-*` | DES-SLURM-008, DES-SLURM-009, DES-SLURM-010, DES-SLURM-014, DES-SLURM-015 |
-| `SLPSEC-*` | DES-SLURM-003, DES-SLURM-013, DES-SLURM-016, DES-SLURM-019, DES-SLURM-020 |
-| `SLPFAIL-*` | DES-SLURM-014, DES-SLURM-015, DES-SLURM-017 |
-| `SLPVAL-*` | DES-SLURM-002, DES-SLURM-018, DES-SLURM-020, DES-SLURM-021 |
+| `SLPARCH-*` | DES-001, DES-002, DES-004, DES-008, DES-015, DES-020, DES-023, DES-024 |
+| `SLPCLI-*` | DES-005, DES-010 |
+| `SLPADM-*` | DES-003, DES-007, DES-009, DES-010 |
+| `SLPLIFE-*` | DES-004, DES-006, DES-007, DES-017, DES-018, DES-029 |
+| `SLPPROTO-*` | DES-011, DES-012, DES-013, DES-014, DES-019, DES-020, DES-024, DES-025, DES-026, DES-028, DES-029 |
+| `SLPGW-*` | DES-008, DES-009, DES-010, DES-014, DES-015, DES-016, DES-018, DES-025, DES-028, DES-029 |
+| `SLPSEC-*` | DES-003, DES-004, DES-013, DES-016, DES-019, DES-020, DES-023, DES-026 |
+| `SLPFAIL-*` | DES-003, DES-009, DES-014, DES-015, DES-017, DES-025, DES-029 |
+| `SLPVAL-*` | DES-002, DES-018, DES-020, DES-021, DES-023 |
 
 Every implementation unit and test plan derived from this design should cite
 the individual requirement IDs it covers. Group traceability in this section

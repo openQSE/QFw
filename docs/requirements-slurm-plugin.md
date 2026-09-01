@@ -16,6 +16,9 @@ The plugin sends small synchronous requests directly to the gateway through a
 native protocol. The gateway is a DEFw client that resolves directory records
 and invokes the existing Python QPM APIs.
 
+The native interface between the plugin and gateway is the Quantum Scheduler
+Gateway Protocol (QSGP).
+
 The plugin drives reservation and release. The gateway performs no autonomous
 admission decisions and does not choose when a Slurm allocation acquires or
 releases a QPM. It supplies connectivity, exact service resolution, RPC
@@ -171,10 +174,9 @@ string.
 
 ## Plugin and Gateway Protocol
 
-The QFw Slurm Gateway Protocol is named QSGP. Version 1 uses a synchronous
-request-response exchange over TCP. Each connection carries one request and
-one response. The connection closes after the response, which avoids shared
-connection state inside Slurm processes.
+QSGP version 1 uses a synchronous request-response exchange over TCP. Each
+connection carries one request and one response. The connection closes after
+the response, which avoids shared connection state inside Slurm processes.
 
 Every request and response is authenticated as a MUNGE credential. The decoded
 MUNGE payload is one QSGP frame. On the network, a frame is carried as a
@@ -344,7 +346,7 @@ reservation.
 
 | ID | Requirement |
 | --- | --- |
-| SLPPROTO-001 | Plugin-to-gateway communication shall use the versioned QSGP protocol rather than DEFw RPC. |
+| SLPPROTO-001 | Plugin-to-gateway communication shall use the versioned Quantum Scheduler Gateway Protocol (QSGP) rather than DEFw RPC. |
 | SLPPROTO-002 | QSGP version 1 shall use one synchronous request and one synchronous response per TCP connection. |
 | SLPPROTO-003 | Each network message shall contain a bounded length prefix followed by one MUNGE credential whose decoded payload is one QSGP frame. |
 | SLPPROTO-004 | The QSGP header shall contain the magic value, major and minor versions, message type, flags, header size, nonzero correlation ID, payload size, and zeroed reserved field. |
