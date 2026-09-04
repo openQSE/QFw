@@ -1,5 +1,7 @@
 import networkx as nx
 import matplotlib.pyplot as plt
+import os
+import tempfile
 import time
 from qiskit_algorithms import QAOA
 from qiskit_algorithms.optimizers import COBYLA
@@ -38,7 +40,12 @@ nx.draw(G, pos, with_labels=True, node_color='lightblue', node_size=2000,
         edge_color='black', linewidths=1, font_size=15)
 plt.title('Graph for Max-Cut Problem')
 # Save the plot to a file
-plt.savefig('max_cut_graph.png')
+result_path = os.environ.get("QFW_EXAMPLE_RESULT_FILE")
+artifact_dir = (
+    os.path.dirname(result_path) if result_path else None
+) or os.environ.get("QFW_RUN_DIR") or tempfile.gettempdir()
+graph_path = os.path.join(artifact_dir, "max_cut_graph.png")
+plt.savefig(graph_path)
 # plt.show()
 
 # ------------------ AER simulator ------------------ #
@@ -81,5 +88,5 @@ emit_result(
         "objective_value": qaoa_result.fval,
         "optimal_solution": qaoa_result.x,
     },
-    artifacts={"graph": "max_cut_graph.png"},
+    artifacts={"graph": graph_path},
 )
