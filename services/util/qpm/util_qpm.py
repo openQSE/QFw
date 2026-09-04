@@ -582,6 +582,9 @@ class UTIL_QPM:
 		return self.controller.service_lifecycle_telemetry(
 			access_class=access_class or "operator")
 
+	def list_scheduler_allocations(self, token=None, filters=None):
+		return self.controller.list_scheduler_allocations(filters=filters)
+
 	def record_defw_directory_event(self, event_type, service_record=None,
 					peer_event=None, reason=None, details=None):
 		return self.controller.record_defw_directory_event(
@@ -1007,6 +1010,14 @@ class UTIL_QPM:
 		return self.controller.get_service_status(
 			initialized=qpm_initialized,
 			provider_ready=self.qrc is not None)
+
+	def get_service_summary(self, token=None):
+		dvm_uri_path = os.environ.get("QFW_DVM_URI_PATH")
+		return self.controller.get_service_summary(
+			initialized=qpm_initialized,
+			provider_ready=self.qrc is not None,
+			dvm_ready=(os.path.isfile(dvm_uri_path)
+				   if dvm_uri_path else None))
 
 	def shutdown(self, token=None, mode="graceful", timeout_s=None,
 		     reason=None):

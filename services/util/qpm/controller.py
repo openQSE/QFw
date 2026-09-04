@@ -129,6 +129,7 @@ TELEMETRY_METHOD_LABELS = {
 	"get_task_metadata": TELEMETRY_CALLER_OWNED,
 	"get_capacity_snapshot": TELEMETRY_MANAGER_AGGREGATE,
 	"get_queue_metrics": TELEMETRY_MANAGER_AGGREGATE,
+	"list_scheduler_allocations": TELEMETRY_MANAGER_AGGREGATE,
 	"get_service_lifecycle_telemetry": TELEMETRY_OPERATOR,
 	"get_scheduler_queue_state": TELEMETRY_MANAGER_AGGREGATE,
 	"get_scheduler_status": TELEMETRY_OPERATOR,
@@ -375,6 +376,90 @@ class QPMTargetController:
 					self.reservation_metadata_by_id),
 				"shutdown": deepcopy(self.shutdown_request),
 			}
+
+	def get_service_summary(self, initialized=False, provider_ready=False,
+				    dvm_ready=None):
+		with self.lock:
+			ready = bool(
+				initialized and provider_ready and
+				self.service_state == "running")
+			active_reservations = self._active_reservation_count_locked()
+			active_tasks = sum(
+				1 for runtime in self.runtime_by_qtask_id.values()
+				if runtime.state not in QPM_TASK_TERMINAL_STATES)
+			if self.service_state != "running":
+				state = "MAINT"
+			elif active_reservations:
+				state = "BUSY"
+			else:
+				state = "IDLE"
+			return {
+				"schema": "qfw-qpm-service-summary-v1",
+				"target_id": self.config.target_id,
+				"state": state,
+				"service_state": self.service_state,
+				"ready": ready,
+				"accepting_requests": (
+					self.service_state == "running"),
+				"provider_ready": bool(provider_ready),
+				"dvm_ready": dvm_ready,
+				"maintenance": self.service_state != "running",
+				"active_reservation_count": active_reservations,
+				"active_task_count": active_tasks,
+				"assigned_hosts": sorted(self.free_hosts),
+				"timestamp_ns": time.time_ns(),
+			}
+
+	def list_scheduler_allocations(self, filters=None):
+		filters = _scheduler_allocation_filters(filters)
+		with self.lock:
+			allocations = []
+			for reservation_id, metadata in (
+					self.reservation_metadata_by_id.items()):
+				try:
+					reservation = get_reservation(
+						self.admission_context, reservation_id)
+				except Exception:
+					continue
+				summary = self._scheduler_allocation_summary_locked(
+					reservation_id, reservation, metadata)
+				if _scheduler_allocation_matches(summary, filters):
+					allocations.append(summary)
+			allocations.sort(key=_scheduler_allocation_sort_key)
+			return {
+				"schema": "qfw-scheduler-allocation-list-v1",
+				"target_id": self.config.target_id,
+				"timestamp_ns": time.time_ns(),
+				"allocations": allocations,
+			}
+
+	def _scheduler_allocation_summary_locked(
+			self, reservation_id, reservation, metadata):
+		binding = dict(metadata.get("reservation_binding") or {})
+		launcher = dict(binding.get("launcher") or {})
+		owner = dict(binding.get("owner") or metadata.get("owner") or {})
+		resource = dict(binding.get("resource") or {})
+		state = str(reservation.get("state") or "unknown").lower()
+		active_tasks = sum(
+			1 for qtask_id in self.qtask_ids_by_reservation.get(
+				reservation_id, set())
+			if qtask_id in self.runtime_by_qtask_id and
+			self.runtime_by_qtask_id[qtask_id].state not in
+			QPM_TASK_TERMINAL_STATES)
+		return _drop_none({
+			"schema": "qfw-scheduler-allocation-summary-v1",
+			"scheduler": launcher.get("scheduler"),
+			"cluster_name": launcher.get("cluster_name"),
+			"allocation_id": launcher.get("allocation_id"),
+			"job_id": launcher.get("external_job_id"),
+			"user": _owner_identifier(owner),
+			"state": state,
+			"qstate": _scheduler_allocation_state(state),
+			"workload_kind": resource.get("workload_kind"),
+			"active_task_count": active_tasks,
+			"created_at_ns": reservation.get("created_at_ns"),
+			"expires_at_ns": reservation.get("expires_at_ns"),
+		})
 
 	def begin_service_shutdown(self, mode, timeout_s, reason, token=None):
 		with self.lock:
@@ -3888,6 +3973,55 @@ def _clear_target_controllers_for_tests():
 	for controller in controllers:
 		controller.clear_provider_credentials()
 		controller.stop_completion_purge_worker()
+
+
+def _scheduler_allocation_filters(filters):
+	filters = dict(filters or {})
+	allowed = {
+		"scheduler",
+		"cluster_name",
+		"allocation_id",
+		"job_id",
+		"user",
+		"state",
+	}
+	unknown = sorted(set(filters) - allowed)
+	if unknown:
+		raise ValueError(
+			"unsupported scheduler allocation filters: " +
+			", ".join(unknown))
+	return {
+		key: str(value)
+		for key, value in filters.items()
+		if value is not None
+	}
+
+
+def _scheduler_allocation_matches(summary, filters):
+	for key, value in filters.items():
+		if str(summary.get(key, "")) != value:
+			return False
+	return True
+
+
+def _scheduler_allocation_sort_key(summary):
+	return (
+		str(summary.get("scheduler", "")),
+		str(summary.get("cluster_name", "")),
+		str(summary.get("allocation_id", "")),
+		str(summary.get("job_id", "")),
+	)
+
+
+def _scheduler_allocation_state(state):
+	return {
+		"active": "ACTIVE",
+		"accepted": "ACTIVE",
+		"released": "RELEASED",
+		"cancelled": "CANCELLED",
+		"expired": "EXPIRED",
+		"rejected": "REJECTED",
+	}.get(state, "UNKNOWN")
 
 
 def completion_retention_config():

@@ -32,6 +32,8 @@ def test_qpm_category_surfaces_are_importable():
 	assert hasattr(QPMTelemetry, "get_service_lifecycle_telemetry")
 	assert hasattr(QPMControl, "reconcile_runtime_state")
 	assert hasattr(QPMControl, "get_service_status")
+	assert hasattr(QPMControl, "get_service_summary")
+	assert hasattr(QPMTelemetry, "list_scheduler_allocations")
 
 
 def test_qpm_category_service_api_packages_export_single_surface():
@@ -96,6 +98,7 @@ def test_qpm_category_surfaces_use_token_first_order():
 		(QPMControl, "test"): ["self", "token"],
 		(QPMControl, "is_ready"): ["self", "token"],
 		(QPMControl, "get_service_status"): ["self", "token"],
+		(QPMControl, "get_service_summary"): ["self", "token"],
 		(QPMControl, "reconcile_runtime_state"):
 			["self", "token", "reason"],
 		(QPMControl, "shutdown"):

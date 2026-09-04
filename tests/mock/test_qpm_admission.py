@@ -336,6 +336,98 @@ def test_reserve_stores_unverified_request_metadata(monkeypatch):
 		"qubit_count"] == 4
 
 
+def test_service_summary_reports_sanitized_runtime_state(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	idle = qpm.get_service_summary()
+	reservation_id = qpm.reserve(request={
+		"owner": {"user": "alice"},
+		"job_id": "41",
+		"allocation_id": "qfw-cluster:41",
+		"launcher": {
+			"scheduler": "slurm",
+			"cluster_name": "qfw-cluster",
+		},
+	})["reservation_id"]
+	busy = qpm.get_service_summary()
+
+	assert idle == {
+		"schema": "qfw-qpm-service-summary-v1",
+		"target_id": "admission-target",
+		"state": "IDLE",
+		"service_state": "running",
+		"ready": True,
+		"accepting_requests": True,
+		"provider_ready": True,
+		"dvm_ready": None,
+		"maintenance": False,
+		"active_reservation_count": 0,
+		"active_task_count": 0,
+		"assigned_hosts": ["localhost"],
+		"timestamp_ns": idle["timestamp_ns"],
+	}
+	assert busy["state"] == "BUSY"
+	assert busy["active_reservation_count"] == 1
+	assert "reservation_id" not in busy
+
+	qpm.release(reservation_id=reservation_id)
+	assert qpm.get_service_summary()["state"] == "IDLE"
+
+
+def test_scheduler_allocations_are_sanitized_and_filterable(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+	decision = qpm.reserve(request={
+		"owner": {"user": "alice", "uid": 1001},
+		"job_id": "41",
+		"allocation_id": "qfw-cluster:41",
+		"launcher": {
+			"scheduler": "slurm",
+			"cluster_name": "qfw-cluster",
+		},
+		"credential_hint": {"api_key": "never-return-this"},
+		"workload_kind": "hybrid",
+	})
+
+	result = qpm.list_scheduler_allocations(filters={
+		"scheduler": "slurm",
+		"cluster_name": "qfw-cluster",
+		"job_id": "41",
+	})
+
+	assert result["schema"] == "qfw-scheduler-allocation-list-v1"
+	assert result["target_id"] == "admission-target"
+	assert result["allocations"] == [{
+		"schema": "qfw-scheduler-allocation-summary-v1",
+		"scheduler": "slurm",
+		"cluster_name": "qfw-cluster",
+		"allocation_id": "qfw-cluster:41",
+		"job_id": "41",
+		"user": "alice",
+		"state": "active",
+		"qstate": "ACTIVE",
+		"workload_kind": "hybrid",
+		"active_task_count": 0,
+		"expires_at_ns": 0,
+	}]
+	assert "reservation_id" not in str(result)
+	assert "never-return-this" not in str(result)
+	assert qpm.list_scheduler_allocations(
+		filters={"user": "bob"})["allocations"] == []
+
+	qpm.release(reservation_id=decision["reservation_id"])
+	assert qpm.list_scheduler_allocations()["allocations"] == []
+
+
+def test_scheduler_allocation_filters_reject_unknown_fields(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	with pytest.raises(ValueError, match="unsupported.*credential"):
+		qpm.list_scheduler_allocations(filters={"credential": "secret"})
+
+
 def test_reserve_stores_structured_binding_without_provider_secrets(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)

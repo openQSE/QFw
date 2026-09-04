@@ -35,3 +35,6 @@ class QPMTelemetry(QPMRemoteBase):
 
 	def get_service_lifecycle_telemetry(self, token=None, access_class=None):
 		pass
+
+	def list_scheduler_allocations(self, token=None, filters=None):
+		pass
