@@ -78,6 +78,45 @@ def test_empty_run_dir_is_rejected(capsys):
     assert "--run-dir must not be empty" in capsys.readouterr().err
 
 
+def test_stop_prte_reloads_recorded_environment_modules(tmp_path, monkeypatch):
+    uri_path = tmp_path / "dvm-uri"
+    uri_path.write_text("uri", encoding="utf-8")
+    state = {
+        "services": [{"environment_modules": ["openmpi", "nwqsim"]}],
+        "allocation": {"mode": "local"},
+    }
+    loaded = {}
+
+    def load_modules(modules, environment):
+        loaded["modules"] = modules
+        return {**environment, "PATH": "/service/bin"}
+
+    def run_on_node(node, command, environment, allocation):
+        loaded["node"] = node
+        loaded["command"] = command
+        loaded["environment"] = environment
+
+    monkeypatch.setattr(
+        service_plane.qfw_environment_modules, "load_modules", load_modules)
+    monkeypatch.setattr(service_plane, "_run_on_node", run_on_node)
+    monkeypatch.setattr(
+        service_plane, "_command_path",
+        lambda name, env=None: f"/service/bin/{name}")
+
+    service_plane._stop_prte(
+        {"uri_path": str(uri_path), "node": "sim-head"},
+        state,
+        service_plane._stopped_service_environment(state),
+    )
+
+    assert loaded["modules"] == ["openmpi", "nwqsim"]
+    assert loaded["node"] == "sim-head"
+    assert loaded["command"] == [
+        "/service/bin/pterm", "--dvm", f"file:{uri_path}"
+    ]
+    assert loaded["environment"]["PATH"] == "/service/bin"
+
+
 def test_site_dry_run_generates_state_and_supports_status_and_stop(
         tmp_path, capsys):
     site, _manifest = write_site_configuration(tmp_path, [

@@ -885,7 +885,8 @@ def _stop_components(state):
     for key, component in reversed(components):
         try:
             if component["role"] == "prte-dvm":
-                _stop_prte(component, state)
+                _stop_prte(
+                    component, state, _stopped_service_environment(state))
             elif not state.get("dry_run") and component.get("pid") is not None:
                 _terminate_pid(
                     int(component["pid"]), component.get("node"),
@@ -900,13 +901,28 @@ def _stop_components(state):
     return errors
 
 
-def _stop_prte(component, state):
+def _stopped_service_environment(state):
+    modules = []
+    for service in state.get("services", []):
+        for name in service.get("environment_modules", []):
+            if name not in modules:
+                modules.append(name)
+    if not modules:
+        return os.environ.copy()
+    return qfw_environment_modules.load_modules(modules, os.environ.copy())
+
+
+def _stop_prte(component, state, environment=None):
     uri_path = Path(component["uri_path"])
     if not uri_path.exists() or state.get("dry_run"):
         uri_path.unlink(missing_ok=True)
         return
-    command = [_command_path("pterm"), "--dvm", f"file:{uri_path}"]
-    _run_on_node(component.get("node"), command, os.environ.copy(),
+    environment = environment or os.environ.copy()
+    command = [
+        _command_path("pterm", env=environment),
+        "--dvm", f"file:{uri_path}",
+    ]
+    _run_on_node(component.get("node"), command, environment,
                  state["allocation"])
     uri_path.unlink(missing_ok=True)
 
