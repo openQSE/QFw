@@ -499,8 +499,7 @@ if [[ -z "${site_config}" ]] &&
 	exit 2
 fi
 
-if ! qfw_chem_driver_bool_enabled "${dry_run}" ||
-   qfw_chem_driver_bool_enabled "${preflight_only}"; then
+if qfw_chem_driver_bool_enabled "${preflight_only}"; then
 	device_access_config="$(
 		qfw_chem_driver_device_access_config
 	)" || {
@@ -646,7 +645,6 @@ if qfw_chem_driver_bool_enabled "${dry_run}"; then
 fi
 
 qfw_example_require_runtime
-qfw_chem_driver_preflight_owner "${device_access_config}"
 qfw-setup \
 	--site-config "${site_config}" \
 	--run-dir "${app_run_dir}"

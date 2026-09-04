@@ -313,7 +313,9 @@ Use the common execution options to select a site-owned hardware QPM:
 
 ### `qfw_iqm_chem_driver.sh`
 
-The driver performs credential preflight, reserves through the Slurm-style
+The driver's explicit `--preflight-only` mode checks an operator-readable
+credential configuration. Normal application runs leave credential and
+entitlement validation to the QPM. The driver reserves through the Slurm-style
 driver, runs the chemistry application against an existing IQM QPM, and
 records evidence. Pass the canonical site file directly with `--site-config`.
 The command does not source state from a service manager run directory.
