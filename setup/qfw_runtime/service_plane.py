@@ -166,6 +166,7 @@ def start(args):
             if plan["components"]["prte"]:
                 _start_prte(state, args.timeout, service_environment)
             if plan["components"]["directory"]:
+                _publish_directory_connection(state, ready=False)
                 _start_directory(state, args.timeout)
                 _publish_directory_connection(state, ready=True)
             if plan["components"]["qpm"]:
@@ -802,7 +803,7 @@ def _publish_directory_connection(state, ready):
                     existing = json.load(stream)
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
-            if existing.get("ready") is True and existing.get(
+            if _directory_connection_active(existing) and existing.get(
                     "instance_id") != state.get("instance_id"):
                 raise ServicePlaneError(
                     "directory-service connection file is owned by active "
@@ -825,6 +826,20 @@ def _publish_directory_connection(state, ready):
             os.replace(temporary, path)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _directory_connection_active(record):
+    if record.get("ready") is not True:
+        return False
+    endpoint = record.get("endpoint")
+    if not endpoint:
+        return True
+    try:
+        host, port = _split_endpoint(endpoint)
+        with socket.create_connection((host, port), timeout=0.2):
+            return True
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def _withdraw_directory_connection(state):

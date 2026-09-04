@@ -294,6 +294,67 @@ def test_directory_lifecycle_publishes_connection_record(
     assert connection["ready"] is False
 
 
+def test_stale_directory_connection_record_is_replaced(tmp_path, monkeypatch):
+    path = tmp_path / "directory-service.json"
+    path.write_text(json.dumps({
+        "instance_id": "stale-instance",
+        "endpoint": "directory-a:18090",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+    state = {
+        "instance_id": "new-instance",
+        "directory": {
+            "connection_file": str(path),
+            "name": "test-dirsvc",
+            "endpoint": "directory-b:18090",
+        },
+    }
+
+    def unavailable(*_args, **_kwargs):
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(socket, "create_connection", unavailable)
+    service_plane._publish_directory_connection(state, ready=True)
+
+    connection = json.loads(path.read_text(encoding="utf-8"))
+    assert connection["instance_id"] == "new-instance"
+    assert connection["endpoint"] == "directory-b:18090"
+    assert connection["ready"] is True
+
+
+def test_active_directory_connection_record_is_preserved(tmp_path, monkeypatch):
+    path = tmp_path / "directory-service.json"
+    original = {
+        "instance_id": "active-instance",
+        "endpoint": "directory-a:18090",
+        "ready": True,
+    }
+    path.write_text(json.dumps(original) + "\n", encoding="utf-8")
+    state = {
+        "instance_id": "new-instance",
+        "directory": {
+            "connection_file": str(path),
+            "name": "test-dirsvc",
+            "endpoint": "directory-b:18090",
+        },
+    }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        socket, "create_connection", lambda *_args, **_kwargs: Connection())
+
+    with pytest.raises(service_plane.ServicePlaneError, match="active instance"):
+        service_plane._publish_directory_connection(state, ready=True)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
 def test_qpm_lifecycle_consumes_connection_record(tmp_path, monkeypatch):
     site, _manifest = write_site_configuration(tmp_path, [
         ("iqm-test", "svc_iqm_qpm", "remote-api"),
