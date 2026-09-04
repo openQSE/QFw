@@ -1,81 +1,79 @@
 # Test a Site-owned NWQSim QPM from a Normal Allocation
 
-This recipe runs the compatible examples from a normal application allocation
-against an NWQSim QPM that the site administrator already operates. The
-directory, DVM, and QPM remain outside the application allocation.
+This recipe validates the complete allocation-time path from Slurm through the
+qfw-slurm gateway, directory service, and a long-running NWQSim QPM. It uses
+one classical application node and one QPM reservation.
 
-## 1. Confirm the site-service prerequisite
+## 1. Confirm prerequisites
 
-The administrator must complete [Configure a site-owned
-QPM](configure-long-running-qpm.md) before an application job starts. Its
-directory connection file must be readable from the application nodes.
-
-The application needs the client-readable site configuration. It does not need
-the QPM manager run directory or DVM URI.
-
-`qfw-activate(1)` prepares the application shell; run `man 1 qfw-activate` for
-its environment and virtual-environment rules. Run `man 1 qfw_run_all.sh` for
-the example runner's arguments and runnable examples.
-
-## 2. Request and prepare the application allocation
+Complete [Configure a site-owned QPM](configure-long-running-qpm.md) and
+[Configure the Docker Slurm environment](docker-slurm-environment.md). Enter
+the controller as a regular user:
 
 ```bash
-salloc --nodes=1 --ntasks=1 --time=01:00:00
-
-export QFW_SHARED_ROOT=/shared/openqse/qfw
-export QFW_RUN_BASE_DIR="${QFW_SHARED_ROOT}/application-runs"
-export QFW_INSTALL_PREFIX=/opt/openqse/qfw/current
-export QFW_VENV=/opt/openqse/qfw/venv
-export QFW_SITE_CONFIG=/etc/openqse/qfw/site.yaml
-
-source "${QFW_INSTALL_PREFIX}/bin/qfw-activate" --venv "${QFW_VENV}"
-mkdir -p "${QFW_RUN_BASE_DIR}"
+cd /path/to/QFw-SLURM-Cluster
+./do_ssh.sh --user user-a
 ```
 
-No application-specific runtime file is needed. Site service mode uses the
-installed default runtime, whose resolver is site-only and whose configuration
-contains no application-owned services. See `qfw-runtime.yaml(5)` with
-`man 5 qfw-runtime.yaml`.
+The login environment selects the official `/opt/openqse` QFw installation,
+the site configuration, and a private run directory beneath the user's home.
 
-## 3. Run the examples
+## 2. Allocate the resources
+
+Run `man salloc` for Slurm syntax. The installed qfw-slurm manuals describe
+the allocator options and gateway protocol; use `man 7 qfw-slurm`
+and `man 5 qfw-slurm-plugin.conf`.
 
 ```bash
+salloc --partition=normal --nodes=1 --ntasks=1 --time=00:30:00 \
+  --qpu=nwqsim \
+  --workload-kind=hybrid \
+  --circ-count=4 \
+  --max-qubits=5 \
+  --max-depth=100 \
+  --max-shots=1024
+```
+
+The public QPU name maps to one exact QPM service ID. Evaluation does not hold
+QPM capacity while Slurm waits for a node. After node assignment, pre-run
+creates the final reservation and records it in the gateway journal.
+
+## 3. Run through QFw
+
+Run `man 1 qfw-activate`, `man 1 qfw-setup`, `man 1 qfw-srun`,
+`man 1 qfw-teardown`, and `man 1 qfw-deactivate` for command details.
+
+```bash
+source "${QFW_INSTALL_PREFIX}/bin/qfw-activate" \
+  --venv "${QFW_VENV}"
+
 cd "${QFW_SHARE_DIR}/examples"
-./qfw_run_all.sh \
-  --service-mode site \
-  --backend nwqsim
-```
-
-Each compatible example passes the activated `QFW_SITE_CONFIG` to
-`qfw-setup(1)` without selecting a profile. An application developer can use
-the same behavior by passing `--service-mode site` to an individual wrapper,
-such as `qfw_ghz.sh`. Run `man 1 qfw_ghz.sh` for that test,
-`man 1 qfw_run_all.sh` for runner options, and `man 1 qfw-setup` for runtime
-selection details.
-
-Every passing case must emit a successful terminal JSONL record. MPI smoke
-remains separate because it has its own task-placement contract.
-
-The administrator can compare `qfw-qpm-svc status` before and after this test
-to confirm that the QPM instance did not restart. `qfw-qpm-svc(1)` documents
-the status output; run `man 1 qfw-qpm-svc` for details. Application teardown
-cannot stop the site-owned service.
-
-`qfw-deactivate(1)` restores the shell after the test. Run
-`man 1 qfw-deactivate` for its cleanup behavior.
-
-<details>
-<summary>Diagnostics, results, and cleanup</summary>
-
-```bash
-find "${QFW_RUN_BASE_DIR}" -type f \
-  \( -name 'summary.jsonl' -o -name '*.log' -o -name 'runtime-state.json' \) \
-  -print
-squeue -j "${SLURM_JOB_ID}"
+qfw-setup
+qfw-srun tests/test_qiskit_simple.py 5 nwqsim
+qfw-teardown
 qfw-deactivate
 ```
 
-Use [Service recovery](recover-services.md) when the site QPM is unavailable.
-Only the site administrator should operate its manager run directory.
+The example must emit a terminal JSON record with `"status": "ok"`. QFw
+application teardown removes only application-owned runtime state. Slurm
+allocation teardown releases the QPM reservation, while the site-owned QPM
+and directory remain alive.
+
+<details>
+<summary>Reservation, result, and cleanup checks</summary>
+
+```bash
+srun /usr/bin/env | grep '^QFW_RESERVATIONS='
+squeue -j "${SLURM_JOB_ID}"
+qfw-status
+```
+
+`QFW_RESERVATIONS` is obtained from the gateway during remote SPANK
+initialization. No reservation handoff file is shared between the controller
+and compute node. Run `man 1 qfw-status` for application-state diagnostics and
+`man 8 qfw-slurm-gateway` for administrator journal inspection.
+
+Exit the allocated shell after `qfw-deactivate`. If a command fails, run
+`qfw-teardown || true` and `qfw-deactivate || true` before exiting.
 
 </details>

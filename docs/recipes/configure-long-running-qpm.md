@@ -238,7 +238,43 @@ qfw-qpm-svc start \
 The PRTE process writes its DVM URI there. TNQVM may use the same explicit
 placement model, but it is not part of the release validation gate.
 
-## 6. Run under a service supervisor
+## 6. Start the allocation gateway
+
+Clusters that reserve QPM capacity at `salloc` or `sbatch` time run one
+qfw-slurm gateway on the Slurm controller. The gateway is a DEFw process. It
+uses the site directory to resolve QPM services and owns a protected,
+controller-local SQLite journal.
+
+The virtual QFw Slurm cluster starts and supervises this gateway automatically
+from its controller entrypoint. It uses:
+
+```text
+/etc/qfw-slurm/gateway.yaml
+/var/lib/qfw-slurm-gateway/reservations.sqlite3
+/var/log/qfw-slurm-gateway/gateway.log
+```
+
+On a systemd site, enable the installed `qfw-slurm-gateway.service` after its
+configuration selects the same QFw installation and `site.yaml`. For a
+foreground diagnostic invocation, use:
+
+```bash
+qfw-slurm-gateway-launch \
+  --config /etc/qfw-slurm/gateway.yaml \
+  serve
+```
+
+Run `man 8 qfw-slurm-gateway-launch`, `man 8 qfw-slurm-gateway`, and
+`man 5 qfw-slurm-gateway.yaml` for command and configuration details. The
+gateway may start before the directory or QPM, but allocation requests remain
+pending or fail until the requested QPM is registered and ready.
+
+Neither the gateway journal nor qfw-slurm burst-buffer retry state is shared
+with compute nodes. Remote SPANK obtains accepted reservation tuples by making
+an authenticated gateway request. This is separate from QFw's shared
+directory connection record and any DVM URI required by a multinode simulator.
+
+## 7. Run under a service supervisor
 
 Use `run` instead of `start` under systemd or another foreground supervisor.
 The installed `qfw-dirsvc@.service` and `qfw-qpm@.service` templates start each
@@ -251,7 +287,7 @@ environment must also define `QFW_SIMULATOR_NODES`.
 
 SIGTERM stops only the component owned by that manager.
 
-## 7. Stop the services
+## 8. Stop the services
 
 Stop each QPM on its manager host before stopping the directory service:
 

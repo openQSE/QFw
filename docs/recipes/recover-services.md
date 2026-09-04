@@ -1,4 +1,4 @@
-# Recover QFw Services After an Interruption
+# Recover QFw Services and Allocations After an Interruption
 
 Use the role manager state before deleting files or starting replacement
 services. Never kill processes based only on a name or an unverified PID.
@@ -87,3 +87,66 @@ qfw-qpm-svc start \
 
 If the directory itself failed, stop all dependent QPMs first, archive its run
 directory, restart the directory, and then restart each QPM.
+
+## 5. Recover the Slurm allocation path
+
+Use the installed qfw-slurm administrator commands only on the Slurm
+controller. Run `man 8 qfw-slurm-gateway`,
+`man 8 qfw-slurm-gateway-launch`, and `man 8 qfw-slurm-bb` before changing
+protected allocation state.
+
+### Gateway unavailable
+
+Remote SPANK fails an application step closed when it cannot retrieve the
+accepted tuple set. It does not create or release a reservation. Restart the
+gateway supervisor, confirm its listener and log, then retry `srun` within the
+same still-active allocation:
+
+```bash
+systemctl restart qfw-slurm-gateway
+systemctl status qfw-slurm-gateway
+```
+
+The virtual cluster uses an entrypoint supervisor instead of systemd. Inspect
+`/var/log/qfw-slurm-gateway/gateway.log`; the supervisor restarts a failed
+gateway automatically.
+
+### QPM missing from the directory
+
+Confirm `qfw-dir-svc status` and `qfw-qpm-svc status` with their respective
+run directories, then inspect the gateway log. Run `man 1 qfw-dir-svc` and
+`man 1 qfw-qpm-svc` for those status commands. A job may remain pending during
+a retryable evaluation failure, but no final reservation should exist before
+the QPM is resolvable and classical nodes are assigned.
+
+### Delayed or rejected admission
+
+Use `squeue` and `scontrol show job` to inspect the Slurm reason. Run
+`man squeue` and `man scontrol` for output fields. A delayed evaluation keeps
+the job pending without classical nodes or QPM capacity. A delayed final
+reserve returns assigned nodes before Slurm retries. A permanent rejection or
+configured retry exhaustion terminates the complete allocation.
+
+### Cancellation or incomplete release
+
+Cancel through Slurm so burst-buffer teardown gets its release callback:
+
+```bash
+scancel "${SLURM_JOB_ID}"
+```
+
+Run `man scancel` for cancellation semantics. If release remains incomplete,
+inspect and retry the exact journaled allocation as the administrator:
+
+```bash
+qfw-slurm-gateway-launch \
+  --config /etc/qfw-slurm/gateway.yaml \
+  status "${SLURM_JOB_ID}"
+qfw-slurm-gateway-launch \
+  --config /etc/qfw-slurm/gateway.yaml \
+  retry-release "${SLURM_JOB_ID}"
+```
+
+Never delete the gateway journal to conceal an incomplete release. Teardown
+returns success to Slurm after its best-effort attempt so scheduler cleanup is
+not blocked; unresolved provider state remains visible for operator recovery.

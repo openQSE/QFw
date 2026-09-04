@@ -7,6 +7,16 @@ execution recipe.
 
 ## Recipes
 
+### Quick starts
+
+| Goal | Recipe |
+| --- | --- |
+| Run the installed examples on one Slurm node | [One-node Slurm example](run-example-slurm-one-node.md) |
+| Run the installed examples in a heterogeneous allocation | [Heterogeneous Slurm example](run-example-slurm-heterogeneous.md) |
+| Run the installed examples against an existing QPM | [Long-running QPM example](run-example-long-running-qpm.md) |
+
+### Installation, operation, and detailed testing
+
 | Goal | Recipe |
 | --- | --- |
 | Configure the QFw Docker/Slurm development environment | [Docker Slurm environment](docker-slurm-environment.md) |
@@ -14,8 +24,8 @@ execution recipe.
 | Install into the conventional site prefix | [Standard site installation](install-standard-location.md) |
 | Build optional NWQSim or TNQVM dependencies | [Simulator dependencies](build-simulator-dependencies.md) |
 | Prepare a reusable, site-owned QPM | [Site-owned QPM configuration](configure-long-running-qpm.md) |
-| Exercise a site-owned QPM from a normal allocation | [Site QPM, normal allocation](test-long-running-qpm-normal.md) |
-| Exercise a site-owned QPM from a heterogeneous allocation | [Site QPM, heterogeneous allocation](test-long-running-qpm-heterogeneous.md) |
+| Exercise the qfw-slurm path from a normal allocation | [Site QPM, normal allocation](test-long-running-qpm-normal.md) |
+| Exercise the qfw-slurm path from a heterogeneous allocation | [Site QPM, heterogeneous allocation](test-long-running-qpm-heterogeneous.md) |
 | Run an application and its services on one node | [Same-node execution](test-same-node.md) |
 | Separate the application and services with a heterogeneous allocation | [Heterogeneous execution](test-heterogeneous-allocation.md) |
 | Recover interrupted directory, DVM, QPM, or reservation state | [Service recovery](recover-services.md) |
@@ -75,6 +85,12 @@ unique run automatically unless a recipe passes `--run-dir` explicitly.
 The QFw prefix and Python virtual environment must also be accessible at the
 same paths on every participating node. They may reside on shared storage or be
 deployed identically to each node.
+
+This QFw runtime requirement is separate from qfw-slurm reservation delivery.
+qfw-slurm keeps its gateway journal and burst-buffer retry records on the
+controller and uses an authenticated gateway request to provide
+`QFW_RESERVATIONS` to compute-node steps. It does not require its state
+directory to be shared.
 
 ## Runtime Choices
 

@@ -1,25 +1,24 @@
 # Configure the Docker Slurm Environment
 
-Use this recipe to create the virtual Slurm cluster and a Python environment
-that is visible to every cluster container. Commands marked **Host** run on the
-workstation. Commands marked **Controller** run in the `slurmctld` container.
+Use this recipe to build the release virtual cluster with its official QFw,
+DEFw, simulator, MUNGE, and qfw-slurm installations. Commands marked **Host**
+run on the workstation. Commands marked **Controller** run in `slurmctld`.
 
 ## 1. Clone and configure the cluster
 
 **Host**
 
 ```bash
-git clone git@github.com:openQSE/QFw-SLURM-Cluster.git
+git clone --branch release/v0.1 \
+  git@github.com:openQSE/QFw-SLURM-Cluster.git
 cd QFw-SLURM-Cluster
-
 ./do_configure.sh --prefix "$PWD/shared-dir"
-git clone --recurse-submodules git@github.com:openQSE/QFw.git \
-  "$PWD/shared-dir/QFw"
 ```
 
-`do_configure.sh` records the shared host path in `qfw-install.env` and
-`.env`. Docker Compose mounts that directory into every Slurm container as
-`/workspace/qfw-container-base`.
+The configured build obtains QFw and qfw-slurm from their upstream
+`release/v0.1` branches. It installs QFw under `/opt/openqse/qfw`, its Python
+environment under `/opt/openqse/qfw-venv`, and qfw-slurm under
+`/opt/openqse/qfw-slurm`.
 
 ## 2. Build and start the cluster
 
@@ -29,63 +28,90 @@ git clone --recurse-submodules git@github.com:openQSE/QFw.git \
 ./do_build.sh
 ./do_startup.sh
 ./do_ls.sh
+```
+
+`do_startup.sh` also provisions `user-a`, `user-b`, and `user-c`, their
+private homes, the client-readable `site.yaml`, and protected device-access
+templates. It does not populate a real provider API key.
+
+## 3. Verify the installed scheduling integration
+
+Enter as root:
+
+```bash
 ./do_ssh.sh
 ```
 
-`do_ssh.sh` opens a shell in the controller container.
-
-## 3. Establish the shared QFw paths
-
 **Controller**
 
 ```bash
-export QFW_SHARED_ROOT=/workspace/qfw-container-base
-export QFW_SRC="${QFW_SHARED_ROOT}/QFw"
-export QFW_VENV="${QFW_SHARED_ROOT}/qfw-venv"
-export QFW_BUILD="${QFW_SHARED_ROOT}/qfw-build"
+scontrol show config | grep -E 'JobSubmitPlugins|BurstBufferType'
+man 7 qfw-slurm
+man 1 qfw-slurm-driver
+man 8 qfw-slurm-gateway
 ```
 
-This recipe does not select a runtime directory. The application and service
-recipes set `QFW_RUN_BASE_DIR` when a run begins. Multinode recipes place it
-below `QFW_SHARED_ROOT` so every container sees the same path.
+The configuration must report `JobSubmitPlugins=lua` and
+`BurstBufferType=burst_buffer/lua`. The Slurm plugstack loads
+`spank_quantum.so`. All three pieces are built against the same installed
+Slurm version. Run `man 7 qfw-slurm` for their responsibilities and lifecycle.
 
-## 4. Create the shared Python environment
-
-**Controller**
+MUNGE authenticates gateway traffic. The image contains one cluster key, and
+every Slurm container starts `munged` before its Slurm daemon. Validate the
+same credential on a compute node:
 
 ```bash
-python3 -m venv "${QFW_VENV}"
-source "${QFW_VENV}/bin/activate"
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r "${QFW_SRC}/setup/build-requirements.txt"
-python -m pip install -r "${QFW_SRC}/setup/requirements.txt"
+munge -n | ssh c1 unmunge >/dev/null
 ```
 
-Continue with either the
-[non-standard installation](install-nonstandard-location.md) or the
-[standard site installation](install-standard-location.md).
+## 4. Enter as an application user
+
+Leave the root shell, then run on the host:
+
+```bash
+./do_ssh.sh --user user-a
+```
+
+The login profile sets:
+
+```text
+QFW_INSTALL_PREFIX=/opt/openqse/qfw
+QFW_VENV=/opt/openqse/qfw-venv
+QFW_SHARED_ROOT=/workspace/qfw-container-base
+QFW_RUN_BASE_DIR=/workspace/home/user-a/qfw-runs
+QFW_SITE_CONFIG=/etc/openqse/qfw/site.yaml
+```
+
+`QFW_SHARED_ROOT` is used by QFw's directory connection record and by any
+DVM-backed service whose runtime artifacts must cross nodes. qfw-slurm does
+not use it to transfer accepted reservation tuples. The gateway journal and
+burst-buffer retry state remain protected, controller-local files; remote
+SPANK retrieves tuples from the gateway.
+
+Continue with the [long-running QPM configuration](configure-long-running-qpm.md)
+as root, then use the [normal](test-long-running-qpm-normal.md) or
+[heterogeneous](test-long-running-qpm-heterogeneous.md) application recipe as
+a regular user.
 
 <details>
-<summary>Environment verification and cluster cleanup</summary>
+<summary>Installation verification and cluster cleanup</summary>
 
 **Controller**
 
 ```bash
-printf 'QFW_SHARED_ROOT=%s\n' "${QFW_SHARED_ROOT}"
-printf 'VIRTUAL_ENV=%s\n' "${VIRTUAL_ENV}"
-printf 'QFW_BUILD=%s\n' "${QFW_BUILD}"
-python -c 'import sys; print(sys.executable); print(*sys.path, sep="\n")'
-squeue -u "${USER}" || true
+test -x /opt/openqse/qfw/bin/qfw-activate
+test -x /opt/openqse/qfw-slurm/bin/qfw-slurm-driver
+test -x /usr/lib64/slurm/spank_quantum.so
+test -x /usr/lib64/slurm/job_submit_lua.so
+test -x /usr/lib64/slurm/burst_buffer_lua.so
+pgrep -a munged
+sinfo -Nel
 ```
 
-Confirm the shared mount from another node when diagnosing visibility:
+Run `man 1 qfw_slurm_install.sh` for standalone qfw-slurm installation and
+`man 5 qfw-slurm-gateway.yaml` for gateway configuration.
 
-```bash
-srun --nodes=1 --ntasks=1 test -d "${QFW_SHARED_ROOT}"
-```
-
-Leave the Python environment with `deactivate`. On the host, stop the virtual
-cluster without deleting its named volumes:
+On the host, stop the cluster without deleting its named volumes:
 
 ```bash
 ./do_stop.sh
