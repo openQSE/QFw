@@ -212,6 +212,7 @@ services:
     load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
       - libfabric
+      - openmpi
       - nwqsim
     required-executables:
       - circuit_runner.nwqsim

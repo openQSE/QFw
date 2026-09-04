@@ -46,12 +46,12 @@ Create site modulefiles that expose the corresponding `bin` and library
 directories, then verify them before starting QFw:
 
 ```bash
-module load libfabric nwqsim
-command -v circuit_runner.nwqsim
+module load libfabric openmpi nwqsim
+command -v prte pterm circuit_runner.nwqsim
 
 module purge
-module load libfabric tnqvm
-command -v circuit_runner.tnqvm
+module load libfabric openmpi tnqvm
+command -v prte pterm circuit_runner.tnqvm
 ```
 
 `qfw-setup(1)` performs the same module loading and executable validation for
