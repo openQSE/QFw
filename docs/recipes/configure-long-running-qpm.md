@@ -7,6 +7,23 @@ that owns it. No Slurm allocation variables participate in this procedure.
 Applications connect through the published directory connection file. Their
 teardown never stops these site-owned processes.
 
+The QFw virtual Slurm cluster packages the manual sequence below as one root
+command. From the cluster repository on the Docker host, enter the controller
+and start the complete service plane:
+
+```bash
+./do_ssh.sh
+qfw-site-services start
+qfw-site-services status
+```
+
+This starts the directory service on `slurmctld`, a three-node NWQSim DVM and
+QPM, and the IQM QPM. It preserves the protected device-access and credential
+files. Run `qfw-site-services stop` as root to stop them in dependency order.
+Run `man 8 qfw-site-services` for its options and environment overrides.
+The remaining sections describe the portable commands that the cluster helper
+coordinates.
+
 ## 1. Configure the service environment
 
 Install the same QFw release and Python environment on every service host.
@@ -296,6 +313,16 @@ qfw-qpm-svc stop --run-dir "${QPM_RUN_DIR}"
 qfw-dir-svc stop --run-dir "${DIR_RUN_DIR}"
 qfw-deactivate
 ```
+
+After the qfw-slurm inspection package is installed, application users can
+compare service state with its Slurm host and active allocation state:
+
+```bash
+qfw-sinfo
+qfw-squeue
+```
+
+Run `man 1 qfw-sinfo` and `man 1 qfw-squeue` for their output contracts.
 
 `qfw-deactivate(1)` restores the shell environment saved during activation.
 Run `man 1 qfw-deactivate` for details. Application-side `qfw-teardown(1)` is

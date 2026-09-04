@@ -34,6 +34,22 @@ environment under `/opt/openqse/qfw-venv`, and qfw-slurm under
 private homes, the client-readable `site.yaml`, and protected device-access
 templates. It does not populate a real provider API key.
 
+The cluster contains eight ordinary application nodes and four dedicated
+service nodes. `nwqsim-head` and two workers form the simulator service pool.
+`iqm-head` represents the hardware head node. Slurm exposes these hosts in the
+administrator-only `qfw-services` partition and excludes them from `normal`.
+
+Start the service plane from the controller as root:
+
+```bash
+qfw-site-services start
+qfw-site-services status
+```
+
+The command starts the site directory, the three-node NWQSim DVM and QPM, and
+the IQM QPM. The controller entrypoint supervises the qfw-slurm gateway. Run
+`man 8 qfw-site-services` for lifecycle details.
+
 ## 3. Verify the installed scheduling integration
 
 Enter as root:
@@ -48,6 +64,8 @@ Enter as root:
 scontrol show config | grep -E 'JobSubmitPlugins|BurstBufferType'
 man 7 qfw-slurm
 man 1 qfw-slurm-driver
+man 1 qfw-sinfo
+man 1 qfw-squeue
 man 8 qfw-slurm-gateway
 ```
 
@@ -93,6 +111,10 @@ as root, then use the [normal](test-long-running-qpm-normal.md) or
 [heterogeneous](test-long-running-qpm-heterogeneous.md) application recipe as
 a regular user.
 
+Once QFw is active, use `qfw-sinfo` to compare QPM state with service-host
+state. `qfw-squeue` correlates live Slurm jobs with sanitized QPM allocation
+state. Their full contracts are in `qfw-sinfo(1)` and `qfw-squeue(1)`.
+
 <details>
 <summary>Installation verification and cluster cleanup</summary>
 
@@ -106,10 +128,19 @@ test -x /usr/lib64/slurm/job_submit_lua.so
 test -x /usr/lib64/slurm/burst_buffer_lua.so
 pgrep -a munged
 sinfo -Nel
+qfw-site-services status
+qfw-sinfo
+qfw-squeue
 ```
 
 Run `man 1 qfw_slurm_install.sh` for standalone qfw-slurm installation and
 `man 5 qfw-slurm-gateway.yaml` for gateway configuration.
+
+Stop the site services as root before leaving the controller:
+
+```bash
+qfw-site-services stop
+```
 
 On the host, stop the cluster without deleting its named volumes:
 
