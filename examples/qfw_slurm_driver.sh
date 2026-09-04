@@ -188,6 +188,24 @@ print(service_id)
 '
 }
 
+qfw_slurm_parse_ownership() {
+	PYTHONPATH="$(qfw_example_path tests)${PYTHONPATH:+:${PYTHONPATH}}" \
+	python3 -c '
+import sys
+
+from qfw_example_report import parse_console_records
+
+ownership = None
+for record in parse_console_records(
+		sys.stdin.read(), "QFW_EXAMPLE_RESERVATION"):
+	if record.get("kind") == "reserve":
+		ownership = record.get("ownership")
+if ownership not in {"driver", "scheduler"}:
+	raise SystemExit("ERROR: reservation ownership not found in reservation output")
+print(ownership)
+'
+}
+
 qfw_slurm_default_allocation_id() {
 	for name in SLURM_JOB_ID SLURM_JOBID QFW_ALLOCATION_ID; do
 		if [[ -n "${!name:-}" ]]; then
@@ -545,10 +563,12 @@ release_command=(
 
 reservation_id=""
 service_id=""
+reservation_ownership=""
 release_done=0
 
 qfw_slurm_release() {
-	if [[ -z "${reservation_id}" || "${release_done}" == "1" ]]; then
+	if [[ -z "${reservation_id}" || "${release_done}" == "1" ||
+	      "${reservation_ownership}" == "scheduler" ]]; then
 		return 0
 	fi
 	local output rc
@@ -597,6 +617,9 @@ reservation_id="$(
 )"
 service_id="$(
 	printf "%s\n" "${reserve_output}" | qfw_slurm_parse_service_id
+)"
+reservation_ownership="$(
+	printf "%s\n" "${reserve_output}" | qfw_slurm_parse_ownership
 )"
 reservation_context="$(
 	python3 - "${service_id}" "${reservation_id}" <<'PY'

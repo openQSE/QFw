@@ -8,6 +8,10 @@ from defw_app_util import defw_get_directory_service
 from defw_exception import DEFwError
 from qfw_qiskit.qpm_resolver import QPMResolver
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
+from qfw_qiskit.reservation_set import (
+	parse_qfw_reservations,
+	select_qpm_reservation,
+)
 from qfw_example_report import format_console_record
 
 
@@ -69,6 +73,21 @@ def json_object(value, label):
 
 def reserve(args):
 	resolved, qpm = resolve_qpm(args.backend, args.timeout)
+	scheduler_reservations = parse_qfw_reservations(required=False)
+	if scheduler_reservations:
+		reservation = select_qpm_reservation(
+			scheduler_reservations, resolved.service_id)
+		emit(
+			"reserve",
+			backend=args.backend,
+			service_id=resolved.service_id,
+			ownership="scheduler",
+			decision={
+				"status": "accepted",
+				"reservation_id": reservation.reservation_id,
+			},
+		)
+		return 0
 	alloc_id = args.allocation_id or allocation_id()
 	job_id = args.job_id or alloc_id
 	measurement_count = args.measurements
@@ -128,7 +147,7 @@ def reserve(args):
 	decision = qpm.reserve(request=request)
 	emit(
 		"reserve", backend=args.backend, service_id=resolved.service_id,
-		request=request, decision=decision)
+		ownership="driver", request=request, decision=decision)
 	if decision.get("status") != "accepted" or not decision.get(
 			"reservation_id"):
 		raise DEFwError(f"reservation was not accepted: {decision}")
