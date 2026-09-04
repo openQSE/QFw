@@ -148,10 +148,11 @@ def start(args):
     with _state_lock(run_dir):
         previous = _read_state(run_dir, required=False)
         if previous and previous.get("state") != "stopped":
-            raise ServicePlaneError(
-                f"service plane already has state {previous.get('state')!r}: "
-                f"{_state_path(run_dir)}"
-            )
+            if _recorded_instance_active(previous):
+                raise ServicePlaneError(
+                    "service plane already has a live instance with state "
+                    f"{previous.get('state')!r}: {_state_path(run_dir)}"
+                )
 
         plan = _resolve_plan(args, run_dir)
         state = _new_state(plan, args.dry_run)
@@ -196,17 +197,27 @@ def status(run_dir):
 
         expected = _expected_component_keys(state)
         all_ready = set(state.get("components", {})) == expected
+        observed_states = set()
         for component in state.get("components", {}).values():
             ready = _component_ready(component, state)
             component["ready"] = ready
-            component["state"] = "ready" if ready else "not-ready"
+            component["state"] = _observed_component_state(
+                component, state, ready)
+            observed_states.add(component["state"])
             component["checked_at_ns"] = time.time_ns()
             all_ready = all_ready and ready
         directory_component = state.get("components", {}).get("directory")
         if directory_component:
             _publish_directory_connection(
                 state, ready=directory_component.get("ready", False))
-        state["state"] = "ready" if all_ready else "degraded"
+        if all_ready:
+            state["state"] = "ready"
+        elif "stale" in observed_states:
+            state["state"] = "stale"
+        elif "starting" in observed_states:
+            state["state"] = "starting"
+        else:
+            state["state"] = "degraded"
         state["updated_at_ns"] = time.time_ns()
         _write_state(state)
         return state
@@ -872,6 +883,37 @@ def _component_ready(component, state):
     if not _pid_alive(pid, component.get("node"), state["allocation"]):
         return False
     return _ready_file(Path(component["ready_file"]))
+
+
+def _recorded_instance_active(state):
+    for component in state.get("components", {}).values():
+        if component.get("state") == "stopped":
+            continue
+        if _component_ready(component, state):
+            return True
+        if component.get("role") == "prte-dvm":
+            continue
+        pid = component.get("pid")
+        if pid is not None and _pid_alive(
+                pid, component.get("node"), state["allocation"]):
+            return True
+    return False
+
+
+def _observed_component_state(component, state, ready):
+    if ready:
+        return "ready"
+    previous = component.get("state")
+    if component.get("role") == "prte-dvm":
+        return "stale"
+    pid = component.get("pid")
+    alive = pid is not None and _pid_alive(
+        pid, component.get("node"), state["allocation"])
+    if previous == "starting" and alive:
+        return "starting"
+    if not alive:
+        return "stale"
+    return "not-ready"
 
 
 def _stop_components(state):

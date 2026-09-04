@@ -117,6 +117,79 @@ def test_stop_prte_reloads_recorded_environment_modules(tmp_path, monkeypatch):
     assert loaded["environment"]["PATH"] == "/service/bin"
 
 
+def test_status_identifies_stale_process_state(tmp_path, monkeypatch):
+    run_dir = tmp_path / "stale-run"
+    state = {
+        "schema": service_plane.SCHEMA,
+        "run_dir": str(run_dir),
+        "state": "ready",
+        "dry_run": False,
+        "allocation": {"mode": "local"},
+        "configuration": {
+            "components": {"directory": False, "prte": False, "qpm": True},
+            "service_ids": ["nwqsim"],
+        },
+        "components": {
+            "qpm:nwqsim": {
+                "role": "qpm",
+                "state": "ready",
+                "pid": 4242,
+                "node": "sim-head",
+                "ready_file": str(tmp_path / "missing-ready.json"),
+            }
+        },
+    }
+    monkeypatch.setattr(service_plane, "_pid_alive", lambda *_args: False)
+    service_plane._write_state(state)
+
+    observed = service_plane.status(run_dir)
+
+    assert observed["state"] == "stale"
+    assert observed["components"]["qpm:nwqsim"]["state"] == "stale"
+
+
+def test_start_replaces_stale_manager_state(tmp_path, monkeypatch):
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text(
+        "resolver:\n  scope-order:\n    - site\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "stale-run"
+    stale = {
+        "schema": service_plane.SCHEMA,
+        "run_dir": str(run_dir),
+        "state": "error",
+        "dry_run": False,
+        "allocation": {"mode": "local"},
+        "components": {
+            "qpm:old": {
+                "role": "qpm",
+                "state": "error",
+                "pid": 4242,
+                "node": "old-node",
+                "ready_file": str(tmp_path / "missing-ready.json"),
+            }
+        },
+    }
+    monkeypatch.setattr(service_plane, "_pid_alive", lambda *_args: False)
+    service_plane._write_state(stale)
+    args = parse_role_start_args(
+        "directory",
+        "--run-dir", str(run_dir),
+        "--site-config", str(site),
+        "--runtime-config", str(runtime),
+        "--dry-run",
+    )
+
+    started = service_plane.start(args)
+
+    assert started["state"] == "ready"
+    assert set(started["components"]) == {"directory"}
+
+
 def test_site_dry_run_generates_state_and_supports_status_and_stop(
         tmp_path, capsys):
     site, _manifest = write_site_configuration(tmp_path, [
