@@ -264,6 +264,90 @@ def test_qpm_startup_long_running_site_registration_uses_defw_api(
 	assert context["properties"]["provider"] == "iqm"
 
 
+def test_qpm_startup_restores_site_registration_after_dirsvc_reconnect(
+		monkeypatch):
+	import sys
+	from types import SimpleNamespace
+
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+
+	reset_qpm_state(uq)
+	first_dirsvc = FakeSiteDirSvc()
+	second_dirsvc = FakeSiteDirSvc()
+	fake_defw = FakeDefw(
+		site_ready={"site-a"},
+		site_dirsvc=first_dirsvc,
+		records=[site_qpm_record()],
+	)
+	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+	monkeypatch.setitem(sys.modules, "defw_workers", SimpleNamespace(
+		is_dirsvc_peer_event=lambda event:
+			event.get("node_type") == "directory",
+	))
+	restore_requests = []
+	monkeypatch.setattr(
+		startup,
+		"_start_site_registration_restore",
+		lambda defw_module: restore_requests.append(defw_module),
+	)
+
+	assert startup._ensure_site_registration(fake_defw) is True
+	assert startup._ensure_site_registration(fake_defw) is True
+	assert len(first_dirsvc.registrations) == 1
+
+	startup._handle_defw_peer_lifecycle_event(fake_defw, {
+		"event_type": "PEER_LOST",
+		"node_type": "directory",
+	})
+	assert getattr(fake_defw, startup.SITE_REGISTRATION_STATE_ATTR) == {}
+	assert restore_requests == [fake_defw]
+
+	fake_defw.dirsvc = second_dirsvc
+	assert startup._ensure_site_registration(fake_defw) is True
+	assert len(first_dirsvc.registrations) == 1
+	assert len(second_dirsvc.registrations) == 1
+
+
+def test_qpm_startup_ignores_non_directory_peer_events(monkeypatch):
+	import sys
+	from types import SimpleNamespace
+
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+
+	reset_qpm_state(uq)
+	site_dirsvc = FakeSiteDirSvc()
+	fake_defw = FakeDefw(
+		site_ready={"site-a"},
+		site_dirsvc=site_dirsvc,
+		records=[site_qpm_record()],
+	)
+	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+	monkeypatch.setitem(sys.modules, "defw_workers", SimpleNamespace(
+		is_dirsvc_peer_event=lambda event:
+			event.get("node_type") == "directory",
+	))
+	restore_requests = []
+	monkeypatch.setattr(
+		startup,
+		"_start_site_registration_restore",
+		lambda defw_module: restore_requests.append(defw_module),
+	)
+
+	assert startup._ensure_site_registration(fake_defw) is True
+	startup._handle_defw_peer_lifecycle_event(fake_defw, {
+		"event_type": "PEER_LOST",
+		"node_type": "service",
+	})
+
+	assert "site-a" in getattr(
+		fake_defw, startup.SITE_REGISTRATION_STATE_ATTR)
+	assert restore_requests == []
+
+
 def test_qpm_startup_registration_records_lifecycle_telemetry(monkeypatch):
 	import util.qpm.startup as startup
 	import util.qpm.util_qpm as uq
