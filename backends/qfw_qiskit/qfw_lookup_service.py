@@ -21,7 +21,7 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 	if reservations:
 		selected = select_qpm_reservation(
 			reservations, service_id=service_id)
-		binding = resolver.connect_reserved(
+		binding = resolver.connect_reserved_managed(
 			selected.service_id,
 			selected.reservation_id,
 			timeout=timeout,
@@ -35,7 +35,12 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 	}
 	if want:
 		request["provider"] = want
-	return resolver.connect(**request), None
+	resolved = resolver.resolve(**request)
+	lifecycle_binding = resolver.managed_binding(resolved)
+	return lifecycle_binding.api(
+		resolved.api_binding.binding_name,
+		expected_runtime_id=resolved.runtime_id,
+	), None
 
 
 def get_qpm(qpm_type=-1, qpm_capabilities=-1, timeout=SYSTEM_UP_TIMEOUT,

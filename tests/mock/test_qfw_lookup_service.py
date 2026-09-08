@@ -31,6 +31,7 @@ def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
 			"service_name": "QPM",
 			"service_type": "qfw.qpm",
 			"runtime_id": f"{service_id}-runtime",
+			"peer_handle": f"{service_id}-peer",
 			"generation": 1,
 			"endpoint": endpoint or f"{service_id}:9000",
 			"selector": {
@@ -52,11 +53,30 @@ class FakeDirectoryService:
 	def __init__(self, records):
 		self.records = list(records)
 		self.queries = []
+		self.registrations = {}
+
+	def register_event_notification(self, endpoint, event_type, class_id,
+			filters=None):
+		registration_id = f"registration-{len(self.registrations) + 1}"
+		self.registrations[registration_id] = {
+			"endpoint": endpoint,
+			"event_type": event_type,
+			"class_id": class_id,
+			"filters": dict(filters or {}),
+		}
+		return registration_id
+
+	def unregister_event_notification(self, registration_id):
+		return self.registrations.pop(registration_id, None) is not None
 
 	def resolve_services(self, **kwargs):
 		self.queries.append(kwargs)
 		results = []
 		for record in self.records:
+			service_id = kwargs.get("service_id")
+			if (service_id and
+					record["service_record"]["service_id"] != service_id):
+				continue
 			result = {
 				key: copy.deepcopy(value)
 				for key, value in record.items()
@@ -81,6 +101,10 @@ class BindingDefwModule:
 			for record in records or []
 		}
 		self.default_qpm = default_qpm
+		self.me = self
+
+	def my_endpoint(self):
+		return "client-endpoint"
 
 	def connect_to_binding(self, resolved_binding):
 		self.binding_connections.append(resolved_binding)
@@ -112,9 +136,9 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 		timeout=7,
 	)
 
-	assert result is fake_qpm
+	assert result.test() == "ok"
 	assert directory_timeouts == [7]
-	assert len(dirsvc.queries) == 1
+	assert len(dirsvc.queries) == 2
 	assert dirsvc.queries[0]["service_name"] == "QPM"
 	assert dirsvc.queries[0]["service_type"] == "qfw.qpm"
 	assert dirsvc.queries[0]["binding_name"] == "execution"
@@ -126,6 +150,7 @@ def test_get_qpm_uses_allocation_dirsvc_selected_binding(monkeypatch):
 	assert binding["service_record"]["service_id"] == "qpm-iqm"
 	assert binding["selected_binding"]["binding_name"] == "execution"
 	assert fake_qpm.shutdown_called is False
+	result.lifecycle_binding.close()
 
 
 def test_get_qpm_leaves_failed_service_probe_running(monkeypatch):
@@ -146,8 +171,9 @@ def test_get_qpm_leaves_failed_service_probe_running(monkeypatch):
 		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 	)
 
-	assert result is fake_qpm
+	assert result.lifecycle_binding.snapshot()["service_id"] == "qpm-iqm"
 	assert fake_qpm.shutdown_called is False
+	result.lifecycle_binding.close()
 
 
 def test_get_qpm_propagates_directory_failures(monkeypatch):
@@ -195,11 +221,12 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
 	)
 
-	assert result is shim_qpm
+	assert result.test() == "ok"
 	assert [
 		item["service_record"]["service_id"]
 		for item in fake_defw.binding_connections
 	] == ["shim"]
+	result.lifecycle_binding.close()
 
 
 def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):

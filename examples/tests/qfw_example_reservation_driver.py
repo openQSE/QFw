@@ -28,10 +28,10 @@ def resolve_qpm(provider, timeout, service_id=None):
 	dirsvc = defw_get_directory_service()
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
 	if service_id:
-		binding = resolver.connect_reserved(
+		binding = resolver.connect_reserved_managed(
 			service_id, 1, timeout=timeout, binding_name="admission")
 		return binding.resolved, binding.client
-	return resolver.resolve_and_connect(
+	resolved = resolver.resolve(
 		service_type="qfw.qpm",
 		binding_name="admission",
 		qpm_type=selection["qpm_type"],
@@ -39,6 +39,9 @@ def resolve_qpm(provider, timeout, service_id=None):
 		provider=selection["provider"],
 		timeout=timeout,
 	)
+	lifecycle_binding = resolver.managed_binding(resolved)
+	return resolved, lifecycle_binding.api(
+		"admission", expected_runtime_id=resolved.runtime_id)
 
 
 def emit(kind, **payload):

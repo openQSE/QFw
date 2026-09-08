@@ -90,6 +90,7 @@ class DirectoryScope:
 	name: str
 	scope: str
 	client: Any = None
+	client_getter: Any = None
 	endpoint: Any = None
 	identity: Optional[str] = None
 	priority: int = 0
@@ -130,6 +131,7 @@ class QPMReservedBinding:
 	resolved: QPMResolvedBinding
 	client: Any
 	reservation_id: int
+	lifecycle_binding: Any = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +209,7 @@ class QPMResolver:
 				name="allocation-local",
 				scope="allocation-local",
 				client=dirsvc,
+				client_getter=_directory_getter(defw_module, dirsvc),
 				endpoint=local_endpoint,
 				identity=local_endpoint or "allocation-local",
 				priority=100,
@@ -227,6 +230,10 @@ class QPMResolver:
 				name=name,
 				scope="site",
 				client=client,
+				client_getter=(
+					_directory_getter(defw_module, dirsvc)
+					if client is dirsvc else None
+				),
 				endpoint=endpoint,
 				identity=endpoint,
 				priority=50,
@@ -275,6 +282,20 @@ class QPMResolver:
 	def connect_reserved(
 			self, service_id, reservation_id, timeout=10,
 			api_category="execution", binding_name=None):
+		resolved = self._resolve_reserved(
+			service_id,
+			timeout=timeout,
+			api_category=api_category,
+			binding_name=binding_name,
+		)
+		return QPMReservedBinding(
+			resolved=resolved,
+			client=self._connector.connect(resolved),
+			reservation_id=reservation_id)
+
+	def _resolve_reserved(
+			self, service_id, timeout=10,
+			api_category="execution", binding_name=None):
 		request = QPMResolutionRequest(
 			service_id=service_id,
 			api_category=api_category,
@@ -296,10 +317,49 @@ class QPMResolver:
 				"visible directories")
 		resolved = candidates[0]
 		self._reject_stale_generation(resolved)
+		return resolved
+
+	def connect_reserved_managed(
+			self, service_id, reservation_id, timeout=10,
+			api_category="execution", binding_name=None):
+		resolved = self._resolve_reserved(
+			service_id,
+			timeout=timeout,
+			api_category=api_category,
+			binding_name=binding_name,
+		)
+		lifecycle_binding = self.managed_binding(resolved)
 		return QPMReservedBinding(
 			resolved=resolved,
-			client=self._connector.connect(resolved),
-			reservation_id=reservation_id)
+			client=lifecycle_binding.api(
+				resolved.api_binding.binding_name,
+				expected_runtime_id=resolved.runtime_id,
+			),
+			reservation_id=reservation_id,
+			lifecycle_binding=lifecycle_binding,
+		)
+
+	def managed_binding(self, resolved):
+		from api_qpm_common import QPMLifecycleBinding
+
+		directory = next((
+			item for item in self._directories
+			if self._directory_matches_resolved(item, resolved)
+		), None)
+		if directory is None:
+			raise QPMResolverError(
+				f"directory for QPM {resolved.service_id!r} is unavailable")
+		getter = directory.client_getter or (lambda: directory.client)
+		client = getter()
+		if client is None:
+			raise QPMResolverError(
+				f"directory for QPM {resolved.service_id!r} is unavailable")
+		defw_module = getattr(self._connector, "_defw", defw)
+		return QPMLifecycleBinding(
+			resolved.service_id,
+			directory_getter=getter,
+			defw_module=defw_module,
+		).start(directory=client)
 
 	def _collect_candidates(self, request):
 		candidates = []
@@ -321,7 +381,8 @@ class QPMResolver:
 		return candidates
 
 	def _query_directory(self, directory, request):
-		client = directory.client
+		client = directory.client_getter() \
+			if directory.client_getter is not None else directory.client
 		if client is None:
 			return []
 		filters = self._query_filters(request)
@@ -800,6 +861,12 @@ def _split_env_list(value):
 		return []
 	return [item.strip() for item in value.replace(";", ",").split(",")
 		if item.strip()]
+
+
+def _directory_getter(defw_module, initial_client):
+	if hasattr(defw_module, "dirsvc"):
+		return lambda: getattr(defw_module, "dirsvc", None)
+	return lambda: initial_client
 
 
 def _normalize_scope_name(name):
