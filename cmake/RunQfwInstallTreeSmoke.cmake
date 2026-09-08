@@ -1000,12 +1000,11 @@ endif()
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
-		first_pid_file=\$(find \
-			'${partial_run_dir}/service-plane/qpm/first/services' \
-			-mindepth 2 -maxdepth 2 -name pid -print -quit)
-		test -n \"\${first_pid_file}\"
-		test -s \"\${first_pid_file}\"
-		first_pid=\$(cat \"\${first_pid_file}\")
+		first_state='${partial_run_dir}/service-plane/qpm/first/state/service-plane.json'
+		test -s \"\${first_state}\"
+		first_pid=\$('${QFW_PYTHON}' -c \
+			'import json, sys; state=json.load(open(sys.argv[1])); print(next(iter(state[\"components\"].values()))[\"pid\"])' \
+			\"\${first_state}\")
 		for _attempt in \$(seq 1 30); do
 			if ! kill -0 \${first_pid} 2>/dev/null; then
 				exit 0
