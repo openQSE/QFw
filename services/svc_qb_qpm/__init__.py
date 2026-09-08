@@ -12,7 +12,8 @@ svc_info = {
 	'name': SERVICE_NAME,
 	'module': __name__,
 	'description': SERVICE_DESC,
-	'version': 1.0
+	'version': 1.0,
+	'instance_mode': 'singleton',
 }
 
 # This is used by the infrastructure to define all the service classes.
