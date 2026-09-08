@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import config as qfw_config
 from . import environment_modules as qfw_environment_modules
+from . import process_state as qfw_process_state
 
 
 SCHEMA = "qfw-service-plane-v1"
@@ -147,12 +148,16 @@ def start(args):
     run_dir = _resolve_run_dir(args.run_dir)
     with _state_lock(run_dir):
         previous = _read_state(run_dir, required=False)
-        if previous and previous.get("state") != "stopped":
-            if _recorded_instance_active(previous):
+        if previous:
+            if (
+                previous.get("state") != "stopped"
+                and _recorded_instance_active(previous)
+            ):
                 raise ServicePlaneError(
                     "service plane already has a live instance with state "
                     f"{previous.get('state')!r}: {_state_path(run_dir)}"
                 )
+            _discard_stale_control_files(previous)
 
         plan = _resolve_plan(args, run_dir)
         state = _new_state(plan, args.dry_run)
@@ -626,8 +631,10 @@ def _new_state(plan, dry_run):
 def _start_prte(state, timeout, service_environment=None):
     dvm = state["dvm"]
     uri_path = Path(dvm["uri_path"])
+    pid_file = uri_path.with_name("pid")
     uri_path.parent.mkdir(parents=True, exist_ok=True)
     uri_path.unlink(missing_ok=True)
+    pid_file.unlink(missing_ok=True)
     record = {
         "role": "prte-dvm",
         "owner": state["owner"],
@@ -636,6 +643,7 @@ def _start_prte(state, timeout, service_environment=None):
         "node": dvm["launch_node"],
         "nodes": dvm["nodes"],
         "uri_path": str(uri_path),
+        "pid_file": str(pid_file),
     }
     state["components"]["prte-dvm"] = record
     _write_state(state)
@@ -647,6 +655,7 @@ def _start_prte(state, timeout, service_environment=None):
             _command_path("prte", env=process_environment),
             "--host", ",".join(f"{host}:*" for host in dvm["nodes"]),
             "--report-uri", str(uri_path),
+            "--report-pid", str(pid_file),
         ]
         job_id = os.environ.get("QFW_JOB_ID") or os.environ.get("SLURM_JOB_ID")
         if job_id and str(job_id) != "-1":
@@ -661,8 +670,17 @@ def _start_prte(state, timeout, service_environment=None):
         command.append("--daemonize")
         _run_on_node(dvm["launch_node"], command, process_environment,
                      state["allocation"])
-        _wait_for(lambda: uri_path.exists() and uri_path.stat().st_size > 0,
-                  timeout, f"PRTE DVM URI {uri_path}")
+        _wait_for(
+            lambda: (
+                uri_path.exists() and uri_path.stat().st_size > 0
+                and pid_file.exists() and pid_file.stat().st_size > 0
+            ),
+            timeout,
+            f"PRTE DVM URI and PID under {uri_path.parent}",
+        )
+        record["pid"] = _read_pid(pid_file)
+        record["process_identity"] = _require_process_identity(
+            record["pid"], record.get("node"), state["allocation"])
     record["state"] = "ready"
     record["ready"] = True
     record["ready_at_ns"] = time.time_ns()
@@ -711,6 +729,8 @@ def _start_directory(state, timeout):
         _run_on_node(directory["target"], command, os.environ.copy(),
                      state["allocation"])
         record["pid"] = _read_pid(pid_file)
+        record["process_identity"] = _require_process_identity(
+            record["pid"], record.get("node"), state["allocation"])
     record["state"] = "ready"
     record["ready"] = True
     record["ready_at_ns"] = time.time_ns()
@@ -777,6 +797,8 @@ def _start_qpm(state, service, timeout, service_environment=None):
         ]
         _run_on_node(service["target"], command, env, state["allocation"])
         record["pid"] = _read_pid(pid_file)
+        record["process_identity"] = _require_process_identity(
+            record["pid"], record.get("node"), state["allocation"])
     record["state"] = "ready"
     record["ready"] = True
     record["ready_at_ns"] = time.time_ns()
@@ -872,16 +894,16 @@ def _withdraw_directory_connection(state):
 
 
 def _component_ready(component, state):
+    if state.get("dry_run"):
+        if component["role"] == "prte-dvm":
+            path = Path(component["uri_path"])
+            return path.exists() and path.stat().st_size > 0
+        return _ready_file(Path(component["ready_file"]))
+    if _component_process_status(component, state) != "alive":
+        return False
     if component["role"] == "prte-dvm":
         path = Path(component["uri_path"])
         return path.exists() and path.stat().st_size > 0
-    if state.get("dry_run"):
-        return _ready_file(Path(component["ready_file"]))
-    pid = component.get("pid")
-    if pid is None:
-        return False
-    if not _pid_alive(pid, component.get("node"), state["allocation"]):
-        return False
     return _ready_file(Path(component["ready_file"]))
 
 
@@ -891,28 +913,26 @@ def _recorded_instance_active(state):
             continue
         if _component_ready(component, state):
             return True
-        if component.get("role") == "prte-dvm":
-            continue
-        pid = component.get("pid")
-        if pid is not None and _pid_alive(
-                pid, component.get("node"), state["allocation"]):
+        if _component_process_status(component, state) == "alive":
             return True
     return False
 
 
 def _observed_component_state(component, state, ready):
     if ready:
+        component["liveness"] = "alive"
         return "ready"
     previous = component.get("state")
-    if component.get("role") == "prte-dvm":
+    if state.get("dry_run"):
         return "stale"
-    pid = component.get("pid")
-    alive = pid is not None and _pid_alive(
-        pid, component.get("node"), state["allocation"])
-    if previous == "starting" and alive:
+    liveness = _component_process_status(component, state)
+    component["liveness"] = liveness
+    if liveness in {"dead", "identity-mismatch"}:
+        return "dead"
+    if liveness != "alive":
+        return "stale"
+    if previous == "starting":
         return "starting"
-    if not alive:
-        return "stale"
     return "not-ready"
 
 
@@ -929,10 +949,14 @@ def _stop_components(state):
             if component["role"] == "prte-dvm":
                 _stop_prte(
                     component, state, _stopped_service_environment(state))
-            elif not state.get("dry_run") and component.get("pid") is not None:
+            elif (
+                not state.get("dry_run")
+                and _component_process_status(component, state) == "alive"
+            ):
                 _terminate_pid(
                     int(component["pid"]), component.get("node"),
                     state["allocation"])
+            _discard_component_control_files(component)
             component["ready"] = False
             component["state"] = "stopped"
             component["stopped_at_ns"] = time.time_ns()
@@ -956,17 +980,89 @@ def _stopped_service_environment(state):
 
 def _stop_prte(component, state, environment=None):
     uri_path = Path(component["uri_path"])
-    if not uri_path.exists() or state.get("dry_run"):
-        uri_path.unlink(missing_ok=True)
+    if state.get("dry_run"):
+        _discard_component_control_files(component)
         return
-    environment = environment or os.environ.copy()
-    command = [
-        _command_path("pterm", env=environment),
-        "--dvm", f"file:{uri_path}",
-    ]
-    _run_on_node(component.get("node"), command, environment,
-                 state["allocation"])
-    uri_path.unlink(missing_ok=True)
+    live = _component_process_status(component, state) == "alive"
+    try:
+        if live:
+            if uri_path.exists():
+                environment = environment or os.environ.copy()
+                command = [
+                    _command_path("pterm", env=environment),
+                    "--dvm", f"file:{uri_path}",
+                ]
+                try:
+                    _run_on_node(component.get("node"), command, environment,
+                                 state["allocation"])
+                except ServicePlaneError:
+                    pass
+            if _component_process_status(component, state) == "alive":
+                _terminate_pid(
+                    int(component["pid"]), component.get("node"),
+                    state["allocation"])
+    finally:
+        _discard_component_control_files(component)
+
+
+def _discard_stale_control_files(state):
+    if state.get("configuration", {}).get("components", {}).get("directory"):
+        _withdraw_directory_connection(state)
+    for component in state.get("components", {}).values():
+        _discard_component_control_files(component)
+
+
+def _discard_component_control_files(component):
+    for key in ("pid_file", "ready_file", "service_ready_file", "uri_path"):
+        selected = component.get(key)
+        if selected:
+            Path(selected).unlink(missing_ok=True)
+
+
+def _require_process_identity(pid, node, allocation):
+    identity = _read_process_identity(pid, node, allocation)
+    if identity is None:
+        raise ServicePlaneError(
+            f"launched process {pid} on {node or 'localhost'} is not alive")
+    return identity
+
+
+def _component_process_status(component, state):
+    pid = component.get("pid")
+    expected = component.get("process_identity")
+    if pid is None or not expected:
+        return "missing"
+    observed = _read_process_identity(
+        pid, component.get("node"), state["allocation"])
+    if observed is None:
+        return "dead"
+    if not qfw_process_state.identities_match(expected, observed):
+        return "identity-mismatch"
+    return "alive"
+
+
+def _read_process_identity(pid, node, allocation):
+    if allocation.get("mode") not in {"slurm", "heterogeneous"}:
+        return qfw_process_state.local_process_identity(pid)
+    launch = _node_launch(
+        node,
+        [sys.executable or "python3", "-m", "qfw_runtime.process_state",
+         str(pid)],
+        allocation,
+    )
+    result = subprocess.run(
+        launch,
+        env=os.environ.copy(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
 
 
 def _terminate_pid(pid, node, allocation):
@@ -1013,20 +1109,6 @@ def _signal_local_pid(pid, sig):
         pass
 
 
-def _pid_alive(pid, node, allocation):
-    if allocation.get("mode") not in {"slurm", "heterogeneous"}:
-        return _local_pid_alive(pid)
-    result = _run_on_node(
-        node,
-        ["python3", "-c", "import os,sys; os.kill(int(sys.argv[1]), 0)",
-         str(pid)],
-        os.environ.copy(),
-        allocation,
-        check=False,
-    )
-    return result.returncode == 0
-
-
 def _local_pid_alive(pid):
     try:
         os.kill(int(pid), 0)
@@ -1046,6 +1128,17 @@ def _ready_file(path):
 
 
 def _run_on_node(node, command, env, allocation, check=True):
+    launch = _node_launch(node, command, allocation)
+    result = subprocess.run(launch, env=env)
+    if check and result.returncode:
+        raise ServicePlaneError(
+            f"command failed with {result.returncode}: "
+            + " ".join(shlex.quote(str(item)) for item in launch)
+        )
+    return result
+
+
+def _node_launch(node, command, allocation):
     launch = list(command)
     mode = allocation.get("mode")
     if mode == "heterogeneous":
@@ -1059,13 +1152,7 @@ def _run_on_node(node, command, env, allocation, check=True):
             "srun", "--nodes=1", "--ntasks=1", "--nodelist", str(node),
             *launch,
         ]
-    result = subprocess.run(launch, env=env)
-    if check and result.returncode:
-        raise ServicePlaneError(
-            f"command failed with {result.returncode}: "
-            + " ".join(shlex.quote(str(item)) for item in launch)
-        )
-    return result
+    return launch
 
 
 def _group_for_node(node, allocation):

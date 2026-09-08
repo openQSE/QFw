@@ -12,7 +12,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
 
+from qfw_runtime import process_state
 from qfw_runtime import service_plane
+
+
+def process_identity(pid):
+    return {
+        "pid": int(pid),
+        "boot_id": "test-boot-id",
+        "start_time_ticks": int(pid) * 10,
+    }
 
 
 def write_site_configuration(tmp_path, services):
@@ -80,12 +89,15 @@ def test_empty_run_dir_is_rejected(capsys):
 
 def test_stop_prte_reloads_recorded_environment_modules(tmp_path, monkeypatch):
     uri_path = tmp_path / "dvm-uri"
+    pid_file = tmp_path / "pid"
     uri_path.write_text("uri", encoding="utf-8")
+    pid_file.write_text("7101\n", encoding="utf-8")
     state = {
         "services": [{"environment_modules": ["openmpi", "nwqsim"]}],
         "allocation": {"mode": "local"},
     }
     loaded = {}
+    terminated = []
 
     def load_modules(modules, environment):
         loaded["modules"] = modules
@@ -100,11 +112,23 @@ def test_stop_prte_reloads_recorded_environment_modules(tmp_path, monkeypatch):
         service_plane.qfw_environment_modules, "load_modules", load_modules)
     monkeypatch.setattr(service_plane, "_run_on_node", run_on_node)
     monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda *_args: process_identity(7101))
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *args: terminated.append(args))
+    monkeypatch.setattr(
         service_plane, "_command_path",
         lambda name, env=None: f"/service/bin/{name}")
 
     service_plane._stop_prte(
-        {"uri_path": str(uri_path), "node": "sim-head"},
+        {
+            "uri_path": str(uri_path),
+            "pid_file": str(pid_file),
+            "pid": 7101,
+            "process_identity": process_identity(7101),
+            "node": "sim-head",
+        },
         state,
         service_plane._stopped_service_environment(state),
     )
@@ -115,6 +139,43 @@ def test_stop_prte_reloads_recorded_environment_modules(tmp_path, monkeypatch):
         "/service/bin/pterm", "--dvm", f"file:{uri_path}"
     ]
     assert loaded["environment"]["PATH"] == "/service/bin"
+    assert terminated == [(7101, "sim-head", {"mode": "local"})]
+
+
+def test_stop_prte_retires_stale_uri_when_pterm_fails(tmp_path, monkeypatch):
+    uri_path = tmp_path / "dvm-uri"
+    pid_file = tmp_path / "pid"
+    uri_path.write_text("stale-uri", encoding="utf-8")
+    pid_file.write_text("7102\n", encoding="utf-8")
+    terminated = []
+
+    def fail_to_stop(*_args, **_kwargs):
+        raise service_plane.ServicePlaneError("DVM is no longer reachable")
+
+    monkeypatch.setattr(service_plane, "_run_on_node", fail_to_stop)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda *_args: process_identity(7102))
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *args: terminated.append(args))
+    monkeypatch.setattr(
+        service_plane, "_command_path", lambda name, env=None: f"/bin/{name}")
+
+    service_plane._stop_prte(
+        {
+            "uri_path": str(uri_path),
+            "pid_file": str(pid_file),
+            "pid": 7102,
+            "process_identity": process_identity(7102),
+            "node": "sim-head",
+        },
+        {"allocation": {"mode": "local"}},
+    )
+
+    assert not uri_path.exists()
+    assert not pid_file.exists()
+    assert terminated == [(7102, "sim-head", {"mode": "local"})]
 
 
 def test_status_identifies_stale_process_state(tmp_path, monkeypatch):
@@ -139,7 +200,8 @@ def test_status_identifies_stale_process_state(tmp_path, monkeypatch):
             }
         },
     }
-    monkeypatch.setattr(service_plane, "_pid_alive", lambda *_args: False)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", lambda *_args: None)
     service_plane._write_state(state)
 
     observed = service_plane.status(run_dir)
@@ -174,7 +236,8 @@ def test_start_replaces_stale_manager_state(tmp_path, monkeypatch):
             }
         },
     }
-    monkeypatch.setattr(service_plane, "_pid_alive", lambda *_args: False)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", lambda *_args: None)
     service_plane._write_state(stale)
     args = parse_role_start_args(
         "directory",
@@ -188,6 +251,60 @@ def test_start_replaces_stale_manager_state(tmp_path, monkeypatch):
 
     assert started["state"] == "ready"
     assert set(started["components"]) == {"directory"}
+
+
+def test_start_removes_stale_markers_but_preserves_logs_and_state(
+        tmp_path, monkeypatch):
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text(
+        "resolver:\n  scope-order:\n    - site\n", encoding="utf-8")
+    run_dir = tmp_path / "stopped-run"
+    component_dir = run_dir / "services" / "old-qpm"
+    log_file = component_dir / "logs" / "service.log"
+    pid_file = component_dir / "pid"
+    ready_file = component_dir / "ready.json"
+    service_ready_file = component_dir / "service-ready.json"
+    log_file.parent.mkdir(parents=True)
+    log_file.write_text("diagnostic history\n", encoding="utf-8")
+    for path in (pid_file, ready_file, service_ready_file):
+        path.write_text("stale\n", encoding="utf-8")
+    stopped = {
+        "schema": service_plane.SCHEMA,
+        "run_dir": str(run_dir),
+        "state": "stopped",
+        "dry_run": False,
+        "allocation": {"mode": "local"},
+        "configuration": {"components": {"directory": False}},
+        "components": {
+            "qpm:old": {
+                "role": "qpm",
+                "state": "stopped",
+                "pid_file": str(pid_file),
+                "ready_file": str(ready_file),
+                "service_ready_file": str(service_ready_file),
+            }
+        },
+    }
+    service_plane._write_state(stopped)
+    old_state_path = run_dir / "state" / service_plane.STATE_NAME
+    args = parse_role_start_args(
+        "directory",
+        "--run-dir", str(run_dir),
+        "--site-config", str(site),
+        "--runtime-config", str(runtime),
+        "--dry-run",
+    )
+
+    started = service_plane.start(args)
+
+    assert started["state"] == "ready"
+    assert log_file.read_text(encoding="utf-8") == "diagnostic history\n"
+    assert not pid_file.exists()
+    assert not service_ready_file.exists()
+    assert old_state_path.exists()
 
 
 def test_site_dry_run_generates_state_and_supports_status_and_stop(
@@ -379,6 +496,9 @@ def test_directory_lifecycle_publishes_connection_record(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda pid, *_args: process_identity(pid))
     monkeypatch.setattr(service_plane, "_command_path", lambda name: name)
     monkeypatch.setattr(service_plane, "_terminate_pid", lambda *args: None)
     monkeypatch.setattr(service_plane, "_allocation_context", lambda: {
@@ -723,9 +843,14 @@ def test_prte_start_uses_keepalive_mode(tmp_path, monkeypatch):
     def fake_run_on_node(node, command, env, allocation, check=True):
         calls.append((node, list(command)))
         uri_path.write_text("test-dvm-uri\n", encoding="utf-8")
+        Path(command[command.index("--report-pid") + 1]).write_text(
+            "7201\n", encoding="utf-8")
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda pid, *_args: process_identity(pid))
     monkeypatch.setattr(
         service_plane, "_command_path", lambda name, env=None: name)
     monkeypatch.setattr(service_plane.os, "geteuid", lambda: 1000)
@@ -734,6 +859,7 @@ def test_prte_start_uses_keepalive_mode(tmp_path, monkeypatch):
 
     assert calls == [("sim-a", [
         "prte", "--host", "sim-a:*", "--report-uri", str(uri_path),
+        "--report-pid", str(uri_path.with_name("pid")),
         "--keepalive", "0", "--daemonize",
     ])]
 
@@ -772,6 +898,9 @@ def test_qpm_start_composes_private_process_launcher(tmp_path, monkeypatch):
 
     monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
     monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda pid, *_args: process_identity(pid))
+    monkeypatch.setattr(
         service_plane,
         "_terminate_pid",
         lambda pid, node, allocation: terminated.append((pid, node)),
@@ -799,6 +928,82 @@ def test_qpm_start_composes_private_process_launcher(tmp_path, monkeypatch):
     stopped = service_plane.stop(run_dir)
     assert stopped["state"] == "stopped"
     assert [pid for pid, _node in terminated] == [2001]
+
+
+def test_process_identity_distinguishes_reused_pid():
+    identity = process_state.local_process_identity(os.getpid())
+
+    assert identity is not None
+    assert process_state.identities_match(identity, identity)
+    reused = dict(identity)
+    reused["start_time_ticks"] += 1
+    assert not process_state.identities_match(identity, reused)
+
+
+def test_live_wrong_process_identity_is_dead(tmp_path, monkeypatch):
+    ready_file = tmp_path / "ready.json"
+    ready_file.write_text('{"ready": true}\n', encoding="utf-8")
+    component = {
+        "role": "qpm",
+        "state": "ready",
+        "pid": 7301,
+        "node": "qpm-a",
+        "process_identity": process_identity(7301),
+        "ready_file": str(ready_file),
+    }
+    state = {
+        "dry_run": False,
+        "allocation": {"mode": "local"},
+        "components": {"qpm:test": component},
+    }
+    wrong = process_identity(7301)
+    wrong["start_time_ticks"] += 1
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", lambda *_args: wrong)
+
+    assert service_plane._component_ready(component, state) is False
+    assert service_plane._recorded_instance_active(state) is False
+    assert service_plane._observed_component_state(
+        component, state, ready=False) == "dead"
+    assert component["liveness"] == "identity-mismatch"
+
+
+def test_stop_does_not_signal_reused_pid_and_removes_markers(
+        tmp_path, monkeypatch):
+    pid_file = tmp_path / "pid"
+    ready_file = tmp_path / "ready.json"
+    service_ready_file = tmp_path / "service-ready.json"
+    for path in (pid_file, ready_file, service_ready_file):
+        path.write_text("retained\n", encoding="utf-8")
+    component = {
+        "role": "qpm",
+        "state": "ready",
+        "pid": 7401,
+        "node": "qpm-a",
+        "process_identity": process_identity(7401),
+        "pid_file": str(pid_file),
+        "ready_file": str(ready_file),
+        "service_ready_file": str(service_ready_file),
+    }
+    state = {
+        "dry_run": False,
+        "allocation": {"mode": "local"},
+        "configuration": {"components": {"directory": False}},
+        "components": {"qpm:test": component},
+    }
+    wrong = process_identity(7401)
+    wrong["start_time_ticks"] += 1
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", lambda *_args: wrong)
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *_args: pytest.fail("a reused PID must not be signalled"))
+
+    assert service_plane._stop_components(state) == []
+    assert component["state"] == "stopped"
+    assert not pid_file.exists()
+    assert not ready_file.exists()
+    assert not service_ready_file.exists()
 
 
 def test_foreground_run_stops_on_sigterm(tmp_path):
