@@ -120,6 +120,7 @@ qfw_example_begin() {
 	QFW_EXAMPLE_TEARDOWN_DONE=0
 	QFW_EXAMPLE_RUNTIME_CONFIG=""
 	QFW_EXAMPLE_SITE_CONFIG=""
+	unset QFW_RUN_TMP_PATH
 	export QFW_EXAMPLE_NAME
 	trap 'qfw_example_exit "$?"' EXIT
 	qfw_example_emit "start" "running" 0 0
@@ -141,8 +142,16 @@ qfw_example_require_runtime() {
 
 qfw_example_setup() {
 	qfw_example_require_runtime
+	local setup_output
+	setup_output="$(qfw-setup "$@")" || return $?
+	printf '%s\n' "${setup_output}"
+	QFW_RUN_TMP_PATH="${setup_output##*$'\n'}"
+	if [[ -z "${QFW_RUN_TMP_PATH}" ]]; then
+		echo "ERROR: qfw-setup did not report a runtime directory" >&2
+		return 1
+	fi
+	export QFW_RUN_TMP_PATH
 	QFW_EXAMPLE_SETUP_STARTED=1
-	qfw-setup "$@"
 }
 
 qfw_example_make_local_runtime_config() {

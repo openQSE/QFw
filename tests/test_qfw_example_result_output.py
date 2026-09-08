@@ -118,6 +118,29 @@ qfw_example_setup_backend_service nwqsim
     assert "setup:--profile local --service-id nwqsim" in result.stdout
 
 
+def test_example_runtime_commands_use_the_setup_run_directory():
+    script = """
+source examples/qfw_example_common.sh
+qfw-setup() { printf '/tmp/qfw-run-one\n'; }
+qfw-srun() { printf 'srun:%s\n' "$QFW_RUN_TMP_PATH"; }
+qfw-teardown() { printf 'teardown:%s\n' "$QFW_RUN_TMP_PATH"; }
+qfw_example_setup
+qfw_example_srun application
+qfw_example_teardown
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "srun:/tmp/qfw-run-one" in result.stdout
+    assert "teardown:/tmp/qfw-run-one" in result.stdout
+
+
 def test_execution_options_reject_unknown_service_mode():
     script = """
 source examples/qfw_example_common.sh
