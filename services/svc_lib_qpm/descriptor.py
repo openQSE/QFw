@@ -43,17 +43,14 @@ def _selected_device(device_id):
 
 	path = device_access_config_path()
 	config = load_yaml_config(path)
-	if device_id:
-		old = os.environ.get(QPU_DEVICE_ENV)
-		os.environ[QPU_DEVICE_ENV] = device_id
-		try:
-			return select_qpu(config, path, provider=DEFAULT_PROVIDER)
-		finally:
-			if old is None:
-				os.environ.pop(QPU_DEVICE_ENV, None)
-			else:
-				os.environ[QPU_DEVICE_ENV] = old
-	return select_qpu(config, path, provider=DEFAULT_PROVIDER)
+	device_id = device_id or os.environ.get(QPU_DEVICE_ENV)
+	# The provider hint only disambiguates between devices when none is named.
+	# select_qpu also *validates* the selected device against it, so passing
+	# the default once a device has been named rejected every non-IQM device
+	# with "expected 'iqm'" no matter how it was configured. Once a device is
+	# named, honor the provider that device declares.
+	provider = None if device_id else DEFAULT_PROVIDER
+	return select_qpu(config, path, provider=provider, device_id=device_id)
 
 
 def resolve_descriptor(device_id=None):
@@ -69,4 +66,8 @@ def resolve_descriptor(device_id=None):
 			"execution-owner",
 			device.get("execution_owner", DEFAULT_EXECUTION_OWNER)),
 		"caps": _copy_caps(device.get("caps")),
+		# Which QRMI resource type to open. Optional: a provider serving
+		# exactly one resolves without it. See drivers/qrmi_driver.py.
+		"resource_type": (device.get("resource-type")
+			or device.get("resource_type")),
 	}

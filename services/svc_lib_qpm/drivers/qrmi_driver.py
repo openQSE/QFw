@@ -64,6 +64,27 @@ import time
 # Looked up by name at raise time, so a qrmi too old to define these (anything
 # before 0.24.0) simply never matches and every failure stays
 # DEFwExecutionError, exactly as before.
+# QRMI fronts several vendors behind one interface, and ResourceType selects
+# which backend a QuantumResource actually opens. Some providers publish more
+# than one, so a descriptor may name the type explicitly with resource-type;
+# a provider serving exactly one resolves on its own.
+#
+# An ambiguous provider is an error rather than a guess. Picking the wrong type
+# does not fail here, it fails much later as an authentication error against
+# the wrong endpoint, which is a bad trade for saving the user one config line.
+#
+# Names are resolved against the installed qrmi at call time rather than
+# imported, so a qrmi that does not carry one of these reports it as an
+# unknown type instead of failing at import.
+PROVIDER_RESOURCE_TYPES = {
+	"iqm": ("IQMServer",),
+	"ibm": ("IBMQiskitRuntimeService", "IBMQuantumComputeService",
+		"IBMQuantumSystem"),
+	"pasqal": ("PasqalCloud", "PasqalLocal"),
+	"alicebob": ("AliceBobFelis",),
+}
+
+
 def _not_implemented_by_library():
 	# Imported at call time, not at module scope. drivers/__init__ is imported
 	# while the svc_lib_qpm package is still initializing, so reaching up to a
@@ -251,12 +272,53 @@ class QrmiDriver(BaseDriver):
 				"device access (these are normally injected by the SPANK "
 				"plugin inside a reservation)")
 
+	def _resource_type(self, qrmi):
+		# Resolve the ResourceType this descriptor should open. Returns the
+		# name alongside the value so errors and logs can say which backend
+		# was attempted.
+		name = (self._descriptor.get("resource_type")
+			or self._descriptor.get("resource-type"))
+		provider = str(self._descriptor.get("provider") or "iqm").lower()
+		if not name:
+			candidates = PROVIDER_RESOURCE_TYPES.get(provider, ())
+			if len(candidates) == 1:
+				name = candidates[0]
+			elif candidates:
+				raise DEFwExecutionError(
+					f"provider {provider!r} serves more than one QRMI "
+					"resource type; set resource-type on the device "
+					"descriptor to one of: " + ", ".join(candidates))
+			else:
+				raise DEFwExecutionError(
+					"no QRMI resource type is known for provider "
+					f"{provider!r}; set resource-type on the device "
+					"descriptor")
+		resource_type = getattr(qrmi.ResourceType, str(name), None)
+		if resource_type is None:
+			available = ", ".join(sorted(
+				item for item in dir(qrmi.ResourceType)
+				if not item.startswith("_")))
+			raise DEFwExecutionError(
+				f"unknown QRMI resource type {str(name)!r}; the installed "
+				f"qrmi serves: {available}")
+		return str(name), resource_type
+
+	def _ensure_resource_env(self, type_name, alias, credential=None):
+		# Each resource type reads its own {backend}_QRMI_* variables, and only
+		# the IQM ones are populated from device-access config today. Other
+		# types rely on the environment already carrying them, from the SPANK
+		# plugin inside a reservation or from the operator. Extending this to
+		# the IBM and Pasqal variable sets is openQSE/QFw#59 blocker 2.
+		if type_name == "IQMServer":
+			self._ensure_iqm_isa_env(alias, credential=credential)
+
 	def _qpu(self, credential=None):
-		# Lazy: open the QRMI QuantumResource for this resource's IQM server.
-		# QRMI reads its credentials/config from the environment; target() is not
+		# Lazy: open the QRMI QuantumResource this descriptor names. QRMI reads
+		# its credentials/config from the environment; target() is not
 		# reservation-bound, so introspection works without acquire() as long as
-		# the endpoint/token env vars are present (_ensure_iqm_isa_env supplies
-		# them from device-access config when no reservation has).
+		# the resource type's env vars are present (_ensure_resource_env
+		# supplies the IQM ones from device-access config when no reservation
+		# has).
 		cache_key = self._credential_cache_key(credential)
 		if cache_key in self._resource_objs:
 			return self._resource_objs[cache_key]
@@ -266,15 +328,18 @@ class QrmiDriver(BaseDriver):
 			raise DEFwExecutionError(
 				"QRMI introspection needs a QFw device id; set "
 				"QFW_QPU_DEVICE_ID or configure a device descriptor")
-		self._ensure_iqm_isa_env(alias, credential=credential)
+		type_name, resource_type = self._resource_type(qrmi)
+		self._ensure_resource_env(type_name, alias, credential=credential)
 		try:
-			resource_obj = qrmi.QuantumResource(
-					alias, qrmi.ResourceType.IQMServer)
+			resource_obj = qrmi.QuantumResource(alias, resource_type)
 		except Exception as exc:
 			raise self._qrmi_error(
-				exc, f"failed to open QRMI IQM resource {alias!r}") from exc
+				exc,
+				f"failed to open QRMI {type_name} resource "
+				f"{alias!r}") from exc
 		self._resource_objs[cache_key] = resource_obj
-		logging.debug("shim: QRMI IQM resource opened (%s)", alias)
+		logging.debug(
+			"shim: QRMI resource opened (%s, %s)", type_name, alias)
 		return resource_obj
 
 	def _credential_cache_key(self, credential=None):
