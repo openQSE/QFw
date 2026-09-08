@@ -23,7 +23,7 @@ ZERO_UUID = str(uuid.UUID(int=0))
 SITE_REGISTRATION_STATE_ATTR = "_qfw_site_dirsvc_registrations"
 LOCAL_REGISTRATION_STATE_ATTR = "_qfw_local_dirsvc_registrations"
 SITE_REGISTRATION_LISTENER_ATTR = "_qfw_site_dirsvc_listener"
-SITE_REGISTRATION_RESTORE_THREAD_ATTR = "_qfw_site_dirsvc_restore_thread"
+SITE_REGISTRATION_MONITOR_THREAD_ATTR = "_qfw_site_dirsvc_monitor_thread"
 SITE_REGISTRATION_RETRY_SECONDS = 1
 _site_registration_lock = threading.RLock()
 
@@ -194,11 +194,14 @@ def _ensure_site_registration(defw_module):
 
 		peer = _site_registration_peer(defw_module)
 		for endpoint in _site_dirsvc_endpoints():
-			if endpoint in state:
-				continue
 			client = _site_dirsvc_client(defw_module, endpoint)
 			if client is None:
 				return False
+			registration = state.get(endpoint)
+			if isinstance(registration, dict) and \
+			   registration.get("client") is client:
+				continue
+			state.pop(endpoint, None)
 			registered = []
 			for record in records:
 				try:
@@ -213,7 +216,10 @@ def _ensure_site_registration(defw_module):
 					logging.exception(
 						"failed to register QPM service with site dirsvc")
 					return False
-			state[endpoint] = registered
+			state[endpoint] = {
+				"client": client,
+				"records": registered,
+			}
 		return True
 
 
@@ -229,30 +235,36 @@ def _invalidate_site_registration(defw_module, event):
 	)
 
 
-def _restore_site_registration(defw_module):
+def _maintain_site_registration(defw_module):
+	registered = False
 	while _site_registration_required() and not uq.qpm_shutdown:
-		if _listener_and_controller_ready(defw_module) and \
-		   _site_dirsvc_ready(defw_module) and \
-		   _ensure_site_registration(defw_module):
+		ready = (
+			_listener_and_controller_ready(defw_module) and
+			_site_dirsvc_ready(defw_module) and
+			_ensure_site_registration(defw_module)
+		)
+		if ready and not registered:
 			logging.info("restored QPM directory registration")
-			return
+		registered = ready
 		sleep(SITE_REGISTRATION_RETRY_SECONDS)
 
 
-def _start_site_registration_restore(defw_module):
+def _start_site_registration_monitor(defw_module):
+	if not _site_registration_required():
+		return
 	with _site_registration_lock:
 		thread = getattr(
-			defw_module, SITE_REGISTRATION_RESTORE_THREAD_ATTR, None)
+			defw_module, SITE_REGISTRATION_MONITOR_THREAD_ATTR, None)
 		if thread is not None and thread.is_alive():
 			return
 		thread = threading.Thread(
-			target=_restore_site_registration,
+			target=_maintain_site_registration,
 			args=(defw_module,),
-			name="qfw-site-registration-restore",
+			name="qfw-site-registration-monitor",
 			daemon=True,
 		)
 		setattr(
-			defw_module, SITE_REGISTRATION_RESTORE_THREAD_ATTR, thread)
+			defw_module, SITE_REGISTRATION_MONITOR_THREAD_ATTR, thread)
 		thread.start()
 
 
@@ -271,7 +283,7 @@ def _handle_defw_peer_lifecycle_event(defw_module, event):
 	}:
 		return
 	_invalidate_site_registration(defw_module, event)
-	_start_site_registration_restore(defw_module)
+	_start_site_registration_monitor(defw_module)
 
 
 def _install_defw_peer_lifecycle_hook(defw_module):
@@ -637,6 +649,7 @@ def initialize_qpm_service(defw_module, message):
 
 	_install_defw_directory_lifecycle_hook()
 	_install_defw_peer_lifecycle_hook(defw_module)
+	_start_site_registration_monitor(defw_module)
 	timeout = startup_timeout()
 	wait_reason = _startup_wait_reason(defw_module)
 	if wait_reason is not None:

@@ -289,7 +289,7 @@ def test_qpm_startup_restores_site_registration_after_dirsvc_reconnect(
 	restore_requests = []
 	monkeypatch.setattr(
 		startup,
-		"_start_site_registration_restore",
+		"_start_site_registration_monitor",
 		lambda defw_module: restore_requests.append(defw_module),
 	)
 
@@ -306,6 +306,34 @@ def test_qpm_startup_restores_site_registration_after_dirsvc_reconnect(
 
 	fake_defw.dirsvc = second_dirsvc
 	assert startup._ensure_site_registration(fake_defw) is True
+	assert len(first_dirsvc.registrations) == 1
+	assert len(second_dirsvc.registrations) == 1
+
+
+def test_qpm_startup_restores_site_registration_when_reconnect_event_is_missed(
+		monkeypatch):
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+
+	reset_qpm_state(uq)
+	first_dirsvc = FakeSiteDirSvc()
+	second_dirsvc = FakeSiteDirSvc()
+	fake_defw = FakeDefw(
+		site_ready={"site-a"},
+		site_dirsvc=first_dirsvc,
+		records=[site_qpm_record()],
+	)
+	monkeypatch.setenv("QFW_QPM_OPERATION_MODE", "long-running")
+	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
+
+	assert startup._ensure_site_registration(fake_defw) is True
+	assert len(first_dirsvc.registrations) == 1
+
+	# DEFw replaces this proxy after reconnecting. The persistent monitor must
+	# notice the new client even when a peer event races with listener setup.
+	fake_defw.dirsvc = second_dirsvc
+	assert startup._ensure_site_registration(fake_defw) is True
+
 	assert len(first_dirsvc.registrations) == 1
 	assert len(second_dirsvc.registrations) == 1
 
@@ -333,7 +361,7 @@ def test_qpm_startup_ignores_non_directory_peer_events(monkeypatch):
 	restore_requests = []
 	monkeypatch.setattr(
 		startup,
-		"_start_site_registration_restore",
+		"_start_site_registration_monitor",
 		lambda defw_module: restore_requests.append(defw_module),
 	)
 
