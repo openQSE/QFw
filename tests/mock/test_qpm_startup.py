@@ -124,6 +124,7 @@ def test_service_record_enriches_metadata_advertisement(monkeypatch):
 def reset_qpm_state(uq):
 	uq.qpm_initialized = False
 	uq.qpm_shutdown = False
+	uq.qpm_directory_registered = False
 
 
 def test_qpm_startup_waits_for_dirsvc_by_default(monkeypatch):
@@ -289,7 +290,7 @@ def test_qpm_startup_restores_site_registration_after_dirsvc_reconnect(
 	restore_requests = []
 	monkeypatch.setattr(
 		startup,
-		"_start_site_registration_monitor",
+		"_start_registration_monitor",
 		lambda defw_module: restore_requests.append(defw_module),
 	)
 
@@ -338,6 +339,54 @@ def test_qpm_startup_restores_site_registration_when_reconnect_event_is_missed(
 	assert len(second_dirsvc.registrations) == 1
 
 
+def test_qpm_startup_restores_local_registration_after_dirsvc_reconnect(
+		monkeypatch):
+	import sys
+	from types import SimpleNamespace
+
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+
+	reset_qpm_state(uq)
+	first_dirsvc = FakeSiteDirSvc()
+	second_dirsvc = FakeSiteDirSvc()
+	fake_defw = FakeDefw(
+		dirsvc=first_dirsvc,
+		records=[site_qpm_record()],
+	)
+	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
+	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
+	monkeypatch.setitem(sys.modules, "defw_workers", SimpleNamespace(
+		is_dirsvc_peer_event=lambda event:
+			event.get("node_type") == "directory",
+	))
+	restore_requests = []
+	monkeypatch.setattr(
+		startup,
+		"_start_registration_monitor",
+		lambda defw_module: restore_requests.append(defw_module),
+	)
+
+	assert startup._ensure_local_registration(fake_defw) is True
+	assert startup._ensure_local_registration(fake_defw) is True
+	assert len(first_dirsvc.registrations) == 1
+	assert uq.qpm_directory_registered is True
+
+	startup._handle_defw_peer_lifecycle_event(fake_defw, {
+		"event_type": "PEER_LOST",
+		"node_type": "directory",
+	})
+	assert getattr(
+		fake_defw, startup.LOCAL_REGISTRATION_STATE_ATTR) == {}
+	assert uq.qpm_directory_registered is False
+	assert restore_requests == [fake_defw]
+
+	fake_defw.dirsvc = second_dirsvc
+	assert startup._ensure_local_registration(fake_defw) is True
+	assert len(second_dirsvc.registrations) == 1
+	assert uq.qpm_directory_registered is True
+
+
 def test_qpm_startup_ignores_non_directory_peer_events(monkeypatch):
 	import sys
 	from types import SimpleNamespace
@@ -361,7 +410,7 @@ def test_qpm_startup_ignores_non_directory_peer_events(monkeypatch):
 	restore_requests = []
 	monkeypatch.setattr(
 		startup,
-		"_start_site_registration_monitor",
+		"_start_registration_monitor",
 		lambda defw_module: restore_requests.append(defw_module),
 	)
 

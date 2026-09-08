@@ -48,6 +48,7 @@ QPM_CATEGORY_API_BINDINGS = (
 )
 qpm_initialized = False
 qpm_shutdown = False
+qpm_directory_registered = False
 
 
 class QPMEventDispatcher:
@@ -1007,9 +1008,13 @@ class UTIL_QPM:
 		}
 
 	def get_service_status(self, token=None):
-		return self.controller.get_service_status(
+		status = self.controller.get_service_status(
 			initialized=qpm_initialized,
 			provider_ready=self.qrc is not None)
+		status["directory_registered"] = bool(qpm_directory_registered)
+		status["ready"] = bool(
+			status["ready"] and qpm_directory_registered)
+		return status
 
 	def get_service_summary(self, token=None):
 		dvm_uri_path = os.environ.get("QFW_DVM_URI_PATH")

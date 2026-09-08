@@ -140,6 +140,7 @@ def _setup_qpm(monkeypatch):
 	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
+	monkeypatch.setattr(util_qpm, "qpm_directory_registered", True)
 
 
 def test_host_resources_default_to_service_host(monkeypatch):
