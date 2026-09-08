@@ -37,7 +37,24 @@ import time
 # "credentials rejected" from "that job is gone" without matching on message
 # text. This maps the classes that have an honest DEFw counterpart.
 #
-# Only three do. DEFw has no authentication, bad-input or configuration error,
+# QRMI 0.24.4 added default trait implementations: a vendor now overrides only
+# what its backend supports and the rest raise UnsupportedFunction. That has a
+# precise counterpart here. NotImplementedByLibrary is the shim's own
+# gap-map signal, raised by the Frontend when no wired library serves a call,
+# so a library saying "I do not implement this" is the same statement arriving
+# from the other direction.
+#
+# Mapping it is worth more than tidiness. The Frontend routes from a
+# hand-maintained capability map, and that map can disagree with the libraries
+# it describes. Before 0.24.4 that disagreement was invisible on this path:
+# acquire() on IQM returned a plausible UUID and the caller could not tell.
+# Now a library that does not implement a call says so, and translating it to
+# NotImplementedByLibrary means the descriptor claiming otherwise surfaces as
+# the gap it is, in the vocabulary the rest of the shim already uses, rather
+# than as a generic execution error a reader has to interpret.
+#
+# Only three of the remaining kinds have an honest DEFw counterpart. DEFw has
+# no authentication, bad-input or configuration error,
 # and inventing a mapping onto a DEFw type that means something else would make
 # the type less trustworthy than leaving it alone -- so everything else stays
 # DEFwExecutionError. The QRMI class name goes into every message either way,
@@ -47,7 +64,18 @@ import time
 # Looked up by name at raise time, so a qrmi too old to define these (anything
 # before 0.24.0) simply never matches and every failure stays
 # DEFwExecutionError, exactly as before.
+def _not_implemented_by_library():
+	# Imported at call time, not at module scope. drivers/__init__ is imported
+	# while the svc_lib_qpm package is still initializing, so reaching up to a
+	# sibling module from here at import time couples this driver to that
+	# ordering for no benefit. The class is only ever needed to build an
+	# exception that is about to be raised.
+	from ..frontend import NotImplementedByLibrary
+	return NotImplementedByLibrary
+
+
 _QRMI_ERROR_MAP = (
+	("UnsupportedFunctionError", _not_implemented_by_library),
 	("ResourceNotFoundError", DEFwNotFound),
 	("TaskNotFoundError", DEFwNotFound),
 	("TaskNotReadyError", DEFwNotReady),
@@ -112,6 +140,10 @@ class QrmiDriver(BaseDriver):
 			for attr, defw_cls in _QRMI_ERROR_MAP:
 				cls = getattr(qrmi, attr, None)
 				if cls is not None and isinstance(exc, cls):
+					# A callable entry defers resolving the DEFw class (see
+					# _not_implemented_by_library); a class entry is used as is.
+					if not isinstance(defw_cls, type):
+						defw_cls = defw_cls()
 					return defw_cls(message)
 		return DEFwExecutionError(message)
 
