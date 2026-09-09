@@ -133,7 +133,10 @@ iterations="${QFW_RUN_ALL_ITERS:-1}"
 shots="${QFW_RUN_ALL_SHOTS:-128}"
 vqe_iterations="${QFW_RUN_ALL_VQE_ITERS:-1}"
 shim_lib="${QFW_RUN_ALL_SHIM_LIB:-qrmi}"
-timestamp="$(date +%Y%m%d-%H%M%S)"
+timestamp="$(date +%Y%m%d-%H%M%S-%N)"
+if [[ "${timestamp}" == *%N ]]; then
+	timestamp="$(date +%Y%m%d-%H%M%S)-$$"
+fi
 log_root="${QFW_RUN_BASE_DIR:-${TMPDIR:-/tmp}}/examples-run-${timestamp}"
 
 mkdir -p "${log_root}"
