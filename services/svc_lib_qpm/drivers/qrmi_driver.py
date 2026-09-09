@@ -76,6 +76,20 @@ import time
 # Names are resolved against the installed qrmi at call time rather than
 # imported, so a qrmi that does not carry one of these reports it as an
 # unknown type instead of failing at import.
+# QRMI names each IBM service's variables after the service, so the resource
+# type selects the family: {backend}_QRMI_IBM_<kind>_ENDPOINT and friends.
+IBM_RESOURCE_ENV_KINDS = {
+	"IBMQiskitRuntimeService": "QRS",
+	"IBMQuantumComputeService": "QCS",
+	"IBMQuantumSystem": "QS",
+}
+
+# IBM Cloud's IAM endpoint. QRMI trades the API key for a token there, with
+# grant_type urn:ibm:params:oauth:grant-type:apikey against /identity/token,
+# and that is the same host for every IBM service. Only a non-public IBM Cloud
+# needs it overridden, so it defaults rather than being required.
+IBM_DEFAULT_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+
 PROVIDER_RESOURCE_TYPES = {
 	"iqm": ("IQMServer",),
 	"ibm": ("IBMQiskitRuntimeService", "IBMQuantumComputeService",
@@ -215,7 +229,7 @@ class QrmiDriver(BaseDriver):
 					credential_handle=credential.get("credential_handle"))
 			except Exception as exc:
 				raise DEFwExecutionError(
-					"QRMI driver could not resolve IQM device access for "
+					"QRMI driver could not resolve device access for "
 					f"provider {provider!r}: set QFW_QC_URL/QFW_API_KEY or "
 					f"configure device access: {exc}") from exc
 			base_url = base_url or cfg.get("url")
@@ -304,13 +318,86 @@ class QrmiDriver(BaseDriver):
 		return str(name), resource_type
 
 	def _ensure_resource_env(self, type_name, alias, credential=None):
-		# Each resource type reads its own {backend}_QRMI_* variables, and only
-		# the IQM ones are populated from device-access config today. Other
-		# types rely on the environment already carrying them, from the SPANK
-		# plugin inside a reservation or from the operator. Extending this to
-		# the IBM and Pasqal variable sets is openQSE/QFw#59 blocker 2.
+		# Each resource type reads its own {backend}_QRMI_* variables. Populate
+		# the families we can resolve; Pasqal and Alice & Bob have no
+		# device-access mapping yet and rely on the environment already
+		# carrying theirs, from the SPANK plugin or the operator.
 		if type_name == "IQMServer":
 			self._ensure_iqm_isa_env(alias, credential=credential)
+			return
+		kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
+		if kind:
+			self._ensure_ibm_env(kind, alias, credential=credential)
+
+	def _ensure_ibm_env(self, kind, alias, credential=None):
+		# QRMI's IBM resources read endpoint, IAM endpoint, API key and service
+		# CRN at construction, so resolve whatever is missing before opening
+		# one. Never override what is already set: inside a reservation the
+		# SPANK plugin owns these.
+		#
+		# The endpoint and API key come from device-access config, the same
+		# source the IQM path uses. The service CRN and the IAM endpoint have
+		# no field in that config (#59 blocker 3), so they come from the
+		# environment, mirroring how _access falls back to QFW_QC_URL and
+		# QFW_API_KEY. That makes them process-wide rather than per-device,
+		# which is a real limitation and the reason blocker 3 still matters.
+		backend = alias.split(",")[0]
+		prefix = f"{backend}_QRMI_IBM_{kind}"
+		endpoint_var = f"{prefix}_ENDPOINT"
+		iam_endpoint_var = f"{prefix}_IAM_ENDPOINT"
+		apikey_var = f"{prefix}_IAM_APIKEY"
+		crn_var = f"{prefix}_SERVICE_CRN"
+
+		if not (os.environ.get(endpoint_var) and os.environ.get(apikey_var)):
+			try:
+				access = self._access(credential=credential)
+			except DEFwExecutionError:
+				# Fall through to the missing-variable report below, which
+				# names what to set. It is more actionable than a failure to
+				# resolve device access the caller may not be relying on.
+				access = {}
+			if not os.environ.get(endpoint_var) and access.get("base_url"):
+				os.environ[endpoint_var] = access["base_url"]
+			if not os.environ.get(apikey_var) and access.get("token"):
+				os.environ[apikey_var] = access["token"]
+
+		if not os.environ.get(iam_endpoint_var):
+			iam_endpoint = (os.environ.get("QFW_IBM_IAM_ENDPOINT")
+				or IBM_DEFAULT_IAM_ENDPOINT)
+			os.environ[iam_endpoint_var] = iam_endpoint
+
+		crn = os.environ.get("QFW_IBM_SERVICE_CRN")
+		if crn and not os.environ.get(crn_var):
+			os.environ[crn_var] = crn
+
+		# Object storage applies only to IBMQuantumSystem, which stages results
+		# through a bucket. No config field carries these either, and the other
+		# IBM services never read them, so they are environment-only and stay
+		# unset when absent rather than being required here.
+		if kind == "QS":
+			for suffix, source in (
+					("S3_ENDPOINT", "QFW_IBM_S3_ENDPOINT"),
+					("S3_BUCKET", "QFW_IBM_S3_BUCKET"),
+					("S3_REGION", "QFW_IBM_S3_REGION"),
+					("AWS_ACCESS_KEY_ID", "QFW_IBM_AWS_ACCESS_KEY_ID"),
+					("AWS_SECRET_ACCESS_KEY",
+						"QFW_IBM_AWS_SECRET_ACCESS_KEY")):
+				value = os.environ.get(source)
+				name = f"{prefix}_{suffix}"
+				if value and not os.environ.get(name):
+					os.environ[name] = value
+
+		missing = [name for name in (
+			endpoint_var, iam_endpoint_var, apikey_var, crn_var)
+			if not os.environ.get(name)]
+		if missing:
+			raise DEFwExecutionError(
+				"QRMI IBM access needs " + " and ".join(missing) +
+				"; the endpoint and API key come from device-access config or "
+				"QFW_QC_URL/QFW_API_KEY, and the service CRN from "
+				"QFW_IBM_SERVICE_CRN (no device-access field carries a CRN "
+				"yet, see openQSE/QFw#59). Inside a reservation the SPANK "
+				"plugin normally supplies all of these")
 
 	def _qpu(self, credential=None):
 		# Lazy: open the QRMI QuantumResource this descriptor names. QRMI reads
