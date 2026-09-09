@@ -304,6 +304,8 @@ class QPMLifecycleBinding:
 			return
 		if event.get("service_id") != self.service_id:
 			return
+		if not self._is_qpm_service_event(event):
+			return
 		with self._lock:
 			if (self._directory_runtime_id and
 					event.get("directory_runtime_id") !=
@@ -319,6 +321,18 @@ class QPMLifecycleBinding:
 				)
 		elif event.get("event") == SERVICE_DISCONNECTED:
 			self._disconnect_service(event)
+
+	def _is_qpm_service_event(self, event):
+		service_type = event.get("service_type")
+		if service_type is not None and service_type != QPM_SERVICE_TYPE:
+			return False
+		record = event.get("service_record")
+		if isinstance(record, dict):
+			record_service_type = record.get("service_type")
+			if (record_service_type is not None and
+					record_service_type != QPM_SERVICE_TYPE):
+				return False
+		return True
 
 	def _disconnect_service(self, event):
 		with self._lock:

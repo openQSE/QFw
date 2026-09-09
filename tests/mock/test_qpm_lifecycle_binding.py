@@ -335,3 +335,44 @@ def test_qpm_disconnect_wins_race_with_direct_binding_creation():
 	thread.join(timeout=1)
 	assert isinstance(result.get("error"), QPMBindingUnavailable)
 	binding.close()
+
+
+def test_lifecycle_binding_ignores_non_qpm_service_events():
+	defw = FakeDEFw()
+	peer_events = FakePeerEvents()
+	event_api = FakeEventAPI()
+	record = service_record()
+	directory = FakeDirectory(record)
+	binding = QPMLifecycleBinding(
+		"nwqsim",
+		defw_module=defw,
+		peer_events_module=peer_events,
+		event_api_factory=lambda: event_api,
+	)
+	binding.start(
+		directory=directory,
+		directory_runtime_id="directory-runtime-1",
+	)
+	api = binding.api("execution", expected_runtime_id="qpm-runtime-1")
+	assert api.identify() == ("qpm-runtime-1", "execution")
+
+	non_qpm_disconnect = disconnected_event(record)
+	non_qpm_disconnect["service_type"] = "defw.service"
+	event_api.put(non_qpm_disconnect)
+	time.sleep(0.05)
+	assert binding.snapshot()["available"]
+	assert api.identify() == ("qpm-runtime-1", "execution")
+
+	non_qpm_record = service_record(
+		runtime_id="launcher-runtime-1",
+		peer_handle="launcher-peer-1",
+		generation=2,
+	)
+	non_qpm_record["service_type"] = "defw.service"
+	non_qpm_connect = connected_event(non_qpm_record)
+	non_qpm_connect["service_type"] = "defw.service"
+	event_api.put(non_qpm_connect)
+	time.sleep(0.05)
+	assert binding.snapshot()["runtime_id"] == "qpm-runtime-1"
+	assert api.identify() == ("qpm-runtime-1", "execution")
+	binding.close()
