@@ -15,6 +15,41 @@ from . import config as qfw_config
 from util import device_access
 
 
+def _service_env_suffix(service_id):
+    return "".join(
+        character if character.isalnum() else "_"
+        for character in str(service_id).upper()
+    )
+
+
+def _service_env_override(service_id, name):
+    suffix = _service_env_suffix(service_id)
+    return os.environ.get(
+        f"QFW_SERVICE_{suffix}_{name}",
+        os.environ.get(f"QFW_SERVICE_{name}"),
+    )
+
+
+def _service_log_level(service_id, service=None):
+    service = service or {}
+    return (
+        _service_env_override(service_id, "DEFW_LOG_LEVEL")
+        or os.environ.get("DEFW_LOG_LEVEL")
+        or service.get("log-level")
+        or "error"
+    )
+
+
+def _service_py_loglevel(service_id, service=None, default="critical"):
+    service = service or {}
+    return (
+        _service_env_override(service_id, "DEFW_PY_LOGLEVEL")
+        or os.environ.get("DEFW_PY_LOGLEVEL")
+        or service.get("py-log-level")
+        or default
+    )
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] not in {"directory", "qpm"}:
@@ -92,9 +127,10 @@ def start_directory(argv):
         "DEFW_PARENT_HOSTNAME": dirsvc_host,
         "DEFW_PARENT_PORT": str(dirsvc_port),
         "DEFW_PARENT_NAME": dirsvc_name,
-        "DEFW_LOG_LEVEL": os.environ.get("DEFW_LOG_LEVEL", "error"),
+        "DEFW_LOG_LEVEL": _service_log_level(dirsvc_name),
         "DEFW_DISABLE_DIRSVC": "yes",
         "DEFW_LOG_DIR": str(log_dir),
+        "DEFW_PY_LOGLEVEL": _service_py_loglevel(dirsvc_name),
     })
     if args.site_config:
         env["QFW_SITE_CONFIG"] = str(qfw_config.resolve_site_config(
@@ -216,10 +252,12 @@ def start_qpm(argv):
         "DEFW_PARENT_HOSTNAME": dirsvc_host,
         "DEFW_PARENT_PORT": str(dirsvc_port),
         "DEFW_PARENT_NAME": dirsvc_name,
-        "DEFW_LOG_LEVEL": service.get("log-level", "error"),
+        "DEFW_LOG_LEVEL": _service_log_level(service_id, service),
         "DEFW_DISABLE_DIRSVC": "no",
         "DEFW_LOG_DIR": str(log_dir),
-        "DEFW_PY_LOGLEVEL": "debug,DEFW_ALL",
+        "DEFW_PY_LOGLEVEL": _service_py_loglevel(
+            service_id, service, "debug,DEFW_ALL"
+        ),
         "QFW_QPM_OPERATION_MODE": operation_mode,
         "QFW_QPM_SERVICE_ID": service_id,
         "QFW_QPM_SERVICE_MODULE": module,

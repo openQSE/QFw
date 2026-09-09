@@ -373,11 +373,37 @@ qfw_example_srun_with_modules() {
 	)
 }
 
+qfw_example_archive_runtime_logs() {
+	local archive_dir="${QFW_EXAMPLE_LOG_ARCHIVE_DIR:-}"
+	local run_dir="${QFW_RUN_TMP_PATH:-}"
+	if [[ -z "${archive_dir}" || -z "${run_dir}" || ! -d "${run_dir}" ]]; then
+		return 0
+	fi
+	mkdir -p "${archive_dir}"
+	local relative target
+	while IFS= read -r -d '' relative; do
+		target="${archive_dir}/${relative#./}"
+		mkdir -p "$(dirname "${target}")"
+		cp -f "${run_dir}/${relative#./}" "${target}" || return 1
+	done < <(cd "${run_dir}" && find . -type f -name '*.log' -print0)
+}
+
+qfw_example_teardown_args() {
+	QFW_EXAMPLE_TEARDOWN_ARGS=()
+	case "${QFW_EXAMPLE_KEEP_RUN_DIR:-}" in
+		1|yes|true|on|y|YES|TRUE|ON|Y)
+			QFW_EXAMPLE_TEARDOWN_ARGS+=(--keep-run-dir)
+			;;
+	esac
+}
+
 qfw_example_teardown() {
 	if [[ "${QFW_EXAMPLE_SETUP_STARTED:-0}" == "1" &&
 	      "${QFW_EXAMPLE_TEARDOWN_DONE:-0}" == "0" ]]; then
 		QFW_EXAMPLE_TEARDOWN_DONE=1
-		qfw-teardown
+		qfw_example_archive_runtime_logs
+		qfw_example_teardown_args
+		qfw-teardown "${QFW_EXAMPLE_TEARDOWN_ARGS[@]}"
 	fi
 }
 
@@ -395,7 +421,9 @@ qfw_example_finish() {
 	if [[ "${QFW_EXAMPLE_SETUP_STARTED:-0}" == "1" &&
 	      "${QFW_EXAMPLE_TEARDOWN_DONE:-0}" == "0" ]]; then
 		QFW_EXAMPLE_TEARDOWN_DONE=1
-		qfw-teardown || teardown_rc=$?
+		qfw_example_archive_runtime_logs || teardown_rc=$?
+		qfw_example_teardown_args
+		qfw-teardown "${QFW_EXAMPLE_TEARDOWN_ARGS[@]}" || teardown_rc=$?
 	fi
 	if [[ -n "${QFW_EXAMPLE_RUNTIME_CONFIG:-}" &&
 	      -f "${QFW_EXAMPLE_RUNTIME_CONFIG}" ]]; then

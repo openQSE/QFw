@@ -89,6 +89,56 @@ def test_private_qpm_launcher_loads_service_paths_from_site(
     assert captured["env"]["QFW_SERVICE_CONFIG"] == str(manifest_path)
     assert captured["env"]["QFW_DEVICE_ACCESS_CFG"] == str(device_path)
     assert captured["env"]["QFW_SITE_CONFIG"] == str(site_path)
+    assert captured["env"]["DEFW_LOG_LEVEL"] == "error"
+    assert captured["env"]["DEFW_PY_LOGLEVEL"] == "debug,DEFW_ALL"
+
+
+def test_private_qpm_launcher_accepts_service_logging_overrides(
+        tmp_path, monkeypatch):
+    manifest_path = tmp_path / "site-services.yaml"
+    manifest_path.write_text(
+        "\n".join([
+            "services:",
+            "  - name: nwqsim",
+            "    module: svc_nwqsim_qpm",
+            "    credential-mode: no-secret",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(
+        "\n".join([
+            "directory-service:",
+            "  endpoint: 127.0.0.1:8090",
+            "service:",
+            f"  manifest: {manifest_path}",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_start(name, env, *args):
+        captured["name"] = name
+        captured["env"] = dict(env)
+        return 0
+
+    monkeypatch.setenv("QFW_SERVICE_DEFW_LOG_LEVEL", "all")
+    monkeypatch.setenv("QFW_SERVICE_DEFW_PY_LOGLEVEL", "debug,DEFW_ALL")
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", fake_start)
+
+    rc = process_launcher.start_qpm([
+        "--service-id", "nwqsim",
+        "--site-config", str(site_path),
+        "--run-dir", str(tmp_path / "run"),
+    ])
+
+    assert rc == 0
+    assert captured["name"] == "nwqsim"
+    assert captured["env"]["DEFW_LOG_LEVEL"] == "all"
+    assert captured["env"]["DEFW_PY_LOGLEVEL"] == "debug,DEFW_ALL"
 
 
 def test_private_qpm_launcher_rejects_removed_config_overrides(

@@ -141,6 +141,61 @@ qfw_example_teardown
     assert "teardown:/tmp/qfw-run-one" in result.stdout
 
 
+def test_example_teardown_archives_runtime_logs(tmp_path):
+    run_dir = tmp_path / "run"
+    log_dir = run_dir / "application" / "logs"
+    archive_dir = tmp_path / "archive"
+    log_dir.mkdir(parents=True)
+    (log_dir / "defw_py.log").write_text("python log\n", encoding="utf-8")
+    (log_dir / "defw_out.log").write_text("native log\n", encoding="utf-8")
+    script = f"""
+source examples/qfw_example_common.sh
+qfw-teardown() {{ printf 'teardown:%s\\n' "$*"; }}
+QFW_EXAMPLE_SETUP_STARTED=1
+QFW_EXAMPLE_TEARDOWN_DONE=0
+QFW_RUN_TMP_PATH={run_dir}
+QFW_EXAMPLE_LOG_ARCHIVE_DIR={archive_dir}
+qfw_example_teardown
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "teardown:" in result.stdout
+    assert (archive_dir / "application" / "logs" / "defw_py.log").read_text(
+        encoding="utf-8"
+    ) == "python log\n"
+    assert (archive_dir / "application" / "logs" / "defw_out.log").read_text(
+        encoding="utf-8"
+    ) == "native log\n"
+
+
+def test_example_teardown_can_keep_run_directory():
+    script = """
+source examples/qfw_example_common.sh
+qfw-teardown() { printf 'teardown:%s\n' "$*"; }
+QFW_EXAMPLE_SETUP_STARTED=1
+QFW_EXAMPLE_TEARDOWN_DONE=0
+QFW_EXAMPLE_KEEP_RUN_DIR=1
+qfw_example_teardown
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "teardown:--keep-run-dir" in result.stdout
+
+
 def test_execution_options_reject_unknown_service_mode():
     script = """
 source examples/qfw_example_common.sh
