@@ -1,8 +1,11 @@
 import pathlib
+import subprocess
 import sys
 import types
 import logging
 import ast
+
+import pytest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -679,3 +682,36 @@ _install_qiskit_stubs()
 
 if not hasattr(logging, "defw_app"):
 	logging.defw_app = lambda *args, **kwargs: None
+
+
+@pytest.fixture
+def run_example_script():
+	"""Run an examples/ shell script, returning its CompletedProcess.
+
+	These scripts shell out to a bare `python3` from PATH, so the interpreter
+	running their preflight is not the one running pytest. When that
+	interpreter cannot import yaml the script exits 2 and says so on its own
+	stderr, which subprocess.run(check=True) discards -- leaving only
+	"returned non-zero exit status 2" to work from. Skip that case with the
+	reason, and quote the child's output for every other failure.
+	"""
+	def _run(argv, env=None):
+		probe = subprocess.run(
+			["python3", "-c", "import yaml"],
+			capture_output=True, text=True)
+		if probe.returncode != 0:
+			pytest.skip(
+				"the python3 on PATH cannot import yaml, which these example "
+				"scripts need for their preflight: install PyYAML for it, or "
+				"put a virtualenv that has it first on PATH")
+		result = subprocess.run(
+			argv, capture_output=True, env=env, text=True)
+		if result.returncode != 0:
+			raise AssertionError(
+				"example script exited {}\ncommand: {}\n"
+				"--- stdout ---\n{}\n--- stderr ---\n{}".format(
+					result.returncode, " ".join(argv),
+					result.stdout, result.stderr))
+		return result
+
+	return _run
