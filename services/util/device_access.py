@@ -189,7 +189,8 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 	# rest -- a key present with a None value would otherwise defeat the
 	# `device.get(key, DEFAULT)` fallbacks. The native resolve_device_access
 	# path ignores these keys, so forwarding them here is harmless.
-	for key in ("libraries", "preference", "caps", "execution-owner", "execution_owner"):
+	for key in ("libraries", "preference", "caps", "execution-owner",
+			"execution_owner", "resource-type", "resource_type"):
 		if key in device:
 			selected[key] = device[key]
 
