@@ -82,7 +82,17 @@ jobs:
       # PyYAML is needed as well: the mock suite drives example scripts whose
       # preflight parses the site and device-access YAML, so without it
       # tests/mock/test_iqm_chem_driver_script.py fails on a missing module.
-      run: python -m pip install --upgrade pip pytest pyyaml
+      #
+      # The OpenTelemetry trio is needed by tests/test_qfw_telemetry.py. QFw
+      # degrades to no-op instrumentation when they are absent, so they are a
+      # soft dependency for running QFw, but the telemetry tests exercise the
+      # real sampler and import them for it. Versions match
+      # setup/requirements.txt.
+      run: |
+        python -m pip install --upgrade pip pytest pyyaml \
+          'opentelemetry-api>=1.44.0' \
+          'opentelemetry-sdk>=1.44.0' \
+          'opentelemetry-exporter-otlp-proto-common>=1.44.0'
 
     - name: Run ci-mock
       # The ci-mock helper mirrors the CI-safe mock pytest suite.

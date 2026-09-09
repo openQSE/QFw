@@ -1,6 +1,5 @@
 import json
 import os
-import subprocess
 from pathlib import Path
 
 SCRIPT = (
@@ -10,7 +9,8 @@ SCRIPT = (
 )
 
 
-def test_service_run_dir_overrides_environment_site_config(tmp_path):
+def test_service_run_dir_overrides_environment_site_config(
+		tmp_path, run_example_script):
 	service_run_dir = tmp_path / "services"
 	env_dir = service_run_dir / "env"
 	env_dir.mkdir(parents=True)
@@ -44,7 +44,7 @@ def test_service_run_dir_overrides_environment_site_config(tmp_path):
 
 	env = os.environ.copy()
 	env["QFW_SITE_CONFIG"] = str(tmp_path / "installed-default.yaml")
-	result = subprocess.run(
+	result = run_example_script(
 		[
 			"bash",
 			str(SCRIPT),
@@ -57,10 +57,7 @@ def test_service_run_dir_overrides_environment_site_config(tmp_path):
 			"--preflight-only",
 			"smoke.py",
 		],
-		check=True,
-		capture_output=True,
 		env=env,
-		text=True,
 	)
 
 	assert '"status": "ok"' in result.stdout
