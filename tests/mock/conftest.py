@@ -711,3 +711,5 @@ _install_qiskit_stubs()
 
 if not hasattr(logging, "defw_app"):
 	logging.defw_app = lambda *args, **kwargs: None
+if not hasattr(logging, "defw_service"):
+	logging.defw_service = lambda *args, **kwargs: None

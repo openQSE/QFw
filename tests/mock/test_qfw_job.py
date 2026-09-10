@@ -155,6 +155,49 @@ def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
 	assert len(backend.logged_results) == 1
 
 
+def test_qfw_job_decodes_compact_statevector_payload():
+	import qfw_qiskit.qfw_job as qfw_job
+	from util.qpm.statevector import encode_statevector_payload
+
+	backend = FakeBackend(statevector=True)
+	job = qfw_job.QFwJob(
+		backend,
+		FakeQPM(),
+		FakeEventAPI(),
+		qfw_job.QuantumCircuit(1, name="statevector"),
+		_driver_options(shots=1, seed=1, seed_simulator=1),
+	)
+	payload = encode_statevector_payload(
+		[complex(1.0, 0.0), complex(0.0, 0.0)], num_qubits=1)
+
+	counts, statevector, metadata = job._split_result_payload({
+		"counts": {"0": 1},
+		"statevector": payload,
+	}, cid="cid-statevector")
+
+	assert counts == {"0": 1}
+	assert metadata == {}
+	assert statevector.data == [complex(1.0, 0.0), complex(0.0, 0.0)]
+
+
+def test_compact_statevector_payload_compresses_sparse_data():
+	from util.qpm.statevector import (
+		decode_statevector_payload,
+		encode_statevector_payload,
+	)
+
+	amplitudes = [complex(0.0, 0.0)] * 1024
+	amplitudes[0] = complex(1.0, 0.0)
+
+	payload = encode_statevector_payload(amplitudes, num_qubits=10)
+	decoded = decode_statevector_payload(payload)
+
+	assert payload["encoding"] == "base64+zlib"
+	assert payload["raw_size_bytes"] == 1024 * 16
+	assert payload["base64_size_bytes"] < payload["raw_size_bytes"]
+	assert list(decoded) == amplitudes
+
+
 def test_qfw_job_result_raises_job_error_for_provider_failure(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 
