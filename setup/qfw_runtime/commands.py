@@ -18,6 +18,14 @@ COMMANDS = {
     "qfw-srun",
     "qfw-teardown",
 }
+PATH_ENVIRONMENT_VARS = {
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "MANPATH",
+}
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] not in COMMANDS:
@@ -127,8 +135,7 @@ def qfw_srun(argv):
             file=sys.stderr,
         )
         return 1
-    env = os.environ.copy()
-    env.update(state.get("environment") or {})
+    env = _application_environment(state)
     allocation = _allocation_context_from_env(env)
     _publish_allocation_environment(env, allocation)
     _configure_application_defw_environment(env, state)
@@ -145,6 +152,35 @@ def qfw_srun(argv):
         },
     )
     return subprocess.run(command, env=env).returncode
+
+
+def _application_environment(state):
+    caller_env = os.environ.copy()
+    runtime_env = state.get("environment") or {}
+    env = dict(caller_env)
+    env.update(runtime_env)
+    for name in PATH_ENVIRONMENT_VARS:
+        merged = _merge_path_environment(
+            caller_env.get(name),
+            runtime_env.get(name),
+        )
+        if merged:
+            env[name] = merged
+    return env
+
+
+def _merge_path_environment(caller_value, runtime_value):
+    values = []
+    seen = set()
+    for raw_value in (caller_value, runtime_value):
+        if not raw_value:
+            continue
+        for item in str(raw_value).split(os.pathsep):
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            values.append(item)
+    return os.pathsep.join(values)
 
 
 def qfw_teardown(argv):

@@ -538,6 +538,49 @@ def test_qfw_srun_runs_directly_for_local_allocation(tmp_path, monkeypatch):
     assert captured["argv"] == ["/usr/bin/defw-python", "app.py"]
 
 
+def test_qfw_srun_preserves_caller_module_paths(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    state_dir = run_dir / "state"
+    state_dir.mkdir(parents=True)
+    state = {
+        "setup_complete": True,
+        "run_dir": str(run_dir),
+        "environment": {
+            "QFW_ALLOCATION_MODE": "local",
+            "PATH": "/opt/openqse/qfw/bin:/usr/bin",
+            "LD_LIBRARY_PATH": "/opt/openqse/qfw/lib",
+        },
+    }
+    (state_dir / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    captured = {}
+
+    def fake_command_path(name, env=None):
+        assert name == "defw-python"
+        return Path("/usr/bin/defw-python")
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        captured["env"] = dict(env)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setenv(
+        "PATH", "/opt/qfw/openmpi/bin:/opt/openqse/qfw/bin:/usr/bin")
+    monkeypatch.setenv(
+        "LD_LIBRARY_PATH", "/opt/qfw/openmpi/lib:/opt/openqse/qfw/lib")
+    monkeypatch.setattr(commands, "_command_path", fake_command_path)
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    rc = commands.qfw_srun(["--run-dir", str(run_dir), "app.py"])
+
+    assert rc == 0
+    assert captured["argv"] == ["/usr/bin/defw-python", "app.py"]
+    assert captured["env"]["PATH"] == (
+        "/opt/qfw/openmpi/bin:/opt/openqse/qfw/bin:/usr/bin")
+    assert captured["env"]["LD_LIBRARY_PATH"] == (
+        "/opt/qfw/openmpi/lib:/opt/openqse/qfw/lib")
+
+
 def test_qfw_srun_configures_application_defw_environment(
         tmp_path, monkeypatch):
     run_dir = tmp_path / "run"
