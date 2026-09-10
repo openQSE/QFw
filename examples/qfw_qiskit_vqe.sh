@@ -14,6 +14,7 @@ qfw_example_setup_backend_service "${backend}"
 # takes the number of VQE iterations
 max_iter="${1:-50}"
 (
+	module load openmpi
 	export DEFW_ONLY_LOAD_MODULE=openmpi
 	qfw_example_srun_with_backend_reservation \
 		"${backend}" qiskit-vqe 4 1024 "${max_iter}" async_run \
