@@ -1,4 +1,3 @@
-from defw_agent_info import *  # noqa: F401,F403
 from defw_util import round_half_up, round_to_nearest_power_of_two
 import logging
 import time
@@ -7,11 +6,6 @@ import time
 MAX_PPN = 8
 # Maximum number of qubits per process
 MAX_QUBITS_PP = 10
-
-
-def set_max_ppn(ppn):
-	global MAX_PPN
-	MAX_PPN = ppn
 
 
 def set_max_qubits_pp(max_qubits):

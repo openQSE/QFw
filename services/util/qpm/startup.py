@@ -1,4 +1,3 @@
-import inspect
 import json
 import logging
 import os
@@ -12,9 +11,6 @@ from .controller import find_target_controller
 
 
 OPERATION_MODE_ENV = "QFW_QPM_OPERATION_MODE"
-REGISTER_WITH_DIRSVC_ENV = "QFW_QPM_REGISTER_WITH_DIRSVC"
-DIRECT_ENDPOINT_FALLBACK_ENV = "QFW_QPM_DIRECT_ENDPOINT_FALLBACK"
-DIRECT_QPM_ENDPOINT_ENV = "QFW_DIRECT_QPM_ENDPOINT"
 SITE_DIRSVC_ENDPOINTS_ENV = "QFW_SITE_DIRSVC_ENDPOINTS"
 STARTUP_TIMEOUT_ENV = "QFW_STARTUP_TIMEOUT"
 LOCAL_DIRSVC_ENDPOINT_ENV = "QFW_LOCAL_DIRSVC_ENDPOINT"
@@ -26,32 +22,16 @@ DEFAULT_STARTUP_TIMEOUT = 40
 ZERO_UUID = str(uuid.UUID(int=0))
 SITE_REGISTRATION_STATE_ATTR = "_qfw_site_dirsvc_registrations"
 LOCAL_REGISTRATION_STATE_ATTR = "_qfw_local_dirsvc_registrations"
-
-FALSE_VALUES = {"0", "false", "no", "off", "n"}
-TRUE_VALUES = {"1", "true", "yes", "on", "y"}
-
+REGISTRATION_LISTENER_ATTR = "_qfw_dirsvc_registration_listener"
+REGISTRATION_MONITOR_THREAD_ATTR = "_qfw_dirsvc_registration_monitor_thread"
+REGISTRATION_RETRY_SECONDS = 1
+_site_registration_lock = threading.RLock()
 
 def startup_timeout():
 	try:
 		return int(os.environ.get(STARTUP_TIMEOUT_ENV, DEFAULT_STARTUP_TIMEOUT))
 	except ValueError:
 		return DEFAULT_STARTUP_TIMEOUT
-
-
-def _env_flag(name, default=None):
-	value = os.environ.get(name)
-	if value is None:
-		return default
-	value = value.strip().lower()
-	if value in TRUE_VALUES:
-		return True
-	if value in FALSE_VALUES:
-		return False
-	return default
-
-
-def direct_endpoint_fallback_enabled():
-	return bool(_env_flag(DIRECT_ENDPOINT_FALLBACK_ENV, False))
 
 
 def operation_mode():
@@ -69,75 +49,23 @@ def site_dirsvc_endpoints_configured():
 	return bool(_site_dirsvc_endpoints())
 
 
-def register_with_dirsvc():
-	configured = _env_flag(REGISTER_WITH_DIRSVC_ENV, None)
-	if configured is not None:
-		return configured
-	if direct_endpoint_fallback_enabled():
-		return False
-	if long_running_mode_enabled():
-		return site_dirsvc_endpoints_configured()
-	return True
-
-
-def startup_config():
-	return {
-		"operation_mode": os.environ.get(
-			OPERATION_MODE_ENV,
-			DEFAULT_OPERATION_MODE,
-		).strip().lower(),
-		"register_with_dirsvc": register_with_dirsvc(),
-		"direct_endpoint_fallback": direct_endpoint_fallback_enabled(),
-		"direct_qpm_endpoint": os.environ.get(DIRECT_QPM_ENDPOINT_ENV, ""),
-		"site_dirsvc_endpoints": os.environ.get(SITE_DIRSVC_ENDPOINTS_ENV, ""),
-	}
-
-
-def startup_status(defw_module):
-	status = startup_config()
-	status.update({
-		"listener_ready": listener_ready(defw_module),
-		"controller_ready": controller_ready(defw_module),
-		"site_dirsvc_ready": _site_dirsvc_ready(defw_module),
-		"local_registration_required": _local_registration_required(),
-		"local_registration_ready": _local_registration_complete(defw_module),
-		"site_registration_required": _site_registration_required(),
-		"site_registration_ready": _site_registration_complete(defw_module),
-	})
-	return status
-
-
 def should_wait_for_dirsvc(defw_module):
-	if not register_with_dirsvc():
-		return False
 	return not _dirsvc_ready(defw_module)
 
 
 def listener_ready(defw_module):
-	return _readiness_hook(defw_module, (
-		"qpm_listener_ready",
-		"listener_ready",
-		"rpc_listener_ready",
-	), default=True)
+	return _readiness_hook(defw_module, "qpm_listener_ready")
 
 
 def controller_ready(defw_module):
-	return _readiness_hook(defw_module, (
-		"qpm_controller_ready",
-		"controller_ready",
-	), default=True)
+	return _readiness_hook(defw_module, "qpm_controller_ready")
 
 
-def _readiness_hook(defw_module, method_names, default):
-	for method_name in method_names:
-		method = getattr(defw_module, method_name, None)
-		if method is None:
-			continue
-		try:
-			return bool(method())
-		except TypeError:
-			return bool(method(defw_module))
-	return default
+def _readiness_hook(defw_module, method_name):
+	method = getattr(defw_module, method_name, None)
+	if method is None:
+		return True
+	return bool(method())
 
 
 def _listener_and_controller_ready(defw_module):
@@ -163,7 +91,7 @@ def _startup_wait_reason(defw_module):
 def _dirsvc_ready(defw_module):
 	if long_running_mode_enabled():
 		if not site_dirsvc_endpoints_configured():
-			return True
+			return False
 		return _site_dirsvc_ready(defw_module)
 	return getattr(defw_module, "dirsvc", None) is not None
 
@@ -177,34 +105,18 @@ def _site_dirsvc_ready(defw_module):
 
 
 def _site_dirsvc_endpoint_ready(defw_module, endpoint):
-	for method_name in (
-			"site_dirsvc_ready",
-			"dirsvc_ready",
-			"directory_ready"):
-		method = getattr(defw_module, method_name, None)
-		if method is None:
-			continue
-		try:
-			return bool(method(endpoint))
-		except TypeError:
-			return bool(method())
-	for attr_name in ("site_dirsvc", "dirsvc"):
-		client = getattr(defw_module, attr_name, None)
-		if client is not None:
-			return True
-	return False
+	return _site_dirsvc_client(defw_module, endpoint) is not None
 
 
 def _site_registration_required():
 	return (
 		long_running_mode_enabled() and
-		register_with_dirsvc() and
 		site_dirsvc_endpoints_configured()
 	)
 
 
 def _local_registration_required():
-	return register_with_dirsvc() and not long_running_mode_enabled()
+	return not long_running_mode_enabled()
 
 
 def _local_registration_ready(defw_module):
@@ -217,17 +129,8 @@ def _local_registration_ready(defw_module):
 	return _ensure_local_registration(defw_module)
 
 
-def _local_registration_complete(defw_module):
-	if not _local_registration_required():
-		return True
-	endpoint = _local_dirsvc_endpoint()
-	state = getattr(defw_module, LOCAL_REGISTRATION_STATE_ATTR, {})
-	if not isinstance(state, dict):
-		return False
-	return endpoint in state
-
-
 def _ensure_local_registration(defw_module):
+	uq.qpm_directory_registered = False
 	records = _site_registration_records(defw_module)
 	if not records:
 		logging.error("no QPM service records available for local registration")
@@ -238,18 +141,21 @@ def _ensure_local_registration(defw_module):
 	if not isinstance(state, dict):
 		state = {}
 		setattr(defw_module, LOCAL_REGISTRATION_STATE_ATTR, state)
-	if endpoint in state:
-		return True
-
 	client = getattr(defw_module, "dirsvc", None)
 	if client is None:
 		return False
+	registration = state.get(endpoint)
+	if isinstance(registration, dict) and \
+	   registration.get("client") is client:
+		uq.qpm_directory_registered = True
+		return True
+	state.pop(endpoint, None)
 	peer = _site_registration_peer(defw_module)
 	registered = []
 	for record in records:
 		try:
 			registered_record = _register_site_record(
-				client, record, peer, defw_module)
+				client, record, defw_module)
 			registered_records = _as_list(registered_record)
 			registered.extend(registered_records)
 			for lifecycle_record in registered_records or [record]:
@@ -259,7 +165,11 @@ def _ensure_local_registration(defw_module):
 			logging.exception(
 				"failed to register QPM service with local dirsvc")
 			return False
-	state[endpoint] = registered
+	state[endpoint] = {
+		"client": client,
+		"records": registered,
+	}
+	uq.qpm_directory_registered = True
 	return True
 
 
@@ -277,89 +187,170 @@ def _site_registration_ready(defw_module):
 	return _ensure_site_registration(defw_module)
 
 
-def _site_registration_complete(defw_module):
-	if not _site_registration_required():
-		return True
-	state = getattr(defw_module, SITE_REGISTRATION_STATE_ATTR, {})
-	if not isinstance(state, dict):
-		return False
-	return all(endpoint in state for endpoint in _site_dirsvc_endpoints())
-
-
 def _ensure_site_registration(defw_module):
-	records = _site_registration_records(defw_module)
-	if not records:
-		logging.error("no QPM service records available for site registration")
-		return False
-
-	state = getattr(defw_module, SITE_REGISTRATION_STATE_ATTR, None)
-	if not isinstance(state, dict):
-		state = {}
-		setattr(defw_module, SITE_REGISTRATION_STATE_ATTR, state)
-
-	peer = _site_registration_peer(defw_module)
-	for endpoint in _site_dirsvc_endpoints():
-		if endpoint in state:
-			continue
-		client = _site_dirsvc_client(defw_module, endpoint)
-		if client is None:
-			logging.error("site dirsvc %s is ready but no client is available",
-				      endpoint)
+	uq.qpm_directory_registered = False
+	with _site_registration_lock:
+		records = _site_registration_records(defw_module)
+		if not records:
+			logging.error(
+				"no QPM service records available for site registration")
 			return False
-		registered = []
-		for record in records:
-			try:
-				registered_record = _register_site_record(
-					client, record, peer, defw_module)
-				registered_records = _as_list(registered_record)
-				registered.extend(registered_records)
-				for lifecycle_record in registered_records or [record]:
-					_record_site_registration_lifecycle(
-						record, lifecycle_record, peer, endpoint)
-			except Exception:
-				logging.exception(
-					"failed to register QPM service with site dirsvc")
+
+		state = getattr(defw_module, SITE_REGISTRATION_STATE_ATTR, None)
+		if not isinstance(state, dict):
+			state = {}
+			setattr(defw_module, SITE_REGISTRATION_STATE_ATTR, state)
+
+		peer = _site_registration_peer(defw_module)
+		for endpoint in _site_dirsvc_endpoints():
+			client = _site_dirsvc_client(defw_module, endpoint)
+			if client is None:
 				return False
-		state[endpoint] = registered
+			registration = state.get(endpoint)
+			if isinstance(registration, dict) and \
+			   registration.get("client") is client:
+				continue
+			state.pop(endpoint, None)
+			registered = []
+			for record in records:
+				try:
+					registered_record = _register_site_record(
+						client, record, defw_module)
+					registered_records = _as_list(registered_record)
+					registered.extend(registered_records)
+					for lifecycle_record in registered_records or [record]:
+						_record_site_registration_lifecycle(
+							record, lifecycle_record, peer, endpoint)
+				except Exception:
+					logging.exception(
+						"failed to register QPM service with site dirsvc")
+					return False
+			state[endpoint] = {
+				"client": client,
+				"records": registered,
+			}
+		uq.qpm_directory_registered = True
+		return True
+
+
+def _invalidate_registration(defw_module, event):
+	uq.qpm_directory_registered = False
+	with _site_registration_lock:
+		for state_attr in (
+			SITE_REGISTRATION_STATE_ATTR,
+			LOCAL_REGISTRATION_STATE_ATTR,
+		):
+			state = getattr(defw_module, state_attr, None)
+			if isinstance(state, dict):
+				state.clear()
+	logging.warning(
+		"invalidated QPM directory registration after %s",
+		event.get("event_type", "directory-peer-change"),
+	)
+
+
+def _registration_required():
+	return _local_registration_required() or _site_registration_required()
+
+
+def _maintain_registration(defw_module):
+	registered = False
+	while _registration_required() and not uq.qpm_shutdown:
+		ready = (
+			_listener_and_controller_ready(defw_module) and
+			_dirsvc_ready(defw_module) and
+			_local_registration_ready(defw_module) and
+			_site_registration_ready(defw_module)
+		)
+		if ready and not registered:
+			logging.info("restored QPM directory registration")
+		registered = ready
+		sleep(REGISTRATION_RETRY_SECONDS)
+
+
+def _start_registration_monitor(defw_module):
+	if not _registration_required():
+		return
+	with _site_registration_lock:
+		thread = getattr(
+			defw_module, REGISTRATION_MONITOR_THREAD_ATTR, None)
+		if thread is not None and thread.is_alive():
+			return
+		thread = threading.Thread(
+			target=_maintain_registration,
+			args=(defw_module,),
+			name="qfw-directory-registration-monitor",
+			daemon=True,
+		)
+		setattr(
+			defw_module, REGISTRATION_MONITOR_THREAD_ATTR, thread)
+		thread.start()
+
+
+def _handle_defw_peer_lifecycle_event(defw_module, event):
+	if not _registration_required():
+		return
+	try:
+		import defw_workers
+		if not defw_workers.is_dirsvc_peer_event(event):
+			return
+	except Exception:
+		logging.exception("failed to classify DEFw peer lifecycle event")
+		return
+	if event.get("event_type") not in {
+		"PEER_READY", "PEER_LOST", "PEER_REMOVED",
+	}:
+		return
+	_invalidate_registration(defw_module, event)
+	_start_registration_monitor(defw_module)
+
+
+def _install_defw_peer_lifecycle_hook(defw_module):
+	try:
+		import defw_workers
+	except Exception:
+		return False
+	add_listener = getattr(defw_workers, "add_peer_event_listener", None)
+	if add_listener is None:
+		return False
+	listener = getattr(defw_module, REGISTRATION_LISTENER_ATTR, None)
+	if listener is not None:
+		return True
+	listener = lambda event: _handle_defw_peer_lifecycle_event(
+		defw_module, event)
+	try:
+		add_listener(listener)
+	except Exception:
+		logging.exception("failed to install DEFw peer lifecycle hook")
+		return False
+	setattr(defw_module, REGISTRATION_LISTENER_ATTR, listener)
 	return True
 
 
 def _site_registration_records(defw_module):
-	records = _call_or_read(defw_module, (
-		"qpm_site_service_records",
-		"site_service_records",
-		"service_records",
-	))
+	records = _call_or_read(defw_module, "qpm_site_service_records")
 	if records:
 		return [dict(record) for record in _as_list(records)]
 
-	infos = _call_or_read(defw_module, (
-		"qpm_site_service_info",
-		"site_service_info",
-		"service_info",
-	))
-	if not infos:
-		infos = _query_local_service_info(defw_module)
+	advertisements = _query_local_service_metadata(defw_module)
 	return [
-		_service_info_record(defw_module, info)
-		for info in _as_list(infos)
+		_service_record(defw_module, advertisement)
+		for advertisement in advertisements
 	]
 
 
-def _call_or_read(obj, names):
-	for name in names:
-		value = getattr(obj, name, None)
-		if value is None:
-			continue
-		return value() if callable(value) else value
-	return None
+def _call_or_read(obj, name):
+	value = getattr(obj, name, None)
+	if value is None:
+		return None
+	return value() if callable(value) else value
 
 
-def _query_local_service_info(defw_module):
+def _query_local_service_metadata(defw_module):
 	services = getattr(defw_module, "services", None)
 	if services is None:
 		return []
-	infos = []
+	advertisements = []
 	for _svc, module in services:
 		svc_info = getattr(module, "svc_info", {})
 		if svc_info.get("name") == "Directory Service":
@@ -367,36 +358,47 @@ def _query_local_service_info(defw_module):
 		for service_class in getattr(module, "service_classes", []):
 			try:
 				obj = service_class(start=False)
-				info = obj.query()
+				metadata = obj.query()
 			except Exception:
 				logging.exception("failed to query QPM service metadata")
 				continue
-			infos.extend(_as_list(info))
-	return infos
+			advertisements.extend(_as_list(metadata))
+	return advertisements
 
 
-def _service_info_record(defw_module, service_info):
-	properties = _service_info_properties(service_info)
+def _service_record(defw_module, advertisement):
+	if not isinstance(advertisement, dict):
+		raise TypeError("QPM service query must return a metadata dictionary")
+	advertisement = dict(advertisement)
+	properties = dict(advertisement.get("properties") or {})
 	lifecycle_service_id = os.environ.get("QFW_QPM_SERVICE_ID")
-	if lifecycle_service_id:
-		properties.setdefault("service_id", lifecycle_service_id)
-	capability, _, _ = _service_info_capability(service_info)
-	service_name = service_info.get_service_name()
+	service_id = lifecycle_service_id or advertisement.get("service_id") or \
+		properties.get("service_id")
+	if service_id:
+		properties["service_id"] = service_id
+	service_name = advertisement.get("service_name")
+	if not service_name:
+		raise ValueError("QPM service metadata missing service_name")
 	endpoint = _defw_endpoint(defw_module)
 	endpoint_record = _endpoint_record(endpoint)
-	qpm_type = properties.get("qpm_type", -1)
-	qpm_capabilities = properties.get(
-		"qpm_capabilities", properties.get("qpm_capability", -1))
+	qpm_type = advertisement.get(
+		"qpm_type", properties.get("qpm_type", -1))
+	qpm_capabilities = advertisement.get(
+		"qpm_capabilities", properties.get("qpm_capabilities", -1))
 	if qpm_type != -1:
 		properties.setdefault("qpm_type", qpm_type)
 	if qpm_capabilities != -1:
 		properties.setdefault("qpm_capabilities", qpm_capabilities)
-	service_id = properties.get("service_id") or \
+	service_id = service_id or \
 		f"{service_name}:{endpoint_record['hostname']}:{endpoint_record['node_name']}"
+	api_bindings = advertisement.get("api_bindings")
+	if not api_bindings:
+		raise ValueError("QPM service metadata missing api_bindings")
 	return {
 		"service_id": service_id,
 		"service_name": service_name,
-		"service_type": properties.get("service_type", "defw.service"),
+		"service_type": advertisement.get(
+			"service_type", properties.get("service_type", "defw.service")),
 		"runtime_id": (
 			properties.get("runtime_id") or
 			endpoint_record["runtime_id"]
@@ -406,114 +408,35 @@ def _service_info_record(defw_module, service_info):
 			_endpoint_attr(endpoint, "blk_uuid", ZERO_UUID)
 		),
 		"endpoint": endpoint_record,
-		"api_bindings": properties.get("api_bindings") or [
-			_default_api_binding(service_info, properties)
-		],
-		"selector": properties.get("selector", {"resources": [service_name]}),
+		"api_bindings": [dict(binding) for binding in api_bindings],
+		"selector": dict(
+			advertisement.get("selector") or
+			properties.get("selector") or
+			{"resources": [service_name]}),
 		"properties": properties,
-		"capability": capability,
+		"capability": dict(advertisement.get("capability") or {}),
 		"qpm_type": qpm_type,
 		"qpm_capabilities": qpm_capabilities,
 	}
 
 
-def _service_info_properties(service_info):
-	get_properties = getattr(service_info, "get_properties", None)
-	if not callable(get_properties):
-		return {}
-	return dict(get_properties() or {})
+def _site_dirsvc_client(defw_module, _endpoint):
+	return getattr(defw_module, "dirsvc", None)
 
 
-def _service_info_capability(service_info):
-	get_capabilities = getattr(service_info, "get_capabilities", None)
-	if not callable(get_capabilities):
-		return {}, -1, -1
-	capabilities = get_capabilities()
-	if capabilities is None:
-		return {}, -1, -1
-	capability = {}
-	get_capability_dict = getattr(capabilities, "get_capability_dict", None)
-	if callable(get_capability_dict):
-		capability = dict(get_capability_dict() or {})
-	return (
-		capability,
-		capabilities.get_cap_type(),
-		capabilities.get_caps(),
-	)
-
-
-def _default_api_binding(service_info, properties):
-	service_name = service_info.get_service_name()
-	return {
-		"binding_name": properties.get("binding_name", "execution"),
-		"client_module": properties.get(
-			"client_module", "api_qpm_execution"),
-		"client_class": properties.get("client_class", service_name),
-		"service_module": properties.get(
-			"service_module", service_info.get_module_name()),
-		"service_class": properties.get(
-			"service_class", service_info.get_class_name()),
-		"version": properties.get("binding_version", 1),
-	}
-
-
-def _site_dirsvc_client(defw_module, endpoint):
-	for method_name in (
-			"connect_to_site_dirsvc",
-			"site_dirsvc_client",
-			"connect_to_directory"):
-		method = getattr(defw_module, method_name, None)
-		if method is None:
-			continue
-		return method(endpoint)
-	for attr_name in ("site_dirsvc", "dirsvc"):
-		client = getattr(defw_module, attr_name, None)
-		if client is not None:
-			return client
-	connect_to_binding = getattr(defw_module, "connect_to_binding", None)
-	if connect_to_binding is not None:
-		return connect_to_binding(_directory_binding_record(endpoint))
-	return None
-
-
-def _register_site_record(client, record, peer, defw_module):
+def _register_site_record(client, record, defw_module):
 	register_service = getattr(client, "register_service", None)
-	if register_service is not None:
-		if _register_service_uses_context(register_service):
-			service_ep = _site_registration_service_endpoint(defw_module)
-			if service_ep is None:
-				raise AttributeError(
-					"QPM DEFw endpoint unavailable for site registration")
-			return register_service(
-				service_ep,
-				context=_site_registration_context(record),
-			)
-		return _register_raw_site_record(register_service, record, peer)
-
-	register = getattr(client, "register", None)
-	if register is not None:
-		return _register_raw_site_record(register, record, peer)
-	raise AttributeError("site dirsvc client does not expose register_service")
-
-
-def _register_service_uses_context(method):
-	try:
-		parameters = inspect.signature(method).parameters
-	except (TypeError, ValueError):
-		return True
-	if "context" in parameters:
-		return True
-	for parameter in parameters.values():
-		if parameter.kind == inspect.Parameter.VAR_KEYWORD:
-			return True
-	return False
-
-
-def _register_raw_site_record(method, record, peer):
-	try:
-		return method(record, peer=peer)
-	except TypeError:
-		return method(record)
+	if register_service is None:
+		raise AttributeError(
+			"site dirsvc client does not expose register_service")
+	service_ep = _site_registration_service_endpoint(defw_module)
+	if service_ep is None:
+		raise AttributeError(
+			"QPM DEFw endpoint unavailable for site registration")
+	return register_service(
+		service_ep,
+		context=_site_registration_context(record),
+	)
 
 
 def _site_registration_context(record):
@@ -531,11 +454,7 @@ def _site_registration_context(record):
 
 
 def _site_registration_service_endpoint(defw_module):
-	endpoint = _call_or_read(defw_module, (
-		"qpm_site_registration_endpoint",
-		"site_registration_endpoint",
-		"registration_endpoint",
-	))
+	endpoint = _call_or_read(defw_module, "qpm_site_registration_endpoint")
 	if _is_defw_service_endpoint(endpoint):
 		return endpoint
 	endpoint = _defw_endpoint(defw_module)
@@ -548,18 +467,13 @@ def _is_defw_service_endpoint(endpoint):
 	return endpoint is not None and hasattr(endpoint, "get_id")
 
 
-def _install_defw_directory_lifecycle_hook(defw_module):
-	directory_module = getattr(defw_module, "defw_directory", None)
-	if directory_module is None:
-		try:
-			import defw_directory as directory_module
-		except Exception:
-			return False
+def _install_defw_directory_lifecycle_hook():
+	try:
+		import defw_directory as directory_module
+	except Exception:
+		return False
 	add_listener = getattr(
 		directory_module, "add_lifecycle_listener", None)
-	if add_listener is None:
-		directory = getattr(directory_module, "directory", None)
-		add_listener = getattr(directory, "add_lifecycle_listener", None)
 	if add_listener is None:
 		return False
 	try:
@@ -599,21 +513,14 @@ def _controller_for_service_record(record):
 	properties = record.get("properties") or {}
 	if not isinstance(properties, dict):
 		return None
-	controller_telemetry = properties.get("controller") or {}
-	if not isinstance(controller_telemetry, dict):
-		return None
-	target_id = controller_telemetry.get("target_id")
+	target_id = properties.get("controller_target_id")
 	if target_id is None:
 		return None
 	return find_target_controller(target_id)
 
 
 def _site_registration_peer(defw_module):
-	peer = _call_or_read(defw_module, (
-		"qpm_site_registration_peer",
-		"site_registration_peer",
-		"registration_peer",
-	))
+	peer = _call_or_read(defw_module, "qpm_site_registration_peer")
 	if peer:
 		return dict(peer)
 	endpoint = _defw_endpoint(defw_module)
@@ -625,40 +532,11 @@ def _site_registration_peer(defw_module):
 	}
 
 
-def _directory_binding_record(endpoint):
-	endpoint_record = _endpoint_record(endpoint)
-	return {
-		"service_record": {
-			"service_id": f"dirsvc:{endpoint}",
-			"service_name": "DEFwDirSvc",
-			"service_type": "defw.dirsvc",
-			"runtime_id": endpoint_record["runtime_id"],
-			"endpoint": endpoint_record,
-			"selector": {
-				"resources": ["DEFwDirSvc"],
-				"aliases": ["dirsvc", "directory"],
-			},
-			"properties": {},
-		},
-		"selected_binding": {
-			"binding_name": "directory",
-			"client_module": "api_dirsvc",
-			"client_class": "DEFwDirSvc",
-			"service_module": "svc_dirsvc.svc_dirsvc",
-			"service_class": "DEFwDirSvc",
-			"version": 1,
-		},
-	}
-
-
 def _defw_endpoint(defw_module):
 	runtime = getattr(defw_module, "me", None)
-	if runtime is not None and hasattr(runtime, "my_endpoint"):
-		return runtime.my_endpoint()
-	method = getattr(defw_module, "my_endpoint", None)
-	if method is not None:
-		return method()
-	return "localhost:0"
+	if runtime is None or not hasattr(runtime, "my_endpoint"):
+		raise RuntimeError("DEFw runtime does not expose me.my_endpoint()")
+	return runtime.my_endpoint()
 
 
 def _endpoint_record(endpoint):
@@ -763,20 +641,6 @@ def _write_service_ready(message):
 		logging.exception("failed to write QPM service readiness file")
 
 
-def wait_for_dirsvc(defw_module, message, timeout=None):
-	deadline = None
-	if timeout is not None and timeout >= 0:
-		deadline = monotonic() + timeout
-	while not _dirsvc_ready(defw_module) and not uq.qpm_shutdown:
-		if deadline is not None and monotonic() >= deadline:
-			logging.error("timed out waiting for QPM directory service")
-			return
-		logging.debug("still waiting for dirsvc to come up")
-		sleep(1)
-	if not uq.qpm_shutdown:
-		complete_qpm_initialization(message)
-
-
 def wait_for_startup(defw_module, message, timeout=None):
 	deadline = None
 	if timeout is not None and timeout >= 0:
@@ -802,7 +666,9 @@ def initialize_qpm_service(defw_module, message):
 	if uq.qpm_initialized:
 		return "already-initialized"
 
-	_install_defw_directory_lifecycle_hook(defw_module)
+	_install_defw_directory_lifecycle_hook()
+	_install_defw_peer_lifecycle_hook(defw_module)
+	_start_registration_monitor(defw_module)
 	timeout = startup_timeout()
 	wait_reason = _startup_wait_reason(defw_module)
 	if wait_reason is not None:
@@ -815,4 +681,5 @@ def initialize_qpm_service(defw_module, message):
 
 def uninitialize_qpm_service(message):
 	uq.qpm_shutdown = True
+	uq.qpm_directory_registered = False
 	logging.debug(message)

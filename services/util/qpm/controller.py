@@ -20,6 +20,7 @@ from .admission import (
 	expire_reservations,
 	get_reservation,
 	list_reservations,
+	normalize_reservation_id,
 	record_actual,
 	register_device_profile,
 	release_reservation,
@@ -47,7 +48,11 @@ from .scheduler import (
 	QPMSchedulerError,
 	QPMSchedulerQueueEmpty,
 )
-from .credentials import bind_reservation_credential
+from .credentials import (
+	bind_reservation_credential,
+	validate_reservation_credential,
+)
+from .reservation_sequence import PersistentReservationSequence
 
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -95,13 +100,6 @@ TELEMETRY_CALLER_OWNED = "caller-owned"
 TELEMETRY_MANAGER_AGGREGATE = "manager-aggregate"
 TELEMETRY_OPERATOR = "operator"
 
-TELEMETRY_ACCESS_CLASSES = (
-	TELEMETRY_BASIC_DISCOVERY,
-	TELEMETRY_CALLER_OWNED,
-	TELEMETRY_MANAGER_AGGREGATE,
-	TELEMETRY_OPERATOR,
-)
-
 RESERVATION_BINDING_SCHEMA = "qfw-reservation-binding-v1"
 SENSITIVE_METADATA_KEY_PARTS = (
 	"api_key",
@@ -129,9 +127,9 @@ TELEMETRY_METHOD_LABELS = {
 	"get_coupling_graph": TELEMETRY_BASIC_DISCOVERY,
 	"get_task_timing": TELEMETRY_CALLER_OWNED,
 	"get_task_metadata": TELEMETRY_CALLER_OWNED,
-	"get_task_metadata": TELEMETRY_CALLER_OWNED,
 	"get_capacity_snapshot": TELEMETRY_MANAGER_AGGREGATE,
 	"get_queue_metrics": TELEMETRY_MANAGER_AGGREGATE,
+	"list_scheduler_allocations": TELEMETRY_MANAGER_AGGREGATE,
 	"get_service_lifecycle_telemetry": TELEMETRY_OPERATOR,
 	"get_scheduler_queue_state": TELEMETRY_MANAGER_AGGREGATE,
 	"get_scheduler_status": TELEMETRY_OPERATOR,
@@ -140,9 +138,16 @@ TELEMETRY_METHOD_LABELS = {
 }
 
 
+def _normalize_optional_reservation_id(reservation_id):
+	if reservation_id is None:
+		return None
+	return normalize_reservation_id(reservation_id)
+
+
 @dataclass(frozen=True)
 class QPMControllerConfig:
 	target_id: str
+	credential_mode: str = "no-secret"
 	admission_threading_mode: str = DEFAULT_ADMISSION_THREADING_MODE
 	scheduler_threading_mode: str = DEFAULT_SCHEDULER_THREADING_MODE
 	serialization_mode: str = DEFAULT_CONTROLLER_SERIALIZATION_MODE
@@ -150,6 +155,7 @@ class QPMControllerConfig:
 	def telemetry(self):
 		return {
 			"target_id": self.target_id,
+			"credential_mode": self.credential_mode,
 			"admission_threading_mode": self.admission_threading_mode,
 			"scheduler_threading_mode": self.scheduler_threading_mode,
 			"serialization_mode": self.serialization_mode,
@@ -230,6 +236,7 @@ class QPMTargetController:
 		self.event_endpoints = {}
 		self.callback_endpoints = {}
 		self.provider_canceller = None
+		self.provider_credential_evictor = None
 		self.timeout_state = {}
 		self.result_state = {}
 		self.completion_retention = completion_retention_config()
@@ -250,7 +257,9 @@ class QPMTargetController:
 		self.admission_request_id_next = 1
 		self.reservation_metadata_by_id = {}
 		self.reservation_credentials_by_id = {}
+		self.credential_cleanup_queue = []
 		self.reservation_close_state = {}
+		self.reservation_sequence = self._create_reservation_sequence()
 		self.device_profile = None
 		self.admission_configuration = {}
 		self.scheduler_policy = normalize_scheduler_policy(None)
@@ -288,6 +297,10 @@ class QPMTargetController:
 	def set_provider_canceller(self, provider_canceller):
 		with self.lock:
 			self.provider_canceller = provider_canceller
+
+	def set_provider_credential_evictor(self, evictor):
+		with self.lock:
+			self.provider_credential_evictor = evictor
 
 	def telemetry(self):
 		info = self.config.telemetry()
@@ -363,6 +376,90 @@ class QPMTargetController:
 					self.reservation_metadata_by_id),
 				"shutdown": deepcopy(self.shutdown_request),
 			}
+
+	def get_service_summary(self, initialized=False, provider_ready=False,
+				    dvm_ready=None):
+		with self.lock:
+			ready = bool(
+				initialized and provider_ready and
+				self.service_state == "running")
+			active_reservations = self._active_reservation_count_locked()
+			active_tasks = sum(
+				1 for runtime in self.runtime_by_qtask_id.values()
+				if runtime.state not in QPM_TASK_TERMINAL_STATES)
+			if self.service_state != "running":
+				state = "MAINT"
+			elif active_reservations:
+				state = "BUSY"
+			else:
+				state = "IDLE"
+			return {
+				"schema": "qfw-qpm-service-summary-v1",
+				"target_id": self.config.target_id,
+				"state": state,
+				"service_state": self.service_state,
+				"ready": ready,
+				"accepting_requests": (
+					self.service_state == "running"),
+				"provider_ready": bool(provider_ready),
+				"dvm_ready": dvm_ready,
+				"maintenance": self.service_state != "running",
+				"active_reservation_count": active_reservations,
+				"active_task_count": active_tasks,
+				"assigned_hosts": sorted(self.free_hosts),
+				"timestamp_ns": time.time_ns(),
+			}
+
+	def list_scheduler_allocations(self, filters=None):
+		filters = _scheduler_allocation_filters(filters)
+		with self.lock:
+			allocations = []
+			for reservation_id, metadata in (
+					self.reservation_metadata_by_id.items()):
+				try:
+					reservation = get_reservation(
+						self.admission_context, reservation_id)
+				except Exception:
+					continue
+				summary = self._scheduler_allocation_summary_locked(
+					reservation_id, reservation, metadata)
+				if _scheduler_allocation_matches(summary, filters):
+					allocations.append(summary)
+			allocations.sort(key=_scheduler_allocation_sort_key)
+			return {
+				"schema": "qfw-scheduler-allocation-list-v1",
+				"target_id": self.config.target_id,
+				"timestamp_ns": time.time_ns(),
+				"allocations": allocations,
+			}
+
+	def _scheduler_allocation_summary_locked(
+			self, reservation_id, reservation, metadata):
+		binding = dict(metadata.get("reservation_binding") or {})
+		launcher = dict(binding.get("launcher") or {})
+		owner = dict(binding.get("owner") or metadata.get("owner") or {})
+		resource = dict(binding.get("resource") or {})
+		state = str(reservation.get("state") or "unknown").lower()
+		active_tasks = sum(
+			1 for qtask_id in self.qtask_ids_by_reservation.get(
+				reservation_id, set())
+			if qtask_id in self.runtime_by_qtask_id and
+			self.runtime_by_qtask_id[qtask_id].state not in
+			QPM_TASK_TERMINAL_STATES)
+		return _drop_none({
+			"schema": "qfw-scheduler-allocation-summary-v1",
+			"scheduler": launcher.get("scheduler"),
+			"cluster_name": launcher.get("cluster_name"),
+			"allocation_id": launcher.get("allocation_id"),
+			"job_id": launcher.get("external_job_id"),
+			"user": _owner_identifier(owner),
+			"state": state,
+			"qstate": _scheduler_allocation_state(state),
+			"workload_kind": resource.get("workload_kind"),
+			"active_task_count": active_tasks,
+			"created_at_ns": reservation.get("created_at_ns"),
+			"expires_at_ns": reservation.get("expires_at_ns"),
+		})
 
 	def begin_service_shutdown(self, mode, timeout_s, reason, token=None):
 		with self.lock:
@@ -542,6 +639,7 @@ class QPMTargetController:
 	def task_status_for_cid(self, cid, outcome=None, reason=None,
 				message=None, result=None, reservation_id=None,
 				require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			runtime = self.runtime_by_cid.get(cid)
 			if runtime is None:
@@ -565,6 +663,7 @@ class QPMTargetController:
 	def task_status_for_qtask_id(self, qtask_id, outcome=None, reason=None,
 				     message=None, result=None, reservation_id=None,
 				     require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			runtime = self.runtime_by_qtask_id.get(qtask_id)
 			if runtime is None:
@@ -734,6 +833,7 @@ class QPMTargetController:
 
 	def cancel_task(self, cid=None, qtask_id=None, reason=None,
 			reservation_id=None, require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		deliveries = []
 		with self.lock:
 			runtime = self._runtime_for_task_selector_locked(
@@ -794,6 +894,7 @@ class QPMTargetController:
 	def task_reservation_error(self, cid=None, qtask_id=None,
 				   reservation_id=None,
 				   require_reservation=False):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			runtime = self._runtime_for_task_selector_locked(
 				cid=cid, qtask_id=qtask_id)
@@ -867,6 +968,7 @@ class QPMTargetController:
 
 	def peek_completion(self, reservation_id=None, cid=None, qtask_id=None,
 			    operation="peek_cq"):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			self._purge_completion_queues_locked(time.time_ns())
 			return self._poll_completion_locked(
@@ -875,6 +977,7 @@ class QPMTargetController:
 
 	def read_completion(self, reservation_id=None, cid=None, qtask_id=None,
 			    operation="read_cq"):
+		reservation_id = _normalize_optional_reservation_id(reservation_id)
 		with self.lock:
 			self._purge_completion_queues_locked(time.time_ns())
 			return self._poll_completion_locked(
@@ -943,6 +1046,27 @@ class QPMTargetController:
 					"state": self.service_state,
 				}
 			admission_request = self._admission_request(request, token=token)
+			try:
+				validate_reservation_credential(
+					admission_request["metadata"]["reservation_binding"],
+					credential_mode=self.config.credential_mode)
+			except Exception as error:
+				return {
+					"status": "rejected",
+					"request_id": admission_request.get("request_id"),
+					"reason": "credential-eligibility-failed",
+					"message": str(error),
+				}
+			if request.get("reservation_id") not in (None, 0, "0"):
+				return {
+					"status": "rejected",
+					"request_id": admission_request.get("request_id"),
+					"reason": "caller-selected-reservation-id",
+				}
+			if self.reservation_sequence is not None:
+				admission_request["reservation_id"] = (
+					self.reservation_sequence.allocate(
+						self._active_reservation_ids_locked()))
 			decision = reserve_request(self.admission_context, admission_request)
 			reservation_id = decision.get("reservation_id")
 			if (decision.get("status") == "accepted" and
@@ -967,12 +1091,14 @@ class QPMTargetController:
 			return decision
 
 	def renew_admission(self, reservation_id, request=None, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		with self.lock:
 			result = renew_reservation(
 				self.admission_context, reservation_id, request or {})
 			return result
 
 	def release_admission(self, reservation_id, reason_code=0, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		deliveries = []
 		with self.lock:
 			result = self._close_reservation(
@@ -982,9 +1108,13 @@ class QPMTargetController:
 				self.reservation_metadata_by_id.pop(reservation_id, None)
 				self._remove_provider_credential_locked(reservation_id)
 		self._dispatch_completion_deliveries(deliveries)
+		cleanup_errors = self._drain_provider_credential_cleanup()
+		if cleanup_errors:
+			result["credential_cleanup_errors"] = cleanup_errors
 		return result
 
 	def cancel_admission(self, reservation_id, reason_code=0, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		deliveries = []
 		with self.lock:
 			result = self._close_reservation(
@@ -994,9 +1124,13 @@ class QPMTargetController:
 				self.reservation_metadata_by_id.pop(reservation_id, None)
 				self._remove_provider_credential_locked(reservation_id)
 		self._dispatch_completion_deliveries(deliveries)
+		cleanup_errors = self._drain_provider_credential_cleanup()
+		if cleanup_errors:
+			result["credential_cleanup_errors"] = cleanup_errors
 		return result
 
 	def get_admission_reservation(self, reservation_id, token=None):
+		reservation_id = normalize_reservation_id(reservation_id)
 		with self.lock:
 			reservation = get_reservation(self.admission_context, reservation_id)
 			metadata = self.reservation_metadata_by_id.get(reservation_id)
@@ -1017,52 +1151,55 @@ class QPMTargetController:
 
 	def validate_reservation_for_context(self, request_context,
 					     operation="execution"):
-		reservation_id = request_context.reservation_id
-		if reservation_id is None:
-			raise QPMAdmissionValidationError(
-				"reservation_id is required")
-		with self.lock:
-			reservation = get_reservation(
-				self.admission_context, reservation_id)
-			if reservation_id in self.reservation_close_state:
-				raise QPMAdmissionValidationError(
-					f"reservation is closing: "
-					f"reservation_id={reservation_id}")
-			self._require_reservation_active(reservation, operation)
-			self._require_reservation_not_expired(reservation)
-			self._require_reservation_matches_context_locked(
-				reservation, request_context)
-			return reservation
+		reservation_id = normalize_reservation_id(
+			request_context.reservation_id)
+		try:
+			with self.lock:
+				reservation = get_reservation(
+					self.admission_context, reservation_id)
+				if reservation_id in self.reservation_close_state:
+					raise QPMAdmissionValidationError(
+						f"reservation is closing: "
+						f"reservation_id={reservation_id}")
+				self._require_reservation_active(reservation, operation)
+				self._require_reservation_not_expired(reservation)
+				self._require_reservation_matches_context_locked(
+					reservation, request_context)
+				return reservation
+		finally:
+			self._drain_provider_credential_cleanup()
 
 	def provider_credential_for_reservation(self, reservation_id,
 						operation="execution"):
-		with self.lock:
-			if reservation_id is None:
-				raise QPMAdmissionValidationError(
-					"reservation_id is required for provider credentials")
-			reservation = get_reservation(
-				self.admission_context, reservation_id)
-			self._require_reservation_active(reservation, operation)
-			self._require_reservation_not_expired(reservation)
-			record = self.reservation_credentials_by_id.get(reservation_id)
-			if record is None:
-				record = self._fallback_provider_credential_locked(
-					reservation_id)
-			expires_at_ns = record["metadata"].get("expires_at_ns")
-			if expires_at_ns and expires_at_ns <= time.time_ns():
-				raise QPMAdmissionValidationError(
-					"provider credential binding expired for "
-					f"reservation_id={reservation_id}")
-			return {
-				"secret": dict(record.get("secret") or {}),
-				"metadata": dict(record.get("metadata") or {}),
-			}
+		reservation_id = normalize_reservation_id(reservation_id)
+		try:
+			with self.lock:
+				reservation = get_reservation(
+					self.admission_context, reservation_id)
+				self._require_reservation_active(reservation, operation)
+				self._require_reservation_not_expired(reservation)
+				record = self.reservation_credentials_by_id.get(reservation_id)
+				if record is None:
+					record = self._fallback_provider_credential_locked(
+						reservation_id)
+				expires_at_ns = record["metadata"].get("expires_at_ns")
+				if expires_at_ns and expires_at_ns <= time.time_ns():
+					raise QPMAdmissionValidationError(
+						"provider credential binding expired for "
+						f"reservation_id={reservation_id}")
+				return {
+					"secret": dict(record.get("secret") or {}),
+					"metadata": dict(record.get("metadata") or {}),
+				}
+		finally:
+			self._drain_provider_credential_cleanup()
 
 	def attach_provider_credential(self, circuit):
 		reservation_id = circuit.info.get("reservation_id")
 		record = self.provider_credential_for_reservation(
 			reservation_id, operation="execution")
 		secret = dict(record.get("secret") or {})
+		secret["reservation_id"] = reservation_id
 		metadata = _drop_none(_redacted_metadata(
 			dict(record.get("metadata") or {})))
 		setattr(circuit, "provider_credential", secret)
@@ -1073,11 +1210,15 @@ class QPMTargetController:
 
 	def clear_provider_credentials(self):
 		with self.lock:
-			self.reservation_credentials_by_id.clear()
+			for reservation_id in list(self.reservation_credentials_by_id):
+				self._remove_provider_credential_locked(reservation_id)
+		return self._drain_provider_credential_cleanup()
 
 	def _bind_provider_credential_locked(self, reservation_id, metadata):
 		reservation_binding = dict(metadata.get("reservation_binding") or {})
-		response = bind_reservation_credential(reservation_binding)
+		provider, response = bind_reservation_credential(
+			reservation_binding,
+			credential_mode=self.config.credential_mode)
 		secret = dict(response.secret or {})
 		credential_metadata = _drop_none(_redacted_metadata(
 			dict(response.metadata or {})))
@@ -1085,13 +1226,68 @@ class QPMTargetController:
 			"secret": secret,
 			"metadata": credential_metadata,
 			"binding": reservation_binding,
+			"provider": provider,
 		}
 		if credential_metadata:
 			metadata["provider_credential_binding"] = credential_metadata
 		return credential_metadata
 
 	def _remove_provider_credential_locked(self, reservation_id):
-		self.reservation_credentials_by_id.pop(reservation_id, None)
+		record = self.reservation_credentials_by_id.pop(reservation_id, None)
+		if record is not None or self.provider_credential_evictor is not None:
+			self.credential_cleanup_queue.append((reservation_id, record))
+		return record
+
+	def _drain_provider_credential_cleanup(self):
+		with self.lock:
+			queued = self.credential_cleanup_queue
+			self.credential_cleanup_queue = []
+		errors = []
+		for reservation_id, record in queued:
+			provider = record.pop("provider", None) if record else None
+			try:
+				if provider is not None:
+					provider.release(record)
+			except Exception as error:
+				errors.append({
+					"reservation_id": reservation_id,
+					"stage": "credential-provider-release",
+					"error": str(error),
+				})
+			try:
+				if self.provider_credential_evictor is not None:
+					self.provider_credential_evictor(reservation_id)
+			except Exception as error:
+				errors.append({
+					"reservation_id": reservation_id,
+					"stage": "provider-client-eviction",
+					"error": str(error),
+				})
+		if errors:
+			with self.lock:
+				for error in errors:
+					self._record_reconciliation_fault_locked({
+						"reason": "credential-cleanup-failed",
+						**error,
+					})
+		return errors
+
+	def _create_reservation_sequence(self):
+		run_dir = os.environ.get("QFW_QPM_RUN_DIR", "").strip()
+		if not run_dir:
+			return None
+		return PersistentReservationSequence(run_dir)
+
+	def _active_reservation_ids_locked(self):
+		try:
+			reservations = list_reservations(self.admission_context, {})
+		except Exception:
+			return set()
+		return {
+			int(record["reservation_id"])
+			for record in reservations
+			if record.get("state") == "active"
+		}
 
 	def _fallback_provider_credential_locked(self, reservation_id):
 		request_metadata = self.reservation_metadata_by_id.get(reservation_id)
@@ -1322,6 +1518,7 @@ class QPMTargetController:
 					"status": "accepted",
 					"decision": dict(committed),
 				})
+		self._drain_provider_credential_cleanup()
 		return results
 
 	def _require_pending_capacity_reservation_valid_locked(
@@ -1367,15 +1564,6 @@ class QPMTargetController:
 				"message": str(error),
 			},
 		}
-
-	def close_expired_reservation(self, reservation_id, now_ns=None):
-		deliveries = []
-		with self.lock:
-			result = self._close_reservation(
-				reservation_id, "expire", now_ns=now_ns or time.time_ns(),
-				deliveries=deliveries)
-		self._dispatch_completion_deliveries(deliveries)
-		return result
 
 	def configure_device_profile(self, profile=None):
 		with self.lock:
@@ -1564,13 +1752,6 @@ class QPMTargetController:
 					runtime.qtask_id, None)
 			return runtime
 
-	def bind_scheduler_task(self, qtask_id, scheduler_task_id):
-		with self.lock:
-			runtime = self.runtime_by_qtask_id[qtask_id]
-			runtime.scheduler_task_id = scheduler_task_id
-			self.qtask_id_by_scheduler_task_id[scheduler_task_id] = qtask_id
-			return runtime
-
 	def bind_provider_handle(self, qtask_id, provider_handle):
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
@@ -1589,14 +1770,6 @@ class QPMTargetController:
 		with self.lock:
 			runtime = self.runtime_by_qtask_id[qtask_id]
 			runtime.state = state
-			return runtime
-
-	def record_result(self, qtask_id, result):
-		with self.lock:
-			runtime = self.runtime_by_qtask_id[qtask_id]
-			self.result_state[qtask_id] = result
-			self.timeout_state.pop(qtask_id, None)
-			runtime.state = QPM_TASK_COMPLETED
 			return runtime
 
 	def complete_scheduled_task(self, circuit, result=None):
@@ -3757,6 +3930,8 @@ def controller_config(qrc, target_id=None, admission_threading_mode=None,
 		      scheduler_threading_mode=None, serialization_mode=None):
 	return QPMControllerConfig(
 		target_id=_target_id(qrc, target_id),
+		credential_mode=os.environ.get(
+			"QFW_QPM_CREDENTIAL_MODE", "no-secret"),
 		admission_threading_mode=(
 			admission_threading_mode or
 			os.environ.get(ADMISSION_THREADING_ENV) or
@@ -3790,13 +3965,63 @@ def find_target_controller(target_id):
 		return _CONTROLLERS.get(target_id)
 
 
-def clear_target_controllers():
+def _clear_target_controllers_for_tests():
+	"""Reset process-global controllers for isolated unit tests."""
 	with _CONTROLLERS_LOCK:
 		controllers = list(_CONTROLLERS.values())
 		_CONTROLLERS.clear()
 	for controller in controllers:
 		controller.clear_provider_credentials()
 		controller.stop_completion_purge_worker()
+
+
+def _scheduler_allocation_filters(filters):
+	filters = dict(filters or {})
+	allowed = {
+		"scheduler",
+		"cluster_name",
+		"allocation_id",
+		"job_id",
+		"user",
+		"state",
+	}
+	unknown = sorted(set(filters) - allowed)
+	if unknown:
+		raise ValueError(
+			"unsupported scheduler allocation filters: " +
+			", ".join(unknown))
+	return {
+		key: str(value)
+		for key, value in filters.items()
+		if value is not None
+	}
+
+
+def _scheduler_allocation_matches(summary, filters):
+	for key, value in filters.items():
+		if str(summary.get(key, "")) != value:
+			return False
+	return True
+
+
+def _scheduler_allocation_sort_key(summary):
+	return (
+		str(summary.get("scheduler", "")),
+		str(summary.get("cluster_name", "")),
+		str(summary.get("allocation_id", "")),
+		str(summary.get("job_id", "")),
+	)
+
+
+def _scheduler_allocation_state(state):
+	return {
+		"active": "ACTIVE",
+		"accepted": "ACTIVE",
+		"released": "RELEASED",
+		"cancelled": "CANCELLED",
+		"expired": "EXPIRED",
+		"rejected": "REJECTED",
+	}.get(state, "UNKNOWN")
 
 
 def completion_retention_config():

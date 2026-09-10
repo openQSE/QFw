@@ -26,22 +26,18 @@ coverage to exercise these runtime modes:
 - QFw-managed local runtime: `qfw-setup --profile local` starts a job-owned
   DEFw-dirsvc and one or more local QPM services from the job-local service
   manifest.
-- Long-running site runtime: site-managed `qfw-dirsvc-start` and
-  `qfw-service-start` processes register a long-running QPM with the
-  site-scoped DEFw-dirsvc.
+- Long-running site runtime: independent `qfw-dir-svc` and `qfw-qpm-svc`
+  managers register a long-running QPM with the site-scoped DEFw-dirsvc.
 - Hybrid runtime: a job starts local services while also allowing discovery
   through a site-scoped directory service.
-- Direct endpoint diagnostic runtime: a DEFw-wrapped QPM listens on an
-  explicitly configured endpoint and is used only when the direct endpoint
-  resolver scope is explicitly enabled.
 
 The environment must provide:
 
 - Installed or in-tree QFw and DEFw builds matching the implementation under
   test, including DEFw-dirsvc, QPM service APIs, and client proxy bindings.
 - CMake install output with executable `qfw-activate`, `defw-python`,
-  `qfw-setup`, `qfw-srun`, `qfw-teardown`, `qfw-dirsvc-start`, and
-  `qfw-service-start` commands.
+  `qfw-setup`, `qfw-status`, `qfw-srun`, `qfw-teardown`, `qfw-dir-svc`, and
+  `qfw-qpm-svc` commands.
 - Source-tree activation with the same logical path variables as the installed
   layout.
 - Runtime profile templates for implicit production, local, and hybrid
@@ -119,8 +115,8 @@ services:
   dispatch-depth control, completion accounting, cancellation, and telemetry.
 - It registers as a normal QPM service through DEFw-dirsvc and advertises an
   explicit provider such as `fake-iqm`, a stable `service_id`, a stable target
-  ID such as `fake-iqm-20q`, `QPM_TYPE_IQM | QPM_TYPE_HARDWARE` compatibility
-  bits, and selector metadata that can distinguish it from live IQM services.
+  ID such as `fake-iqm-20q`, the required QPM type bits, and selector metadata
+  that can distinguish it from live IQM services.
 - Its QRC or provider adapter never calls production hardware or a simulator.
   It accepts a real QFw circuit record, derives execution metadata from the
   circuit payload and any supplied annotations, sleeps for a bounded
@@ -359,8 +355,9 @@ The baseline script is
 path under `QFw-SLURM-Cluster-doug/shared-dir/chemistry_example_aim2`.
 
 A passing simulator smoke proves that the wrapper activates QFw, uses
-`qfw-setup`, `qfw-srun`, and `qfw-teardown`, starts only job-owned simulator
-services, receives a reservation ID from the launcher or driver, submits
+`qfw-setup`, `qfw-status`, `qfw-srun`, and `qfw-teardown`, starts only
+application-owned simulator services, receives a reservation ID from the
+launcher or driver, submits
 estimator circuits through QFw, releases the reservation, and cleans job-owned
 runtime state. The wrapper must emit a final `QFW_EXAMPLE_RESULT` record with
 `status: ok`, app return code zero, teardown return code zero, the backend
@@ -456,8 +453,8 @@ export QFW_QPU_DEVICE_ID=ornl-iqm-20q
 ```
 
 Create or select a site configuration shared by the Docker-launched directory,
-IQM QPM, and application allocations. The endpoint host must be resolvable from
-all Docker Slurm nodes used by the test:
+IQM QPM, and application allocations. The connection record must be visible at
+the same path from all Docker Slurm nodes used by the test:
 
 ```bash
 export QFW_SITE_CONFIG=/workspace/qfw-container-base/iqm-site.yaml
@@ -466,11 +463,11 @@ install:
   qfw-prefix: $QFW_PREFIX
   defw-prefix: $QFW_PREFIX
 
-directory:
-  site:
-    name: qfw-docker-iqm-dirsvc
-    endpoint: <docker-service-node-host>:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: qfw-docker-iqm-dirsvc
+  listen-port: 8090
+  connect-timeout-seconds: 300
+  connection-file: /workspace/qfw-container-base/qfw-site-services/directory-service.json
 
 service:
   manifest: $QFW_PREFIX/share/qfw/config/services/site-services.yaml
@@ -492,19 +489,21 @@ allocation. These processes are site-style services for the test, even though
 Docker owns their lifetime. The service launcher should take the target device
 as an input. If the installed service manifest does not already define that
 device, the launcher should generate a temporary service manifest entry for the
-requested target device and pass the generated manifest to `qfw-service-start`.
+requested target device and pass the generated manifest to `qfw-qpm-svc`.
 
 ```bash
 salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:30:00 bash
 
-export QFW_IQM_RUN_DIR=/workspace/qfw-container-base/test-runs/iqm-smoke-$(date +%Y%m%d-%H%M%S)
-qfw-dirsvc-start --site-config "$QFW_SITE_CONFIG" \
-  --run-dir "$QFW_IQM_RUN_DIR" --background
+export QFW_IQM_SERVICE_ROOT=/workspace/qfw-container-base/test-runs/iqm-smoke-$(date +%Y%m%d-%H%M%S)
+qfw-dir-svc start \
+  --run-dir "$QFW_IQM_SERVICE_ROOT/directory" \
+  --site-config "$QFW_SITE_CONFIG" --scope site --node c5
 
-qfw-service-start --service-id iqm-ornl-20q \
+qfw-qpm-svc start \
+  --run-dir "$QFW_IQM_SERVICE_ROOT/iqm-ornl-20q" \
+  --service-id iqm-ornl-20q \
   --site-config "$QFW_SITE_CONFIG" \
-  --run-dir "$QFW_IQM_RUN_DIR" \
-  --background --timeout 120
+  --scope site --node c5 --timeout 120
 ```
 
 Before running the chemistry application, call the IQM QPM telemetry path
@@ -516,11 +515,13 @@ the application allocation in site mode:
 source "$QFW_PREFIX/bin/qfw-activate" \
   --venv /workspace/qfw-container-base/qfw-shared-test-venv
 export QFW_SITE_CONFIG=/workspace/qfw-container-base/iqm-site.yaml
-export QFW_CHEM_SETUP_MODE=site
+export QFW_RUNTIME_CONFIG=/workspace/qfw-container-base/site-runtime.yaml
 
 cd "$QFW_SHARE_DIR/examples"
 salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:20:00 \
-  ./qfw_chem_app.sh --backend iqm \
+  ./qfw_chem_app.sh --service-mode site --backend iqm \
+  --site-config "${QFW_SITE_CONFIG}" \
+  --runtime-config "${QFW_RUNTIME_CONFIG}" \
   --chem-app-dir /workspace/qfw-container-base/chemistry_example_aim2 \
   example_1_He_from_pyscf.py --smoke --no-draw \
   --reservation-qubits 20 \
@@ -529,28 +530,17 @@ salloc --partition=quantum --nodes=1 --nodelist=c5 --time=00:20:00 \
   --reservation-ttl-s <ttl>
 ```
 
-The planned IQM helper scripts should mirror the existing Slurm-style driver
-pattern used by the admission and scheduler fixture:
-
-- `examples/qfw_iqm_site_services.sh` builds or selects a site config, accepts
-  `--target-device`, starts the Docker-hosted site-style directory and
-  long-running IQM QPM, runs telemetry preflight, records service logs, and
-  leaves services running until explicitly stopped.
-- `examples/qfw_iqm_chem_smoke.sh` accepts `--target-device`,
-  `--site-config`, `--qfw-src`, `--build-dir`, `--install-prefix`,
-  `--shared-venv`, `--chem-app-dir`, `--partition`, `--nodes`, `--nodelist`,
-  `--time`, `--shots`, and `--max-output-bytes`;
-  captures stdout and stderr; embeds bounded output in a JSONL result record;
-  and verifies that app-side teardown does not stop the Docker-hosted
-  site-style services.
+The IQM chemistry driver follows the existing Slurm-style driver pattern used
+by the admission and scheduler fixture. Site services are started with
+`qfw-dir-svc` and `qfw-qpm-svc`; the application test does not own them.
 
 ## System Test Cases
 
 | Test ID | Scenario | Requirements |
 | --- | --- | --- |
 | ST-001 | QFw-managed service discovery. Start an allocation-local DEFw-dirsvc and QPM service, verify QPM registers service records and API bindings, resolve execution and telemetry bindings, and confirm DEFw-dirsvc performs no QPM admission capacity accounting. | `OPM-001`, `OPM-003`, `DISC-001`, `DISC-002`, `DISC-004`, `API-003` |
-| ST-002 | Long-running QPM discovery. Start a long-running DEFw-wrapped QPM, register it with a site-scoped DEFw-dirsvc, inject directory configuration into a client allocation, resolve and call it through DEFw RPC, and verify an unregistered direct endpoint is callable only when the direct endpoint resolver scope is explicitly enabled. | `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003` |
-| ST-003 | Multi-scope resolver policy. Present local, site-scoped, hybrid, and direct-endpoint candidates, verify scope annotation, deterministic ordering, tie-breaking, ambiguity errors, stale generation rejection, selected API binding validation, and no silent hardware-to-simulator fallback. | `DISC-004`, `DISC-005`, `API-003` |
+| ST-002 | Long-running QPM discovery. Start a long-running DEFw-wrapped QPM, register it with a site-scoped DEFw-dirsvc, inject directory configuration into a client allocation, and resolve and call it through DEFw RPC. | `OPM-002`, `OPM-003`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003` |
+| ST-003 | Multi-scope resolver policy. Present local, site-scoped, and hybrid candidates, then verify scope annotation, deterministic ordering, tie-breaking, ambiguity errors, stale generation rejection, selected API binding validation, and no silent hardware-to-simulator fallback. | `DISC-004`, `DISC-005`, `API-003` |
 | ST-004 | API category separation and token placeholders. Resolve and call execution, admission control, admission policy configuration, scheduler control, and telemetry/discovery bindings. Verify tokens are preserved as opaque metadata and are not parsed, validated, or used for authorization. | `CAT-001` through `CAT-007`, `API-001` through `API-004`, `CTRL-001` |
 | ST-005 | Client pass-through. Submit through QFw backend, job, sampler, and estimator paths with `reservation_id`, token, timeout, and execution options. Verify context reaches QPM unchanged and production resource-affecting execution without a reservation ID is rejected. | `API-001`, `API-003`, `CAT-002` |
 | ST-006 | Admission reservation workflows. Exercise `evaluate`, `reserve`, `renew`, `release`, `cancel`, `get_reservation`, and `list_reservations`. Verify accepted, delayed, and rejected outcomes include machine-readable reasons and that qhw-admission is the authoritative reservation store. | `ADM-001` through `ADM-004`, `ADM-016`, `ADM-017`, `CAT-003` |
@@ -567,8 +557,8 @@ pattern used by the admission and scheduler fixture:
 | ST-017 | Operation-mode parity. Run the same reservation, execution, cancellation, timeout, release, and telemetry workflows in QFw-managed mode and long-running QPM mode. Verify the externally visible QPM API semantics match after binding. | `OPM-001` through `OPM-003`, `API-003`, `CAT-007` |
 | ST-018 | Compatibility debt removal. Verify legacy directory `reserve()` and `release()` capacity semantics and unmanaged public execution bypasses are unavailable. Verify all circuit execution requires a reservation and follows admission and scheduler selection. | `DISC-002`, `SCHED-009`, `SCHED-010`, `API-001` |
 | ST-019 | Installed and source runtime parity. Build and install QFw, activate both source-tree and installed-prefix layouts, verify command executability, logical path variables, Python package imports, DEFw Python version checks, virtual-environment preservation, and absence of installed-mode Python executable rewriting. | `OPM-001`, `OPM-002`, `API-003` |
-| ST-020 | Runtime profile and lifecycle ownership. Exercise implicit production, local, and hybrid profiles through `qfw-setup`, `qfw-srun`, and `qfw-teardown`. Verify local and hybrid profiles start only job-owned services, production jobs leave site services running, setup fails on directory readiness timeout, and teardown cleans only job-owned run state. | `OPM-001` through `OPM-003`, `DISC-001`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003` |
-| ST-021 | Service lifecycle commands. Start site directory and QPM services through `qfw-dirsvc-start` and `qfw-service-start`, verify service run directories, PID or readiness state, signal handling, directory registration before readiness, service-manager environment compatibility, and nonzero startup on registration timeout. | `OPM-001`, `OPM-002`, `DISC-001`, `DISC-003`, `DISC-005` |
+| ST-020 | Runtime profile and lifecycle ownership. Exercise implicit production, local, and hybrid profiles through `qfw-setup`, `qfw-status`, `qfw-srun`, and `qfw-teardown`. Verify local and hybrid profiles start only application-owned managers, status composes manager health, production jobs leave site services running, setup fails on directory readiness timeout, and teardown cleans only application-owned run state. | `OPM-001` through `OPM-003`, `DISC-001`, `DISC-003`, `DISC-004`, `DISC-005`, `API-003` |
+| ST-021 | Service lifecycle commands. Start a site directory through `qfw-dir-svc` and one QPM through `qfw-qpm-svc`. Verify independent run directories, PID and readiness state, foreground signal handling, directory connection publication, automatic QPM connection, optional DVM ownership, and nonzero startup on registration timeout. | `OPM-001`, `OPM-002`, `DISC-001`, `DISC-003`, `DISC-005` |
 | ST-021A | Privileged QPM lifecycle control. Resolve the control binding, verify structured liveness/readiness/status, audit reconciliation reasons, reject new reservations and execution after quiescing, exercise graceful and cancel shutdown including timeout and repetition, and confirm provider cleanup, response-before-exit, and directory deregistration. | `CAT-008`, `CTRL-009`, `DISC-001`, `STATE-004` |
 | ST-022 | Reservation-scoped completion queues. Create reservation queues on accepted reservations, complete multiple tasks under multiple reservations, verify oldest-ready and targeted `peek_cq()` and `read_cq()` behavior, missing-reservation and mismatched-reservation rejection, peek idempotency, and single completion consumption. | `CAT-002`, `API-001`, `API-004`, `SCHED-012`, `STATE-001` through `STATE-003` |
 | ST-023 | Completion notifications and retention. Verify terminal completions are enqueued after admission and scheduler finalization and before event dispatch, notifications do not consume polling records, QRC completion sink ownership is acknowledged only after enqueue, retention settings evict records deterministically, no-longer-retained responses are structured, and terminal reservation queues are garbage-collected only after active work and retention conditions are satisfied. | `ADM-021`, `SCHED-005`, `SCHED-006`, `SCHED-011`, `STATE-003`, `STATE-004` |
@@ -584,11 +574,11 @@ pattern used by the admission and scheduler fixture:
   completion, inspect usage, release the reservation, and inspect final
   telemetry.
 - Run the normal user lifecycle in each runtime profile: source or activate
-  QFw, run `qfw-setup`, launch a trivial application with `qfw-srun`, and run
-  `qfw-teardown`.
+  QFw, run `qfw-setup`, require `qfw-status` to report ready, launch a trivial
+  application with `qfw-srun`, and run `qfw-teardown`.
 - Run the site service lifecycle separately from the user job lifecycle:
-  start site services with `qfw-dirsvc-start` and `qfw-service-start`, then
-  confirm user teardown does not stop those site-owned services.
+  start a directory with `qfw-dir-svc` and a QPM with `qfw-qpm-svc`, then
+  confirm user teardown does not stop those site-owned managers.
 - Run the long-running QPM concurrency workflow from a three-node allocation:
   keep the site directory, PRTE DVM, and `nwqsim` QPM running on the service
   node while two application nodes execute simultaneous app waves through
@@ -645,8 +635,6 @@ pattern used by the admission and scheduler fixture:
 - Inspect telemetry and audit records for registration, deregistration, peer
   loss, restart, generation change, policy change,
   reconciliation fault, and reservation close events.
-- Review direct endpoint fallback configuration and confirm unmanaged execution
-  cannot be selected in production workflows.
 - Inspect the installed prefix and confirm commands, private helpers, service
   modules, service API bindings, Python packages, examples, and configuration
   templates are installed under the expected package-owned locations.
@@ -682,8 +670,7 @@ pattern used by the admission and scheduler fixture:
   emergency service operation.
 - Confirm operator documentation or runbook notes identify which command-line
   options, environment variables, and site or runtime files select local
-  directories, site-scoped directories, hybrid lookup, and direct fallback
-  endpoints.
+  directories, site-scoped directories, and hybrid lookup.
 
 ## Acceptance Criteria
 

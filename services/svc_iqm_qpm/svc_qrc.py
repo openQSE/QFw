@@ -127,6 +127,9 @@ class QRC:
 	def get_task_metadata(self, cid=None):
 		return self.iqm.get_task_metadata(cid)
 
+	def evict_reservation_client(self, reservation_id):
+		return self.iqm.evict_reservation(reservation_id)
+
 	def shutdown(self):
 		self.shutdown_workers = True
 		for thread in self.threads:

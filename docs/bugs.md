@@ -179,7 +179,7 @@ Impact: if chemistry cleanup is restored to a normal `finally` path, or if any
 other application calls `QFwEstimatorV2.shutdown()`, the application can shut
 down a site-owned or long-running QPM. That violates the intended lifecycle
 boundary where service teardown is owned by `qfw-teardown`,
-`qfw_iqm_site_services.sh stop`, or an operator/site-driver path.
+`qfw-qpm-svc stop`, or an operator/site-manager path.
 
 Expected behavior:
 
@@ -710,9 +710,8 @@ Resolution:
 - Moved all six remote API classes into independent category packages and
   moved shared enum flags and the DEFw remote base into `api_qpm_common`.
 - Removed the aggregate `api_qpm.QPM` package and the `default` QPM binding.
-- Updated registration, direct-endpoint resolution, applications, test
-  drivers, Qiskit lookup, provider metadata, startup records, and tests to
-  select explicit category bindings.
+- Updated registration, applications, test drivers, Qiskit lookup, provider
+  metadata, startup records, and tests to select explicit category bindings.
 - Renamed provider-side last-job helpers to task-scoped operations and removed
   stale compatibility expectations from the active design and test plan.
 - Added package import, signature, multi-binding resolver, one-time event

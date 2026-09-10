@@ -24,8 +24,6 @@ from defw_exception import DEFwExecutionError
 import logging
 import os
 
-VERSION = 0.3
-
 PREFERENCE_ENV = "QFW_QPU_IFACE_PREF"
 
 # The contract is the union of operations (today: the IQMServiceClient surface).

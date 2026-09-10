@@ -1,20 +1,21 @@
 from datetime import datetime, timezone
 from defw_exception import DEFwExecutionError
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from util.device_access import (
 	QPU_DEVICE_ENV, resolve_device_access, resolve_qpu_user)
 from util.iqm_transcode import (
 	build_iqm_circuit, to_jsonable)
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
-import inspect
 import logging
 import os
 import threading
 import time
 
 REQUIRED_ENV = ("QFW_QC_URL", "QFW_API_KEY")
-DEFAULT_REQUEST_TIMEOUT = 30.0
 DEFAULT_JOB_TIMEOUT = 300.0
+REQUIRED_IQM_CLIENT_VERSION = "34.0.1"
 
 
 def sanitize_url(url):
@@ -28,6 +29,16 @@ def sanitize_url(url):
 
 
 def load_iqm_client_module():
+	try:
+		installed_version = package_version("iqm-client")
+	except PackageNotFoundError as exc:
+		raise DEFwExecutionError(
+			"iqm-client is not installed. QFw IQM services require "
+			f"iqm-client=={REQUIRED_IQM_CLIENT_VERSION}.") from exc
+	if installed_version != REQUIRED_IQM_CLIENT_VERSION:
+		raise DEFwExecutionError(
+			f"unsupported iqm-client version {installed_version}; QFw IQM "
+			f"services require iqm-client=={REQUIRED_IQM_CLIENT_VERSION}")
 	try:
 		from iqm.iqm_client import IQMClient
 	except Exception as exc:
@@ -60,21 +71,6 @@ def normalize_qhw_iqm(kind, raw_payload, device_id=None, include_raw=False):
 		return normalize_result(
 			raw_payload, device_id=device_id, include_raw=include_raw)
 	raise DEFwExecutionError(f"unsupported qhw-iqm normalization kind {kind!r}")
-
-
-def method_accepts(method, name):
-	try:
-		signature = inspect.signature(method)
-	except (TypeError, ValueError):
-		return True
-	return name in signature.parameters
-
-
-def call_iqm_method(method, timeout, *args, **kwargs):
-	call_kwargs = dict(kwargs)
-	if method_accepts(method, "timeout_secs"):
-		call_kwargs["timeout_secs"] = timeout
-	return method(*args, **call_kwargs)
 
 
 def parse_calibration_set_id(value):
@@ -183,22 +179,6 @@ def fetch_iqm_section(name, func):
 		}
 
 
-def summarize_observation_set(data):
-	if not isinstance(data, dict):
-		data = {}
-	observations = data.get("observations", {})
-	if not isinstance(observations, dict):
-		observations = {}
-	return {
-		"calibration_set_id": (
-			data.get("calibration_set_id")
-			or data.get("id")
-			or data.get("observation_set_id")),
-		"observation_count": len(observations),
-		"observation_names": sorted(str(name) for name in observations.keys()),
-	}
-
-
 def get_env_float(name, default):
 	value = os.environ.get(name)
 	if not value:
@@ -291,21 +271,11 @@ def load_iqm_service_config(credential=None):
 
 
 def create_iqm_client(client_type, config):
-	kwargs = {"token": config["api_key"]}
-	if config.get("quantum_computer") and method_accepts(
-			client_type, "quantum_computer"):
-		kwargs["quantum_computer"] = config["quantum_computer"]
-	return client_type(config["url"], **kwargs)
-
-
-def submit_run_request(client, run_request, use_timeslot):
-	submit = client.submit_run_request
-	if method_accepts(submit, "use_timeslot"):
-		return submit(run_request, use_timeslot=use_timeslot)
-	if use_timeslot:
-		raise DEFwExecutionError(
-			"this iqm-client version does not support use_timeslot")
-	return submit(run_request)
+	return client_type(
+		config["url"],
+		token=config["api_key"],
+		quantum_computer=config.get("quantum_computer"),
+	)
 
 
 def normalize_status(status):
@@ -334,115 +304,11 @@ def get_dynamic_qubits(data):
 	return qubits
 
 
-def get_dynamic_couplers(data):
-	couplers = data.get("couplers") or []
-	if isinstance(couplers, dict):
-		return list(couplers.values())
-	return couplers
-
-
-def normalize_locus(value):
-	if isinstance(value, str):
-		return [part.strip() for part in value.split(",") if part.strip()]
-	if isinstance(value, (list, tuple)):
-		return [str(part) for part in value]
-	return []
-
-
-def normalize_edge(locus):
-	if len(locus) != 2:
-		return None
-	a, b = locus
-	if a == b:
-		return None
-	return tuple(sorted((a, b)))
-
-
-def sorted_edges(edges):
-	return [list(edge) for edge in sorted(edges)]
-
-
-def collect_static_component_edges(static_arch):
-	edges = set()
-	for item in static_arch.get("connectivity", []):
-		edge = normalize_edge(normalize_locus(item))
-		if edge:
-			edges.add(edge)
-	return edges
-
-
-def collect_gate_loci(dynamic_arch):
-	gate_loci = {}
-	gates = dynamic_arch.get("gates", {})
-	if not isinstance(gates, dict):
-		return gate_loci
-
-	for gate_name, gate_info in gates.items():
-		loci = set()
-		if isinstance(gate_info, dict):
-			implementations = gate_info.get("implementations", {})
-			if isinstance(implementations, dict):
-				for implementation in implementations.values():
-					if not isinstance(implementation, dict):
-						continue
-					for locus in implementation.get("loci", []):
-						normalized = tuple(normalize_locus(locus))
-						if normalized:
-							loci.add(normalized)
-		gate_loci[str(gate_name)] = [
-			list(locus) for locus in sorted(loci)
-		]
-	return gate_loci
-
-
-def build_coupling_graph(static_arch, dynamic_arch):
-	qubits = sorted(str(q) for q in dynamic_arch.get("qubits")
-			or static_arch.get("qubits", []))
-	resonators = sorted(str(r) for r in dynamic_arch.get(
-		"computational_resonators",
-	) or static_arch.get("computational_resonators", []))
-	qubit_set = set(qubits)
-	component_edges = collect_static_component_edges(static_arch)
-	gate_loci = collect_gate_loci(dynamic_arch)
-
-	qubit_edges = set()
-	gate_edges = {}
-	for gate_name, loci in gate_loci.items():
-		edges = set()
-		for locus in loci:
-			edge = normalize_edge(locus)
-			if edge and edge[0] in qubit_set and edge[1] in qubit_set:
-				edges.add(edge)
-				qubit_edges.add(edge)
-		if edges:
-			gate_edges[gate_name] = sorted_edges(edges)
-
-	if not qubit_edges:
-		for edge in component_edges:
-			if edge[0] in qubit_set and edge[1] in qubit_set:
-				qubit_edges.add(edge)
-
-	return {
-		"qubits": qubits,
-		"computational_resonators": resonators,
-		"component_edges": sorted_edges(component_edges),
-		"qubit_edges": sorted_edges(qubit_edges),
-		"couplers": sorted_edges(qubit_edges),
-		"gate_loci": gate_loci,
-		"gate_edges": gate_edges,
-		"source_priority": [
-			"dynamic_architecture.gates.*.implementations.*.loci",
-			"static_architecture.connectivity",
-		],
-	}
-
-
 class IQMServiceClient:
 	def __init__(self):
+		self._client_type = load_iqm_client_module()
 		self._clients = {}
 		self._client_lock = threading.Lock()
-		self._request_timeout = get_env_float(
-			"QFW_IQM_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 		self._job_timeout = get_env_float(
 			"QFW_IQM_JOB_TIMEOUT", DEFAULT_JOB_TIMEOUT)
 		self._include_raw_results = get_env_bool(
@@ -458,8 +324,7 @@ class IQMServiceClient:
 			if cache_key in self._clients:
 				return self._clients[cache_key]
 			config = load_iqm_service_config(credential=credential)
-			client_type = load_iqm_client_module()
-			client = create_iqm_client(client_type, config)
+			client = create_iqm_client(self._client_type, config)
 			self._clients[cache_key] = client
 			self._config = config
 			logging.debug(
@@ -471,6 +336,9 @@ class IQMServiceClient:
 		credential = dict(credential or {})
 		if not credential:
 			return ("default",)
+		reservation_id = credential.get("reservation_id")
+		if reservation_id is not None:
+			return ("reservation", str(reservation_id))
 		return (
 			credential.get("url"),
 			credential.get("provider_device_id"),
@@ -478,6 +346,17 @@ class IQMServiceClient:
 			credential.get("user"),
 			credential.get("api_key") or credential.get("token"),
 		)
+
+	def evict_reservation(self, reservation_id):
+		cache_key = ("reservation", str(reservation_id))
+		with self._client_lock:
+			client = self._clients.pop(cache_key, None)
+		if client is None:
+			return False
+		close = getattr(client, "close", None)
+		if callable(close):
+			close()
+		return True
 
 	def device_id(self):
 		if self._config is None:
@@ -492,17 +371,15 @@ class IQMServiceClient:
 			include_raw=include_raw)
 
 	def get_static_architecture(self, credential=None):
-		return call_iqm_method(
-			self.client(credential=credential).get_static_quantum_architecture,
-			self._request_timeout)
+		return self.client(
+			credential=credential).get_static_quantum_architecture()
 
 	def get_dynamic_architecture(self, calibration_set_id=None,
 				     credential=None):
 		calibration_set_id = parse_calibration_set_id(calibration_set_id)
-		return call_iqm_method(
-			self.client(credential=credential).get_dynamic_quantum_architecture,
-			self._request_timeout,
-			calibration_set_id)
+		return self.client(
+			credential=credential).get_dynamic_quantum_architecture(
+				calibration_set_id)
 
 	def get_backend_info(self):
 		static = to_jsonable(self.get_static_architecture())
@@ -547,15 +424,11 @@ class IQMServiceClient:
 			self.get_dynamic_architecture(requested_calibration_set_id))
 		calibration = fetch_iqm_section(
 			"calibration_set",
-			lambda: call_iqm_method(
-				self.client().get_calibration_set,
-				self._request_timeout,
+			lambda: self.client().get_calibration_set(
 				requested_calibration_set_id))
 		quality = fetch_iqm_section(
 			"quality_metric_set",
-			lambda: call_iqm_method(
-				self.client().get_quality_metric_set,
-				self._request_timeout,
+			lambda: self.client().get_quality_metric_set(
 				requested_calibration_set_id))
 		errors = {
 			result["name"]: result["error"]
@@ -636,11 +509,8 @@ class IQMServiceClient:
 			shots=shots)
 
 		submit_started = time.monotonic()
-		job = submit_run_request(client, run_request, use_timeslot)
-		if not hasattr(job, "wait_for_completion"):
-			raise DEFwExecutionError(
-				"iqm-client returned only a job id from submit_run_request. "
-				"QFw IQM execution requires CircuitJob polling support.")
+		job = client.submit_run_request(
+			run_request, use_timeslot=use_timeslot)
 		timing["submit_seconds"] = time.monotonic() - submit_started
 
 		wait_started = time.monotonic()

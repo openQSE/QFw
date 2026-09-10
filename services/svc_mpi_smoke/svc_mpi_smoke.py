@@ -8,7 +8,6 @@ import subprocess
 import sys
 
 import defw_common_def as common
-from defw_agent_info import Capability, DEFwServiceInfo
 from defw_exception import DEFwError
 from util.mpi import build_mpi_command
 
@@ -22,22 +21,26 @@ class MPISmoke:
 
 		logging.debug("Querying MPI smoke service metadata")
 
-		cap = Capability(1, 1, "launches a trivial mpirun smoke workload")
-		return DEFwServiceInfo(
-			SERVICE_NAME,
-			SERVICE_DESC,
-			self.__class__.__name__,
-			self.__class__.__module__,
-			cap,
-			-1,
-			properties={
+		return {
+			"service_name": SERVICE_NAME,
+			"service_type": "qfw.mpi-smoke",
+			"api_bindings": [{
 				"binding_name": "default",
 				"client_module": "api_mpi_smoke",
 				"client_class": "MPISmoke",
 				"service_module": self.__class__.__module__,
 				"service_class": self.__class__.__name__,
+				"version": 1,
+			}],
+			"selector": {"resources": [SERVICE_NAME]},
+			"properties": {"description": SERVICE_DESC},
+			"capability": {
+				"type": 1,
+				"caps": 1,
+				"description": (
+					"launches a trivial mpirun smoke workload"),
 			},
-		)
+		}
 
 	def reserve(self, svc, client_ep, *args, **kwargs):
 		logging.debug("Reserving MPI smoke service for client %s", client_ep)

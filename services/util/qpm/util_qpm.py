@@ -1,4 +1,3 @@
-from defw_agent_info import *  # noqa: F401,F403
 from api_events import BaseEventAPI
 from defw_util import expand_host_list
 from defw import me
@@ -31,7 +30,6 @@ from .admission import (
 from .scheduler import QPMSchedulerError, QPMSchedulerUnavailable
 from .util_circuit import Circuit, CircuitStates, MAX_PPN
 from .request import parse_execution_request
-from statistics import mean, median, stdev
 
 QPM_SERVICE_TYPE = "qfw.qpm"
 MANAGED_SUBMISSION_FAILURE_REASONS = (
@@ -50,6 +48,7 @@ QPM_CATEGORY_API_BINDINGS = (
 )
 qpm_initialized = False
 qpm_shutdown = False
+qpm_directory_registered = False
 
 
 class QPMEventDispatcher:
@@ -160,6 +159,9 @@ class UTIL_QPM:
 			scheduler_context_factory=scheduler_context_factory)
 		self.controller.set_provider_canceller(
 			getattr(qrc, "cancel", None) if qrc is not None else None)
+		self.controller.set_provider_credential_evictor(
+			getattr(qrc, "evict_reservation_client", None)
+			if qrc is not None else None)
 		self.circuits = self.controller.circuits
 		self.oor_queue = self.controller.oor_queue
 		if self.oor_queue is None:
@@ -581,21 +583,14 @@ class UTIL_QPM:
 		return self.controller.service_lifecycle_telemetry(
 			access_class=access_class or "operator")
 
+	def list_scheduler_allocations(self, token=None, filters=None):
+		return self.controller.list_scheduler_allocations(filters=filters)
+
 	def record_defw_directory_event(self, event_type, service_record=None,
 					peer_event=None, reason=None, details=None):
 		return self.controller.record_defw_directory_event(
 			event_type, service_record=service_record,
 			peer_event=peer_event, reason=reason, details=details)
-
-	def _cancel_provider_handle(self, status):
-		provider_handle = status.get("provider_handle")
-		if provider_handle is None or self.qrc is None:
-			return
-		cancel = getattr(self.qrc, "cancel", None)
-		if cancel is not None:
-			status["provider_cancel_status"] = cancel(provider_handle)
-			return
-		status["provider_cancel_status"] = "unsupported"
 
 	def sync_run(self, info, reservation_id=None, token=None, timeout=None,
 				 cancel_on_timeout=False):
@@ -791,20 +786,6 @@ class UTIL_QPM:
 			reservation_id=reservation_id, cid=cid,
 			operation="peek_cq")
 
-	def _result_selector_reservation_error(self, cid, reservation_id):
-		if reservation_id is not None and cid is None:
-			return {
-				"outcome": "INVALID_RESERVATION",
-				"lifecycle_state": "invalid-reservation",
-				"reservation_id": reservation_id,
-				"reason": "task-selector-required",
-				"message": (
-					"reservation-scoped result retrieval requires cid"),
-			}
-		return self.controller.task_reservation_error(
-			cid=cid, reservation_id=reservation_id,
-			require_reservation=True)
-
 	def register_event_notification(self, ep, evtype, class_id,
 					token=None, reservation_id=None, filters=None):
 		if reservation_id is not None:
@@ -851,14 +832,14 @@ class UTIL_QPM:
 	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc,
 					 properties=None):
 		from api_qpm_common import QPMType, QPMCapability
-		from defw_agent_info import get_bit_list, get_bit_desc, Capability, DEFwServiceInfo
 		properties = dict(properties or {})
 		service_module = self.__class__.__module__
 		service_class = self.__class__.__name__
 		provider = properties.get("provider")
-		properties.setdefault("service_type", QPM_SERVICE_TYPE)
-		properties.setdefault("service_id", _qpm_service_id(
-			svc_name, service_module, provider, properties))
+		service_type = QPM_SERVICE_TYPE
+		service_id = _qpm_service_id(
+			svc_name, service_module, provider, properties)
+		properties.pop("selector", None)
 		properties.setdefault("qpm_type", int(type_bits))
 		properties.setdefault("qpm_capabilities", int(caps_bits))
 		properties.setdefault(
@@ -867,26 +848,40 @@ class UTIL_QPM:
 		properties.setdefault(
 			"hardware",
 			_qpm_type_bit_enabled(type_bits, QPMType.QPM_TYPE_HARDWARE))
-		properties.setdefault("selector", _qpm_selector(
-			properties, svc_name, provider))
-		properties.setdefault("api_bindings", _qpm_api_bindings(
-			service_module, service_class))
-		properties.setdefault("binding_name", "execution")
-		properties.setdefault("client_module", "api_qpm_execution")
-		properties.setdefault("client_class", "QPMExecution")
-		properties.setdefault("service_module", service_module)
-		properties.setdefault("service_class", service_class)
-		properties.setdefault("controller", self.controller_telemetry())
-		t = get_bit_list(type_bits, QPMType)
-		c = get_bit_list(caps_bits, QPMCapability)
-		cap = Capability(type_bits, caps_bits, get_bit_desc(t, c))
-		info = DEFwServiceInfo(
-			svc_name, svc_desc,
-			service_class,
-			service_module,
-			cap, -1,
-			properties=properties)
-		return info
+		selector = _qpm_selector(properties, svc_name, provider)
+		api_bindings = _qpm_api_bindings(service_module, service_class)
+		controller_target_id = self.controller_telemetry().get("target_id")
+		if controller_target_id:
+			properties.setdefault(
+				"controller_target_id", controller_target_id)
+		properties.setdefault("service_id", service_id)
+		properties.setdefault("service_type", service_type)
+		type_names = [
+			name for name, member in QPMType.__members__.items()
+			if int(member) & int(type_bits)
+		]
+		capability_names = [
+			name for name, member in QPMCapability.__members__.items()
+			if int(member) & int(caps_bits)
+		]
+		return {
+			"service_id": service_id,
+			"service_name": svc_name,
+			"service_type": service_type,
+			"api_bindings": list(api_bindings),
+			"selector": dict(selector),
+			"properties": properties,
+			"capability": {
+				"type": int(type_bits),
+				"caps": int(caps_bits),
+				"description": (
+					f"{','.join(type_names)} -> "
+					f"{','.join(capability_names)}"),
+			},
+			"qpm_type": int(type_bits),
+			"qpm_capabilities": int(caps_bits),
+			"description": svc_desc,
+		}
 
 	def controller_telemetry(self):
 		return self.controller.telemetry()
@@ -955,18 +950,13 @@ class UTIL_QPM:
 
 	def get_scheduler_queue_state(self, token=None, device_id=None,
 				      include_restricted=False):
-		token, device_id, include_restricted = (
-			_token_device_payload_args(
-				token, device_id, include_restricted))
 		return self.controller.get_scheduler_queue_state(
 			include_restricted=include_restricted)
 
 	def evaluate(self, token=None, request=None):
-		token, request = _token_request_args(token, request)
 		return self.controller.evaluate_reservation(request, token=token)
 
-	def reserve(self, token=None, request=None, *args, **kwargs):
-		token, request = _token_request_args(token, request)
+	def reserve(self, token=None, request=None):
 		if not isinstance(request, dict):
 			raise DEFwExecutionError(
 				"legacy service reservation is not supported by the "
@@ -974,15 +964,10 @@ class UTIL_QPM:
 		return self.controller.reserve_admission(request, token=token)
 
 	def renew(self, token=None, reservation_id=None, request=None):
-		token, reservation_id, request = _token_reservation_request_args(
-			token, reservation_id, request)
 		return self.controller.renew_admission(
 			reservation_id, request=request, token=token)
 
-	def release(self, token=None, reservation_id=None, reason=None,
-		    services=None):
-		token, reservation_id, reason = _token_reservation_reason_args(
-			token, reservation_id, reason)
+	def release(self, token=None, reservation_id=None, reason=None):
 		if reservation_id is None or isinstance(
 				reservation_id, (list, tuple, set)):
 			raise DEFwExecutionError(
@@ -992,19 +977,14 @@ class UTIL_QPM:
 			reservation_id, reason_code=reason or 0, token=token)
 
 	def cancel(self, token=None, reservation_id=None, reason=None):
-		token, reservation_id, reason = _token_reservation_reason_args(
-			token, reservation_id, reason)
 		return self.controller.cancel_admission(
 			reservation_id, reason_code=reason or 0, token=token)
 
 	def get_reservation(self, token=None, reservation_id=None):
-		token, reservation_id = _token_reservation_args(
-			token, reservation_id)
 		return self.controller.get_admission_reservation(
 			reservation_id, token=token)
 
 	def list_reservations(self, token=None, filters=None):
-		token, filters = _token_filters_args(token, filters)
 		return self.controller.list_admission_reservations(
 			filters=filters, token=token)
 
@@ -1019,20 +999,6 @@ class UTIL_QPM:
 			self.qrc = None
 		pass
 
-	def schedule_shutdown(self, timeout=5):
-		logging.debug(f"Shutting down in {timeout} seconds")
-		time.sleep(timeout)
-		me.exit()
-
-	def compute_stats(self, data, label):
-		logging.critical(f"Statistical Analysis for {label}:")
-		logging.critical(f"Count: {len(data)}")
-		logging.critical(f"Mean: {mean(data):.6f} seconds")
-		logging.critical(f"Median: {median(data):.6f} seconds")
-		logging.critical(f"Standard Deviation: {stdev(data):.6f} seconds" if len(data) > 1 else "N/A")
-		logging.critical(f"Min: {min(data):.6f} seconds")
-		logging.critical(f"Max: {max(data):.6f} seconds")
-
 	def test(self, token=None):
 		status = self.get_service_status(token=token)
 		return {
@@ -1042,9 +1008,21 @@ class UTIL_QPM:
 		}
 
 	def get_service_status(self, token=None):
-		return self.controller.get_service_status(
+		status = self.controller.get_service_status(
 			initialized=qpm_initialized,
 			provider_ready=self.qrc is not None)
+		status["directory_registered"] = bool(qpm_directory_registered)
+		status["ready"] = bool(
+			status["ready"] and qpm_directory_registered)
+		return status
+
+	def get_service_summary(self, token=None):
+		dvm_uri_path = os.environ.get("QFW_DVM_URI_PATH")
+		return self.controller.get_service_summary(
+			initialized=qpm_initialized,
+			provider_ready=self.qrc is not None,
+			dvm_ready=(os.path.isfile(dvm_uri_path)
+				   if dvm_uri_path else None))
 
 	def shutdown(self, token=None, mode="graceful", timeout_s=None,
 		     reason=None):
@@ -1108,58 +1086,6 @@ class UTIL_QPM:
 		if self.qrc:
 			self.qrc.shutdown()
 			self.qrc = None
-
-
-def _token_request_args(token, request):
-	if request is None and isinstance(token, dict):
-		return None, token
-	return token, request
-
-
-def _token_reservation_args(token, reservation_id):
-	if reservation_id is None:
-		return None, token
-	return token, reservation_id
-
-
-def _token_reservation_request_args(token, reservation_id, request):
-	if reservation_id is None:
-		return None, token, request
-	if isinstance(reservation_id, dict) and request is None:
-		return None, token, reservation_id
-	return token, reservation_id, request
-
-
-def _token_reservation_reason_args(token, reservation_id, reason):
-	if reservation_id is None:
-		return None, token, reason
-	return token, reservation_id, reason
-
-
-def _token_filters_args(token, filters):
-	return token, filters
-
-
-def _token_device_payload_args(token, device_id, payload,
-			       legacy_payload_first=False):
-	if payload is None:
-		if isinstance(device_id, dict):
-			return None, token, device_id
-		if isinstance(token, dict):
-			return None, None, token
-		return token, device_id, payload
-	if (legacy_payload_first and isinstance(token, dict)
-			and not isinstance(payload, dict)):
-		return device_id, payload, token
-	return token, device_id, payload
-
-
-def _token_task_metadata_args(token, cid, reservation_id, qtask_id):
-	if qtask_id is not None:
-		return token, cid, reservation_id, qtask_id
-	if cid is None:
-		return None, token, reservation_id, qtask_id
-	return token, cid, reservation_id, qtask_id
 
 
 def _sync_deadline(timeout):

@@ -1,5 +1,7 @@
 # Detailed Design
 
+**Status:** draft
+
 ## Table Of Contents
 
 - [Purpose](#purpose)
@@ -13,6 +15,8 @@
 <details open>
 <summary><strong>Purpose</strong></summary>
 
+**Status:** draft
+
 ## Purpose
 
 This document records implementation-oriented design notes for
@@ -23,6 +27,8 @@ identified by the same requirement ID.
 
 <details open>
 <summary><strong>Design Context</strong></summary>
+
+**Status:** draft
 
 ## Design Context
 
@@ -45,21 +51,17 @@ client
 ```
 
 The target design separates these concerns. DEFw-dirsvc owns registered-service
-discovery for services that choose to register, while QPM owns the active
-reservation flow and uses qhw-admission as the authoritative reservation store.
-Long-running QPM services remain DEFw-wrapped RPC services. Depending on site
-configuration, they either register with a selected DEFw-dirsvc or expose a
-configured direct DEFw endpoint that clients resolve without directory-service
-registration.
+discovery, while QPM owns the active reservation flow and uses qhw-admission as
+the authoritative reservation store. Every QPM registers with either the
+application-owned or site-owned directory service. Long-running QPM services
+remain DEFw-wrapped RPC services.
 
 Relevant implementation points:
 
 - `backends/qfw_qiskit/qfw_lookup_service.py` resolves QPM through
-  `QPMResolver`, using configured DEFw-dirsvc scopes or a configured direct
-  endpoint scope.
-- `backends/qfw_qiskit/qpm_resolver.py` resolves service records, selected API
-  bindings, and direct endpoint records, then asks DEFw to construct the
-  requested service API wrapper.
+  `QPMResolver`, using configured DEFw-dirsvc scopes.
+- `backends/qfw_qiskit/qpm_resolver.py` resolves service records and selected
+  API bindings, then asks DEFw to construct the requested service API wrapper.
 - `DEFw/python/infra/defw.py` implements `connect_to_binding()` by connecting
   to the selected endpoint and constructing the requested service API wrapper.
 - `DEFw/python/services/svc_dirsvc/svc_dirsvc.py` implements registration,
@@ -84,6 +86,8 @@ Relevant implementation points:
 
 <details open>
 <summary><strong>Build And Installation Model</strong></summary>
+
+**Status:** draft
 
 ## Build And Installation Model
 
@@ -115,12 +119,11 @@ DEFw/
   swig/
     defw.i
     typemaps/
-      compat_charpp.i
-      compat_charppp.i
       owned_string.i
       owned_string_list_counted.i
       opaque_handle.i
-  python/defw/
+      rma_buffer.i
+  python/infra/
   tests/
 ```
 
@@ -149,28 +152,21 @@ directories, library targets, runtime search path behavior, Python extension
 install location, and the installed SWIG typemap directory for optional
 downstream wrappers.
 
-The SWIG cleanup should preserve current DEFw Python API behavior unless an
-individual wrapper is explicitly migrated with tests. Existing broad typemaps
-remain available as compatibility includes for the current API surface, but new
-or refactored interfaces should opt in to narrower typemaps. This lets DEFw
-wrap external libraries, such as libfabric, without forcing every interface to
-inherit DEFw-specific pointer semantics by default.
-
-The target typemap set should separate compatibility from new contracts:
+DEFw wrappers use narrow, opt-in typemaps so one interface cannot impose
+pointer semantics on unrelated interfaces. The installed typemap set is:
 
 | Typemap include | Purpose |
 | --- | --- |
-| `compat_charpp.i` | Preserve existing `char **` output behavior for audited current DEFw APIs. |
-| `compat_charppp.i` | Preserve existing `char ***` pointer-return behavior until each API is migrated. |
 | `owned_string.i` | Convert malloc/calloc-owned `char **` output to a Python string and free the transferred buffer. A NULL output means allocation failure and raises a Python memory/allocation exception. |
 | `owned_string_list_counted.i` | Convert counted `char ***out, size_t *count` output to `list[str]`, then free each transferred string and the transferred array. |
 | `opaque_handle.i` | Expose typed opaque handles without enabling arbitrary global `void *` conversion. |
+| `rma_buffer.i` | Map Python byte buffers to RMA input buffers and return malloc-owned RMA output buffers as Python bytes. |
 
 New string-list APIs should prefer an explicit count, such as
 `char ***out, size_t *count`, over an uncounted `char ***`. The counted typemap
 returns a Python list of strings and owns cleanup for malloc/calloc-transferred
-memory. Existing uncounted `char ***` wrappers should keep their current return
-shape until a targeted migration changes that API and adds tests.
+memory. Uncounted `char ***` outputs are not part of the supported wrapper
+contract.
 
 The commented global `void *` typemap should be removed rather than carried as
 dead code. Peer handles and future libfabric handles should use typed opaque
@@ -181,13 +177,15 @@ pointers.
 CMake validation should include build-tree imports and install-tree imports.
 Tests should cover generated SWIG outputs, installed Python package imports,
 exported CMake targets, runtime search paths, string output typemaps, counted
-string-list typemaps, compatibility typemaps used by current wrappers, NULL
-allocation-failure handling, and typed opaque-handle round trips.
+string-list typemaps, NULL allocation-failure handling, RMA byte-buffer
+round trips, and typed opaque-handle round trips.
 
 </details>
 
 <details open>
 <summary><strong>Installation And Runtime Startup Model</strong></summary>
+
+**Status:** draft
 
 ## Installation And Runtime Startup Model
 
@@ -211,10 +209,11 @@ site-selected equivalent. A typical combined prefix has this shape:
     qfw-activate
     defw-python
     qfw-setup
+    qfw-status
     qfw-srun
     qfw-teardown
-    qfw-dirsvc-start
-    qfw-service-start
+    qfw-dir-svc
+    qfw-qpm-svc
   libexec/qfw/
     qfw-setup-driver
     service-lifecycle/
@@ -248,6 +247,8 @@ comes from a runtime configuration selected by `qfw-setup`, wrapper defaults,
 or an explicit operator override. Configuration files form the stable
 deployment contract.
 
+**Status:** draft
+
 ### Installation Paths
 
 The implementation uses fixed installed locations for packaged QFw material.
@@ -261,10 +262,11 @@ different prefix, but the relative paths under each prefix remain the same.
 | `/opt/openqse/qfw/current/bin/qfw-activate` | QFw package | Shell activation entry point. |
 | `/opt/openqse/qfw/current/bin/defw-python` | QFw package | DEFw-backed Python launcher for user applications. |
 | `/opt/openqse/qfw/current/bin/qfw-setup` | QFw package | User job setup command. |
+| `/opt/openqse/qfw/current/bin/qfw-status` | QFw package | User job status command. |
 | `/opt/openqse/qfw/current/bin/qfw-srun` | QFw package | User application launch command. |
 | `/opt/openqse/qfw/current/bin/qfw-teardown` | QFw package | User job cleanup command. |
-| `/opt/openqse/qfw/current/bin/qfw-dirsvc-start` | QFw package | One-directory-service lifecycle command. |
-| `/opt/openqse/qfw/current/bin/qfw-service-start` | QFw package | One-service-instance lifecycle command. |
+| `/opt/openqse/qfw/current/bin/qfw-dir-svc` | QFw package | One directory-service manager. |
+| `/opt/openqse/qfw/current/bin/qfw-qpm-svc` | QFw package | One QPM and optional DVM manager. |
 | `/opt/openqse/qfw/current/libexec/qfw` | QFw package | Private helper scripts used by public commands. |
 | `/opt/openqse/qfw/current/lib/qfw/services` | QFw package | Installed QPM and utility service modules. |
 | `/opt/openqse/qfw/current/lib/qfw/service-apis` | QFw package | Installed DEFw service API bindings and proxies. |
@@ -295,19 +297,24 @@ selects a different file. Job-local service inventory remains packaged under
 `share/qfw/config/services/local-services.yaml`; a standard installation does not
 copy it to `/etc/openqse/qfw`.
 
+**Status:** draft
+
 ### Activation
 
 `qfw-activate` is an environment bootstrap step. It makes QFw commands and
-runtime paths visible in the current shell and defines `qfw_deactivate` to
-restore the previous environment. Activation does not start a directory
+runtime paths visible in the current shell, prepends `(qfw) ` to the existing
+prompt, and defines `qfw-deactivate` to restore the previous environment and
+prompt. Existing prompt escapes and dynamic behavior remain intact. The QFw
+activation layer owns this prefix; virtual-environment activation does not
+supply it. Activation does not start a directory
 service, start QPM, register a service, connect to a directory service, or
 replace the user's Python executable.
 
 Every public command installed under `<prefix>/bin` must be executable.
 Activation prepends that directory to `PATH` so users and service wrappers can
-call `qfw-setup`, `qfw-srun`, `qfw-teardown`, `qfw-dirsvc-start`, and
-`qfw-service-start` by name. Activation also augments `LD_LIBRARY_PATH` only
-for libraries that are not already reachable through RPATH or runpath.
+call `qfw-setup`, `qfw-status`, `qfw-srun`, `qfw-teardown`, `qfw-dir-svc`,
+and `qfw-qpm-svc` by name. Activation also augments `LD_LIBRARY_PATH` only for
+libraries that are not already reachable through RPATH or runpath.
 
 An installed activation exports the logical path variables used by the role
 wrappers:
@@ -332,6 +339,8 @@ Activation may also add installed QFw and DEFw Python package directories to
 `PYTHONPATH` for source or non-wheel deployments. A normal Python package
 installation should prefer the active environment's site-packages over ad hoc
 path injection.
+
+**Status:** draft
 
 ### DEFw Python Entry Point
 
@@ -360,9 +369,10 @@ keeps user dependencies in the user's virtual environment while avoiding the
 source-mode practice of replacing `python`, `python3`, and `pythonX.Y` inside
 the virtual environment.
 
-The venv-rewriting behavior can remain as an explicit legacy development
-option. Installed deployments use `defw-python` and leave the Python
+Both source and installed deployments use `defw-python` and leave the Python
 environment intact.
+
+**Status:** draft
 
 ### Runtime Roles
 
@@ -374,39 +384,49 @@ hyphens. QFw startup has three layers.
 library paths, Python paths, and DEFw defaults for every role. It does not own
 any process lifecycle.
 
-`qfw-setup`, `qfw-srun`, and `qfw-teardown` define the user job lifecycle.
+`qfw-setup`, `qfw-status`, `qfw-srun`, and `qfw-teardown` define the user job
+lifecycle.
 This lifecycle is used for both production client jobs and local simulator
 jobs. `qfw-setup` reads `site.yaml`, reads the selected runtime configuration,
-creates job-owned run and log directories, validates resolver policy, and
-starts local services only when `local-services` is present. `qfw-srun` runs
-the user application in the prepared QFw context through `defw-python`.
-`qfw-teardown` stops only job-owned processes and cleans job-owned runtime
-state.
+creates job-owned run and log directories, and validates resolver policy. When
+`local-services` is present, it delegates the application-owned directory to
+the `qfw-dir-svc` lifecycle engine and each selected QPM and optional DVM to
+the `qfw-qpm-svc` lifecycle engine. It records those manager run directories
+and the generated directory connection record in application state.
+`qfw-srun` runs the user application in the prepared QFw context through
+`defw-python`. `qfw-status` composes the recorded runtime with current manager
+health. `qfw-teardown` stops the recorded QPM managers and directory manager in
+reverse order, then cleans job-owned runtime state. It never stops site-owned
+service managers.
 
-`qfw-dirsvc-start` and `qfw-service-start` define the service lifecycle. They
-are used by administrators, service managers, or local runtime profile setup
-code. Each invocation owns one process lifecycle. `qfw-dirsvc-start` starts
-one DEFw-dirsvc process. `qfw-service-start` starts one named QPM or utility
-service instance. The commands prepare DEFw configuration, create service run
-and log directories, start the process they own, handle shutdown signals, and
-clean service-owned runtime state. QPM service startup waits for directory
-registration to succeed before reporting the service as ready. These commands
-do not call `qfw-setup` or `qfw-teardown` because those commands are scoped to
-a user job.
+Each setup invocation creates one run directory for one logical application
+run. Several application steps may use that directory through `qfw-srun`.
+Activation is reusable across sequential or concurrent application runtimes;
+it does not select an application run directory.
+
+`qfw-dir-svc` and `qfw-qpm-svc` define the operator-facing service lifecycle.
+Each manager accepts one explicit run directory and supports `start`, `run`,
+`status`, and `stop`. The directory manager owns one DEFw directory service.
+The QPM manager owns one named QPM and starts a PRTE DVM only when its provider
+requires one. The role managers invoke a private installed Python module when
+they need to start a DEFw process on another node.
 
 | Command | Lifecycle | Responsibility |
 | --- | --- | --- |
 | `qfw-activate` | Environment | Prepare QFw, DEFw, Python, and library paths for the current shell or service unit. |
-| `qfw-setup` | User job | Prepare a job runtime context and optionally start job-owned local services. |
+| `qfw-setup` | User job | Prepare a job runtime context and orchestrate requested application-owned role managers. |
+| `qfw-status` | User job | Report runtime state and recorded role-manager health. |
 | `qfw-srun` | User job | Run one application in the prepared QFw runtime context. |
-| `qfw-teardown` | User job | Stop job-owned local services and clean job runtime state. |
-| `qfw-dirsvc-start` | Service | Start and own one DEFw-dirsvc process. |
-| `qfw-service-start` | Service | Start and own one named QPM or utility service instance. |
+| `qfw-teardown` | User job | Stop recorded application-owned role managers and clean job runtime state. |
+| `qfw-dir-svc` | Service | Manage one DEFw directory-service instance. |
+| `qfw-qpm-svc` | Service | Manage one QPM and its optional PRTE DVM. |
 
 The job lifecycle and service lifecycle share lower-level helpers for config
 loading, DEFw preparation, run-directory creation, PID files, signal handling,
 and cleanup. The user-visible lifecycles remain separate so user job cleanup
 cannot stop site-owned services.
+
+**Status:** draft
 
 ### Deployment Modes
 
@@ -429,6 +449,7 @@ The normal user flow is the same in both modes:
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate
 qfw-setup
+qfw-status
 qfw-srun my_app.py
 qfw-teardown
 ```
@@ -438,18 +459,26 @@ Local simulator jobs select the local profile:
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate
 qfw-setup --profile local
+qfw-status
 qfw-srun my_app.py
 qfw-teardown
 ```
 
-Site services use service lifecycle commands instead of the job lifecycle:
+Site services use independent role managers instead of the job lifecycle:
 
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate
-qfw-dirsvc-start --site-config /etc/openqse/qfw/site.yaml
-qfw-service-start \
+qfw-dir-svc start \
+  --run-dir /shared/openqse/qfw/services/directory \
+  --site-config /etc/openqse/qfw/site.yaml \
+  --scope site \
+  --node dirsvc01
+qfw-qpm-svc start \
+  --run-dir /shared/openqse/qfw/services/iqm-ornl-20q \
   --service-id iqm-ornl-20q \
-  --site-config /etc/openqse/qfw/site.yaml
+  --site-config /etc/openqse/qfw/site.yaml \
+  --scope site \
+  --node qpm01
 ```
 
 A service manager may either source `qfw-activate` in a small wrapper or use an
@@ -469,14 +498,11 @@ systemctl restart qfw-qpm@iqm.service
 ```
 
 The unit should load `/etc/openqse/qfw/env.sh` or call a wrapper that sources
-`qfw-activate`, then run `qfw-dirsvc-start` or `qfw-service-start`. The unit's
-startup timeout should exceed the QFw directory connection timeout so systemd
-does not kill a service while QFw is still waiting for a reachable directory.
-For QPM units, the systemd instance name identifies the production service
-through unit configuration and is passed to `qfw-service-start` as the service
-id. The command resolves that ID in the site manifest selected by `site.yaml`.
-A deployment that runs several production QPM services enables several
-`qfw-qpm@...` units.
+`qfw-activate`, then use `qfw-dir-svc run` or `qfw-qpm-svc run`. The foreground
+`run` action lets systemd supervise the manager and trigger reverse-order
+cleanup with SIGTERM. For QPM units, the instance configuration supplies one
+service ID and one QPM run directory. A deployment that runs several
+production QPM services enables several `qfw-qpm@...` units.
 
 The selected behavior comes from client runtime configuration or an explicit
 command-line option. It does not come from `site.yaml`. The compatibility
@@ -490,8 +516,8 @@ sequenceDiagram
     autonumber
     participant Admin as Site service manager
     participant Act as qfw-activate
-    participant DStart as qfw-dirsvc-start
-    participant SStart as qfw-service-start
+    participant DStart as qfw-dir-svc
+    participant SStart as qfw-qpm-svc
     participant Dir as DEFw-dirsvc
     participant QPM as QPM service
     participant User as User job
@@ -520,12 +546,12 @@ sequenceDiagram
     rect rgb(246, 246, 246)
         User->>Act: prepare job environment
         User->>Setup: select runtime config
-        Setup->>Setup: create job run and log state
+        Setup->>Setup: create application run and log state
         alt runtime requests local services
-            Setup->>DStart: start job-owned directory service
+            Setup->>DStart: start application-owned directory manager
             loop selected manifest entry
-                Setup->>LStart: start one job-owned service
-                LStart->>SStart: qfw-service-start service-id
+                Setup->>LStart: start one application-owned manager
+                LStart->>SStart: qfw-qpm-svc service-id
                 SStart->>QPM: start one QPM service instance
                 QPM->>Dir: register local service binding
             end
@@ -546,6 +572,8 @@ sequenceDiagram
         Tear->>Tear: stop only job-owned services
     end
 ```
+
+**Status:** draft
 
 ### Site Configuration
 
@@ -592,11 +620,11 @@ install:
   qfw-prefix: /opt/openqse/qfw/current
   defw-prefix: /opt/openqse/defw/current
 
-directory:
-  site:
-    name: ornl-site-dirsvc
-    endpoint: login01:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: ornl-site-dirsvc
+  listen-port: 8090
+  connect-timeout-seconds: 300
+  connection-file: /shared/openqse/qfw/directory-service.json
 
 service:
   manifest: /etc/openqse/qfw/services/site-services.yaml
@@ -612,6 +640,12 @@ qpm:
       purge-interval-seconds: 60
 ```
 
+Configuration paths may reference activated environment variables with the
+strict `${NAME}` form. `qfw-activate` establishes `QFW_PREFIX` and
+`DEFW_PREFIX` before QFw reads the site and runtime files. Referencing an unset
+or empty variable is an error. Unbraced `$NAME` references and legacy
+angle-bracket placeholders are invalid.
+
 A source-tree development site file may use the same shape with a localhost
 site endpoint. That endpoint gives the implicit profile a directory to query
 during local development:
@@ -621,14 +655,13 @@ install:
   qfw-prefix: /home/user/openQSE/QFw
   defw-prefix: /home/user/openQSE/QFw/DEFw
 
-directory:
-  site:
-    name: qfw-local-dirsvc
-    endpoint: localhost:8090
-    connect-timeout-seconds: 300
+directory-service:
+  name: qfw-local-dirsvc
+  endpoint: localhost:8090
+  connect-timeout-seconds: 300
 
 service:
-  manifest: <prefix>/share/qfw/config/services/site-services.yaml
+  manifest: ${QFW_PREFIX}/share/qfw/config/services/site-services.yaml
   device-access-config: /etc/openqse/qfw/device/device-access.yaml
 ```
 
@@ -638,6 +671,8 @@ settings, described below.
 The path to the canonical configuration is exported as `QFW_SITE_CONFIG`.
 Source-tree examples are templates only; production startup should not depend
 on writable source-tree files.
+
+**Status:** draft
 
 ### Directory Readiness
 
@@ -655,16 +690,18 @@ started local directory service and the configured site directory service. If a
 required directory is not reachable before the timeout, setup fails and
 `qfw-srun` should not run the application.
 
-`qfw-service-start` uses the same timeout when starting one named service
-instance. The service must register its bindings with the configured directory
-before it is considered ready. If registration cannot complete before the
-timeout, the service exits nonzero. This prevents it from continuing to run in
-a state where clients cannot discover it.
+`qfw-qpm-svc` uses the same timeout when starting one named service instance.
+The QPM must register its bindings with the configured directory before it is
+considered ready. If registration cannot complete before the timeout, the
+manager exits nonzero and cleans its owned components. This prevents it from
+continuing in a state where clients cannot discover it.
 
 `qfw-srun` may also validate the prepared directory environment before
 launching the application. A direct client lookup that loses directory
 connectivity returns a structured discovery error rather than falling back to
 an undiscoverable QPM.
+
+**Status:** draft
 
 ### Client Runtime Configuration
 
@@ -742,7 +779,7 @@ local-services:
     name: qfw-local-dirsvc
     bind-host: 127.0.0.1
     port: auto
-  service-manifest: <prefix>/share/qfw/config/services/local-services.yaml
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/local-services.yaml
 ```
 
 When `local-services.start-dirsvc` is true, `qfw-setup` starts a job-owned
@@ -798,6 +835,8 @@ If `local-services` is absent, `qfw-setup` starts no local services. This
 keeps production client jobs on the site-only discovery path while letting each
 runtime file decide whether local infrastructure is created.
 
+**Status:** draft
+
 ### Job-Local Service Manifest
 
 The job-local service manifest describes QPM and simulator services that QFw
@@ -824,6 +863,8 @@ Each manifest entry names one service and the information needed to start it:
 | `name` | Stable service name used by runtime profile selection and logs. |
 | `module` | QPM service module to start. |
 | `load-modules` | DEFw modules loaded into the service process. |
+| `environment-modules` | Site environment modules loaded into the PRTE and QPM process environment. |
+| `required-executables` | Commands validated after site module loading and before service startup. |
 | `agent-prefix` | Prefix used for the DEFw agent name. |
 | `target` | Launch target or placement group selected by the local runtime. |
 | `assigned-hosts` | Optional host group for simulator or local service placement. |
@@ -835,26 +876,14 @@ The manifest also contains the `mpi-launch` block used by local simulator
 services. This keeps allocation-specific MPI policy with the services that
 consume it. Provider wrappers live in each service's `provider-launch` block.
 
-`qfw-setup` expands the selected runtime profile into one start request per
-selected manifest entry. A local-service launcher helper runs inside the job
-lifecycle and invokes `qfw-service-start` once for each selected entry.
-`qfw-service-start` starts only the named service entry it is given and reports
-readiness only after that service has registered with the job-local directory
-service. If a required entry fails to start, `qfw-setup` fails the local
-runtime setup and tears down any job-owned services already started.
+`qfw-setup` expands the selected runtime profile into one manager request per
+selected manifest entry. It invokes the `qfw-qpm-svc` lifecycle engine once
+for each selected QPM. Each manager starts only its named service and reports
+readiness only after registration with the application directory. If a
+required entry fails, setup stops all application-owned managers already
+started and reports a failed runtime.
 
-### Configure Profiles
-
-Install-profile files, such as the YAML files under `setup/config`, are inputs
-to `qfw_configure`. They select the source or install base, module or explicit
-dependency paths, virtual environment, MPI transport setup, dependency build
-version, and installation defaults. `qfw_configure` uses these profiles to
-generate activation and build helper scripts. Clients and QPM services do not
-read them during normal execution.
-
-The existing `runtime-mode` key in these profiles describes the configure
-environment, such as `cluster` or `container`. It is separate from client
-runtime behavior and resolver order.
+**Status:** draft
 
 ### Site Service Manifest And QPM Policy
 
@@ -900,14 +929,15 @@ Explicit non-positive values are invalid except where a future schema version
 defines a named value such as `unlimited`. Invalid explicit retention settings
 should fail QPM readiness rather than silently disabling queue bounds.
 
+**Status:** draft
+
 ### Device Access Configuration
 
 Device-access configuration contains provider endpoints, provider device
 aliases, library preferences, per-device capability overrides, and credential
 provider selection. Source-tree files under `services/dev-config` are
-development templates. Development installations place them under
-`<prefix>/lib/qfw/services/dev-config`. Production configuration belongs under
-a protected site-owned path such as
+development templates and are not installed. Production configuration belongs
+under a protected site-owned path such as
 `/etc/openqse/qfw/device/device-access.yaml`. The
 `service.device-access-config` field in `site.yaml` selects the active file.
 User jobs should not receive the credential store referenced by that file.
@@ -954,23 +984,32 @@ qpus:
 
 credential-providers:
   iqm-site:
-    type: site-plugin
-    plugin: openqse_qfw_iqm_credentials
-  iqm-dev-yaml:
-    type: yaml-file
-    path: /path/to/dev/qpu-users.yaml
+    type: plugin
+    module: openqse_qfw_iqm_credentials
+    class: CredentialProvider
+  iqm-dev-json:
+    type: file
+    path: /path/to/dev/qpu-users.json
 ```
 
-The YAML credential provider is a reference and development implementation.
-Its input file can be written as:
+The file credential provider is a reference and development implementation.
+Its JSON input file can be written as:
 
-```yaml
-users:
-  alice:
-    devices:
-      ornl-iqm-20q:
-        api-key: iqm-token-reference-or-secret
+```json
+{
+  "users": {
+    "alice": {
+      "devices": {
+        "ornl-iqm-20q": {
+          "api_key": "iqm-token-reference-or-secret"
+        }
+      }
+    }
+  }
+}
 ```
+
+**Status:** draft
 
 ### Reservation-Scoped Provider Credentials
 
@@ -1073,6 +1112,8 @@ configuration, then registers service records with selected API bindings. User
 applications read the runtime environment prepared by `qfw-setup`, then connect
 directly to the selected QPM binding.
 
+**Status:** draft
+
 ### Environment Variables
 
 Configuration files are the primary deployment interface. Environment variables
@@ -1089,19 +1130,12 @@ Client and resolver variables:
 | `QFW_RUNTIME_PROFILE` | Optional profile name, such as `local` or `hybrid`, used when no explicit runtime path is supplied. |
 | `QFW_SITE_DIRSVC_ENDPOINTS` | Override for site directory endpoints from `site.yaml`; normally unset. |
 | `QFW_QPM_RESOLVER_SCOPE_ORDER` | Override for `resolver.scope-order` from runtime configuration. |
-| `QFW_QPM_DIRECT_ENDPOINT_FALLBACK` | Enables the configured direct-endpoint resolver scope. The name is retained for compatibility, but the scope is also used for explicit direct long-running profiles. |
-| `QFW_DIRECT_QPM_ENDPOINT` | Configured direct DEFw endpoint for an unregistered or directly selected long-running QPM. |
-| `QFW_DIRECT_QPM_SERVICE_MODULE` | Optional service module override for a direct endpoint binding. |
-| `QFW_DIRECT_QPM_SERVICE_CLASS` | Optional service class override for a direct endpoint binding. |
 
 Service-launch variables:
 
 | Variable | Purpose |
 | --- | --- |
 | `QFW_QPM_OPERATION_MODE` | QPM operation-mode override, such as `long-running` or `qfw-managed`. |
-| `QFW_QPM_REGISTER_WITH_DIRSVC` | Override controlling whether a QPM registers with a directory service. |
-| `QFW_QPM_DIRECT_ENDPOINT_FALLBACK` | Enables direct listener readiness when a service runs without directory-service registration. |
-| `QFW_DIRECT_QPM_ENDPOINT` | Stable endpoint advertised to direct clients for long-running listener mode. |
 | `DEFW_DISABLE_DIRSVC` | Low-level DEFw listener setting written by wrappers; users should not set it directly. |
 
 Activation variables:
@@ -1123,6 +1157,8 @@ Standard external variables used by the runtime:
 | `VIRTUAL_ENV` | Active Python virtual environment detected by `defw-python`. |
 | `LD_LIBRARY_PATH` | Dynamic-library search path augmented by activation or MPI policy. |
 
+**Status:** draft
+
 ### Lifecycle Ownership
 
 Every process started by QFw has an owning scope. Site-owned directory services
@@ -1141,6 +1177,8 @@ services they use.
 
 <details open>
 <summary><strong>Managed Resource Model</strong></summary>
+
+**Status:** draft
 
 ## Managed Resource Model
 
@@ -1247,7 +1285,11 @@ timed-out overlays where those concepts live outside qhw-scheduler.
 <details open>
 <summary><strong>QFw Controller Architecture</strong></summary>
 
+**Status:** draft
+
 ## QFw Controller Architecture
+
+**Status:** draft
 
 ### Current QPM Structure
 
@@ -1279,12 +1321,16 @@ policy configuration, scheduler control, telemetry, and privileged QPM control
 bindings. The split changes remote API ownership without creating separate
 execution paths inside each QPM service.
 
+**Status:** draft
+
 ### Current Execution Flow
 
 The current execution path sends client work directly from QPM into QRC after
 local host-slot checks. DEFw-dirsvc may be used to discover the service and
 construct the client binding, but it does not participate in execution after
 the client is bound to the QPM service.
+
+**Status:** draft
 
 #### Execution Submission Flow
 
@@ -1321,6 +1367,8 @@ Asynchronous execution returns a circuit ID after QRC accepts the work. The
 client can then observe completion through a completion-queue read or through
 event notification.
 
+**Status:** draft
+
 #### Completion Queue Read Flow
 
 Completion-queue reads are a polling path. `peek_cq()` observes a visible
@@ -1344,6 +1392,8 @@ sequenceDiagram
     QPM-->>API: completion record or in-progress
     API-->>Client: completion record or in-progress
 ```
+
+**Status:** draft
 
 #### Event Notification Flow
 
@@ -1380,6 +1430,8 @@ sequenceDiagram
 Local out-of-resource handling happens in `UTIL_QPM` before provider
 submission. The notification path avoids unbounded polling while preserving
 completion-queue reads as a fallback and recovery mechanism.
+
+**Status:** draft
 
 ### Admission And Scheduler Integration
 
@@ -1590,6 +1642,8 @@ API states derived from dispatcher and waiter context. A provider that does not
 distinguish accepted and running work may move directly from `ASSIGNED` to
 `RUNNING` when the provider accepts the submission.
 
+**Status:** draft
+
 ### DEFw Directory And Identity Model
 
 DEFw-dirsvc is the directory service for QFw-managed and long-running services.
@@ -1608,16 +1662,17 @@ The transport layer and the directory layer need separate identities:
 
 | Identity | Owner | Stability | Purpose |
 | --- | --- | --- | --- |
-| `service_id` | Python directory and service registration | Stable across service restarts | Identifies the logical service or client registration. |
+| `service_id` | Python directory and service registration | Stable for a site service; unique to one application run for a local service | Identifies one logical service across all directories visible to a client. |
 | `runtime_id` | Service process | Stable for one process lifetime | Identifies one running instance of a logical service. |
 | `peer_handle` | C transport abstraction exposed to Python | Stable while C considers a peer callable | Lets Python associate registration and liveness with an opaque transport peer. |
 | `generation` | Python directory | Increments when a new runtime registers for a known `service_id` | Separates stale endpoints from the active runtime. |
 
-`service_id` should come from deployment configuration or another stable
-registration source. A generated `service_id` is acceptable only for ephemeral
-services that do not need restart continuity. Services should register with a
-stable `service_id`, service type, concrete API bindings, selector metadata,
-and endpoint metadata.
+Site service IDs come from deployment configuration and remain stable across
+restarts. QFw derives each application-owned service ID from its manifest name
+and application run ID. A resolver rejects a service ID found in more than one
+visible directory instead of choosing by scope priority. Services register
+their service ID, service type, concrete API bindings, selector metadata, and
+endpoint metadata.
 
 C manages connection state, sockets, heartbeat transmission, heartbeat failure
 detection, connection block UUIDs, and low-level connection events. It exports
@@ -1683,6 +1738,8 @@ The control flow should use these steps:
    authorization. The launcher releases the reservation after the application
    step exits. DEFw-dirsvc does not perform QPM capacity accounting.
 
+**Status:** draft
+
 #### Connection Establishment Flow
 
 Connection establishment creates a transport binding. It does not register the
@@ -1700,7 +1757,7 @@ sequenceDiagram
     Driver->>QPM: reserve(user, allocation, device, scope)
     QPM-->>Driver: reservation_id and execution credential
     Driver-->>Client: reservation_id and execution credential
-    Client->>Dir: resolve_service(filters, api_category)
+    Client->>Dir: resolve_services(filters, api_category)
     Dir->>Dir: select authorized UP record
     Dir-->>Client: service record, API binding, endpoint, identity
     Client->>CT: connect(endpoint, service_id, runtime_id, generation)
@@ -1715,6 +1772,8 @@ sequenceDiagram
 The resolve response carries enough identity for the client side to reject
 stale bindings. A later directory generation supersedes any endpoint returned
 for an older generation.
+
+**Status:** draft
 
 #### Peer Lifecycle Events
 
@@ -1774,6 +1833,8 @@ Python never derives peer liveness by refreshing C transport state. A
 C-provided snapshot may be used during startup recovery or tests, but it is a
 resynchronization from the C source of truth rather than a polling path.
 
+**Status:** draft
+
 ##### Heartbeat Policy
 
 Heartbeat behavior is a policy on each C connection record rather than an
@@ -1816,6 +1877,8 @@ Python ignores peer events that reference an older runtime identity, peer
 handle, or directory generation after a newer runtime has become active for the
 same `service_id`. This rule prevents late loss events from taking down a
 restarted service.
+
+**Status:** draft
 
 #### Service Registration Flow
 
@@ -1928,6 +1991,8 @@ unless a deployment explicitly enables a controlled takeover policy. Restart of
 an inactive service uses the same `service_id` with a new `runtime_id` and a
 new generation.
 
+**Status:** draft
+
 #### DEFw Registration Infrastructure Changes
 
 DEFw registration should support one logical service advertising multiple API
@@ -1943,12 +2008,9 @@ filters and requested binding filters, then creates the client proxy from the
 selected binding's `client_module` and `client_class`. The proxy sends RPCs to
 the selected binding's `service_module` and `service_class`.
 
-The old connection helper constructed the proxy by looking up
-`service_apis[service_name]` and then instantiating a class with the same name
-as `service_name`. `BaseRemote` then sends `type(self).__name__` as the remote
-service class during `instantiate_class` and `method_call` RPCs. The
-binding-aware path keeps that convention as a compatibility fallback, but it
-adds an explicit RPC target override.
+Every remote proxy requires an explicit service module and service class from
+its selected binding. `BaseRemote` rejects remote construction without both
+values, so RPC routing cannot fall back to an inferred local class name.
 
 The binding-aware construction path is:
 
@@ -1994,6 +2056,8 @@ bindings. For example, the QFw resolver can map its execution category to the
 DEFw does not need category-specific rules, authorization behavior, or QPM
 knowledge to route those calls.
 
+**Status:** draft
+
 #### Heartbeat And Liveness Flow
 
 C owns heartbeat probes and connection-level failure detection. Python owns the
@@ -2024,6 +2088,8 @@ a newer runtime has registered for the same `service_id`.
 Normal discovery omits `DOWN`, `TIMED_OUT`, and `DEREGISTERED` records.
 Operator queries may include inactive records until the retention deadline.
 
+**Status:** draft
+
 #### Service Deregistration Flow
 
 Deregistration removes the service from normal discovery while preserving the
@@ -2048,6 +2114,8 @@ sequenceDiagram
 After the retention deadline, a directory purge deletes the inactive record
 from the service database. Purge activity may remain in an audit log, but the
 record is no longer part of service discovery or operator directory queries.
+
+**Status:** draft
 
 #### Directory Service Scope And Resolver Policy
 
@@ -2107,13 +2175,12 @@ among endpoints based on load, admission estimates, scheduler state, or policy.
 That scheduler is a higher-level selection component rather than the baseline
 resolver behavior.
 
-Direct configured QPM endpoint resolution is the supported model for
-unregistered long-running QPM services and also remains useful for diagnostics
-and controlled fallback. It still uses DEFw RPC and the same selected QPM API
-binding model; it only bypasses directory-service registration and lookup.
-Runtime profiles decide whether clients use site directory discovery, job-local
-directory discovery, direct endpoint resolution, or an ordered combination of
-those scopes.
+Runtime profiles decide whether clients use site directory discovery,
+application-local directory discovery, or an ordered combination of those
+scopes. An endpoint that has not registered with a directory service is never
+eligible for client resolution.
+
+**Status:** draft
 
 ### QPM Override Handling
 
@@ -2169,6 +2236,8 @@ public `sync_run()` and `async_run()` overrides use the shared managed path.
 Metadata methods remain telemetry and discovery API methods rather than
 execution hooks.
 
+**Status:** draft
+
 ### QFw API Categories
 
 Each QPM API category owns a separate service API package and remote class.
@@ -2198,13 +2267,15 @@ runtimes submit qtasks through execution APIs using that reservation ID and the
 token parameter described below. Site operators configure admission policy
 through the admission policy configuration surface.
 
+**Status:** draft
+
 #### Token Placeholder For Current Milestone
 
 The QPM API keeps a `token` parameter on control, admission, execution, and
 telemetry methods so the call signatures are ready for the later
 authentication feature. In the current milestone, authentication is disabled.
 QPM treats the token as opaque request metadata. It accepts, stores, and
-forwards the value where useful for compatibility, but does not parse it,
+forwards the value for later authentication integration, but does not parse it,
 verify it, derive caller identity from it, or reject requests because of it.
 
 Reservation IDs remain the mechanism that ties execution calls to admission
@@ -2216,6 +2287,8 @@ and design are defined separately in `docs/requirements-authentication.md` and
 DEFw remains outside this token contract. It stores service records, resolves
 selected API bindings, establishes transport, and routes RPCs to
 `service_module.service_class.method`.
+
+**Status:** draft
 
 #### Admission Policy Configuration APIs
 
@@ -2250,6 +2323,8 @@ qhw-admission estimates each task in `baseline_units` and `total_ns`. QPM maps
 those values to qhw-scheduler `estimated_cost` and `estimated_runtime_ns`;
 qhw-scheduler does not interpret the baseline circuit.
 
+**Status:** draft
+
 #### Scheduler Control APIs
 
 Scheduler control APIs configure qhw-scheduler behavior for a QPM-managed
@@ -2271,6 +2346,8 @@ There are no short-form `pause()`, `resume()`, or `drain()` aliases and no
 alternate scheduler-policy setter. Provider queue capability remains in the
 device profile rather than the dispatch-limits payload.
 
+**Status:** draft
+
 #### Admission Control APIs
 
 Admission control APIs create and manage reservation lifecycle state. Workflow
@@ -2286,6 +2363,8 @@ the primary callers.
 | `cancel(token, reservation_id, reason)` | `token`, `reservation_id`, cancellation reason. | Starts the QPM close protocol, cancels or fails reservation-scoped work according to site policy, finalizes held-task accounting, and then moves the reservation to cancelled. |
 | `get_reservation(token, reservation_id)` | `token`, `reservation_id`. | Returns reservation state, owner metadata, expiration, allowance, and usage summary. |
 | `list_reservations(token, filters)` | `token`, device, owner, job, state, or time filters. | Returns reservation summaries matching the filters. |
+
+**Status:** draft
 
 #### Execution APIs
 
@@ -2319,6 +2398,8 @@ placeholder.
 
 <details>
 <summary><strong>Per-Reservation Completion Queues</strong></summary>
+
+**Status:** draft
 
 ##### Per-Reservation Completion Queues
 
@@ -2402,6 +2483,8 @@ records have exceeded the configured retention limits.
 
 </details>
 
+**Status:** draft
+
 #### Synchronous Execution Contract
 
 `sync_run()` uses the same controller path as `async_run()`. It validates the
@@ -2447,6 +2530,8 @@ All synchronous responses use the same structured status envelope:
 | `error` | Structured failure details for rejected, failed, expired, or invalid requests. Authentication-specific errors are added by the separate authentication feature. |
 | `retry_after_ns` or `estimated_start_ns` | Optional scheduling guidance when the policy can provide it. |
 
+**Status:** draft
+
 #### Telemetry And Discovery APIs
 
 Telemetry and discovery APIs contain aggregate read-only QPM, scheduler,
@@ -2467,6 +2552,8 @@ Access filtering is deferred to the authentication feature.
 Task timing and metadata are execution-lifecycle operations. They require an
 explicit QPM task ID and reservation scope; telemetry never infers a global or
 per-service "last job".
+
+**Status:** draft
 
 #### Privileged QPM Control APIs
 
@@ -2490,6 +2577,8 @@ credentials, stops the QRC, and enters `stopped`. It returns the acknowledgement
 before calling the DEFw process exit path, which performs normal directory
 deregistration. Repeated requests return the original shutdown state without
 starting another finalizer.
+
+**Status:** draft
 
 ### Integration Sequence
 
@@ -2536,6 +2625,8 @@ State maintained by QPM:
 | Worker state, timeouts, and cancellation state | These lifecycle details sit outside admission accounting. |
 | Live telemetry inputs | QPM supplies queue depth, pending count, active task count, device availability, and related values through the admission capacity-provider callback. |
 
+**Status:** draft
+
 ### Identifier Allocation And Mapping
 
 QPM is the canonical allocator for managed qtask IDs. It allocates the qtask ID
@@ -2576,10 +2667,14 @@ IDs and QPM must retain the parent/child mapping beside the original qtask ID.
 <details open>
 <summary><strong>Requirement Design Notes</strong></summary>
 
+**Status:** draft
+
 ## Requirement Design Notes
 
 <details>
 <summary><strong>OPM-001</strong></summary>
+
+**Status:** draft
 
 ### OPM-001
 
@@ -2596,6 +2691,8 @@ path and implemented inside QPM.
 
 <details>
 <summary><strong>OPM-002</strong></summary>
+
+**Status:** draft
 
 ### OPM-002
 
@@ -2627,6 +2724,8 @@ that profile.
 <details>
 <summary><strong>OPM-003</strong></summary>
 
+**Status:** draft
+
 ### OPM-003
 
 Deployment ownership should be orthogonal to reservation ownership. Whether QFw
@@ -2638,6 +2737,8 @@ across both deployment modes.
 
 <details>
 <summary><strong>DISC-001</strong></summary>
+
+**Status:** draft
 
 ### DISC-001
 
@@ -2656,13 +2757,14 @@ binding class, selector name, selector aliases, and selector resources.
 <details>
 <summary><strong>DISC-002</strong></summary>
 
+**Status:** draft
+
 ### DISC-002
 
-The removed discovery-service activation path called
-`service_info.consume_capacity()` before activating the service callback. That
-capacity was stored on the queried `DEFwServiceInfo` object, not in an
-admission-grade resource database. The target design removes QPM admission
-capacity accounting from this path.
+The removed discovery-service activation path changed capacity on queried
+service metadata before activating the service callback. That state was not
+stored in an admission-grade resource database. The target design removes QPM
+admission capacity accounting from this path.
 
 Directory resolution should return service records, selected API bindings, and
 endpoints. Transport binding should connect the client to the selected
@@ -2673,88 +2775,74 @@ endpoint. QPM reservation should be exposed only through the QPM admission API.
 <details>
 <summary><strong>DISC-003</strong></summary>
 
+**Status:** draft
+
 ### DISC-003
 
-DEFw service startup should distinguish job-local registration,
-site-global registration, and direct listener mode. Registration settings should
-be explicit so accidental unregistered services are easy to diagnose.
+DEFw service startup should distinguish application-local and site-global
+registration. Every QPM must register before it becomes ready.
 
 Candidate configuration fields:
 
 | Field | Meaning |
 | --- | --- |
-| `register-with-dirsvc` | Boolean controlling whether the service registers with a DEFw-dirsvc. |
 | `listen-endpoint` | Stable endpoint or port used by long-running clients. |
 | `dirsvc-endpoint` | DEFw-dirsvc endpoint used for job-local or site-global registration. |
-| `startup-readiness-gate` | `dirsvc-ready` for registered mode or `listener-and-controller-ready` for direct endpoint mode. |
+| `startup-readiness-gate` | `dirsvc-ready` after listener and controller initialization. |
 
 The option must map to the existing DEFw startup behavior. `defwp-wrapper`
 defaults `DEFW_DISABLE_DIRSVC` to `yes`, and the C listener attempts a parent
 directory-service connection only when directory-service use is enabled and a
 parent name is configured. QFw-managed service launch sets
-`DEFW_DISABLE_DIRSVC=no` and provides parent host, port, and name. A
-long-running QPM may register with the configured production DEFw-dirsvc or run
-as a configured direct endpoint, depending on the selected runtime profile.
-Direct unregistered listener mode should set `DEFW_DISABLE_DIRSVC=yes`, leave
-registration disabled, and use the listener/controller readiness gate.
+`DEFW_DISABLE_DIRSVC=no` and provides the parent host, port, and name. A
+long-running QPM registers with the configured production DEFw-dirsvc.
 
-Provider QPM modules that currently wait in `qpm_wait_dirsvc()` need a
-configuration-aware readiness path. In registered mode they may keep the
-existing directory-service wait after it is renamed. In direct endpoint mode
-they should call the common QPM completion routine after listener and
-controller initialization, then expose health and metadata over DEFw RPC so the
-direct resolver can validate the service.
+Provider QPM modules use the common configuration-aware readiness path. They
+wait for listener and controller initialization and directory registration.
 
 </details>
 
 <details>
 <summary><strong>DISC-004</strong></summary>
 
+**Status:** draft
+
 ### DISC-004
 
 QFw should provide a QPM resolver layer between clients and QPM discovery. The
-resolver queries one or more DEFw-dirsvc instances and can also synthesize a
-binding record from a configured direct endpoint. QFw-managed local services
+resolver queries one or more DEFw-dirsvc instances. QFw-managed local services
 register with the job-local directory service started by `qfw-setup`.
-Long-running services either register with the shared directory service whose
-endpoint is recorded in the site configuration or listen on a configured direct
-DEFw endpoint without registration.
+Long-running services register with the shared directory service whose resolved
+endpoint is published in its connection record.
 
 The resolver input is the site configuration plus client runtime profile rather
 than a list of primary QPM endpoints. `site.yaml` provides the site-global
-directory endpoint:
+directory connection record:
 
 ```yaml
-directory:
-  site:
-    name: ornl-site-dirsvc
-    endpoint: login01:8090
+directory-service:
+  name: ornl-site-dirsvc
+  listen-port: 8090
+  connection-file: /shared/openqse/qfw/directory-service.json
 ```
 
-The selected runtime configuration provides lookup order. Directory scopes and
-direct endpoint scopes are explicit entries in that order:
+The selected runtime configuration provides directory lookup order:
 
 ```yaml
 resolver:
   scope-order:
     - local
     - site
-    - direct
 ```
 
 The implicit profile uses only `site`. The local profile uses only `local`.
-The hybrid profile uses `local` first and then `site`. A direct long-running
-profile can use only `direct`, while a controlled fallback profile can place
-`direct` after the permitted directory scopes.
+The hybrid profile uses `local` first and then `site`.
 
 The resolver path should:
 
-1. Read enabled directory-service endpoints, configured direct endpoints, and
-   selection policy.
-2. Connect to each enabled DEFw-dirsvc or synthesize direct endpoint records as
-   required by ordered policy.
-3. Query service records and selected API bindings, or build the selected
-   binding for a direct endpoint.
+1. Read enabled directory-service endpoints and selection policy.
+2. Connect to each enabled DEFw-dirsvc in the configured order.
+3. Query service records and selected API bindings.
 4. Annotate candidates with resolver scope and resolver identity.
 5. Filter by service type, selector resource, selector alias, API binding,
    caller policy, and operation mode.
@@ -2780,9 +2868,8 @@ deterministic policy or returns a structured ambiguity error. Scheduler-driven
 or load-aware selection is outside this resolver layer.
 
 After resolution, reservation and release behavior should be identical for
-QFw-managed and long-running QPM services. Directory-service discovery and
-configured direct endpoint resolution are both supported resolver contracts; the
-selected runtime profile determines which scopes are allowed and in what order.
+QFw-managed and long-running QPM services. The selected runtime profile
+determines which directory scopes are allowed and in what order.
 
 Load-aware selection among multiple matching QPM endpoints belongs to a later
 QFw scheduler layer. The DISC-004 resolver should only apply deterministic
@@ -2794,6 +2881,8 @@ defined.
 <details>
 <summary><strong>DISC-005</strong></summary>
 
+**Status:** draft
+
 ### DISC-005
 
 The long-running QPM service should remain a DEFw service module with a DEFw
@@ -2804,6 +2893,8 @@ should still communicate through DEFw RPC and the QPM service API surface.
 
 <details>
 <summary><strong>ADM-001</strong></summary>
+
+**Status:** draft
 
 ### ADM-001
 
@@ -2820,6 +2911,8 @@ needs reservation details.
 
 <details>
 <summary><strong>ADM-002</strong></summary>
+
+**Status:** draft
 
 ### ADM-002
 
@@ -2838,6 +2931,8 @@ metadata.
 
 <details>
 <summary><strong>ADM-003</strong></summary>
+
+**Status:** draft
 
 ### ADM-003
 
@@ -2861,6 +2956,8 @@ operation.
 <details>
 <summary><strong>ADM-004</strong></summary>
 
+**Status:** draft
+
 ### ADM-004
 
 QPM may cache or index transient execution objects, but it should not maintain a
@@ -2871,6 +2968,8 @@ query qhw-admission using the reservation ID.
 
 <details>
 <summary><strong>ADM-005</strong></summary>
+
+**Status:** draft
 
 ### ADM-005
 
@@ -2900,6 +2999,8 @@ provider state, and any queued retry path that later submits work.
 
 <details>
 <summary><strong>ADM-006</strong></summary>
+
+**Status:** draft
 
 ### ADM-006
 
@@ -2932,6 +3033,8 @@ retryable pending-capacity state for the same qtask ID.
 <details>
 <summary><strong>ADM-007</strong></summary>
 
+**Status:** draft
+
 ### ADM-007
 
 QPM should record both estimated and actual usage for accepted
@@ -2953,6 +3056,8 @@ consumed estimate is not used, or only part of it is used, QPM calls
 <details>
 <summary><strong>ADM-016</strong></summary>
 
+**Status:** draft
+
 ### ADM-016
 
 QPM reservation APIs should return the structured outcome produced by
@@ -2969,6 +3074,8 @@ lifecycle state where applicable.
 
 <details>
 <summary><strong>ADM-017</strong></summary>
+
+**Status:** draft
 
 ### ADM-017
 
@@ -2990,6 +3097,8 @@ over-limit conditions through `QHW_ADM_REASON_OVER_LIMIT`, usage state,
 <details>
 <summary><strong>ADM-018</strong></summary>
 
+**Status:** draft
+
 ### ADM-018
 
 The admission allowance check and usage update must be concurrency-safe. When
@@ -3009,6 +3118,8 @@ are telemetry and diagnostics. They are not admission holds.
 
 <details>
 <summary><strong>ADM-019</strong></summary>
+
+**Status:** draft
 
 ### ADM-019
 
@@ -3033,6 +3144,8 @@ pending-capacity retry queue.
 <details>
 <summary><strong>ADM-020</strong></summary>
 
+**Status:** draft
+
 ### ADM-020
 
 When a qtask cannot obtain estimated capacity, QPM should apply site policy to
@@ -3054,6 +3167,8 @@ ready to commit the hold and submit the qtask to qhw-scheduler.
 
 <details>
 <summary><strong>ADM-021</strong></summary>
+
+**Status:** draft
 
 ### ADM-021
 
@@ -3085,6 +3200,8 @@ reported a reconciliation fault.
 
 <details>
 <summary><strong>ADM-022</strong></summary>
+
+**Status:** draft
 
 ### ADM-022
 
@@ -3118,6 +3235,8 @@ until their final accounting is recorded.
 <details>
 <summary><strong>SCHED-001</strong></summary>
 
+**Status:** draft
+
 ### SCHED-001
 
 Reservation-scoped execution should route through qhw-scheduler during normal
@@ -3134,6 +3253,8 @@ scheduler.
 <details>
 <summary><strong>SCHED-002</strong></summary>
 
+**Status:** draft
+
 ### SCHED-002
 
 The controller should maintain scheduler state per managed QPU execution
@@ -3149,6 +3270,8 @@ task lifecycle from interfering with another device.
 <details>
 <summary><strong>SCHED-003</strong></summary>
 
+**Status:** draft
+
 ### SCHED-003
 
 When QPM creates a scheduler task, it should record the relationship among the
@@ -3162,6 +3285,8 @@ events, cancellation, result retrieval, and admission usage accounting.
 
 <details>
 <summary><strong>SCHED-004</strong></summary>
+
+**Status:** draft
 
 ### SCHED-004
 
@@ -3179,6 +3304,8 @@ forward.
 
 <details>
 <summary><strong>SCHED-005</strong></summary>
+
+**Status:** draft
 
 ### SCHED-005
 
@@ -3212,6 +3339,8 @@ provider handle and submitted timestamp in runtime state and expose
 <details>
 <summary><strong>SCHED-006</strong></summary>
 
+**Status:** draft
+
 ### SCHED-006
 
 QPM should update qhw-admission usage and accounting state from task lifecycle
@@ -3232,6 +3361,8 @@ admission accounting is final.
 <details>
 <summary><strong>SCHED-007</strong></summary>
 
+**Status:** draft
+
 ### SCHED-007
 
 The scheduler-backed dispatcher bounds provider queue depth with the smaller
@@ -3249,6 +3380,8 @@ effective value, and current provider occupancy.
 
 <details>
 <summary><strong>SCHED-008</strong></summary>
+
+**Status:** draft
 
 ### SCHED-008
 
@@ -3272,6 +3405,8 @@ scheduler and policy can provide them.
 <details>
 <summary><strong>SCHED-009</strong></summary>
 
+**Status:** draft
+
 ### SCHED-009
 
 Public execution APIs should not provide a normal path that bypasses admission
@@ -3287,6 +3422,8 @@ managed-resource boundary.
 <details>
 <summary><strong>SCHED-010</strong></summary>
 
+**Status:** draft
+
 ### SCHED-010
 
 QPM must not expose a public execution path that bypasses admission
@@ -3298,6 +3435,8 @@ reservation and follows the managed admission and scheduling path.
 
 <details>
 <summary><strong>SCHED-011</strong></summary>
+
+**Status:** draft
 
 ### SCHED-011
 
@@ -3314,6 +3453,8 @@ and result record affected by the cancellation.
 
 <details>
 <summary><strong>SCHED-012</strong></summary>
+
+**Status:** draft
 
 ### SCHED-012
 
@@ -3335,6 +3476,8 @@ Submitted and timed-out are QPM overlays from dispatcher and waiter state.
 <details>
 <summary><strong>SCHED-013</strong></summary>
 
+**Status:** draft
+
 ### SCHED-013
 
 When site policy permits it, QPM should expose pending-queue position,
@@ -3350,6 +3493,8 @@ trusted automation to make progress decisions.
 <details>
 <summary><strong>SCHED-014</strong></summary>
 
+**Status:** draft
+
 ### SCHED-014
 
 QPM should provide estimated wait time or estimated start time for pending or
@@ -3364,6 +3509,8 @@ estimate is unavailable rather than fabricate one.
 
 <details>
 <summary><strong>CAT-001</strong></summary>
+
+**Status:** draft
 
 ### CAT-001
 
@@ -3383,6 +3530,8 @@ the read surfaces used by applications, operators, and policy services.
 <details>
 <summary><strong>CAT-002</strong></summary>
 
+**Status:** draft
+
 ### CAT-002
 
 The execution category should be modeled as task lifecycle APIs. These APIs
@@ -3397,6 +3546,8 @@ resource", not "place this task directly on the provider queue".
 
 <details>
 <summary><strong>CAT-003</strong></summary>
+
+**Status:** draft
 
 ### CAT-003
 
@@ -3415,6 +3566,8 @@ validation is defined in `docs/detailed-design-authentication.md`.
 <details>
 <summary><strong>CAT-004</strong></summary>
 
+**Status:** draft
+
 ### CAT-004
 
 Scheduler control APIs should expose workflow-level operations for selecting
@@ -3428,6 +3581,8 @@ of the normal application task-run path.
 
 <details>
 <summary><strong>CAT-005</strong></summary>
+
+**Status:** draft
 
 ### CAT-005
 
@@ -3446,6 +3601,8 @@ Policy-controlled filtering is deferred to
 <details>
 <summary><strong>CAT-006</strong></summary>
 
+**Status:** draft
+
 ### CAT-006
 
 QFw should not re-expose the complete low-level qhw-admission or qhw-scheduler
@@ -3460,6 +3617,8 @@ implement those workflows.
 
 <details>
 <summary><strong>CAT-007</strong></summary>
+
+**Status:** draft
 
 ### CAT-007
 
@@ -3476,6 +3635,8 @@ contracts, telemetry, and structured error semantics.
 <details>
 <summary><strong>API-001</strong></summary>
 
+**Status:** draft
+
 ### API-001
 
 Current `api_qpm` execution calls such as `sync_run(info)` and
@@ -3488,9 +3649,9 @@ production behavior should require the reservation ID.
 
 The Qiskit adapter uses the same reservation-scoped API path. The current
 `qfw_lookup_service.get_qpm()` path is a QPM resolver wrapper. The resolver
-talks to the enabled DEFw-dirsvc instances or configured direct endpoint scopes
-from the selected runtime profile. It may use the site-global directory, the
-job-local directory, direct endpoint resolution, or an ordered combination. It
+talks to the enabled DEFw-dirsvc instances from the selected runtime profile.
+It may use the site-global directory, the job-local directory, or an ordered
+combination. It
 resolves the selected service record and API binding, then constructs the same
 QPM client binding regardless of which configured scope returned the record.
 
@@ -3523,6 +3684,8 @@ Token validation is added by the separate authentication feature.
 <details>
 <summary><strong>API-002</strong></summary>
 
+**Status:** draft
+
 ### API-002
 
 Read-only service metadata calls can remain available before reservation when
@@ -3536,6 +3699,8 @@ that every read-only call is always public.
 
 <details>
 <summary><strong>API-003</strong></summary>
+
+**Status:** draft
 
 ### API-003
 
@@ -3552,6 +3717,8 @@ distinguishing those jobs and sessions in both operation modes.
 
 <details>
 <summary><strong>API-004</strong></summary>
+
+**Status:** draft
 
 ### API-004
 
@@ -3574,6 +3741,8 @@ reservation, or escalate to an operator.
 <details>
 <summary><strong>CTRL-001</strong></summary>
 
+**Status:** draft
+
 ### CTRL-001
 
 Admission policy configuration and scheduler policy configuration should be
@@ -3588,6 +3757,8 @@ unstructured input.
 
 <details>
 <summary><strong>CTRL-002</strong></summary>
+
+**Status:** draft
 
 ### CTRL-002
 
@@ -3606,6 +3777,8 @@ and confidence when those values are available.
 <details>
 <summary><strong>CTRL-003</strong></summary>
 
+**Status:** draft
+
 ### CTRL-003
 
 Admission policies should consume capacity snapshots through a defined QPM or
@@ -3620,6 +3793,8 @@ state.
 
 <details>
 <summary><strong>CTRL-004</strong></summary>
+
+**Status:** draft
 
 ### CTRL-004
 
@@ -3636,6 +3811,8 @@ observe consistent state.
 <details>
 <summary><strong>CTRL-005</strong></summary>
 
+**Status:** draft
+
 ### CTRL-005
 
 The QPM service or associated QPU control service should configure a
@@ -3650,6 +3827,8 @@ estimator and policy plugins.
 
 <details>
 <summary><strong>CTRL-006</strong></summary>
+
+**Status:** draft
 
 ### CTRL-006
 
@@ -3668,6 +3847,8 @@ decisions.
 <details>
 <summary><strong>CTRL-007</strong></summary>
 
+**Status:** draft
+
 ### CTRL-007
 
 QFw telemetry should expose aggregate queue metrics when permitted by site
@@ -3684,6 +3865,8 @@ from unrelated service internals.
 <details>
 <summary><strong>CTRL-008</strong></summary>
 
+**Status:** draft
+
 ### CTRL-008
 
 Queue telemetry APIs should label estimates with confidence, timestamp, and
@@ -3698,6 +3881,8 @@ explicit instead of presenting the estimate as authoritative.
 
 <details>
 <summary><strong>STATE-001</strong></summary>
+
+**Status:** draft
 
 ### STATE-001
 
@@ -3716,6 +3901,8 @@ admission ledger.
 <details>
 <summary><strong>STATE-002</strong></summary>
 
+**Status:** draft
+
 ### STATE-002
 
 When transient execution state is created for reservation-scoped work, QPM
@@ -3733,6 +3920,8 @@ lifecycle.
 <details>
 <summary><strong>STATE-003</strong></summary>
 
+**Status:** draft
+
 ### STATE-003
 
 QPM should use its runtime mappings to correlate QFw circuit records,
@@ -3748,6 +3937,8 @@ metadata.
 
 <details>
 <summary><strong>STATE-004</strong></summary>
+
+**Status:** draft
 
 ### STATE-004
 
@@ -3771,3 +3962,5 @@ retention windows have elapsed.
 </details>
 
 </details>
+
+**Status:** draft

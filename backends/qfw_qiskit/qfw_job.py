@@ -9,6 +9,10 @@ from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError
+from util.qpm.statevector import (
+	decode_statevector_payload,
+	statevector_payload_size_summary,
+)
 from .qfw_metadata import get_qubit_mapping
 
 
@@ -24,20 +28,15 @@ def normalize_reservation_id(value):
 	if value is None:
 		return None
 	if isinstance(value, str):
-		value = value.strip()
-		if not value:
-			raise DEFwError("reservation_id must not be empty")
-		try:
-			value = int(value, 0)
-		except ValueError as exc:
+		if not value or not value.isdecimal():
 			raise DEFwError(
-				f"reservation_id must be an unsigned 64-bit integer: "
-				f"{value!r}") from exc
+				f"reservation_id must be a decimal uint64_t value: {value!r}")
+		value = int(value, 10)
 	if isinstance(value, bool) or not isinstance(value, int):
 		raise DEFwError(
 			f"reservation_id must be an unsigned 64-bit integer: "
 			f"{value!r}")
-	if value < 0 or value > 0xffffffffffffffff:
+	if value < 1 or value > 0xffffffffffffffff:
 		raise DEFwError(
 			f"reservation_id must fit in uint64_t: {value!r}")
 	return value
@@ -188,12 +187,12 @@ class QFwJob(Job):
 
 		return sample
 
-	def _split_result_payload(self, output):
+	def _split_result_payload(self, output, cid=None):
 		if isinstance(output, dict) and (
 			"counts" in output or "statevector" in output):
 			counts = output.get("counts", {})
 			statevector = self._build_statevector(
-				output.get("statevector", None))
+				output.get("statevector", None), cid=cid)
 			metadata = self._result_metadata(output)
 			return counts, statevector, metadata
 
@@ -247,18 +246,25 @@ class QFwJob(Job):
 		messages = [self._failure_message(result) for result in failures]
 		raise JobError("; ".join(messages))
 
-	def _build_statevector(self, payload):
+	def _build_statevector(self, payload, cid=None):
 		if not payload:
 			return []
 
 		if not isinstance(payload, dict):
-			return Statevector(payload)
+			raise DEFwError(f"Unsupported statevector payload: {payload}")
 
 		if payload.get("type") != "statevector":
 			raise DEFwError(f"Unsupported statevector payload: {payload}")
 
-		data = payload.get("data", [])
-		amplitudes = [complex(real, imag) for real, imag in data]
+		logging.defw_app(
+			"Received statevector from QPM completion: "
+			f"cid={cid} {statevector_payload_size_summary(payload)}")
+		start = time.time()
+		amplitudes = decode_statevector_payload(payload)
+		logging.defw_app(
+			"Decoded statevector from QPM completion: "
+			f"cid={cid} {statevector_payload_size_summary(payload)} "
+			f"decode_time_seconds={time.time() - start}")
 		return Statevector(amplitudes)
 
 	def result(self):
@@ -291,7 +297,8 @@ class QFwJob(Job):
 		for qr in qpm_results:
 			res = qr['res']
 			output = res.get("result", {})
-			counts, statevector, metadata = self._split_result_payload(output)
+			counts, statevector, metadata = self._split_result_payload(
+				output, cid=res.get("cid"))
 
 			out = {
 				"counts": counts,

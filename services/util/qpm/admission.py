@@ -5,7 +5,6 @@ from pathlib import Path
 
 QHW_ADM_THREAD_SAFE = "QHW_ADM_THREAD_SAFE"
 QHW_ADM_THREAD_USER = "QHW_ADM_THREAD_USER"
-DEFAULT_WORKLOAD_KIND = "QHW_ADM_WORKLOAD_QUANTUM_JOB"
 DECISION_ACCEPTED = "accepted"
 DECISION_DELAYED = "delayed"
 DECISION_REJECTED = "rejected"
@@ -87,6 +86,28 @@ class QPMAdmissionUnavailable(RuntimeError):
 
 class QPMAdmissionValidationError(RuntimeError):
 	pass
+
+
+UINT64_MAX = (1 << 64) - 1
+
+
+def normalize_reservation_id(value, allow_zero=False):
+	if isinstance(value, bool):
+		raise QPMAdmissionValidationError(
+			"reservation_id must be a decimal uint64_t value")
+	if isinstance(value, str):
+		if not value or not value.isdecimal():
+			raise QPMAdmissionValidationError(
+				"reservation_id must be a decimal uint64_t value")
+		value = int(value, 10)
+	if not isinstance(value, int):
+		raise QPMAdmissionValidationError(
+			"reservation_id must be a decimal uint64_t value")
+	minimum = 0 if allow_zero else 1
+	if value < minimum or value > UINT64_MAX:
+		raise QPMAdmissionValidationError(
+			f"reservation_id must be between {minimum} and UINT64_MAX")
+	return value
 
 
 class QPMAdmissionPendingCapacity(RuntimeError):
@@ -252,6 +273,7 @@ def reserve_request(context, request):
 
 
 def renew_reservation(context, reservation_id, request):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "renew_reservation")
 	if handler is not None:
 		return _decision_dict(handler(reservation_id, dict(request or {})))
@@ -269,6 +291,7 @@ def renew_reservation(context, reservation_id, request):
 
 
 def release_reservation(context, reservation_id, reason_code=0):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "release_reservation")
 	if handler is not None:
 		return _decision_dict(handler(reservation_id, reason_code))
@@ -284,6 +307,7 @@ def release_reservation(context, reservation_id, reason_code=0):
 
 
 def cancel_reservation(context, reservation_id, reason_code=0):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "cancel_reservation")
 	if handler is not None:
 		return _decision_dict(handler(reservation_id, reason_code))
@@ -309,6 +333,7 @@ def expire_reservations(context, now_ns=0):
 
 
 def get_reservation(context, reservation_id):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "get_reservation_record")
 	if handler is not None:
 		return _reservation_dict(handler(reservation_id))
@@ -348,6 +373,7 @@ def estimate_qtask_class(context, device_id, task_class):
 
 
 def authorize_usage(context, reservation_id, usage):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "authorize_usage_request")
 	if handler is not None:
 		return _decision_dict(handler(reservation_id, dict(usage)))
@@ -362,6 +388,7 @@ def authorize_usage(context, reservation_id, usage):
 
 
 def consume_usage(context, reservation_id, usage):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "consume_usage_request")
 	if handler is not None:
 		return _decision_dict(handler(reservation_id, dict(usage)))
@@ -376,6 +403,7 @@ def consume_usage(context, reservation_id, usage):
 
 
 def return_usage(context, reservation_id, usage):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "return_usage_request")
 	if handler is not None:
 		return handler(reservation_id, dict(usage))
@@ -389,6 +417,7 @@ def return_usage(context, reservation_id, usage):
 
 
 def record_actual(context, reservation_id, actual):
+	reservation_id = normalize_reservation_id(reservation_id)
 	handler = _handler(context, "record_actual_request")
 	if handler is not None:
 		return handler(reservation_id, dict(actual))

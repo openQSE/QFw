@@ -7,6 +7,7 @@ from qiskit_aer import noise
 from qfw_qiskit import QFwBackend
 from qfw_example_context import apply_qfw_reservation_to_backend
 from qfw_example_report import emit_result
+import sys
 # --------------------------------------------------- #
 
 # Error probabilities
@@ -26,7 +27,9 @@ noise_model.add_all_qubit_quantum_error(error_2, ['cx'])
 # dev = qml.device('qiskit.aer', wires=2, noise_model=noise_model)
 # -------------------------------------------------------------------------- #
 # ---------------------- QFWSimulator Pennylane Device --------------------- #
-backend_instance = apply_qfw_reservation_to_backend(QFwBackend(provider="nwqsim"))
+backend_name = sys.argv[1] if len(sys.argv) > 1 else "nwqsim"
+backend_instance = apply_qfw_reservation_to_backend(
+    QFwBackend(provider=backend_name))
 dev = qml.device('qiskit.remote', wires=2, backend=backend_instance, shots=1024)
 # -------------------------------------------------------------------------- #
 
@@ -48,6 +51,6 @@ print("Whatever this should be doing = ", result)
 print("\n \t ------------------- \n")
 emit_result(
 	"pennylane",
-	parameters={"qubits": 2, "backend": "nwqsim", "shots": 1024},
+	parameters={"qubits": 2, "backend": backend_name, "shots": 1024},
 	metrics={"expectation_value": result},
 )

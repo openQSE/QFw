@@ -1,0 +1,53 @@
+.TH QFW_MPI_SMOKE.SH 1 "August 2026" "QFw 0.1.0" "QFw Examples"
+.SH NAME
+qfw_mpi_smoke.sh \- validate the QFw application-owned MPI service path
+.SH SYNOPSIS
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_mpi_smoke.sh [--verbose]
+.EE
+.SH DESCRIPTION
+.B qfw_mpi_smoke.sh
+starts the specialized
+.B mpi-smoke
+service from the installed example manifest, launches one application task,
+and verifies a call through
+.BR api_mpi_smoke .
+The wrapper owns and tears down its directory and service runtime.
+.PP
+This test has its own service manifest and task-placement contract. It does not
+accept backend or site-service options and is intentionally separate from
+.BR qfw_run_all.sh (1).
+.SH OPTIONS
+.TP
+.B --verbose
+Enable shell tracing.
+.SH ENVIRONMENT
+.TP
+.B QFW_MPI_SMOKE_NP
+MPI rank count. The default is 2.
+.TP
+.B QFW_MPI_SMOKE_TIMEOUT
+Directory lookup and service connection timeout in seconds. The default is 40.
+.SH EXAMPLES
+Run the smoke test in a one-node allocation:
+.EX
+salloc --nodes=1 --ntasks=1 --time=00:15:00
+source /opt/openqse/qfw/current/bin/qfw-activate \e
+  --venv /opt/openqse/qfw/venv
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_mpi_smoke.sh
+qfw-deactivate
+.EE
+.PP
+Run it after a heterogeneous allocation has been granted:
+.EX
+export QFW_RUN_BASE_DIR=/shared/openqse/qfw/application-runs
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_mpi_smoke.sh --verbose
+.EE
+.SH SEE ALSO
+.BR qfw_run_all.sh (1),
+.BR qfw-examples (7),
+.BR qfw-srun (1),
+.BR qfw-service-lifecycle (7)

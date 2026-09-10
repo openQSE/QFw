@@ -4,11 +4,13 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_shim_smoke.sh --lib <qrmi|qdmi> [--call <api>] [test args...]
-       ./qfw_shim_smoke.sh --libs <qdmi,qrmi> [--call <api>] [test args...]
+Usage: ./qfw_shim_smoke.sh [--verbose] --lib <qrmi|qdmi> [--call <api>] [test args...]
+       ./qfw_shim_smoke.sh [--verbose] --libs <qdmi,qrmi> [--call <api>] [test args...]
 
 Run the QRMI/QDMI shim smoke test. Provide either:
   --lib  <qrmi|qdmi>   exercise a single shim library path, or

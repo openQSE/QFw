@@ -5,7 +5,7 @@ from defw_exception import DEFwExecutionError, DEFwOutOfResources
 from tests.mock.fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
-	clear_target_controllers,
+	_clear_target_controllers_for_tests,
 )
 from util.qpm.request import parse_execution_request
 from util.qpm.util_qpm import UTIL_QPM
@@ -34,6 +34,13 @@ class FakeQRC:
 
 	def shutdown(self):
 		self.shutdown_called = True
+
+
+def _bind_scheduler_task_for_test(controller, runtime, scheduler_task_id):
+	with controller.lock:
+		runtime.scheduler_task_id = scheduler_task_id
+		controller.qtask_id_by_scheduler_task_id[
+			scheduler_task_id] = runtime.qtask_id
 
 
 class FakeAdmissionContext:
@@ -130,9 +137,10 @@ class RetryOnceQPM(HookQPM):
 
 
 def _setup_qpm(monkeypatch):
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:2")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
+	monkeypatch.setattr(util_qpm, "qpm_directory_registered", True)
 
 
 def test_host_resources_default_to_service_host(monkeypatch):
@@ -166,7 +174,7 @@ def test_controller_state_is_target_scoped(monkeypatch):
 def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 	_setup_qpm(monkeypatch)
 	qpm = HookQPM()
-	qpm.controller.reservation_metadata_by_id["reservation-1"] = {
+	qpm.controller.reservation_metadata_by_id[1] = {
 		"owner": {"user": "alice"},
 		"external_user_id": "alice",
 		"external_job_id": "job-7",
@@ -175,13 +183,13 @@ def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 	cid1 = qpm.create_circuit({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 		"token": "opaque-token",
 	})
 	cid2 = qpm.create_circuit({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 3,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	runtime1 = qpm.controller.task_for_cid(cid1)
@@ -191,7 +199,7 @@ def test_runtime_maps_allocate_stable_qtask_ids(monkeypatch):
 	assert qpm.circuits[cid1].info["qtask_id"] == 1
 	assert "token" not in qpm.circuits[cid1].info
 	assert qpm.controller.task_for_qtask_id(1) is runtime1
-	assert qpm.controller.qtask_ids_by_reservation["reservation-1"] == {1, 2}
+	assert qpm.controller.qtask_ids_by_reservation[1] == {1, 2}
 	assert runtime1.token_metadata == {"present": True, "type": "str"}
 	assert runtime1.external_ids["owner_id"] == "alice"
 	assert runtime1.canonical_ids["owner_id"] == runtime2.canonical_ids["owner_id"]
@@ -205,7 +213,7 @@ def test_request_scoped_identifiers_are_canonicalized(monkeypatch):
 	cid = qpm.create_circuit({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 		"job_id": "job-direct",
 		"allocation_id": "allocation-direct",
 		"project_id": "project-direct",
@@ -237,7 +245,7 @@ def test_sync_run_records_opaque_token_metadata(monkeypatch):
 
 	result = qpm.sync_run(
 		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
-		reservation_id="reservation-1",
+		reservation_id="1",
 		token="opaque-token")
 	runtime = qpm.controller.terminal_tasks_by_cid[result["cid"]]
 
@@ -250,7 +258,7 @@ def test_async_run_records_dict_token_metadata(monkeypatch):
 
 	result = qpm.async_run(
 		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
-		reservation_id="reservation-1",
+		reservation_id="1",
 		token={"opaque": "token"})
 	runtime = qpm.controller.task_for_cid(result["cid"])
 
@@ -265,7 +273,7 @@ def test_provider_hooks_run_outside_controller_lock(monkeypatch):
 	result = qpm.sync_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	assert result["qtask_id"] == 1
@@ -281,7 +289,7 @@ def test_sync_retry_does_not_dispatch_async_work(monkeypatch):
 	result = qpm.sync_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 
 	assert result["qtask_id"] == 1
@@ -296,12 +304,12 @@ def test_cancellation_lookup_and_cleanup(monkeypatch):
 	cid = qpm.create_circuit({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 	})
 	runtime = qpm.controller.task_for_cid(cid)
 
 	qpm.controller.set_provider_canceller(lambda provider_handle: "cancelled")
-	qpm.controller.bind_scheduler_task(runtime.qtask_id, "sched-1")
+	_bind_scheduler_task_for_test(qpm.controller, runtime, "sched-1")
 	qpm.controller.bind_provider_handle(runtime.qtask_id, "provider-1")
 	cancelled = qpm.cancel_provider_submission(cid, reason="test")
 
@@ -317,7 +325,7 @@ def test_cancellation_lookup_and_cleanup(monkeypatch):
 def test_reservation_validation_uses_reservation_id_binding(monkeypatch):
 	_setup_qpm(monkeypatch)
 	qpm = HookQPM()
-	reservation_id = "reservation-1"
+	reservation_id = 1
 	qpm.controller.reservation_metadata_by_id[reservation_id] = {
 		"external_allocation_id": "allocation-a",
 		"external_project_id": "project-a",
@@ -352,7 +360,7 @@ def test_managed_execution_strips_internal_payload_fields(monkeypatch):
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
-		"reservation_id": "reservation-1",
+		"reservation_id": "1",
 		"_qfw_internal_control": True,
 	})
 	runtime = qpm.controller.task_for_cid(response["cid"])

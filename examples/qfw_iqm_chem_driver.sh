@@ -4,10 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_iqm_chem_driver.sh [options] [chemistry-script.py] [script args...]
+Usage: ./qfw_iqm_chem_driver.sh [--verbose] [options] [chemistry-script.py] [script args...]
 
 Reserve through the QFw Slurm-style driver, then run a QFw-enabled chemistry
 application with the driver-provided reservation id.
@@ -101,10 +103,11 @@ qfw_chem_driver_require_positive_int() {
 }
 
 qfw_chem_driver_device_access_config() {
-	python3 - "${site_config}" "${QFW_PREFIX:-}" <<'PY'
-import os
+	python3 - "${site_config}" <<'PY'
 import sys
 from pathlib import Path
+
+from qfw_runtime.config import resolve_path
 
 try:
 	import yaml
@@ -113,17 +116,12 @@ except ImportError as exc:
 		f"ERROR: PyYAML is required to read the site configuration: {exc}")
 
 site_path = Path(sys.argv[1]).expanduser().resolve()
-prefix = sys.argv[2]
 with site_path.open("r", encoding="utf-8") as stream:
 	site = yaml.safe_load(stream) or {}
 value = (site.get("service") or {}).get("device-access-config")
 if not value:
 	raise SystemExit("site.yaml does not define service.device-access-config")
-value = str(value).replace("<prefix>", prefix)
-path = Path(os.path.expanduser(value))
-if not path.is_absolute():
-	path = site_path.parent / path
-path = path.resolve()
+path = resolve_path(value, base=site_path.parent)
 if not path.is_file():
 	raise SystemExit(f"device access config is not readable: {path}")
 print(path)
@@ -173,20 +171,16 @@ def load_yaml(path):
 
 
 def select_device(config):
-	qpus = config.get("qpus") or config.get("devices")
+	qpus = config.get("qpus")
 	if not isinstance(qpus, dict):
-		raise ValueError("device access config does not define qpus/devices")
+		raise ValueError("device access config does not define qpus")
 	if target_device in qpus and isinstance(qpus[target_device], dict):
 		return target_device, qpus[target_device]
 	matches = []
 	for qpu_id, record in qpus.items():
 		if not isinstance(record, dict):
 			continue
-		provider_device_id = (
-			record.get("provider-device-id")
-			or record.get("provider_device_id")
-			or record.get("quantum-computer")
-			or record.get("quantum_computer"))
+		provider_device_id = record.get("provider-device-id")
 		aliases = record.get("aliases") or []
 		if isinstance(aliases, str):
 			aliases = [aliases]
@@ -246,19 +240,15 @@ def api_key_present(record, device_id, provider_device_id):
 			if isinstance(value, str):
 				return bool(value.strip())
 			if isinstance(value, dict):
-				return bool(value.get("api_key") or value.get("api-key"))
-	value = record.get("api_key") or record.get("api-key")
+				return bool(value.get("api_key"))
+	value = record.get("api_key")
 	return bool(value)
 
 
 try:
 	config = load_yaml(config_path)
 	device_id, device = select_device(config)
-	credential_db = (
-		device.get("credential-db")
-		or device.get("credential_db")
-		or config.get("credential-db")
-		or config.get("credential_db"))
+	credential_db = device.get("credential-db")
 	if not credential_db:
 		raise ValueError(f"device {device_id!r} does not define credential-db")
 	credential_db_path = resolve_relative(str(credential_db), config_path)
@@ -266,11 +256,7 @@ try:
 	users = db.get("users", db)
 	if not isinstance(users, dict):
 		raise ValueError("credential DB users entry is invalid")
-	provider_device_id = (
-		device.get("provider-device-id")
-		or device.get("provider_device_id")
-		or device.get("quantum-computer")
-		or device.get("quantum_computer"))
+	provider_device_id = device.get("provider-device-id")
 	candidates = []
 	for value in (
 			credential_handle_user(users),
@@ -297,7 +283,7 @@ try:
 				"provider_device_id": provider_device_id,
 				"config": config_path,
 				"credential_db": credential_db_path,
-			}, sort_keys=True))
+			}, indent=2, sort_keys=True))
 			raise SystemExit(0)
 	raise ValueError(
 		f"credential DB does not contain an API key for owner {owner!r} "
@@ -310,7 +296,7 @@ except Exception as exc:
 		"target_device_id": target_device,
 		"config": config_path,
 		"error": str(exc),
-	}, sort_keys=True))
+	}, indent=2, sort_keys=True))
 	raise SystemExit(1)
 PY
 }
@@ -530,8 +516,7 @@ if [[ -z "${site_config}" ]] &&
 	exit 2
 fi
 
-if ! qfw_chem_driver_bool_enabled "${dry_run}" ||
-   qfw_chem_driver_bool_enabled "${preflight_only}"; then
+if qfw_chem_driver_bool_enabled "${preflight_only}"; then
 	device_access_config="$(
 		qfw_chem_driver_device_access_config
 	)" || {
@@ -541,19 +526,12 @@ if ! qfw_chem_driver_bool_enabled "${dry_run}" ||
 	}
 fi
 
-runtime_config="${run_dir}/config/chem-site-runtime.yaml"
 launcher="${run_dir}/config/qfw-chem-with-reservation.py"
 app_run_dir="${run_dir}/runtime"
 driver_result="${run_dir}/driver.jsonl"
 example_result="${run_dir}/chemistry-example.jsonl"
 stdout_log="${run_dir}/logs/qfw-iqm-chem-driver.stdout.log"
 stderr_log="${run_dir}/logs/qfw-iqm-chem-driver.stderr.log"
-
-cat >"${runtime_config}" <<EOF
-resolver:
-  scope-order:
-    - site
-EOF
 
 launcher_args=(
 	"--qfw"
@@ -586,10 +564,13 @@ for stream in (sys.stdout, sys.stderr):
 \tif reconfigure is not None:
 \t\treconfigure(line_buffering=True)
 
-reservation_id = os.environ.get("QFW_RESERVATION_ID")
-if not reservation_id:
-\tprint("ERROR: QFW_RESERVATION_ID is not set", file=sys.stderr)
-\tsys.exit(2)
+from qfw_qiskit.reservation_set import (
+\tparse_qfw_reservations,
+\tselect_qpm_reservation,
+)
+
+reservation_id = select_qpm_reservation(
+\tparse_qfw_reservations()).reservation_id
 
 script_path = {json.dumps(script_path)}
 script_args = {json.dumps(script_args)}
@@ -670,8 +651,8 @@ if qfw_chem_driver_bool_enabled "${preflight_only}"; then
 fi
 
 if qfw_chem_driver_bool_enabled "${dry_run}"; then
-	printf "DRY RUN qfw-setup --site-config %q --runtime-config %q --run-dir %q\n" \
-		"${site_config}" "${runtime_config}" "${app_run_dir}"
+	printf "DRY RUN qfw-setup --site-config %q --run-dir %q\n" \
+		"${site_config}" "${app_run_dir}"
 	printf "DRY RUN QFW_EXAMPLE_RESULT_FILE=%q QFW_SLURM_DRIVER_RESULT_FILE=%q %q" \
 		"${example_result}" "${driver_result}" \
 		"$(qfw_example_path qfw_slurm_driver.sh)"
@@ -681,10 +662,8 @@ if qfw_chem_driver_bool_enabled "${dry_run}"; then
 fi
 
 qfw_example_require_runtime
-qfw_chem_driver_preflight_owner "${device_access_config}"
 qfw-setup \
 	--site-config "${site_config}" \
-	--runtime-config "${runtime_config}" \
 	--run-dir "${app_run_dir}"
 
 driver_rc=0

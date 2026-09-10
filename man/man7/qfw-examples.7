@@ -1,0 +1,90 @@
+.TH QFW-EXAMPLES 7 "August 2026" "QFw 0.1.0" "QFw Concepts"
+.SH NAME
+qfw-examples \- installed QFw application and integration tests
+.SH DESCRIPTION
+QFw installs its public example scripts beneath
+.IR QFW_SHARE_DIR/examples .
+They run after
+.BR qfw-activate (1)
+has prepared the shell. Change to that directory before using the command
+forms shown in the example manual pages.
+.PP
+Backend-aware wrappers accept
+.B --service-mode local
+or
+.BR --service-mode site .
+Local mode selects the installed local runtime profile, starts the requested
+application-owned QPM, runs the test, and tears down its runtime. Site mode
+uses the installed site-only runtime and connects to an existing site-owned
+QPM. Application teardown does not stop site services.
+.PP
+The activated
+.B QFW_SITE_CONFIG
+supplies site connection information. The
+.B --site-config
+and
+.B --runtime-config
+options provide per-invocation overrides. Applications do not need to create
+a site-only runtime file.
+.SH PREREQUISITES
+Application-owned simulator runs require a scheduler allocation. Every node
+participating in a multi-node or heterogeneous run must see
+.B QFW_RUN_BASE_DIR
+at the same pathname so PRTE and service coordination records are shared.
+.PP
+Site-mode runs require an active directory service and a compatible QPM. The
+site configuration's directory connection record must be readable from the
+application nodes.
+.SH TESTS
+.TP
+.BR qfw_run_all.sh (1)
+Run the backend-compatible test set and produce a pass, fail, and skip summary.
+.TP
+.BR qfw_qiskit_simple.sh (1)
+Submit one measured Qiskit circuit.
+.TP
+.BR qfw_ghz.sh (1)
+Run a Qiskit or PennyLane GHZ circuit.
+.TP
+.BR qfw_supermarq.sh (1)
+Run a SuperMarQ GHZ or VQE workload through admission-managed capacity.
+.TP
+.BR qfw_chem_app.sh (1)
+Run a QFw-enabled external chemistry application.
+.TP
+.BR qfw_mpi_smoke.sh (1)
+Validate the specialized application-owned MPI service path.
+.SH QUICK START
+.EX
+source /opt/openqse/qfw/current/bin/qfw-activate \e
+  --venv /opt/openqse/qfw/venv
+cd "${QFW_SHARE_DIR}/examples"
+
+\&./qfw_run_all.sh --service-mode local --backend nwqsim \e
+  --tests init-test,qiskit-simple,ghz-qiskit
+
+qfw-deactivate
+.EE
+.SH RESULTS
+Each wrapper emits a terminal
+.B QFW_EXAMPLE_RESULT
+record. When
+.B QFW_EXAMPLE_RESULT_FILE
+is set, the same records are appended as JSONL for automation.
+.BR qfw_run_all.sh (1)
+writes per-test logs, JSONL result files, and a combined
+.I summary.jsonl
+beneath
+.BR QFW_RUN_BASE_DIR .
+.SH SEE ALSO
+.BR qfw_run_all.sh (1),
+.BR qfw_qiskit_simple.sh (1),
+.BR qfw_ghz.sh (1),
+.BR qfw_supermarq.sh (1),
+.BR qfw_chem_app.sh (1),
+.BR qfw_mpi_smoke.sh (1),
+.BR qfw-activate (1),
+.BR qfw-setup (1),
+.BR qfw-deactivate (1),
+.BR qfw-runtime.yaml (5),
+.BR qfw (7)

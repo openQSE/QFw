@@ -2,6 +2,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from .admission import normalize_reservation_id
+
 
 AUTH_DISABLED_ENV = "QFW_QPM_AUTH_DISABLED"
 
@@ -28,7 +30,7 @@ SCOPED_METADATA_KEYS = (
 
 @dataclass(frozen=True)
 class QPMRequestContext:
-	reservation_id: Optional[str] = None
+	reservation_id: Optional[int] = None
 	token: Any = None
 	timeout: Any = None
 	cancel_on_timeout: bool = False
@@ -74,25 +76,14 @@ def parse_execution_request(info, **overrides):
 	return QPMExecutionRequest(payload=payload, context=context)
 
 
-def status_envelope(status, *, reason=None, message=None, data=None,
-		    reservation_id=None, qtask_id=None):
-	envelope = {
-		"status": status,
-		"reason": reason,
-		"message": message,
-		"reservation_id": reservation_id,
-		"qtask_id": qtask_id,
-		"data": data or {},
-	}
-	return {key: value for key, value in envelope.items()
-		if value not in (None, {})}
-
-
 def _context_from_payload(payload, overrides):
 	values = {}
 	for key in REQUEST_CONTEXT_KEYS:
 		value = _request_value(key, payload, overrides)
 		values[key] = value
+	if values["reservation_id"] is not None:
+		values["reservation_id"] = normalize_reservation_id(
+			values["reservation_id"])
 	values["cancel_on_timeout"] = bool(values["cancel_on_timeout"])
 	values["metadata"] = _scoped_metadata(payload, overrides)
 	values["auth_disabled"] = auth_disabled()

@@ -35,6 +35,32 @@ def jsonable(value):
 	return str(value)
 
 
+def format_console_record(prefix, record):
+	return f"{prefix} " + json.dumps(record, indent=2, sort_keys=True)
+
+
+def parse_console_records(text, prefix):
+	records = []
+	marker = f"{prefix} "
+	decoder = json.JSONDecoder()
+	offset = 0
+	while True:
+		start = text.find(marker, offset)
+		if start < 0:
+			return records
+		start += len(marker)
+		try:
+			record, offset = decoder.raw_decode(text, start)
+		except json.JSONDecodeError:
+			offset = start
+			continue
+		records.append(record)
+
+
+def format_console_result(record):
+	return format_console_record("QFW_EXAMPLE_RESULT", record)
+
+
 def emit_result(example, status="ok", parameters=None, metrics=None,
 		artifacts=None, details=None):
 	record = {
@@ -49,7 +75,7 @@ def emit_result(example, status="ok", parameters=None, metrics=None,
 		"details": jsonable(details or {}),
 	}
 	payload = json.dumps(record, sort_keys=True)
-	print("QFW_EXAMPLE_RESULT " + payload)
+	print(format_console_result(record))
 	path = os.environ.get("QFW_EXAMPLE_RESULT_FILE")
 	if path:
 		directory = os.path.dirname(path)

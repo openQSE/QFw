@@ -24,6 +24,25 @@ class FakeJob:
 		self.submit_called = True
 
 
+class FakeLifecycleBinding:
+	def __init__(self):
+		self.listeners = []
+		self.closed = False
+
+	def add_reconnect_listener(self, listener):
+		self.listeners.append(listener)
+
+	def remove_reconnect_listener(self, listener):
+		self.listeners.remove(listener)
+
+	def reconnect(self, same_runtime):
+		for listener in list(self.listeners):
+			listener({"same_runtime": same_runtime})
+
+	def close(self):
+		self.closed = True
+
+
 def test_backend_registers_event_api(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
 
@@ -31,7 +50,9 @@ def test_backend_registers_event_api(monkeypatch):
 	fake_event_api = FakeEventAPI(class_id="event-api-7")
 	fake_runtime = FakeRuntime(endpoint="endpoint-1")
 
-	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
 	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
 	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
 
@@ -61,7 +82,7 @@ def test_backend_provider_selector_uses_qpm_metadata(monkeypatch):
 
 	def fake_get_qpm(*args, **kwargs):
 		calls.append((args, kwargs))
-		return fake_qpm
+		return fake_qpm, None
 
 	monkeypatch.setattr(qfw_simulator, "get_qpm", fake_get_qpm)
 	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
@@ -72,7 +93,11 @@ def test_backend_provider_selector_uses_qpm_metadata(monkeypatch):
 	assert backend.qpm is fake_qpm
 	assert calls == [(
 		(QPMType.QPM_TYPE_SIMULATOR, QPMCapability.QPM_CAP_STATEVECTOR),
-		{"provider": "nwqsim"},
+		{
+			"provider": "nwqsim",
+			"return_reservation": True,
+			"service_id": None,
+		},
 	)]
 	assert backend.returns_statevector() is True
 
@@ -84,7 +109,9 @@ def test_backend_run_and_shutdown_leave_qpm_running(monkeypatch):
 	fake_event_api = FakeEventAPI(class_id="event-api-8")
 	fake_runtime = FakeRuntime(endpoint="endpoint-2")
 
-	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
 	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
 	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
 	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
@@ -111,7 +138,9 @@ def test_backend_run_preserves_reservation_context(monkeypatch):
 	fake_event_api = FakeEventAPI(class_id="event-api-context")
 	fake_runtime = FakeRuntime(endpoint="endpoint-context")
 
-	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
 	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
 	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
 	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
@@ -137,7 +166,9 @@ def test_backend_run_uses_option_reservation_context(monkeypatch):
 	fake_event_api = FakeEventAPI(class_id="event-api-options")
 	fake_runtime = FakeRuntime(endpoint="endpoint-options")
 
-	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
 	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
 	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
 	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
@@ -168,7 +199,9 @@ def test_backend_registers_completion_event_once(monkeypatch):
 	fake_event_api = FakeEventAPI(class_id="event-api-scoped")
 	fake_runtime = FakeRuntime(endpoint="endpoint-scoped")
 
-	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
 	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
 	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
 
@@ -183,6 +216,33 @@ def test_backend_registers_completion_event_once(monkeypatch):
 			"class_id": "event-api-scoped",
 		}
 	]
+
+
+def test_backend_restores_completion_event_after_same_qpm_reconnect(
+		monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	lifecycle = FakeLifecycleBinding()
+	fake_qpm.lifecycle_binding = lifecycle
+	fake_event_api = FakeEventAPI(class_id="event-api-reconnect")
+	fake_runtime = FakeRuntime(endpoint="endpoint-reconnect")
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator.g_circ_metrics, "dump", lambda: None)
+
+	backend = qfw_simulator.QFwBackend()
+	lifecycle.reconnect(same_runtime=True)
+	lifecycle.reconnect(same_runtime=False)
+	backend.shutdown()
+
+	assert len(fake_qpm.registrations) == 2
+	assert lifecycle.listeners == []
+	assert lifecycle.closed is True
 
 
 def test_qfw_job_metadata_keeps_only_qhw_result():
@@ -221,7 +281,9 @@ def test_backend_sets_qubit_mapping_metadata(monkeypatch):
 	fake_event_api = FakeEventAPI(class_id="event-api-9")
 	fake_runtime = FakeRuntime(endpoint="endpoint-3")
 
-	monkeypatch.setattr(qfw_simulator, "get_qpm", lambda betype, capability: fake_qpm)
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
 	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
 	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
 

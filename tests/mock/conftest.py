@@ -4,6 +4,8 @@ import sys
 import types
 import logging
 import ast
+import os
+import threading
 
 import pytest
 
@@ -220,9 +222,6 @@ def _install_defw_stubs():
 		defw_exception.DEFwDumper = DEFwDumper
 		sys.modules["defw_exception"] = defw_exception
 
-	if "defw_agent_info" not in sys.modules:
-		sys.modules["defw_agent_info"] = types.ModuleType("defw_agent_info")
-
 	if "api_events" not in sys.modules:
 		api_events = types.ModuleType("api_events")
 
@@ -277,7 +276,7 @@ def _install_defw_stubs():
 	if "defw_app_util" not in sys.modules:
 		defw_app_util = types.ModuleType("defw_app_util")
 
-		def defw_get_directory_service():
+		def defw_get_directory_service(timeout=None):
 			raise AssertionError(
 				"defw_get_directory_service must be patched in tests")
 
@@ -296,26 +295,59 @@ def _install_defw_stubs():
 
 		class BaseEventAPI:
 			def __init__(self, *args, **kwargs):
+				self._read_fd, self._write_fd = os.pipe()
 				self._events = []
+				self._lock = threading.Lock()
 				self._registered = False
 				self._class_id = "stub-class-id"
 
 			def register_external(self):
 				self._registered = True
 
+			def unregister_external(self):
+				self._registered = False
+
 			def class_id(self):
 				return self._class_id
 
 			def fileno(self):
-				return 0
+				return self._read_fd
+
+			def put(self, event):
+				with self._lock:
+					self._events.append(event)
+					os.write(self._write_fd, b"x")
 
 			def get(self):
-				events = list(self._events)
-				self._events.clear()
-				return events
+				with self._lock:
+					events = list(self._events)
+					self._events.clear()
+					os.read(self._read_fd, len(events))
+					return events
 
 		defw_event_baseapi.BaseEventAPI = BaseEventAPI
 		sys.modules["defw_event_baseapi"] = defw_event_baseapi
+
+	if "defw_workers" not in sys.modules:
+		defw_workers = types.ModuleType("defw_workers")
+		defw_workers.listeners = []
+
+		def add_peer_event_listener(listener):
+			if listener not in defw_workers.listeners:
+				defw_workers.listeners.append(listener)
+			return listener
+
+		def remove_peer_event_listener(listener):
+			if listener in defw_workers.listeners:
+				defw_workers.listeners.remove(listener)
+
+		def is_dirsvc_peer_event(event):
+			return bool(event.get("directory"))
+
+		defw_workers.add_peer_event_listener = add_peer_event_listener
+		defw_workers.remove_peer_event_listener = remove_peer_event_listener
+		defw_workers.is_dirsvc_peer_event = is_dirsvc_peer_event
+		sys.modules["defw_workers"] = defw_workers
 
 	if "defw_common_def" not in sys.modules:
 		defw_common_def = types.ModuleType("defw_common_def")
@@ -682,6 +714,9 @@ _install_qiskit_stubs()
 
 if not hasattr(logging, "defw_app"):
 	logging.defw_app = lambda *args, **kwargs: None
+
+if not hasattr(logging, "defw_service"):
+	logging.defw_service = lambda *args, **kwargs: None
 
 
 @pytest.fixture

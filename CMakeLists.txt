@@ -19,6 +19,8 @@ endif()
 include(GNUInstallDirs)
 include(ExternalProject)
 
+add_subdirectory(man)
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(QFW_BUILD_BUNDLED_DEFW
@@ -114,9 +116,22 @@ configure_file(
 	cmake/qfw-setup-driver.in
 	"${QFW_GENERATED_LIBEXEC_DIR}/qfw-setup-driver"
 	@ONLY)
+foreach(qfw_role_command IN ITEMS qfw-dir-svc qfw-qpm-svc)
+	if(qfw_role_command STREQUAL "qfw-dir-svc")
+		set(QFW_SERVICE_LIFECYCLE_ROLE "directory")
+	else()
+		set(QFW_SERVICE_LIFECYCLE_ROLE "qpm")
+	endif()
+	configure_file(
+		cmake/qfw-role-service.in
+		"${QFW_GENERATED_BIN_DIR}/${qfw_role_command}"
+		@ONLY)
+endforeach()
 file(CHMOD
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
 	"${QFW_GENERATED_BIN_DIR}/defw-python"
+	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
+	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"
 	"${QFW_GENERATED_LIBEXEC_DIR}/qfw-setup-driver"
 	PERMISSIONS
 		OWNER_READ OWNER_WRITE OWNER_EXECUTE
@@ -125,10 +140,9 @@ file(CHMOD
 
 foreach(qfw_command
 		qfw-setup
+		qfw-status
 		qfw-srun
-		qfw-teardown
-		qfw-dirsvc-start
-		qfw-service-start)
+		qfw-teardown)
 	set(QFW_COMMAND_NAME "${qfw_command}")
 	configure_file(
 		cmake/qfw-command.in
@@ -145,10 +159,11 @@ install(PROGRAMS
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
 	"${QFW_GENERATED_BIN_DIR}/defw-python"
 	"${QFW_GENERATED_BIN_DIR}/qfw-setup"
+	"${QFW_GENERATED_BIN_DIR}/qfw-status"
 	"${QFW_GENERATED_BIN_DIR}/qfw-srun"
 	"${QFW_GENERATED_BIN_DIR}/qfw-teardown"
-	"${QFW_GENERATED_BIN_DIR}/qfw-dirsvc-start"
-	"${QFW_GENERATED_BIN_DIR}/qfw-service-start"
+	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
+	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"
 	DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 install(PROGRAMS
@@ -181,31 +196,11 @@ install(DIRECTORY service-apis/
 	FILES_MATCHING
 		PATTERN "*.py"
 		PATTERN "__pycache__" EXCLUDE)
-install(CODE
-	"file(REMOVE_RECURSE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/service-apis/api_qpm\")")
 install(DIRECTORY share/qfw/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw")
-install(CODE
-	"file(REMOVE
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/qfw_services.yaml\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/service-runtime.yaml\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/device/device-access.yaml\")")
-install(CODE
-	"file(REMOVE_RECURSE
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/services/templates\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/qfw/config/device\"
-		\"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/qfw/services/config\")")
-install(FILES
-	share/qfw/service-manager/env.sh
-	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/service-manager")
-install(FILES
-	share/qfw/service-manager/systemd/qfw-dirsvc@.service
-	share/qfw/service-manager/systemd/qfw-qpm@.service
-	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/service-manager/systemd")
 install(DIRECTORY examples/
 	DESTINATION "${CMAKE_INSTALL_DATADIR}/qfw/examples"
 	FILES_MATCHING
-		PATTERN "*.batch"
 		PATTERN "*.md"
 		PATTERN "*.py"
 		PATTERN "*.yaml"
@@ -218,10 +213,6 @@ install(PROGRAMS
 	examples/qfw_ghz.sh
 	examples/qfw_init_test.sh
 	examples/qfw_iqm_chem_driver.sh
-	examples/qfw_iqm_chem_site_run.sh
-	examples/qfw_iqm_chem_smoke.sh
-	examples/qfw_iqm_site_services.sh
-	examples/qfw_long_running_qpm.sh
 	examples/qfw_mpi_smoke.sh
 	examples/qfw_pennylane.sh
 	examples/qfw_qaoa.sh
@@ -262,6 +253,7 @@ add_test(NAME qfw_install_tree_smoke
 		"${CMAKE_COMMAND}"
 		-DQFW_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
 		-DQFW_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test-install
+		-DQFW_INSTALL_MANDIR=${CMAKE_INSTALL_MANDIR}
 		-DQFW_PYTHON=${Python3_EXECUTABLE}
 		-DQFW_PYTHON_INSTALL_DIR=${QFW_PYTHON_INSTALL_DIR}
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunQfwInstallTreeSmoke.cmake")

@@ -37,11 +37,14 @@ per-request reconnect is multiplied by the poll count rather than paid once.
 The drivers are opened and warmed before timing, so this measures execution and
 not session setup -- see measure_shim_introspection.py for that.
 
-Run it inside the container, with device access configured:
+Run it from an activated QFw installation with device access configured:
 
-  docker exec c5 bash -c 'source /opt/qfw/qhpc/QFw/setup/qfw_activate \\
-      >/dev/null 2>&1 && source "$QFW_IMAGE_VENV/bin/activate" \\
-      && python -u /opt/qfw/qhpc/QFw/examples/measure_shim_execution.py'
+  export QFW_INSTALL_PREFIX=/path/to/qfw
+  export QFW_VENV=/path/to/qfw-venv
+  source "${QFW_INSTALL_PREFIX}/bin/qfw-activate" --venv "${QFW_VENV}"
+  cd "${QFW_SHARE_DIR}/examples"
+  python -u measure_shim_execution.py
+  qfw-deactivate
 """
 
 import argparse

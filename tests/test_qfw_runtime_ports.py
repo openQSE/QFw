@@ -7,6 +7,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
 
 from qfw_runtime import commands
+from qfw_runtime import config as qfw_config
+from qfw_runtime import _process_launcher as process_launcher
 
 
 def allocation():
@@ -31,20 +33,31 @@ def hetero_allocation():
     }
 
 
-def test_qfw_service_start_loads_service_paths_from_site(
+def test_private_qpm_launcher_loads_service_paths_from_site(
         tmp_path, monkeypatch):
     device_path = tmp_path / "device-access.yaml"
+    device_path.write_text(
+        "qpus:\n"
+        "  iqm:\n"
+        "    provider: iqm\n"
+        "    url: https://iqm.invalid/\n"
+        "    credential-db: qpu-users.json\n",
+        encoding="utf-8",
+    )
     manifest_path = tmp_path / "site-services.yaml"
     manifest_path.write_text(
-        "services:\n  - name: iqm\n    module: svc_iqm_qpm\n",
+        "services:\n"
+        "  - name: iqm\n"
+        "    module: svc_iqm_qpm\n"
+        "    credential-mode: required\n"
+        "    device-id: iqm\n",
         encoding="utf-8",
     )
     site_path = tmp_path / "site.yaml"
     site_path.write_text(
         "\n".join([
-            "directory:",
-            "  site:",
-            "    endpoint: 127.0.0.1:8090",
+            "directory-service:",
+            "  endpoint: 127.0.0.1:8090",
             "service:",
             f"  manifest: {manifest_path}",
             f"  device-access-config: {device_path}",
@@ -60,23 +73,75 @@ def test_qfw_service_start_loads_service_paths_from_site(
         return 0
 
     monkeypatch.setenv("QFW_SERVICE_SCOPE", "site")
-    monkeypatch.setattr(commands, "_start_defw_owned_process", fake_start)
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", fake_start)
 
-    rc = commands.qfw_service_start([
-        "--service-id", "iqm",
+    rc = process_launcher.start_qpm([
+        "--service-id", "iqm-runtime",
+        "--manifest-service-name", "iqm",
         "--site-config", str(site_path),
         "--run-dir", str(tmp_path / "run"),
-        "--operation-mode", "direct",
+        "--operation-mode", "long-running",
     ])
 
     assert rc == 0
-    assert captured["name"] == "iqm"
+    assert captured["name"] == "iqm-runtime"
     assert captured["env"]["QFW_SERVICE_CONFIG"] == str(manifest_path)
     assert captured["env"]["QFW_DEVICE_ACCESS_CFG"] == str(device_path)
     assert captured["env"]["QFW_SITE_CONFIG"] == str(site_path)
+    assert captured["env"]["DEFW_LOG_LEVEL"] == "error"
+    assert captured["env"]["DEFW_PY_LOGLEVEL"] == "debug,DEFW_ALL"
 
 
-def test_qfw_service_start_rejects_removed_config_overrides(
+def test_private_qpm_launcher_accepts_service_logging_overrides(
+        tmp_path, monkeypatch):
+    manifest_path = tmp_path / "site-services.yaml"
+    manifest_path.write_text(
+        "\n".join([
+            "services:",
+            "  - name: nwqsim",
+            "    module: svc_nwqsim_qpm",
+            "    credential-mode: no-secret",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(
+        "\n".join([
+            "directory-service:",
+            "  endpoint: 127.0.0.1:8090",
+            "service:",
+            f"  manifest: {manifest_path}",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_start(name, env, *args):
+        captured["name"] = name
+        captured["env"] = dict(env)
+        return 0
+
+    monkeypatch.setenv("QFW_SERVICE_DEFW_LOG_LEVEL", "all")
+    monkeypatch.setenv("QFW_SERVICE_DEFW_PY_LOGLEVEL", "debug,DEFW_ALL")
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", fake_start)
+
+    rc = process_launcher.start_qpm([
+        "--service-id", "nwqsim",
+        "--site-config", str(site_path),
+        "--run-dir", str(tmp_path / "run"),
+    ])
+
+    assert rc == 0
+    assert captured["name"] == "nwqsim"
+    assert captured["env"]["DEFW_LOG_LEVEL"] == "all"
+    assert captured["env"]["DEFW_PY_LOGLEVEL"] == "debug,DEFW_ALL"
+
+
+def test_private_qpm_launcher_rejects_removed_config_overrides(
         tmp_path, monkeypatch):
     site_path = tmp_path / "site.yaml"
     site_path.write_text(
@@ -86,7 +151,7 @@ def test_qfw_service_start_rejects_removed_config_overrides(
         encoding="utf-8",
     )
     with pytest.raises(SystemExit):
-        commands.qfw_service_start([
+        process_launcher.start_qpm([
             "--service-id", "iqm",
             "--module", "svc_iqm_qpm",
             "--site-config", str(site_path),
@@ -94,98 +159,18 @@ def test_qfw_service_start_rejects_removed_config_overrides(
         ])
 
 
-def test_local_service_launch_specs_allocate_distinct_default_ports():
-    services = [
-        {"name": "nwqsim", "module": "svc_nwqsim_qpm"},
-        {"name": "tnqvm", "module": "svc_tnqvm_qpm"},
-    ]
-
-    specs = commands._local_service_launch_specs(
-        {}, services, ["nwqsim", "tnqvm"], allocation())
-
-    assert [spec["listen_port"] for spec in specs] == [8290, 8390]
-    assert [spec["telnet_port"] for spec in specs] == [8291, 8391]
-    assert [spec["endpoint"] for spec in specs] == [
-        "svc-a:8290",
-        "svc-a:8390",
-    ]
-
-
-def test_local_service_launch_specs_honor_explicit_manifest_ports():
-    services = [
-        {
-            "name": "nwqsim",
-            "module": "svc_nwqsim_qpm",
-            "listen-port": 9020,
-            "telnet-port": 9021,
-        },
-        {"name": "tnqvm", "module": "svc_tnqvm_qpm"},
-    ]
-
-    specs = commands._local_service_launch_specs(
-        {}, services, ["nwqsim", "tnqvm"], allocation())
-
-    assert [spec["listen_port"] for spec in specs] == [9020, 8290]
-    assert [spec["telnet_port"] for spec in specs] == [9021, 8291]
-
-
-def test_local_service_launch_specs_reject_duplicate_ports():
-    services = [
-        {
-            "name": "nwqsim",
-            "module": "svc_nwqsim_qpm",
-            "listen-port": 9020,
-        },
-        {
-            "name": "tnqvm",
-            "module": "svc_tnqvm_qpm",
-            "telnet-port": 9020,
-        },
-    ]
-
-    with pytest.raises(ValueError, match="duplicate local service"):
-        commands._local_service_launch_specs(
-            {}, services, ["nwqsim", "tnqvm"], allocation())
-
-
-def test_local_service_launch_specs_resolve_manifest_placement():
-    services = [
-        {
-            "name": "nwqsim",
-            "module": "svc_nwqsim_qpm",
-            "target": "group1-head",
-            "assigned-hosts": "group1",
-            "assigned-hosts-env": "QFW_QPM_ASSIGNED_HOSTS",
-        },
-        {
-            "name": "client-side",
-            "module": "svc_client",
-            "target": "group0-head",
-            "assigned-hosts": "all",
-        },
-    ]
-
-    specs = commands._local_service_launch_specs(
-        {}, services, ["nwqsim", "client-side"], allocation())
-
-    assert specs[0]["target"] == "svc-a"
-    assert specs[0]["assigned_hosts"] == "svc-a,svc-b"
-    assert specs[0]["assigned_hosts_env"] == "QFW_QPM_ASSIGNED_HOSTS"
-    assert specs[0]["endpoint"] == "svc-a:8290"
-    assert specs[1]["target"] == "client-a"
-    assert specs[1]["assigned_hosts"] == "client-a,svc-a,svc-b"
-    assert specs[1]["endpoint"] == "client-a:8390"
-
-
-def test_start_job_local_services_passes_distinct_ports(tmp_path, monkeypatch):
+def test_start_job_local_services_delegates_to_split_managers(
+        tmp_path, monkeypatch):
     manifest = tmp_path / "services.yaml"
     manifest.write_text(
         "\n".join([
             "services:",
             "  - name: nwqsim",
             "    module: svc_nwqsim_qpm",
+            "    credential-mode: no-secret",
             "  - name: tnqvm",
             "    module: svc_tnqvm_qpm",
+            "    credential-mode: no-secret",
             "",
         ]),
         encoding="utf-8",
@@ -196,92 +181,31 @@ def test_start_job_local_services_passes_distinct_ports(tmp_path, monkeypatch):
     run_dir.mkdir()
     calls = []
 
-    def fake_command_path(name, env=None):
-        return Path(f"/usr/bin/{name}")
+    def fake_start_role(role, **kwargs):
+        calls.append((role, dict(kwargs)))
+        if role == "directory":
+            return {
+                "directory": {
+                    "name": "qfw-local-dirsvc",
+                    "endpoint": "svc-a:18090",
+                    "telnet_port": 18091,
+                    "connection_file": str(
+                        run_dir / "service-plane" / "directory" /
+                        "directory-service.json"),
+                },
+            }
+        index = 0 if kwargs["manifest_service_name"] == "nwqsim" else 1
+        return {
+            "services": [{
+                "service_id": kwargs["service_id"],
+                "target": "svc-a",
+                "listen_port": 8290 + index * 100,
+                "telnet_port": 8291 + index * 100,
+            }],
+        }
 
-    def fake_run_checked(argv, env):
-        calls.append(list(argv))
-        pid_path = Path(argv[argv.index("--pid-file") + 1])
-        pid_path.write_text(f"{1000 + len(calls)}\n", encoding="utf-8")
-        ready_path = Path(argv[argv.index("--ready-file") + 1])
-        ready_path.write_text("{}\n", encoding="utf-8")
-
-    monkeypatch.setattr(commands, "_command_path", fake_command_path)
-    monkeypatch.setattr(commands, "_run_checked", fake_run_checked)
-
-    state = {
-        "run_id": "test",
-        "run_base_dir": str(tmp_path),
-        "run_dir": str(run_dir),
-        "state_dir": str(state_dir),
-        "site_config": str(tmp_path / "site.yaml"),
-        "local_services": {"start-prte": False, "start-qpm": True},
-        "environment": {
-            "QFW_ALLOCATION_MODE": "local",
-            "QFW_GROUP_0_NODELIST": "client-a",
-            "QFW_GROUP_1_NODELIST": "svc-a,svc-b",
-            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
-        },
-        "processes": [],
-        "directory_requirements": [
-            {"scope": "allocation-local", "connect_timeout_seconds": 1},
-        ],
-        "service_manifest": str(manifest),
-    }
-
-    commands._start_job_local_services(state)
-
-    assert len(calls) == 2
-    assert [call[call.index("--listen-port") + 1] for call in calls] == [
-        "8290",
-        "8390",
-    ]
-    assert [call[call.index("--telnet-port") + 1] for call in calls] == [
-        "8291",
-        "8391",
-    ]
-    assert [process["endpoint"] for process in state["processes"]] == [
-        "svc-a:8290",
-        "svc-a:8390",
-    ]
-
-
-def test_start_job_local_services_starts_prte_before_services(
-        tmp_path, monkeypatch):
-    manifest = tmp_path / "services.yaml"
-    manifest.write_text(
-        "\n".join([
-            "services:",
-            "  - name: nwqsim",
-            "    module: svc_nwqsim_qpm",
-            "",
-        ]),
-        encoding="utf-8",
-    )
-    state_dir = tmp_path / "state"
-    run_dir = tmp_path / "run"
-    state_dir.mkdir()
-    run_dir.mkdir()
-    calls = []
-
-    def fake_command_path(name, env=None):
-        return Path(f"/usr/bin/{name}")
-
-    def fake_run_checked(argv, env):
-        calls.append((list(argv), dict(env)))
-        if argv[0] == "prte":
-            Path(env["QFW_DVM_URI_PATH"]).parent.mkdir(
-                parents=True, exist_ok=True)
-            Path(env["QFW_DVM_URI_PATH"]).write_text(
-                "dvm-uri\n", encoding="utf-8")
-            return
-        pid_path = Path(argv[argv.index("--pid-file") + 1])
-        pid_path.write_text(f"{1000 + len(calls)}\n", encoding="utf-8")
-        ready_path = Path(argv[argv.index("--ready-file") + 1])
-        ready_path.write_text("{}\n", encoding="utf-8")
-
-    monkeypatch.setattr(commands, "_command_path", fake_command_path)
-    monkeypatch.setattr(commands, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "start_role", fake_start_role)
 
     state = {
         "run_id": "test",
@@ -289,162 +213,180 @@ def test_start_job_local_services_starts_prte_before_services(
         "run_dir": str(run_dir),
         "state_dir": str(state_dir),
         "site_config": str(tmp_path / "site.yaml"),
-        "local_services": {"start-prte": True, "start-qpm": True},
-        "environment": {
-            "QFW_DVM_URI_PATH": str(run_dir / "prte_dvm" / "dvm-uri"),
-            "QFW_ALLOCATION_MODE": "local",
-            "QFW_GROUP_0_NODELIST": "client-a",
-            "QFW_GROUP_1_NODELIST": "svc-a,svc-b",
-            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
-            "QFW_JOB_ID": "12345",
-        },
-        "processes": [],
-        "directory_requirements": [
-            {"scope": "allocation-local", "connect_timeout_seconds": 1},
-        ],
-        "service_manifest": str(manifest),
-    }
-
-    commands._start_job_local_services(state)
-
-    assert calls[0][0][:5] == [
-        "prte",
-        "--host",
-        "svc-a:*,svc-b:*",
-        "--report-uri",
-        str(run_dir / "prte_dvm" / "dvm-uri"),
-    ]
-    assert "SLURM_JOB_ID=12345" in calls[0][0]
-    assert "SLURM_JOBID=12345" in calls[0][0]
-    assert calls[1][0][0] == "/usr/bin/qfw-service-start"
-    assert calls[1][1]["QFW_DVM_URI_PATH"] == str(
-        run_dir / "prte_dvm" / "dvm-uri")
-    assert calls[1][1]["SLURM_JOB_ID"] == "12345"
-    assert calls[1][1]["SLURM_JOBID"] == "12345"
-    assert [process["role"] for process in state["processes"]] == [
-        "prte-dvm",
-        "service",
-    ]
-
-
-def test_start_job_local_services_places_heterogeneous_stack_on_group1(
-        tmp_path, monkeypatch):
-    manifest = tmp_path / "services.yaml"
-    manifest.write_text(
-        "\n".join([
-            "services:",
-            "  - name: nwqsim",
-            "    module: svc_nwqsim_qpm",
-            "    target: group1-head",
-            "    assigned-hosts: group1",
-            "    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS",
-            "",
-        ]),
-        encoding="utf-8",
-    )
-    state_dir = tmp_path / "state"
-    run_dir = tmp_path / "run"
-    state_dir.mkdir()
-    run_dir.mkdir()
-    calls = []
-
-    def fake_command_path(name, env=None):
-        return Path(f"/usr/bin/{name}")
-
-    def fake_run_checked(argv, env):
-        calls.append((list(argv), dict(env)))
-        if "prte" in argv:
-            Path(env["QFW_DVM_URI_PATH"]).parent.mkdir(
-                parents=True, exist_ok=True)
-            Path(env["QFW_DVM_URI_PATH"]).write_text(
-                "dvm-uri\n", encoding="utf-8")
-            return
-        pid_path = Path(argv[argv.index("--pid-file") + 1])
-        pid_path.write_text(f"{1000 + len(calls)}\n", encoding="utf-8")
-        ready_path = Path(argv[argv.index("--ready-file") + 1])
-        ready_path.write_text("{}\n", encoding="utf-8")
-
-    monkeypatch.setattr(commands, "_command_path", fake_command_path)
-    monkeypatch.setattr(commands, "_run_checked", fake_run_checked)
-
-    state = {
-        "run_id": "test",
-        "run_base_dir": str(tmp_path),
-        "run_dir": str(run_dir),
-        "state_dir": str(state_dir),
-        "site_config": str(tmp_path / "site.yaml"),
+        "runtime_config": str(tmp_path / "runtime.yaml"),
         "local_services": {
             "start-prte": True,
             "start-dirsvc": True,
             "start-qpm": True,
         },
-        "local_dirsvc": {
-            "name": "qfw-local-dirsvc",
-            "host": "127.0.0.1",
-            "port": 8090,
-            "telnet_port": 8092,
-            "endpoint": "127.0.0.1:8090",
-        },
         "environment": {
-            "QFW_DVM_URI_PATH": str(run_dir / "prte_dvm" / "dvm-uri"),
-            "QFW_ALLOCATION_MODE": "heterogeneous",
+            "QFW_ALLOCATION_MODE": "local",
             "QFW_GROUP_0_NODELIST": "client-a",
             "QFW_GROUP_1_NODELIST": "svc-a,svc-b",
             "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
         },
-        "processes": [],
+        "service_managers": [],
         "directory_requirements": [
-            {
-                "scope": "allocation-local",
-                "name": "qfw-local-dirsvc",
-                "endpoint": "127.0.0.1:8090",
-                "connect_timeout_seconds": 1,
-            },
+            {"scope": "allocation-local", "connect_timeout_seconds": 1},
         ],
         "service_manifest": str(manifest),
     }
 
     commands._start_job_local_services(state)
 
-    assert state["local_dirsvc"]["endpoint"] == "svc-a:8090"
-    assert state["environment"]["QFW_LOCAL_DIRSVC_ENDPOINT"] == "svc-a:8090"
-    assert state["environment"]["DEFW_DISABLE_DIRSVC"] == "no"
-    assert state["directory_requirements"][0]["endpoint"] == "svc-a:8090"
-    assert calls[0][0][:6] == [
-        "srun",
-        "--het-group=1",
-        "--nodes=1",
-        "--ntasks=1",
-        "--nodelist",
-        "svc-a",
+    assert [role for role, _kwargs in calls] == [
+        "directory",
+        "qpm",
+        "qpm",
     ]
-    assert calls[0][0][6] == "prte"
-    assert calls[1][0][:7] == [
-        "srun",
-        "--het-group=1",
-        "--nodes=1",
-        "--ntasks=1",
-        "--nodelist",
-        "svc-a",
-        "/usr/bin/qfw-dirsvc-start",
+    expected_ids = [
+        qfw_config.application_service_id(name, "test")
+        for name in ("nwqsim", "tnqvm")
     ]
-    assert calls[1][0][calls[1][0].index("--host") + 1] == "svc-a"
-    assert calls[1][0][calls[1][0].index("--telnet-port") + 1] == "8092"
-    assert calls[2][0][:7] == [
-        "srun",
-        "--het-group=1",
-        "--nodes=1",
-        "--ntasks=1",
-        "--nodelist",
-        "svc-a",
-        "/usr/bin/qfw-service-start",
+    assert [
+        kwargs.get("service_id") for _role, kwargs in calls[1:]
+    ] == expected_ids
+    assert [
+        kwargs.get("manifest_service_name") for _role, kwargs in calls[1:]
+    ] == ["nwqsim", "tnqvm"]
+    directory_info = str(
+        run_dir / "service-plane" / "directory" /
+        "directory-service.json")
+    assert calls[1][1]["directory_service_info"] == directory_info
+    assert calls[2][1]["directory_service_info"] == directory_info
+    assert [manager["role"] for manager in state["service_managers"]] == [
+        "directory",
+        "qpm",
+        "qpm",
     ]
-    assert calls[2][1]["QFW_LOCAL_DIRSVC_ENDPOINT"] == "svc-a:8090"
-    assert calls[2][1]["QFW_LOCAL_SERVICE_TARGET"] == "svc-a"
-    assert calls[2][1]["QFW_QPM_ASSIGNED_HOSTS"] == "svc-a,svc-b"
+    assert state["environment"]["QFW_DIRECTORY_SERVICE_INFO"] == (
+        directory_info)
+    assert state["environment"]["QFW_LOCAL_DIRSVC_ENDPOINT"] == (
+        "svc-a:18090")
+    assert state["environment"]["QFW_QPM_SERVICE_IDS"] == ",".join(
+        expected_ids)
+    assert [launch["listen_port"] for launch in
+            state["local_service_launches"]] == [8290, 8390]
 
 
-def test_start_defw_owned_process_uses_defw_python_wrapper(
+def test_start_job_local_services_places_every_role_on_group1(
+        tmp_path, monkeypatch):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "services:\n"
+        "  - name: nwqsim\n"
+        "    module: svc_nwqsim_qpm\n"
+        "    credential-mode: no-secret\n",
+        encoding="utf-8",
+    )
+    state_dir = tmp_path / "state"
+    run_dir = tmp_path / "run"
+    state_dir.mkdir()
+    run_dir.mkdir()
+    allocation = hetero_allocation()
+    calls = []
+
+    def fake_start_role(role, **kwargs):
+        calls.append((role, dict(kwargs)))
+        if role == "directory":
+            return {
+                "directory": {
+                    "name": "qfw-local-dirsvc",
+                    "endpoint": "svc-a:18090",
+                    "telnet_port": 18091,
+                    "connection_file": str(
+                        run_dir / "service-plane" / "directory" /
+                        "directory-service.json"),
+                },
+            }
+        return {
+            "services": [{
+                "service_id": "nwqsim",
+                "target": "svc-a",
+                "assigned_hosts": "svc-a,svc-b",
+                "listen_port": 8290,
+                "telnet_port": 8291,
+            }],
+        }
+
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "start_role", fake_start_role)
+    state = {
+        "run_id": "test",
+        "run_base_dir": str(tmp_path),
+        "run_dir": str(run_dir),
+        "state_dir": str(state_dir),
+        "site_config": str(tmp_path / "site.yaml"),
+        "runtime_config": str(tmp_path / "runtime.yaml"),
+        "local_services": {
+            "start-prte": True,
+            "start-dirsvc": True,
+            "start-qpm": True,
+        },
+        "local_dirsvc": {},
+        "environment": {
+            "QFW_ALLOCATION_MODE": allocation["mode"],
+            "QFW_GROUP_0_NODELIST": allocation["group0_nodelist"],
+            "QFW_GROUP_1_NODELIST": allocation["group1_nodelist"],
+            "QFW_GROUPS": allocation["groups"],
+        },
+        "service_managers": [],
+        "directory_requirements": [{
+            "scope": "allocation-local",
+            "name": "qfw-local-dirsvc",
+            "endpoint": "127.0.0.1:1",
+            "connect_timeout_seconds": 1,
+        }],
+        "service_manifest": str(manifest),
+    }
+
+    commands._start_job_local_services(state)
+
+    assert all(kwargs["scope"] == "application" for _role, kwargs in calls)
+    assert all(kwargs["allocation"] == allocation for _role, kwargs in calls)
+    assert state["local_dirsvc"]["host"] == "svc-a"
+    assert state["directory_requirements"][0]["endpoint"] == (
+        "svc-a:18090")
+
+
+def test_cleanup_application_service_managers_uses_reverse_order(
+        monkeypatch):
+    stopped = []
+    monkeypatch.setattr(
+        commands.qfw_service_plane,
+        "stop",
+        lambda run_dir: stopped.append(str(run_dir)),
+    )
+    state = {
+        "service_managers": [
+            {
+                "owner": "application",
+                "role": "directory",
+                "run_dir": "/run/directory",
+            },
+            {
+                "owner": "application",
+                "role": "qpm",
+                "service_id": "nwqsim",
+                "run_dir": "/run/qpm/nwqsim",
+            },
+            {
+                "owner": "site",
+                "role": "qpm",
+                "service_id": "site-iqm",
+                "run_dir": "/site/qpm/iqm",
+            },
+        ],
+    }
+
+    assert commands._cleanup_application_service_managers(state) == []
+    assert stopped == [
+        "/run/qpm/nwqsim",
+        "/run/directory",
+    ]
+
+
+def test_private_process_launcher_uses_defw_python_wrapper(
         tmp_path, monkeypatch):
     pid_file = tmp_path / "svc.pid"
     ready_file = tmp_path / "svc-ready.json"
@@ -472,15 +414,15 @@ def test_start_defw_owned_process_uses_defw_python_wrapper(
         captured["stderr_name"] = stderr.name
         return FakeProcess()
 
-    monkeypatch.setattr(commands, "_command_path", fake_command_path)
-    monkeypatch.setattr(commands.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(process_launcher, "_command_path", fake_command_path)
+    monkeypatch.setattr(process_launcher.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(
-        commands,
+        process_launcher,
         "_wait_process_ready",
         lambda process, timeout, name, ready_probe: None,
     )
 
-    rc = commands._start_defw_owned_process(
+    rc = process_launcher._start_defw_owned_process(
         "svc",
         {"DEFW_LOG_DIR": str(log_dir), "VIRTUAL_ENV": "/shared/venv"},
         pid_file,
@@ -501,6 +443,16 @@ def test_start_defw_owned_process_uses_defw_python_wrapper(
     assert pid_file.read_text(encoding="utf-8") == "1234\n"
     assert json.loads(ready_file.read_text(encoding="utf-8"))["role"] == (
         "service")
+
+
+def test_process_launcher_expands_site_simulator_nodes(monkeypatch):
+    monkeypatch.setenv("QFW_SIMULATOR_NODES", "sim-a,sim-b")
+
+    assert process_launcher._resolve_host_policy(
+        "${QFW_SIMULATOR_NODES}", {
+            "group0": ["qpm-a"],
+            "group1": ["qpm-a"],
+        }) == "sim-a,sim-b"
 
 
 def test_qfw_srun_uses_group0_for_heterogeneous_allocation(
@@ -749,127 +701,3 @@ def test_qfw_srun_configures_site_directory_defw_environment(
     assert captured["env"]["DEFW_PARENT_NAME"] == "qfw-site-dirsvc"
     assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.3"
     assert captured["env"]["DEFW_LISTEN_PORT"] == "45679"
-
-
-def test_cleanup_prte_uses_dvm_uri_without_default_pkill(tmp_path,
-                                                         monkeypatch):
-    uri_path = tmp_path / "prte_dvm" / "dvm-uri"
-    uri_path.parent.mkdir()
-    uri_path.write_text("dvm-uri\n", encoding="utf-8")
-    calls = []
-
-    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
-        calls.append(list(argv))
-        return commands.subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(commands.subprocess, "run", fake_run)
-
-    commands._cleanup_prte({"uri_path": str(uri_path)})
-
-    assert calls == [["pterm", "--dvm", f"file:{uri_path}"]]
-    assert not uri_path.parent.exists()
-
-
-def test_cleanup_prte_can_force_legacy_pkill(monkeypatch):
-    calls = []
-
-    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
-        calls.append(list(argv))
-        return commands.subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(commands.subprocess, "run", fake_run)
-
-    commands._cleanup_prte({"force_cleanup": True})
-
-    assert calls == [
-        ["pkill", "-9", "prte"],
-        ["pkill", "-9", "prted"],
-    ]
-
-
-def test_cleanup_job_processes_terminates_heterogeneous_pid_on_target(
-        monkeypatch):
-    calls = []
-
-    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
-        calls.append((list(argv), dict(env)))
-        return commands.subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(commands.subprocess, "run", fake_run)
-
-    state = {
-        "environment": {
-            "QFW_ALLOCATION_MODE": "heterogeneous",
-            "QFW_GROUP_0_NODELIST": "client-a",
-            "QFW_GROUP_1_NODELIST": "svc-a,svc-b",
-            "QFW_GROUPS": "GROUP_0=client-a:GROUP_1=svc-a,svc-b",
-        },
-        "processes": [
-            {
-                "owner": "job",
-                "role": "service",
-                "target": "svc-a",
-                "pid": 1234,
-            },
-        ],
-    }
-
-    errors = commands._cleanup_job_processes(state, report_errors=False)
-
-    assert errors == []
-    assert calls[0][0][:6] == [
-        "srun",
-        "--het-group=1",
-        "--nodes=1",
-        "--ntasks=1",
-        "--nodelist",
-        "svc-a",
-    ]
-    assert calls[0][0][6:9] == [
-        sys.executable,
-        "-c",
-        commands._REMOTE_TERMINATE_PROCESS,
-    ]
-    assert calls[0][0][-1] == "1234"
-
-
-def test_cleanup_prte_uses_target_for_heterogeneous_dvm(tmp_path,
-                                                        monkeypatch):
-    uri_path = tmp_path / "prte_dvm" / "dvm-uri"
-    uri_path.parent.mkdir()
-    uri_path.write_text("dvm-uri\n", encoding="utf-8")
-    calls = []
-
-    def fake_run(argv, env=None, stdout=None, stderr=None, check=None):
-        calls.append(list(argv))
-        return commands.subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(commands.subprocess, "run", fake_run)
-
-    commands._cleanup_prte(
-        {
-            "uri_path": str(uri_path),
-            "targets": ["svc-a"],
-            "allocation_mode": "heterogeneous",
-        },
-        env={},
-        allocation=hetero_allocation(),
-    )
-
-    assert calls[0][:6] == [
-        "srun",
-        "--het-group=1",
-        "--nodes=1",
-        "--ntasks=1",
-        "--nodelist",
-        "svc-a",
-    ]
-    assert calls[0][6:] == ["pterm", "--dvm", f"file:{uri_path}"]
-    assert calls[1][:6] == calls[0][:6]
-    assert calls[1][6:9] == [
-        sys.executable,
-        "-c",
-        commands._REMOTE_TERMINATE_PRTE_BY_URI,
-    ]
-    assert calls[1][-1] == str(uri_path)
-    assert not uri_path.parent.exists()

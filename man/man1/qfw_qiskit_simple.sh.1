@@ -1,0 +1,59 @@
+.TH QFW_QISKIT_SIMPLE.SH 1 "August 2026" "QFw 0.1.0" "QFw Examples"
+.SH NAME
+qfw_qiskit_simple.sh \- submit one measured Qiskit circuit through QFw
+.SH SYNOPSIS
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_qiskit_simple.sh [common-options] qubits
+.EE
+.SH DESCRIPTION
+.B qfw_qiskit_simple.sh
+constructs a GHZ-style Qiskit circuit, measures every qubit, and submits it to
+the selected QPM with 1,024 shots. The test prints measurement counts and a
+statevector when the backend provides one.
+.SH ARGUMENTS
+.TP
+.I qubits
+Positive circuit width.
+.SH COMMON OPTIONS
+.TP
+.BI --service-mode " mode"
+Use application-owned
+.B local
+services or an existing
+.B site
+QPM. The default is local.
+.TP
+.BI --backend " name"
+Select the QPM provider. The default is
+.BR nwqsim .
+.TP
+.BI --site-config " path"
+Override the activated site configuration.
+.TP
+.BI --runtime-config " path"
+Override the installed runtime selected by the service mode.
+.TP
+.B --verbose
+Enable shell tracing.
+.PP
+Common options must precede
+.IR qubits .
+.SH EXAMPLES
+Run a four-qubit circuit on an application-owned NWQSim QPM:
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_qiskit_simple.sh --service-mode local --backend nwqsim 4
+.EE
+.PP
+Run a two-qubit circuit on a site-owned IQM QPM:
+.EX
+cd "${QFW_SHARE_DIR}/examples"
+\&./qfw_qiskit_simple.sh --service-mode site --backend iqm 2
+.EE
+.SH SEE ALSO
+.BR qfw_ghz.sh (1),
+.BR qfw_run_all.sh (1),
+.BR qfw-examples (7),
+.BR qfw-srun (1),
+.BR qfw-runtime.yaml (5)

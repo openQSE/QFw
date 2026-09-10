@@ -2,21 +2,49 @@
 
 These scripts are intended to run after the QFw environment has been
 activated inside a Slurm allocation. They are integration examples, not
-unit tests.
+unit tests. Run `man 7 qfw-examples` for the installed overview and
+`man 1 <script-name>` for a public wrapper's complete command reference.
 
 ```bash
 source /opt/openqse/qfw/current/bin/qfw-activate
 cd "$QFW_SHARE_DIR/examples"
 ```
 
-Each wrapper starts QFw with `qfw-setup`, runs one application through
-`qfw-srun`, and tears QFw down even when the application fails. Do not call
-`qfw_deactivate` until the wrapper has completed.
+Each compatible wrapper accepts `--service-mode local|site` and `--backend`.
+Local mode selects the installed `local` profile and starts only the requested
+application-owned backend. Site mode uses the installed default site-only
+runtime and resolves an existing site-owned QPM. Neither mode requires an
+application-generated runtime file. Both modes run through `qfw-srun` and call
+`qfw-teardown` even when the application fails. Do not call `qfw-deactivate`
+until the wrapper has completed.
 
-Each wrapper and example emits machine-readable result records as JSON lines.
-Records are printed with a `QFW_EXAMPLE_RESULT ` prefix in the log. When
-`QFW_EXAMPLE_RESULT_FILE` is set, the same JSON records are appended to that
-file. The stable fields are:
+Example scripts are quiet by default. Pass `--verbose` before the wrapper's
+positional arguments to enable shell command tracing:
+
+```bash
+./qfw_ghz.sh --verbose qiskit 4 nwqsim 1
+```
+
+Each wrapper and example emits a result record. Standard output shows a
+human-readable, pretty-printed JSON block whose opening line starts with
+`QFW_EXAMPLE_RESULT `. When `QFW_EXAMPLE_RESULT_FILE` is set, the same record
+is appended to that file as compact, one-record-per-line JSONL for machine
+consumption. The stable fields are:
+
+```text
+QFW_EXAMPLE_RESULT {
+  "artifacts": {},
+  "details": {},
+  "example": "ghz-qiskit",
+  ...
+}
+```
+
+Other structured records emitted by the example drivers use the same
+pretty-printed stdout format, including `QFW_SLURM_DRIVER_RESULT`,
+`QFW_EXAMPLE_RESERVATION`, `QFW_FAKE_IQM_STRESS_RESULT`, and chemistry and IQM
+result prefixes. Files whose names end in `.jsonl` remain compact JSONL and
+should be used by automation instead of parsing terminal output.
 
 ```text
 schema: qfw-example-wrapper-v1 or qfw-example-result-v1
@@ -43,12 +71,23 @@ artifacts: generated files, when any
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
 
-To run the standard examples sequentially and collect per-example logs and
-JSONL result files:
+Run the compatible examples locally against NWQSim:
 
 ```bash
-./qfw_run_all.sh
+./qfw_run_all.sh --service-mode local --backend nwqsim
 ```
+
+Run them against an existing site-owned QPM:
+
+```bash
+./qfw_run_all.sh \
+  --service-mode site \
+  --backend nwqsim
+```
+
+The site configuration comes from the activated `QFW_SITE_CONFIG`. Pass
+`--site-config` only to override it for that invocation. `--runtime-config` is
+also an advanced override, not a requirement for site mode.
 
 The runner continues after failures, prints a final summary, and exits
 nonzero if any example fails. Logs, per-example JSONL files, and
@@ -59,14 +98,16 @@ nonzero if any example fails. Logs, per-example JSONL files, and
 Useful overrides:
 
 ```bash
-QFW_RUN_ALL_BACKEND=nwqsim ./qfw_run_all.sh
+./qfw_run_all.sh --tests init-test,qiskit-simple,ghz-qiskit
 QFW_RUN_ALL_QUBITS=4 QFW_RUN_ALL_VQE_ITERS=1 ./qfw_run_all.sh
 QFW_RUN_ALL_SHIM_LIB=qrmi ./qfw_run_all.sh
 ```
 
-`qfw_run_all.sh` intentionally covers allocation-local managed examples. The
-long-running QPM example below needs a multi-node allocation and is run
-separately.
+The aggregate runner intentionally excludes `qfw_mpi_smoke.sh`; MPI validation
+has its own placement and task-count contract and remains a separate command.
+The shim smoke test runs only in local mode because it owns a specialized
+service. VQE is skipped for backends without the required statevector result.
+Every selected case must emit a successful terminal wrapper record to pass.
 
 The fake IQM stress fixture is also run separately because it exercises a
 bounded admission/scheduler matrix rather than a single application smoke.
@@ -104,6 +145,9 @@ Starts only the QRMI/QDMI bifurcation shim service from
 calls the shim service over DEFw RPC. The test covers device introspection,
 coupling graph, calibration snapshot, backend info, async circuit execution,
 completion notification, and last-job metadata.
+
+This specialized case is not part of a simulator-backed `qfw_run_all.sh`
+matrix. Select it explicitly with `--service-mode local --backend shim`.
 
 ```bash
 ./qfw_shim_smoke.sh --lib qdmi
@@ -153,8 +197,8 @@ speed of failing.
 
 ### `qfw_qiskit_simple.sh`
 
-Runs a simple Qiskit GHZ-style circuit through the NWQ-Sim QFw backend.
-The argument is the number of qubits.
+Runs a simple Qiskit GHZ-style circuit through the selected QFw backend. The
+argument is the number of qubits.
 
 ```bash
 ./qfw_qiskit_simple.sh 4
@@ -169,7 +213,7 @@ Arguments:
 ```text
 framework: qiskit or pennylane
 num-qubits: number of qubits
-simtype: nwqsim or tnqvm
+backend: QFw provider backend name
 iterations: number of repeated runs
 ```
 
@@ -181,7 +225,7 @@ Example:
 
 ### `qfw_pennylane.sh`
 
-Runs the fixed PennyLane remote-backend example against the NWQ-Sim QFw
+Runs the fixed PennyLane remote-backend example against the selected QFw
 backend.
 
 ```bash
@@ -258,68 +302,23 @@ application tree is present.
 ./qfw_chem_app.sh <script-name.py>
 ```
 
-### `qfw_iqm_chem_site_run.sh`
-
-Starts a site-style DEFw directory service and ORNL IQM QPM, reserves through
-the Slurm-style QFw driver, runs the QFw-enabled chemistry application, and
-tears the site services down. The wrapper is intended for the Docker/site
-workflow where the chemistry application tree and shared virtual environment
-are visible to all nodes.
+Use the common execution options to select a site-owned hardware QPM:
 
 ```bash
-./qfw_iqm_chem_site_run.sh \
-  --base /workspace/qfw-container-base \
-  --qfw-prefix /workspace/qfw-container-base/qfw-install-dev \
-  --venv /workspace/qfw-container-base/qfw-shared-test-venv \
-  --chem-app-dir /workspace/qfw-container-base/chemistry_example_aim2
+./qfw_chem_app.sh \
+  --service-mode site \
+  --backend iqm \
+  <script-name.py>
 ```
 
-The wrapper creates one `site.yaml` that selects the site service manifest,
-device-access configuration, and common QPM settings. Provider credentials
-remain service-side and are not passed as command-line options.
+### `qfw_iqm_chem_driver.sh`
 
-Use `--device-access-config PATH` to select a site-owned device map. The
-installed default is `/etc/openqse/qfw/device/device-access.yaml`; development
-credential files are not installed with QFw.
+The driver's explicit `--preflight-only` mode checks an operator-readable
+credential configuration. Normal application runs leave credential and
+entitlement validation to the QPM. The driver reserves through the Slurm-style
+driver, runs the chemistry application against an existing IQM QPM, and
+records evidence. Pass the canonical site file directly with `--site-config`.
+The command does not source state from a service manager run directory.
 
-By default the wrapper uses `1000` shots and estimator precision `0.031623`,
-which maps QFwEstimator submissions to `num_shots: 1000`. Override with
-`--shots` and `--estimator-precision` when a different chemistry sampling
-budget is needed.
-
-### `qfw_supermarq.batch`
-
-Frontier-oriented batch template for submitting the SupermarQ workflow
-as a heterogeneous Slurm job. Update account, node counts, paths, and
-arguments before use.
-
-### `qfw_long_running_qpm.sh`
-
-Runs a site-scoped long-running QPM workflow. The script expects at least
-three allocated nodes by default. It starts a site DEFw-dirsvc, PRTE DVM, and
-long-running `nwqsim` QPM on one service node, then launches concurrent
-application waves on the remaining nodes. Each app uses site-scoped
-`qfw-setup`, `qfw-srun`, and `qfw-teardown`; app teardown must not stop the
-site service plane.
-
-```bash
-./qfw_long_running_qpm.sh --apps 2 --waves 2 --backend nwqsim
-```
-
-Useful overrides:
-
-```bash
-./qfw_long_running_qpm.sh --service-node c1 --app-nodes c2,c3
-QFW_LONG_RUNNING_QPM_FORCE_PRTE_CLEANUP=yes ./qfw_long_running_qpm.sh
-```
-
-Logs, generated site/runtime configs, service PID files, per-app logs, and
-`summary.jsonl` are written under
-`$QFW_RUN_BASE_DIR/long-running-qpm-<timestamp>`. If `QFW_RUN_BASE_DIR` is
-unset, the script uses `${TMPDIR:-/tmp}/qfw-runs`.
-
-### `qfw_long_running_qpm.batch`
-
-Three-node Slurm batch template for `qfw_long_running_qpm.sh`. Set
-`QFW_ACTIVATE` when the QFw install is not under
-`/opt/openqse/qfw/current/bin/qfw-activate`.
+Long-running site-service startup, application validation, and interruption
+recovery are documented in `docs/recipes`.

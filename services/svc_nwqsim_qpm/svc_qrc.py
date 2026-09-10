@@ -1,11 +1,14 @@
-from defw_agent_info import *  # noqa: F401,F403
 import sys
 import os
+import logging
 import numpy as np
 from defw_exception import DEFwError, DEFwExecutionError
 from util.mpi import backend_config, backend_wrapper, build_mpi_command_string
 from util.qpm.util_qrc import UTIL_QRC
-from util.qpm.statevector import QFwStatevector
+from util.qpm.statevector import (
+	QFwStatevector,
+	statevector_payload_size_summary,
+)
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
@@ -60,9 +63,13 @@ class QRC(UTIL_QRC):
 
 		statevector = self.parse_statevector_dump(
 			dump_file, info.get("num_qubits", None))
+		statevector_payload = statevector.to_dict()
+		logging.defw_service(
+			"Encoded statevector for QPM completion: "
+			f"{statevector_payload_size_summary(statevector_payload)}")
 		return {
 			"counts": counts,
-			"statevector": statevector.to_dict()
+			"statevector": statevector_payload
 		}
 
 	def parse_statevector_dump(self, dump_file, num_qubits):

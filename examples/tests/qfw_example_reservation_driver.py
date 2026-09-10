@@ -8,6 +8,11 @@ from defw_app_util import defw_get_directory_service
 from defw_exception import DEFwError
 from qfw_qiskit.qpm_resolver import QPMResolver
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
+from qfw_qiskit.reservation_set import (
+	parse_qfw_reservations,
+	select_qpm_reservation,
+)
+from qfw_example_report import format_console_record
 
 
 def normalize_reservation_id(value):
@@ -18,11 +23,15 @@ def normalize_reservation_id(value):
 	return value
 
 
-def resolve_qpm(provider, timeout):
+def resolve_qpm(provider, timeout, service_id=None):
 	selection = qpm_selection_for_provider(provider, default_provider=provider)
 	dirsvc = defw_get_directory_service()
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc)
-	return resolver.connect(
+	if service_id:
+		binding = resolver.connect_reserved_managed(
+			service_id, 1, timeout=timeout, binding_name="admission")
+		return binding.resolved, binding.client
+	resolved = resolver.resolve(
 		service_type="qfw.qpm",
 		binding_name="admission",
 		qpm_type=selection["qpm_type"],
@@ -30,6 +39,9 @@ def resolve_qpm(provider, timeout):
 		provider=selection["provider"],
 		timeout=timeout,
 	)
+	lifecycle_binding = resolver.managed_binding(resolved)
+	return resolved, lifecycle_binding.api(
+		"admission", expected_runtime_id=resolved.runtime_id)
 
 
 def emit(kind, **payload):
@@ -39,8 +51,7 @@ def emit(kind, **payload):
 		"timestamp_ns": time.time_ns(),
 	}
 	record.update(payload)
-	print("QFW_EXAMPLE_RESERVATION " + json.dumps(record, sort_keys=True),
-	      flush=True)
+	print(format_console_record("QFW_EXAMPLE_RESERVATION", record), flush=True)
 
 
 def allocation_id():
@@ -64,7 +75,22 @@ def json_object(value, label):
 
 
 def reserve(args):
-	qpm = resolve_qpm(args.backend, args.timeout)
+	resolved, qpm = resolve_qpm(args.backend, args.timeout)
+	scheduler_reservations = parse_qfw_reservations(required=False)
+	if scheduler_reservations:
+		reservation = select_qpm_reservation(
+			scheduler_reservations, resolved.service_id)
+		emit(
+			"reserve",
+			backend=args.backend,
+			service_id=resolved.service_id,
+			ownership="scheduler",
+			decision={
+				"status": "accepted",
+				"reservation_id": reservation.reservation_id,
+			},
+		)
+		return 0
 	alloc_id = args.allocation_id or allocation_id()
 	job_id = args.job_id or alloc_id
 	measurement_count = args.measurements
@@ -122,7 +148,9 @@ def reserve(args):
 	if args.credential_scope:
 		request["credential_scope"] = args.credential_scope
 	decision = qpm.reserve(request=request)
-	emit("reserve", backend=args.backend, request=request, decision=decision)
+	emit(
+		"reserve", backend=args.backend, service_id=resolved.service_id,
+		ownership="driver", request=request, decision=decision)
 	if decision.get("status") != "accepted" or not decision.get(
 			"reservation_id"):
 		raise DEFwError(f"reservation was not accepted: {decision}")
@@ -130,7 +158,8 @@ def reserve(args):
 
 
 def release(args):
-	qpm = resolve_qpm(args.backend, args.timeout)
+	_resolved, qpm = resolve_qpm(
+		args.backend, args.timeout, service_id=args.service_id)
 	reservation_id = normalize_reservation_id(args.reservation_id)
 	result = qpm.release(reservation_id=reservation_id, reason=args.reason)
 	emit(
@@ -180,6 +209,7 @@ def build_parser():
 	release_parser = subparsers.add_parser("release")
 	release_parser.add_argument("--backend", required=True)
 	release_parser.add_argument("--reservation-id", required=True)
+	release_parser.add_argument("--service-id", required=True)
 	release_parser.add_argument("--reason", type=int, default=0)
 	release_parser.add_argument("--timeout", type=float, default=40.0)
 	release_parser.set_defaults(func=release)

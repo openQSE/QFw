@@ -10,6 +10,7 @@ svc_info = {
 	'module': __name__,
 	'description': SERVICE_DESC,
 	'version': 1.0,
+	'instance_mode': 'singleton',
 	'properties': {
 		'provider': 'fake-iqm',
 		'target_id': 'fake-iqm-20q',

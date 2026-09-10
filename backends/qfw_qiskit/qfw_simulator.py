@@ -76,7 +76,7 @@ class QFwBackend(BackendV2):
 
 	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
 				 num_qubits=QFW_NUM_QUBITS, lookup_timeout=None,
-				 provider=None, backend=None):
+				 provider=None, backend=None, service_id=None):
 		self.log_time = time.time()
 		self._provider = None
 		selector = provider if provider is not None else backend
@@ -86,22 +86,33 @@ class QFwBackend(BackendV2):
 			if betype in (-1, None):
 				betype = selection["qpm_type"]
 			if capability in (-1, None):
-				capability = selection["qpm_capability"]
+				capability = selection["qpm_capabilities"]
 		self._capability = capability
 		lookup_kwargs = {}
 		if lookup_timeout is not None:
 			lookup_kwargs["timeout"] = lookup_timeout
 		if self._provider is not None:
 			lookup_kwargs["provider"] = self._provider
-		self.qpm = get_qpm(betype, capability, **lookup_kwargs)
+		self.qpm, reservation_id = get_qpm(
+			betype, capability,
+			service_id=service_id,
+			return_reservation=True,
+			**lookup_kwargs)
+		self._qpm_lifecycle_binding = getattr(
+			self.qpm, "lifecycle_binding", None)
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
 		self._event_endpoint = me.my_endpoint()
 		self._event_registration_lock = threading.Lock()
 		self._completion_event_registered = False
 		self._completion_event_registration = None
+		if self._qpm_lifecycle_binding is not None:
+			self._qpm_lifecycle_binding.add_reconnect_listener(
+				self._handle_qpm_reconnect)
 
 		super().__init__(name=self.my_name())
+		if reservation_id is not None:
+			self.options.reservation_id = reservation_id
 		self._target = target
 		self._properties = properties
 		self._num_qubits = num_qubits
@@ -135,6 +146,10 @@ class QFwBackend(BackendV2):
 
 	def shutdown(self):
 		g_circ_metrics.dump()
+		if self._qpm_lifecycle_binding is not None:
+			self._qpm_lifecycle_binding.remove_reconnect_listener(
+				self._handle_qpm_reconnect)
+			self._qpm_lifecycle_binding.close()
 		me.exit()
 
 	def configuration(self):
@@ -222,6 +237,13 @@ class QFwBackend(BackendV2):
 					self.event_api.class_id())
 			self._completion_event_registered = True
 			return self._completion_event_registration
+
+	def _handle_qpm_reconnect(self, state):
+		with self._event_registration_lock:
+			self._completion_event_registered = False
+			self._completion_event_registration = None
+		if state.get("same_runtime"):
+			self.register_completion_events()
 
 	def log_statistics(self, res):
 		g_circ_metrics.add_time(res['creation_time'], res['launch_time'], "creation->launch")

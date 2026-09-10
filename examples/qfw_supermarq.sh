@@ -1,13 +1,16 @@
 #!/bin/bash
 
 set -euo pipefail
-set -x
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_execution_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
+
+backend="$(qfw_example_backend "${7:-nwqsim}")"
 
 qfw_example_begin "supermarq" "$@"
-qfw_example_setup_backend_service "$7"
+qfw_example_setup_backend_service "${backend}"
 
 # test_supermarq.py takes
 #   run: sync or async
@@ -57,7 +60,7 @@ PY
 
 QFW_SUPERMARQ_SHUTDOWN_QPM=no \
 	qfw_example_slurm_driver \
-	--backend "$7" \
+	--backend "${backend}" \
 	--example qfw_supermarq \
 	--qubits "${reservation_qubits}" \
 	--shots "$4" \
@@ -69,4 +72,4 @@ QFW_SUPERMARQ_SHUTDOWN_QPM=no \
 	--workload-json "${workload_json}" \
 	-- "$(qfw_example_path tests/test_supermarq.py)" --run "$1" \
 		--iterations "$2" --startqbit "$3" --shots "$4" \
-		--increase "$5" --method "$6" --backend "$7"
+		--increase "$5" --method "$6" --backend "${backend}"

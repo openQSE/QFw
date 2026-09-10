@@ -7,7 +7,7 @@ from svc_fake_iqm_qpm.svc_qpm import (
 	FAKE_IQM_TARGET_ID,
 	QPM,
 )
-from util.qpm.controller import clear_target_controllers
+from util.qpm.controller import _clear_target_controllers_for_tests
 
 
 class FakeAdmissionContext:
@@ -92,7 +92,7 @@ class FakeAdmissionContext:
 
 
 def _setup(monkeypatch):
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_FAKE_QPM_MIN_SLEEP_SECONDS", "0.001")
 	monkeypatch.setenv("QFW_FAKE_QPM_MAX_SLEEP_SECONDS", "0.01")
@@ -103,8 +103,10 @@ def configure_fake_credentials(monkeypatch, tmp_path, *users):
 	credential_db = {
 		"users": {
 			user: {
+				"enabled": True,
 				"devices": {
 					FAKE_IQM_TARGET_ID: {
+						"enabled": True,
 						"api_key": f"fake-api-key-{user}",
 					}
 				}
@@ -145,7 +147,7 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 	assert profile["baseline"]["qubit_count"] == 4
 	assert admission.policies[-1][1] == "unlimited"
 
-	decision = qpm.reserve({
+	decision = qpm.reserve(request={
 		"owner": {"user": "stress-user"},
 		"job_id": "job-fake-iqm",
 		"scope_id": "allocation-1",
@@ -213,12 +215,13 @@ def test_fake_iqm_qpm_uses_reservation_provider_credential(
 		monkeypatch, tmp_path):
 	_setup(monkeypatch)
 	configure_fake_credentials(monkeypatch, tmp_path, "stress-user")
+	monkeypatch.setenv("QFW_QPM_CREDENTIAL_MODE", "required")
 
 	qpm = QPM(
 		admission_context_factory=FakeAdmissionContext,
 		scheduler_context_factory=FakeSchedulerContext,
 	)
-	decision = qpm.reserve({
+	decision = qpm.reserve(request={
 		"owner": {"user": "stress-user"},
 		"job_id": "job-fake-iqm-credential",
 		"scope_id": "allocation-credential",

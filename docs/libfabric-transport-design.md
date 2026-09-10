@@ -104,14 +104,8 @@ Several pieces of libfabric groundwork already exist in the tree:
 - `environment/qfw_libfabric_env.sh` exports the libfabric install paths
   and Slingshot-oriented tuning (`FI_LNX_PROV_LINKS="shm+cxi:cxi0|..."`,
   `FI_CXI_RDZV_*`, `FI_MR_CACHE_*`, XPMEM).
-- `DEFw/python/experiments/suite_libfabric/` contains an early experiment
-  that uses DEFw-resmgr as an out-of-band rendezvous to exchange endpoint
-  contexts between agents, which is the bootstrap pattern libfabric RDM
-  endpoints require.
-- `DEFw/defw_build.yaml` carries a stale `swigify` entry that wrapped a
-  private libfabric source tree directly into Python. That experiment
-  informs this design (see below) but the entry itself references
-  filesystem paths that no longer exist and will be removed.
+- DEFw transport and SWIG contract tests live under `DEFw/tests/`; they do not
+  require site-specific experiment scripts or private source-tree paths.
 
 ## Goals And Non-Goals
 
@@ -329,12 +323,9 @@ Notes:
   still available, but the socket is now load-bearing: it is what carries
   a message too large for the eager receive buffer. Removing it would
   need the oversized-message path handled some other way first.
-- DEFw-resmgr needs no changes: it already brokers agent discovery, and
-  the OFI address rides inside the existing per-pair handshake, not
-  through the resmgr. This is deliberately simpler than the
-  `suite_libfabric` experiment, which brokered contexts through the
-  resmgr; the per-pair handshake works even for direct client-to-service
-  connections that bypass the resmgr.
+- The OFI address rides inside the existing per-pair handshake rather than
+  through directory discovery. The handshake therefore works for both
+  directory-resolved and direct client-to-service connections.
 
 ## Large Payloads And RDMA
 
@@ -427,14 +418,11 @@ the object alive until the acknowledgement arrives.
 
 ## Configuration
 
-- Install configuration (`setup/config/*.yaml`): the existing
-  `libfabric-install` key locates the libfabric installation.
-Configuration is by environment variable, following the existing `DEFW_*`
-pattern. The `transport:` and `ofi-provider:` service-YAML keys originally
-proposed here were deferred: the DEFw YAML files interpolate the
-environment anyway, so the variable has to reach the agent regardless, and
-adding a second place to say the same thing earns nothing until there is a
-reason to vary it per service.
+Transport configuration uses environment variables that follow the existing
+`DEFW_*` pattern. The `transport:` and `ofi-provider:` service-YAML keys
+originally proposed here were deferred. DEFw agents already inherit these
+values from their launch environment, so a second configuration source is not
+needed.
 
 - `DEFW_TRANSPORT` - `tcp` (default) or `ofi`. With `ofi`, agents attempt
   OFI and fall back to TCP per peer as described above.
@@ -458,10 +446,9 @@ well below that and well above the small arrays that ride along with
 ordinary RPCs. It is worth revisiting with numbers when a bulk-data path
 adopts attachments.
 
-Because RMA is on by default, no new variable has to be threaded through
-the QFw launcher's curated environment (`get_external_defw_env()` in
-`setup/qfw_setup.py`) to reach the resmgr and service agents.
-`DEFW_TRANSPORT` and `DEFW_OFI_PROVIDER` do, and are already listed there.
+RMA is enabled by default and requires no additional launcher configuration.
+QFw service launchers preserve `DEFW_TRANSPORT` and `DEFW_OFI_PROVIDER` in the
+environment passed to DEFw agents.
 
 Slingshot tuning stays where it is today, in
 `environment/qfw_libfabric_env.sh` (`FI_LNX_PROV_LINKS`, `FI_CXI_RDZV_*`,
@@ -553,9 +540,8 @@ was in hand before Slingshot bring-up rather than after it.
 - Fallback matrix: OFI-enabled client against TCP-only service and vice
   versa; provider-unavailable startup; peer death detection under OFI
   (heartbeat path).
-- `DEFw/python/experiments/suite_libfabric/` is repurposed as the
-  transport experiment suite (connectivity, message-size sweeps,
-  attachment benchmarks).
+- Transport validation belongs in `DEFw/tests/transport/` and focused
+  multi-process integration tests, not in installed site-specific experiments.
 
 ## Risks And Open Questions
 

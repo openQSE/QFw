@@ -27,13 +27,6 @@ _registration_records = []
 _registration_thread = None
 
 
-def _env_enabled(name, default=True):
-	value = os.environ.get(name)
-	if value is None:
-		return default
-	return value.strip().lower() in {"1", "true", "yes", "on", "y"}
-
-
 def _startup_timeout():
 	try:
 		return int(os.environ.get("QFW_STARTUP_TIMEOUT", "60"))
@@ -95,8 +88,6 @@ def _register_with_dirsvc():
 def initialize():
 	global _registration_thread
 
-	if not _env_enabled("QFW_QPM_REGISTER_WITH_DIRSVC"):
-		return None
 	with _registration_lock:
 		if _registration_thread is not None:
 			return None

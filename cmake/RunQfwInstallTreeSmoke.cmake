@@ -4,6 +4,9 @@ endif()
 if(NOT QFW_INSTALL_PREFIX)
 	message(FATAL_ERROR "QFW_INSTALL_PREFIX is required")
 endif()
+if(NOT QFW_INSTALL_MANDIR)
+	message(FATAL_ERROR "QFW_INSTALL_MANDIR is required")
+endif()
 if(NOT QFW_PYTHON)
 	message(FATAL_ERROR "QFW_PYTHON is required")
 endif()
@@ -12,6 +15,8 @@ if(NOT QFW_PYTHON_INSTALL_DIR)
 endif()
 
 find_program(QFW_BASH bash REQUIRED)
+get_filename_component(qfw_python_bin_dir "${QFW_PYTHON}" DIRECTORY)
+set(ENV{PATH} "${qfw_python_bin_dir}:$ENV{PATH}")
 
 function(qfw_free_port out_var)
 	get_property(next_port GLOBAL PROPERTY QFW_NEXT_FAKE_PORT)
@@ -63,6 +68,17 @@ foreach(forbidden_config
 	endif()
 endforeach()
 
+foreach(source_only_dependency_path
+		tools/dependencies
+		bin/circuit_runner.nwqsim
+		bin/circuit_runner.tnqvm)
+	if(EXISTS "${QFW_INSTALL_PREFIX}/${source_only_dependency_path}")
+		message(FATAL_ERROR
+			"source-only simulator dependency was installed: "
+			"${source_only_dependency_path}")
+	endif()
+endforeach()
+
 set(qfw_install_pythonpath
 	"${QFW_INSTALL_PREFIX}/${QFW_PYTHON_INSTALL_DIR}")
 execute_process(
@@ -90,15 +106,68 @@ endif()
 foreach(command_name
 			qfw-activate
 			defw-python
-		qfw-setup
-		qfw-srun
-		qfw-teardown
-		qfw-dirsvc-start
-		qfw-service-start)
+			qfw-setup
+			qfw-status
+			qfw-srun
+			qfw-teardown
+			qfw-dir-svc
+			qfw-qpm-svc)
 	if(NOT EXISTS "${QFW_INSTALL_PREFIX}/bin/${command_name}")
 		message(FATAL_ERROR "missing installed command: ${command_name}")
 	endif()
 endforeach()
+
+foreach(removed_command qfw-dirsvc-start qfw-service-start qfw-service-plane)
+	if(EXISTS "${QFW_INSTALL_PREFIX}/bin/${removed_command}")
+		message(FATAL_ERROR
+			"removed command was installed: ${removed_command}")
+	endif()
+endforeach()
+
+set(qfw_man_root "${QFW_INSTALL_PREFIX}/${QFW_INSTALL_MANDIR}")
+foreach(man_page
+		man1/defw-python.1
+		man1/qfw-activate.1
+		man1/qfw-deactivate.1
+		man1/qfw-dir-svc.1
+		man1/qfw_chem_app.sh.1
+		man1/qfw_ghz.sh.1
+		man1/qfw_mpi_smoke.sh.1
+		man1/qfw_qiskit_simple.sh.1
+		man1/qfw_run_all.sh.1
+		man1/qfw_supermarq.sh.1
+		man1/qfw-qpm-svc.1
+		man1/qfw-setup.1
+		man1/qfw-srun.1
+		man1/qfw-status.1
+		man1/qfw-teardown.1
+		man5/qfw-runtime.yaml.5
+		man5/qfw-services.yaml.5
+		man5/qfw-site.yaml.5
+		man7/qfw.7
+		man7/qfw-examples.7
+		man7/qfw-service-lifecycle.7)
+	if(NOT EXISTS "${qfw_man_root}/${man_page}")
+		message(FATAL_ERROR "missing installed manual page: ${man_page}")
+	endif()
+endforeach()
+
+find_program(QFW_MAN man)
+if(QFW_MAN)
+	execute_process(
+		COMMAND "${CMAKE_COMMAND}" -E env
+			"MANPATH=${qfw_man_root}"
+			"${QFW_MAN}" -w qfw-setup
+		RESULT_VARIABLE man_lookup_rc
+		OUTPUT_VARIABLE man_lookup_out
+		ERROR_VARIABLE man_lookup_err)
+	if(NOT man_lookup_rc EQUAL 0)
+		message(FATAL_ERROR
+			"installed QFw manual lookup failed\n"
+			"stdout:\n${man_lookup_out}\n"
+			"stderr:\n${man_lookup_err}")
+	endif()
+endif()
 
 foreach(service_manager_file
 		service-manager/env.sh
@@ -117,7 +186,7 @@ string(FIND "${dirsvc_unit_text}" "QFW_DIRSVC_NAME"
 	dirsvc_unit_name_env_index)
 string(FIND "${dirsvc_unit_text}" "--name" dirsvc_unit_name_arg_index)
 string(FIND "${dirsvc_unit_text}"
-	"qfw-dirsvc-start --site-config \"\${QFW_SITE_CONFIG}\""
+	"qfw-dir-svc run --scope site"
 	dirsvc_unit_site_config_index)
 if(NOT dirsvc_unit_name_env_index EQUAL -1 OR
    NOT dirsvc_unit_name_arg_index EQUAL -1 OR
@@ -129,9 +198,6 @@ endif()
 foreach(example_file
 		examples/README.md
 		examples/qfw_example_common.sh
-		examples/qfw_iqm_chem_site_run.sh
-		examples/qfw_long_running_qpm.batch
-		examples/qfw_long_running_qpm.sh
 		examples/qfw_mpi_smoke.sh
 		examples/qfw_mpi_smoke_services.yaml
 		examples/qfw_qiskit_simple.sh
@@ -139,7 +205,6 @@ foreach(example_file
 		examples/qfw_shim_device_access.yaml
 		examples/qfw_shim_smoke_services.yaml
 		examples/qfw_slurm_driver.sh
-		examples/qfw_supermarq.batch
 		examples/tests/test_init_qfw.py)
 	if(NOT EXISTS "${QFW_INSTALL_PREFIX}/share/qfw/${example_file}")
 		message(FATAL_ERROR
@@ -211,12 +276,6 @@ class DirectoryClient:
         with open(path, 'r', encoding='utf-8') as stream:
             return json.load(stream)
 
-    def query_directory(self, include_inactive=False):
-        return self._records()
-
-    def query(self):
-        return self._records()
-
     def resolve_services(self, **filters):
         service_id = filters.get('service_id')
         records = self._records()
@@ -229,21 +288,16 @@ class DirectoryClient:
                 matched.append(record)
         return matched
 
-    def resolve_service(self, **filters):
-        return self.resolve_services(**filters)
-
-
 class EndpointClient:
     def is_ready(self):
         return os.environ.get('QFW_FAKE_NO_LISTEN') != '1'
 
 
-def connect_to_binding(_record):
+def connect_to_binding(record):
+    binding = record.get('selected_binding', {})
+    if binding.get('client_class') == 'QPMControl':
+        return EndpointClient()
     return DirectoryClient()
-
-
-def connect_to_endpoint(_endpoint, _binding=None):
-    return EndpointClient()
 ")
 file(WRITE "${fake_service_script}"
 "import json
@@ -394,19 +448,30 @@ file(CHMOD
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
+		export PS1='original> '
 		export DEFW_LOAD_NO_INIT=api_existing_helper
+		unset MANPATH
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
+		test \"\${PS1}\" = '(qfw) original> '
+		declare -F qfw-deactivate >/dev/null
+		! declare -F qfw_deactivate >/dev/null
 		test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 		test \"\${QFW_BIN_PATH}\" = '${QFW_INSTALL_PREFIX}/bin'
 		test \"\${QFW_LIBEXEC_DIR}\" = '${QFW_INSTALL_PREFIX}/libexec/qfw'
 		test \"\${QFW_SHARE_DIR}\" = '${QFW_INSTALL_PREFIX}/share/qfw'
+		test \"\${MANPATH}\" = '${qfw_man_root}:'
 		test \"\${DEFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
 		test \"\${DEFW_LOAD_NO_INIT}\" = 'api_existing_helper,api_qpm_common'
 		command -v qfw-setup >/dev/null
+		command -v qfw-status >/dev/null
+		command -v qfw-dir-svc >/dev/null
+		command -v qfw-qpm-svc >/dev/null
 		export DEFW_ONLY_LOAD_MODULE=api_qpm_common
 		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None'
-		qfw_deactivate
+		qfw-deactivate
+		test \"\${PS1}\" = 'original> '
 		test -z \"\${QFW_PREFIX+x}\"
+		test -z \"\${MANPATH+x}\"
 		test \"\${DEFW_LOAD_NO_INIT}\" = api_existing_helper"
 	RESULT_VARIABLE activation_rc)
 	if(NOT activation_rc EQUAL 0)
@@ -430,13 +495,21 @@ execute_process(
 			"\t\tunset _OLD_VIRTUAL_PATH\n"
 			"\tfi\n"
 			"\tunset VIRTUAL_ENV\n"
+			"\tif [[ -n \"\${_OLD_VIRTUAL_PS1+x}\" ]]; then\n"
+			"\t\tPS1=\"\${_OLD_VIRTUAL_PS1}\"\n"
+			"\t\tunset _OLD_VIRTUAL_PS1\n"
+			"\tfi\n"
 			"\tif [[ \"\${1:-}\" != \"nondestructive\" ]]; then\n"
 			"\t\tunset -f deactivate\n"
 			"\tfi\n"
 			"}\n"
 			"_OLD_VIRTUAL_PATH=\"\${PATH:-}\"\n"
 			"export VIRTUAL_ENV='${qfw_fake_venv}'\n"
-			"export PATH=\"\${VIRTUAL_ENV}/bin:\${PATH:-}\"\n")
+			"export PATH=\"\${VIRTUAL_ENV}/bin:\${PATH:-}\"\n"
+			"if [[ -z \"\${VIRTUAL_ENV_DISABLE_PROMPT:-}\" ]]; then\n"
+			"\t_OLD_VIRTUAL_PS1=\"\${PS1-}\"\n"
+			"\tPS1=\"(fake-venv) \${PS1-}\"\n"
+			"fi\n")
 		file(WRITE "${qfw_fake_venv}/bin/python"
 			"#!/usr/bin/env bash\n"
 			"exec '${QFW_PYTHON}' \"\$@\"\n")
@@ -452,36 +525,60 @@ execute_process(
 	execute_process(
 		COMMAND "${QFW_BASH}" -c
 			"set -e
+			export PS1='original> '
 			source '${qfw_activation_venv}/bin/activate'
+			test \"\${PS1}\" = '(fake-venv) original> '
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
+			test \"\${PS1}\" = '(qfw) (fake-venv) original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
 			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
 			test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
-			qfw_deactivate
+			qfw-deactivate
+			test \"\${PS1}\" = '(fake-venv) original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+
+			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_switch_venv}' 2> '${qfw_run_base}/qfw-activate-prompt-switch.err'
+			test \"\${PS1}\" = '(qfw) original> '
+			test -z \"\${_OLD_VIRTUAL_PS1+x}\"
+			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
+			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-prompt-switch.err'
+			qfw-deactivate
+			test \"\${PS1}\" = '(fake-venv) original> '
+			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
 			deactivate
+			test \"\${PS1}\" = 'original> '
 			test -z \"\${VIRTUAL_ENV+x}\"
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_activation_venv}'
+			test \"\${PS1}\" = '(qfw) original> '
+			test -z \"\${_OLD_VIRTUAL_PS1+x}\"
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
 			test \"\$(command -v python)\" = '${qfw_activation_venv}/bin/python'
 			test \"\${QFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
-			qfw_deactivate
-			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
+			qfw-deactivate
+			test \"\${PS1}\" = 'original> '
+			test -z \"\${VIRTUAL_ENV+x}\"
+			! declare -F deactivate >/dev/null 2>&1
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv '${qfw_switch_venv}' 2> '${qfw_run_base}/qfw-activate-switch.err'
+			test \"\${PS1}\" = '(qfw) original> '
+			test -z \"\${_OLD_VIRTUAL_PS1+x}\"
 			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
 			test \"\$(command -v python)\" = '${qfw_switch_venv}/bin/python'
-			grep -q 'switching virtual environment' '${qfw_run_base}/qfw-activate-switch.err'
-			qfw_deactivate
-			test \"\${VIRTUAL_ENV}\" = '${qfw_switch_venv}'
-			deactivate
+			test ! -s '${qfw_run_base}/qfw-activate-switch.err'
+			qfw-deactivate
+			test \"\${PS1}\" = 'original> '
 			test -z \"\${VIRTUAL_ENV+x}\"
+			! declare -F deactivate >/dev/null 2>&1
 
 			source '${QFW_INSTALL_PREFIX}/bin/qfw-activate' --venv='${qfw_activation_venv}'
+			test \"\${PS1}\" = '(qfw) original> '
 			test \"\${VIRTUAL_ENV}\" = '${qfw_activation_venv}'
-			qfw_deactivate
-			deactivate"
+			qfw-deactivate
+			test \"\${PS1}\" = 'original> '
+			test -z \"\${VIRTUAL_ENV+x}\"
+			! declare -F deactivate >/dev/null 2>&1"
 		RESULT_VARIABLE activation_venv_rc)
 	if(NOT activation_venv_rc EQUAL 0)
 		message(FATAL_ERROR "QFw install activation venv smoke failed")
@@ -494,13 +591,23 @@ execute_process(
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
 		test -z \"\${QFW_PATH+x}\"
 		source '${QFW_INSTALL_PREFIX}/share/qfw/examples/qfw_example_common.sh'
+		qfw_example_parse_common_options alpha beta
+		test \"\${#QFW_EXAMPLE_REMAINING_ARGS[@]}\" = 2
+		test \"\${QFW_EXAMPLE_REMAINING_ARGS[0]}\" = alpha
+		case \"\$-\" in *x*) exit 1 ;; esac
+		qfw_example_parse_common_options --verbose gamma
+		test \"\${#QFW_EXAMPLE_REMAINING_ARGS[@]}\" = 1
+		test \"\${QFW_EXAMPLE_REMAINING_ARGS[0]}\" = gamma
+		case \"\$-\" in *x*) ;; *) exit 1 ;; esac
+		set +x
+		unset QFW_EXAMPLE_VERBOSE
 		qfw_example_require_runtime
 		test \"\$(qfw_example_examples_dir)\" = '${QFW_INSTALL_PREFIX}/share/qfw/examples'
 		test \"\$(qfw_example_path tests/test_init_qfw.py)\" = '${QFW_INSTALL_PREFIX}/share/qfw/examples/tests/test_init_qfw.py'
 		export QFW_RUN_BASE_DIR='${qfw_run_base}'
 		qfw_example_setup --profile local --dry-run --run-id install-example-helper
 		qfw_example_teardown
-		qfw_deactivate"
+		qfw-deactivate"
 	RESULT_VARIABLE example_helper_rc)
 if(NOT example_helper_rc EQUAL 0)
 	message(FATAL_ERROR "QFw installed example helper smoke failed")
@@ -520,7 +627,7 @@ execute_process(
 		grep -q 'qfw_mpi_smoke_services.yaml' '${qfw_run_base}/custom-manifest-example/state/runtime-state.json'
 		grep -q 'mpi-smoke' '${qfw_run_base}/custom-manifest-example/state/runtime-state.json'
 		qfw-teardown --run-dir '${qfw_run_base}/custom-manifest-example'
-		qfw_deactivate"
+		qfw-deactivate"
 	RESULT_VARIABLE custom_manifest_example_rc)
 if(NOT custom_manifest_example_rc EQUAL 0)
 	message(FATAL_ERROR
@@ -554,16 +661,32 @@ if(complete_index EQUAL -1)
 	message(FATAL_ERROR "QFw install dry-run setup did not mark complete state")
 endif()
 
+execute_process(
+	COMMAND
+		"${CMAKE_COMMAND}" -E env
+		"QFW_RUN_BASE_DIR=${qfw_run_base}"
+		"${QFW_INSTALL_PREFIX}/bin/qfw-status"
+			--run-dir "${qfw_run_base}/install-smoke"
+			--json
+	RESULT_VARIABLE status_rc
+	OUTPUT_VARIABLE status_output)
+if(NOT status_rc EQUAL 0)
+	message(FATAL_ERROR "QFw install qfw-status failed")
+endif()
+string(FIND "${status_output}" "\"state\": \"ready\"" status_ready_index)
+if(status_ready_index EQUAL -1)
+	message(FATAL_ERROR "QFw install qfw-status did not report ready")
+endif()
+
 set(prefix_site "${qfw_run_base}/prefix-site.yaml")
 file(WRITE "${prefix_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}/site-qfw
   defw-prefix: ${QFW_INSTALL_PREFIX}/site-defw
-directory:
-  site:
-    name: prefix-dirsvc
-    endpoint: 127.0.0.1:1
-    connect-timeout-seconds: 0
+directory-service:
+  name: prefix-dirsvc
+  endpoint: 127.0.0.1:1
+  connect-timeout-seconds: 0
 ")
 execute_process(
 	COMMAND
@@ -589,6 +712,8 @@ execute_process(
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
 		"QFW_RUN_BASE_DIR=${qfw_run_base}"
+		"QFW_SHARED_ROOT=${qfw_run_base}"
+		"QFW_SITE_DIRSVC_ENDPOINTS=127.0.0.1:1"
 		"${QFW_INSTALL_PREFIX}/bin/qfw-setup"
 			--profile hybrid
 			--dry-run
@@ -647,11 +772,10 @@ file(WRITE "${bad_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: bad-dirsvc
-    endpoint: 127.0.0.1:1
-    connect-timeout-seconds: 0
+directory-service:
+  name: bad-dirsvc
+  endpoint: 127.0.0.1:1
+  connect-timeout-seconds: 0
 ")
 file(WRITE "${bad_app_path}"
 "import os
@@ -691,11 +815,10 @@ file(WRITE "${tcp_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: tcp-listener
-    endpoint: 127.0.0.1:${tcp_listener_port}
-    connect-timeout-seconds: 1
+directory-service:
+  name: tcp-listener
+  endpoint: 127.0.0.1:${tcp_listener_port}
+  connect-timeout-seconds: 1
 ")
 execute_process(
 	COMMAND "${QFW_BASH}" -c
@@ -723,111 +846,61 @@ endif()
 
 qfw_free_port(dirsvc_port)
 qfw_free_port(service_port)
-set(service_smoke_dir "${qfw_run_base}/service-smoke")
+set(service_smoke_dir "${qfw_run_base}/service-manager-smoke")
+set(directory_run_dir "${service_smoke_dir}/directory")
+set(qpm_run_dir "${service_smoke_dir}/qpm")
 set(service_registry "${service_smoke_dir}/registry.json")
+set(service_connection "${service_smoke_dir}/directory-service.json")
 set(service_site "${service_smoke_dir}/site.yaml")
+set(service_runtime "${service_smoke_dir}/runtime.yaml")
+set(service_manifest "${service_smoke_dir}/services.yaml")
 file(MAKE_DIRECTORY "${service_smoke_dir}")
 file(WRITE "${service_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: live-dirsvc
-    endpoint: 127.0.0.1:${dirsvc_port}
-    connect-timeout-seconds: 5
+directory-service:
+  name: live-dirsvc
+  connection-file: ${service_connection}
+  listen-port: ${dirsvc_port}
+  connect-timeout-seconds: 5
+service:
+  manifest: ${service_manifest}
 ")
-qfw_free_port(site_default_dirsvc_port)
-set(site_defaults_dir "${qfw_run_base}/site-defaults-smoke")
-set(site_defaults_site "${site_defaults_dir}/site.yaml")
-file(MAKE_DIRECTORY "${site_defaults_dir}")
-file(WRITE "${site_defaults_site}"
-"install:
-  qfw-prefix: ${QFW_INSTALL_PREFIX}
-  defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: site-default-dirsvc
-    endpoint: 0.0.0.0:${site_default_dirsvc_port}
-    connect-timeout-seconds: 7
+file(WRITE "${service_runtime}"
+"resolver:
+  scope-order:
+    - site
 ")
-execute_process(
-	COMMAND
-		"${QFW_INSTALL_PREFIX}/bin/qfw-dirsvc-start"
-			--site-config "${site_defaults_site}"
-			--run-dir "${site_defaults_dir}"
-			--dry-run
-			--pid-file "${site_defaults_dir}/dirsvc.pid"
-			--ready-file "${site_defaults_dir}/dirsvc-ready.json"
-	RESULT_VARIABLE site_defaults_dirsvc_rc)
-if(NOT site_defaults_dirsvc_rc EQUAL 0)
-	message(FATAL_ERROR
-		"QFw qfw-dirsvc-start site defaults dry-run failed")
-endif()
-file(READ "${site_defaults_dir}/dirsvc-ready.json" site_dirsvc_ready_text)
-string(FIND "${site_dirsvc_ready_text}"
-	"\"name\": \"site-default-dirsvc\"" site_dirsvc_name_index)
-string(FIND "${site_dirsvc_ready_text}"
-	"\"endpoint\": \"0.0.0.0:${site_default_dirsvc_port}\""
-	site_dirsvc_endpoint_index)
-string(FIND "${site_dirsvc_ready_text}"
-	"\"startup_timeout\": 7" site_dirsvc_timeout_index)
-if(site_dirsvc_name_index EQUAL -1 OR
-   site_dirsvc_endpoint_index EQUAL -1 OR
-   site_dirsvc_timeout_index EQUAL -1)
-	message(FATAL_ERROR
-		"QFw qfw-dirsvc-start ignored site-configured directory defaults")
-endif()
-execute_process(
-	COMMAND
-		"${QFW_INSTALL_PREFIX}/bin/qfw-service-start"
-			--service-id site-default-qpm
-			--module svc_nwqsim_qpm
-			--site-config "${site_defaults_site}"
-			--run-dir "${site_defaults_dir}"
-			--dry-run
-			--pid-file "${site_defaults_dir}/site-default-qpm.pid"
-			--ready-file "${site_defaults_dir}/site-default-qpm-ready.json"
-	RESULT_VARIABLE site_defaults_service_rc)
-if(NOT site_defaults_service_rc EQUAL 0)
-	message(FATAL_ERROR
-		"QFw qfw-service-start site defaults dry-run failed")
-endif()
-file(READ
-	"${site_defaults_dir}/site-default-qpm-ready.json"
-	site_service_ready_text)
-string(FIND "${site_service_ready_text}"
-	"\"dirsvc_name\": \"site-default-dirsvc\"" site_service_name_index)
-string(FIND "${site_service_ready_text}"
-	"\"dirsvc_endpoint\": \"0.0.0.0:${site_default_dirsvc_port}\""
-	site_service_endpoint_index)
-string(FIND "${site_service_ready_text}"
-	"\"startup_timeout\": 7" site_service_timeout_index)
-if(site_service_name_index EQUAL -1 OR
-   site_service_endpoint_index EQUAL -1 OR
-   site_service_timeout_index EQUAL -1)
-	message(FATAL_ERROR
-		"QFw qfw-service-start ignored site-configured directory defaults")
-endif()
+file(WRITE "${service_manifest}"
+"services:
+  - name: smoke-qpm
+    module: svc_nwqsim_qpm
+    load-modules: svc_nwqsim_qpm
+    credential-mode: no-secret
+    listen-port: ${service_port}
+    provider-launch:
+      type: internal
+")
+
 execute_process(
 	COMMAND
 		"${CMAKE_COMMAND}" -E env
 		"PYTHONPATH=${fake_module_dir}"
-		"QFW_RUN_BASE_DIR=${qfw_run_base}"
-		"${QFW_INSTALL_PREFIX}/bin/qfw-dirsvc-start"
-			--background
-			--run-dir "${service_smoke_dir}"
-			--name live-dirsvc
-			--listen-port "${dirsvc_port}"
+		"QFW_FAKE_DIRSVC_REGISTRY=${service_registry}"
+		"${QFW_INSTALL_PREFIX}/bin/qfw-dir-svc"
+			start
+			--run-dir "${directory_run_dir}"
+			--site-config "${service_site}"
+			--runtime-config "${service_runtime}"
+			--scope site
 			--timeout 5
-			--pid-file "${service_smoke_dir}/dirsvc.pid"
-			--ready-file "${service_smoke_dir}/dirsvc-ready.json"
-	RESULT_VARIABLE dirsvc_rc)
-if(NOT dirsvc_rc EQUAL 0)
-	message(FATAL_ERROR "QFw install qfw-dirsvc-start readiness failed")
+	RESULT_VARIABLE directory_manager_rc)
+if(NOT directory_manager_rc EQUAL 0)
+	message(FATAL_ERROR "QFw installed directory manager startup failed")
 endif()
-if(NOT EXISTS "${service_smoke_dir}/dirsvc-ready.json")
-	message(FATAL_ERROR "QFw dirsvc readiness file was not written")
+if(NOT EXISTS "${service_connection}")
+	message(FATAL_ERROR "QFw directory manager did not publish connection")
 endif()
 
 execute_process(
@@ -835,183 +908,39 @@ execute_process(
 		"${CMAKE_COMMAND}" -E env
 		"PYTHONPATH=${fake_module_dir}"
 		"QFW_FAKE_DIRSVC_REGISTRY=${service_registry}"
-		"QFW_FAKE_REGISTRATION_DELAY_SECONDS=0.5"
-		"QFW_RUN_BASE_DIR=${qfw_run_base}"
-		"${QFW_INSTALL_PREFIX}/bin/qfw-service-start"
-			--background
+		"${QFW_INSTALL_PREFIX}/bin/qfw-qpm-svc"
+			start
+			--run-dir "${qpm_run_dir}"
+			--site-config "${service_site}"
+			--runtime-config "${service_runtime}"
+			--scope site
 			--service-id smoke-qpm
-			--module svc_nwqsim_qpm
-			--site-config "${service_site}"
-			--run-dir "${service_smoke_dir}"
-			--listen-port "${service_port}"
 			--timeout 5
-			--pid-file "${service_smoke_dir}/smoke-qpm.pid"
-			--ready-file "${service_smoke_dir}/smoke-qpm-ready.json"
-	RESULT_VARIABLE service_rc)
-if(NOT service_rc EQUAL 0)
-	message(FATAL_ERROR "QFw install qfw-service-start readiness failed")
-endif()
-if(NOT EXISTS "${service_smoke_dir}/smoke-qpm-ready.json")
-	message(FATAL_ERROR "QFw service readiness file was not written")
-endif()
-file(READ "${service_smoke_dir}/smoke-qpm-ready.json" service_ready_text)
-string(FIND "${service_ready_text}" "\"register_with_dirsvc\": true" service_register_index)
-if(service_register_index EQUAL -1)
-	message(FATAL_ERROR "QFw service readiness missed registration state")
+	RESULT_VARIABLE qpm_manager_rc)
+if(NOT qpm_manager_rc EQUAL 0)
+	message(FATAL_ERROR "QFw installed QPM manager startup failed")
 endif()
 
-qfw_free_port(wrong_service_port)
-set(wrong_service_dir "${qfw_run_base}/wrong-service-smoke")
-set(wrong_service_registry "${wrong_service_dir}/registry.json")
-file(MAKE_DIRECTORY "${wrong_service_dir}")
-file(WRITE "${wrong_service_registry}"
-"[
-  {
-    \"service_record\": {
-      \"service_id\": \"other-qpm\",
-      \"service_name\": \"QPM\",
-      \"service_type\": \"qfw.qpm\"
-    },
-    \"selected_binding\": {
-      \"binding_name\": \"execution\"
-    }
-  }
-]
-")
 execute_process(
-	COMMAND
-		"${CMAKE_COMMAND}" -E env
-		"PYTHONPATH=${fake_module_dir}"
-		"QFW_FAKE_DIRSVC_REGISTRY=${wrong_service_registry}"
-		"QFW_FAKE_REGISTRATION_DELAY_SECONDS=10"
-		"${QFW_INSTALL_PREFIX}/bin/qfw-service-start"
-			--background
-			--service-id wanted-qpm
-			--module svc_nwqsim_qpm
-			--site-config "${service_site}"
-			--run-dir "${wrong_service_dir}"
-			--listen-port "${wrong_service_port}"
-			--timeout 1
-			--pid-file "${wrong_service_dir}/wanted-qpm.pid"
-			--ready-file "${wrong_service_dir}/wanted-qpm-ready.json"
-	RESULT_VARIABLE wrong_service_rc)
-if(wrong_service_rc EQUAL 0)
-	message(FATAL_ERROR "QFw service readiness accepted another QPM record")
-endif()
-if(EXISTS "${wrong_service_dir}/wanted-qpm.pid" OR
-   EXISTS "${wrong_service_dir}/wanted-qpm-ready.json")
-	message(FATAL_ERROR "QFw wrong-service timeout left pid or readiness state")
+	COMMAND "${QFW_INSTALL_PREFIX}/bin/qfw-qpm-svc"
+		status --run-dir "${qpm_run_dir}"
+	RESULT_VARIABLE qpm_status_rc)
+if(NOT qpm_status_rc EQUAL 0)
+	message(FATAL_ERROR "QFw installed QPM manager status failed")
 endif()
 
-qfw_free_port(direct_tcp_port)
-set(direct_tcp_dir "${qfw_run_base}/direct-tcp-smoke")
-set(direct_tcp_ready "${direct_tcp_dir}/tcp-ready.txt")
-file(MAKE_DIRECTORY "${direct_tcp_dir}")
 execute_process(
-	COMMAND "${QFW_BASH}" -c
-		"set -e
-		'${QFW_PYTHON}' '${plain_tcp_script}' 127.0.0.1 '${direct_tcp_port}' '${direct_tcp_ready}' &
-		listener_pid=\$!
-		for _attempt in \$(seq 1 50); do
-			[[ -f '${direct_tcp_ready}' ]] && break
-			sleep 0.1
-		done
-		[[ -f '${direct_tcp_ready}' ]]
-		set +e
-		'${QFW_INSTALL_PREFIX}/bin/qfw-service-start' --background --operation-mode direct --service-id direct-tcp-qpm --module svc_nwqsim_qpm --run-dir '${direct_tcp_dir}' --listen-port '${direct_tcp_port}' --timeout 1 --pid-file '${direct_tcp_dir}/direct-tcp-qpm.pid' --ready-file '${direct_tcp_dir}/direct-tcp-qpm-ready.json'
-		service_rc=\$?
-		kill -TERM \${listener_pid} 2>/dev/null
-		wait \${listener_pid} 2>/dev/null
-		if [[ -f '${direct_tcp_dir}/direct-tcp-qpm.pid' ]]; then
-			kill -TERM \$(cat '${direct_tcp_dir}/direct-tcp-qpm.pid') 2>/dev/null
-		fi
-		exit \${service_rc}"
-	RESULT_VARIABLE direct_tcp_rc)
-if(direct_tcp_rc EQUAL 0)
-	message(FATAL_ERROR "QFw direct service readiness accepted raw TCP")
-endif()
-if(EXISTS "${direct_tcp_dir}/direct-tcp-qpm.pid" OR
-   EXISTS "${direct_tcp_dir}/direct-tcp-qpm-ready.json")
-	message(FATAL_ERROR "QFw direct raw-TCP timeout left lifecycle state")
+	COMMAND "${QFW_INSTALL_PREFIX}/bin/qfw-qpm-svc"
+		stop --run-dir "${qpm_run_dir}"
+	RESULT_VARIABLE qpm_stop_rc)
+execute_process(
+	COMMAND "${QFW_INSTALL_PREFIX}/bin/qfw-dir-svc"
+		stop --run-dir "${directory_run_dir}"
+	RESULT_VARIABLE directory_stop_rc)
+if(NOT qpm_stop_rc EQUAL 0 OR NOT directory_stop_rc EQUAL 0)
+	message(FATAL_ERROR "QFw installed role-manager cleanup failed")
 endif()
 
-qfw_free_port(direct_not_ready_port)
-set(direct_not_ready_dir "${qfw_run_base}/direct-not-ready-smoke")
-file(MAKE_DIRECTORY "${direct_not_ready_dir}")
-execute_process(
-	COMMAND
-		"${CMAKE_COMMAND}" -E env
-		"PYTHONPATH=${fake_module_dir}"
-		"QFW_FAKE_NO_LISTEN=1"
-		"${QFW_INSTALL_PREFIX}/bin/qfw-service-start"
-			--background
-			--operation-mode direct
-			--service-id direct-not-ready-qpm
-			--module svc_nwqsim_qpm
-			--run-dir "${direct_not_ready_dir}"
-			--listen-port "${direct_not_ready_port}"
-			--timeout 1
-			--pid-file "${direct_not_ready_dir}/direct-not-ready-qpm.pid"
-			--ready-file "${direct_not_ready_dir}/direct-not-ready-qpm-ready.json"
-	RESULT_VARIABLE direct_not_ready_rc)
-if(direct_not_ready_rc EQUAL 0)
-	message(FATAL_ERROR "QFw direct service readiness accepted failed is_ready")
-endif()
-if(EXISTS "${direct_not_ready_dir}/direct-not-ready-qpm.pid" OR
-   EXISTS "${direct_not_ready_dir}/direct-not-ready-qpm-ready.json")
-	message(FATAL_ERROR "QFw direct failed-readiness timeout left lifecycle state")
-endif()
-execute_process(
-	COMMAND "${QFW_BASH}" -c
-		"kill -TERM \$(cat '${service_smoke_dir}/smoke-qpm.pid') \$(cat '${service_smoke_dir}/dirsvc.pid') 2>/dev/null || true")
-
-qfw_free_port(timeout_port)
-set(timeout_dir "${qfw_run_base}/timeout-smoke")
-file(MAKE_DIRECTORY "${timeout_dir}")
-execute_process(
-	COMMAND
-		"${CMAKE_COMMAND}" -E env
-		"PYTHONPATH=${fake_module_dir}"
-		"QFW_FAKE_NO_LISTEN=1"
-		"${QFW_INSTALL_PREFIX}/bin/qfw-dirsvc-start"
-			--background
-			--run-dir "${timeout_dir}"
-			--name timeout-dirsvc
-			--listen-port "${timeout_port}"
-			--timeout 1
-			--pid-file "${timeout_dir}/dirsvc.pid"
-			--ready-file "${timeout_dir}/dirsvc-ready.json"
-	RESULT_VARIABLE timeout_rc)
-if(timeout_rc EQUAL 0)
-	message(FATAL_ERROR "QFw dirsvc startup succeeded without readiness")
-endif()
-if(EXISTS "${timeout_dir}/dirsvc.pid" OR EXISTS "${timeout_dir}/dirsvc-ready.json")
-	message(FATAL_ERROR "QFw dirsvc timeout left pid or readiness state")
-endif()
-
-qfw_free_port(signal_port)
-set(signal_dir "${qfw_run_base}/signal-smoke")
-file(MAKE_DIRECTORY "${signal_dir}")
-execute_process(
-	COMMAND "${QFW_BASH}" -c
-		"set -e
-		PYTHONPATH='${fake_module_dir}' '${QFW_INSTALL_PREFIX}/bin/qfw-dirsvc-start' --run-dir '${signal_dir}' --name signal-dirsvc --listen-port '${signal_port}' --timeout 5 --pid-file '${signal_dir}/dirsvc.pid' --ready-file '${signal_dir}/dirsvc-ready.json' &
-		cmd_pid=\$!
-		for _attempt in \$(seq 1 50); do
-			[[ -f '${signal_dir}/dirsvc-ready.json' ]] && break
-			sleep 0.1
-		done
-		[[ -f '${signal_dir}/dirsvc-ready.json' ]]
-		kill -TERM \${cmd_pid}
-		set +e
-		wait \${cmd_pid}
-		set -e
-		[[ ! -e '${signal_dir}/dirsvc.pid' ]]
-		[[ ! -e '${signal_dir}/dirsvc-ready.json' ]]"
-	RESULT_VARIABLE signal_rc)
-if(NOT signal_rc EQUAL 0)
-	message(FATAL_ERROR "QFw dirsvc foreground signal cleanup failed")
-endif()
 
 set(partial_run_dir "${qfw_run_base}/partial-setup")
 set(partial_registry "${qfw_run_base}/partial-registry.json")
@@ -1022,7 +951,9 @@ file(WRITE "${partial_manifest}"
 "services:
   - name: first
     module: svc_nwqsim_qpm
+    credential-mode: no-secret
   - name: second
+    credential-mode: no-secret
 ")
 file(WRITE "${partial_runtime}"
 "resolver:
@@ -1030,12 +961,12 @@ file(WRITE "${partial_runtime}"
     - local
 local-services:
   start-prte: false
-  start-dirsvc: false
+  start-dirsvc: true
   start-qpm: true
   dirsvc:
     name: partial-dirsvc
     bind-host: 127.0.0.1
-    port: 1
+    port: auto
     connect-timeout-seconds: 1
   service-manifest: ${partial_manifest}
   services:
@@ -1046,11 +977,10 @@ file(WRITE "${partial_site}"
 "install:
   qfw-prefix: ${QFW_INSTALL_PREFIX}
   defw-prefix: ${QFW_INSTALL_PREFIX}
-directory:
-  site:
-    name: partial-site
-    endpoint: 127.0.0.1:1
-    connect-timeout-seconds: 1
+directory-service:
+  name: partial-site
+  endpoint: 127.0.0.1:1
+  connect-timeout-seconds: 1
 ")
 execute_process(
 	COMMAND
@@ -1070,8 +1000,11 @@ endif()
 execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
-		test -s '${partial_run_dir}/state/first.pid'
-		first_pid=\$(cat '${partial_run_dir}/state/first.pid')
+		first_state='${partial_run_dir}/service-plane/qpm/first/state/service-plane.json'
+		test -s \"\${first_state}\"
+		first_pid=\$('${QFW_PYTHON}' -c \
+			'import json, sys; state=json.load(open(sys.argv[1])); print(next(iter(state[\"components\"].values()))[\"pid\"])' \
+			\"\${first_state}\")
 		for _attempt in \$(seq 1 30); do
 			if ! kill -0 \${first_pid} 2>/dev/null; then
 				exit 0

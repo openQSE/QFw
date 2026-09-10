@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import importlib
+import os
 import time
 
 from defw_exception import DEFwExecutionError
@@ -9,11 +10,11 @@ from .. import device_access
 
 CREDENTIAL_BINDING_SCHEMA = "qfw-provider-credential-binding-v1"
 CREDENTIAL_PROVIDER_CONFIG_KEYS = (
-	"credential-provider",
 	"credential_provider",
 )
 FILE_PROVIDER_TYPES = ("file", "json", "file-backed", "development-file")
 NO_SECRET_PROVIDER = "no-secret"
+CREDENTIAL_MODE_ENV = "QFW_QPM_CREDENTIAL_MODE"
 
 
 class QPMCredentialError(DEFwExecutionError):
@@ -37,6 +38,9 @@ class CredentialProviderResponse:
 class CredentialProvider:
 	name = "base"
 
+	def validate(self, request):
+		raise NotImplementedError
+
 	def bind(self, request):
 		raise NotImplementedError
 
@@ -49,6 +53,9 @@ class CredentialProvider:
 
 class NoSecretCredentialProvider(CredentialProvider):
 	name = NO_SECRET_PROVIDER
+
+	def validate(self, request):
+		return None
 
 	def bind(self, request):
 		now_ns = time.time_ns()
@@ -78,24 +85,12 @@ class FileCredentialProvider(CredentialProvider):
 		self.device = dict(device or {})
 		self.provider_config = dict(provider_config or {})
 
+	def validate(self, request):
+		self._select_credential(request)
+
 	def bind(self, request):
-		credential_db_path = self._credential_db_path()
-		credential_db = device_access.load_json_config(credential_db_path)
-		record_key, user_record = device_access.select_user_record(
-			credential_db,
-			request.get("user"),
-			device_id=self.device.get("device_id"),
-			provider_device_id=self.device.get("provider_device_id"),
-			credential_hint=request.get("credential_hint"),
-			credential_handle=request.get("credential_handle"))
-		api_key = device_access.get_api_key_from_user_record(
-			user_record,
-			self.device.get("device_id"),
-			self.device.get("provider_device_id"))
-		if not api_key:
-			raise QPMCredentialBindingMissing(
-				"file credential provider did not return an API key for "
-				f"user={record_key!r} device={self.device.get('device_id')!r}")
+		record_key, api_key, credential_db_path = self._select_credential(
+			request)
 		now_ns = time.time_ns()
 		expires_at_ns = self._expires_at_ns(now_ns)
 		metadata = {
@@ -113,8 +108,7 @@ class FileCredentialProvider(CredentialProvider):
 			"bound_at_ns": now_ns,
 			"expires_at_ns": expires_at_ns,
 			"refresh_policy": self.provider_config.get(
-				"refresh-policy",
-				self.provider_config.get("refresh_policy", "none")),
+				"refresh-policy", "none"),
 			"source": {
 				"type": "file",
 				"config": self.config_path,
@@ -137,10 +131,29 @@ class FileCredentialProvider(CredentialProvider):
 				if value not in (None, "")},
 			metadata=_drop_none(metadata))
 
+	def _select_credential(self, request):
+		credential_db_path = self._credential_db_path()
+		credential_db = device_access.load_json_config(credential_db_path)
+		record_key, user_record = device_access.select_user_record(
+			credential_db,
+			request.get("user"),
+			device_id=self.device.get("device_id"),
+			provider_device_id=self.device.get("provider_device_id"),
+			credential_hint=request.get("credential_hint"),
+			credential_handle=request.get("credential_handle"))
+		api_key = device_access.get_api_key_from_user_record(
+			user_record,
+			self.device.get("device_id"),
+			self.device.get("provider_device_id"))
+		if not api_key:
+			raise QPMCredentialBindingMissing(
+				"file credential provider did not return an API key for "
+				f"user={record_key!r} device={self.device.get('device_id')!r}")
+		return record_key, api_key, credential_db_path
+
 	def _credential_db_path(self):
 		value = (
 			self.provider_config.get("credential-db") or
-			self.provider_config.get("credential_db") or
 			self.provider_config.get("path") or
 			self.device.get("credential_db"))
 		if not value:
@@ -149,13 +162,9 @@ class FileCredentialProvider(CredentialProvider):
 		return device_access.resolve_relative_path(value, self.config_path)
 
 	def _expires_at_ns(self, now_ns):
-		ttl_ns = (
-			self.provider_config.get("ttl_ns") or
-			self.provider_config.get("ttl-ns"))
+		ttl_ns = self.provider_config.get("ttl-ns")
 		if ttl_ns is None:
-			ttl_s = (
-				self.provider_config.get("ttl_seconds") or
-				self.provider_config.get("ttl-seconds"))
+			ttl_s = self.provider_config.get("ttl-seconds")
 			if ttl_s is None:
 				return 0
 			ttl_ns = int(float(ttl_s) * 1_000_000_000)
@@ -165,10 +174,16 @@ class FileCredentialProvider(CredentialProvider):
 		return now_ns + ttl_ns
 
 
-def bind_reservation_credential(binding):
+def bind_reservation_credential(binding, credential_mode=None):
 	request = credential_request_from_binding(binding)
-	provider = provider_for_request(request)
-	return provider.bind(request)
+	provider = provider_for_request(request, credential_mode=credential_mode)
+	return provider, provider.bind(request)
+
+
+def validate_reservation_credential(binding, credential_mode=None):
+	request = credential_request_from_binding(binding)
+	provider = provider_for_request(request, credential_mode=credential_mode)
+	provider.validate(request)
 
 
 def credential_request_from_binding(binding):
@@ -199,29 +214,34 @@ def credential_request_from_binding(binding):
 	}
 
 
-def provider_for_request(request):
+def provider_for_request(request, credential_mode=None):
+	credential_mode = (
+		credential_mode or os.environ.get(CREDENTIAL_MODE_ENV) or ""
+	).strip().lower()
+	if credential_mode == NO_SECRET_PROVIDER:
+		return NoSecretCredentialProvider()
+	if credential_mode != "required":
+		raise QPMCredentialProviderUnavailable(
+			"QPM credential mode must be explicitly configured")
 	config_path = device_access.device_access_config_path()
 	try:
 		config = device_access.load_yaml_config(config_path)
 	except DEFwExecutionError as exc:
-		if _credential_context_required(request):
-			raise QPMCredentialProviderUnavailable(
-				"credential provider configuration is required but could not "
-				f"be loaded: {exc}") from exc
-		return NoSecretCredentialProvider()
+		raise QPMCredentialProviderUnavailable(
+			"credential provider configuration is required but could not "
+			f"be loaded: {exc}") from exc
 	device = _selected_device(config, config_path, request)
 	if device is None:
-		if _credential_context_required(request):
-			raise QPMCredentialProviderUnavailable(
-				"credential context was supplied, but no matching QPU device "
-				f"was found for target {request.get('target_device_id')!r}")
-		return NoSecretCredentialProvider()
+		raise QPMCredentialProviderUnavailable(
+			"no matching QPU device was found for target "
+			f"{request.get('target_device_id')!r}")
 	provider_config = _provider_config_for_device(config, device)
 	provider_type = str(provider_config.get("type", "file")).strip().lower()
 	if provider_type in FILE_PROVIDER_TYPES:
 		return FileCredentialProvider(config_path, device, provider_config)
 	if provider_type in ("none", "no-secret"):
-		return NoSecretCredentialProvider()
+		raise QPMCredentialProviderUnavailable(
+			"hardware QPM cannot use a no-secret credential provider")
 	if provider_type in ("python", "plugin", "module"):
 		return _load_plugin_provider(provider_config, config_path, device)
 	raise QPMCredentialProviderUnavailable(
@@ -246,9 +266,7 @@ def _selected_device(config, config_path, request):
 
 def _provider_config_for_device(config, device):
 	providers = (
-		config.get("credential-providers") or
-		config.get("credential_providers") or
-		{})
+		config.get("credential-providers") or {})
 	provider_ref = None
 	for key in CREDENTIAL_PROVIDER_CONFIG_KEYS:
 		if key in device:
@@ -272,11 +290,9 @@ def _provider_config_for_device(config, device):
 
 def _load_plugin_provider(provider_config, config_path, device):
 	module_name = (
-		provider_config.get("module") or
-		provider_config.get("plugin_module"))
+		provider_config.get("module"))
 	class_name = (
 		provider_config.get("class") or
-		provider_config.get("class_name") or
 		"CredentialProvider")
 	if not module_name:
 		raise QPMCredentialProviderUnavailable(

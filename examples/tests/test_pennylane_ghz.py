@@ -38,16 +38,11 @@ sim_type = sys.argv[2]
 itrs = int(sys.argv[3])
 
 
-if sim_type == "nwqsim":
+if sim_type != "qiskit-aer":
 	backend_instance = apply_qfw_reservation_to_backend(
-		QFwBackend(provider="nwqsim"))
-elif sim_type == "tnqvm":
-	backend_instance = apply_qfw_reservation_to_backend(
-		QFwBackend(provider="tnqvm"))
+		QFwBackend(provider=sim_type))
 elif sim_type == "qiskit-aer":
 	backend_instance = qml.device('qiskit.aer', wires=nq)
-else:
-	raise ValueError("Unknown simulation type")
 
 dev = qml.device('qiskit.remote', wires=nq, backend=backend_instance, shots=1024)
 

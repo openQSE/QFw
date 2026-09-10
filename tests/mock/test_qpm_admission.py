@@ -12,11 +12,28 @@ from tests.mock.fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
 	QPM_TASK_FAILED,
-	clear_target_controllers,
+	_clear_target_controllers_for_tests,
 )
 from util.qpm.util_qpm import UTIL_QPM
 import util.qpm.admission as qpm_admission
+import util.qpm.credentials as qpm_credentials
 from util.qpm.admission import QPMAdmissionValidationError
+
+
+def test_credential_provider_requires_explicit_mode(monkeypatch):
+	monkeypatch.delenv("QFW_QPM_CREDENTIAL_MODE", raising=False)
+
+	with pytest.raises(
+			qpm_credentials.QPMCredentialProviderUnavailable,
+			match="explicitly configured"):
+		qpm_credentials.provider_for_request({})
+
+
+def test_no_secret_credential_provider_is_explicit():
+	provider = qpm_credentials.provider_for_request(
+		{}, credential_mode="no-secret")
+
+	assert isinstance(provider, qpm_credentials.NoSecretCredentialProvider)
 
 
 class FakeQRC:
@@ -24,6 +41,7 @@ class FakeQRC:
 		self.async_cids = []
 		self.cancelled = []
 		self.push_info = None
+		self.evicted_reservations = []
 
 	def async_run(self, circuit):
 		self.async_cids.append(circuit.get_cid())
@@ -41,6 +59,23 @@ class FakeQRC:
 
 	def shutdown(self):
 		pass
+
+	def evict_reservation_client(self, reservation_id):
+		self.evicted_reservations.append(reservation_id)
+
+
+def _close_expired_reservation_for_test(controller, reservation_id, now_ns):
+	deliveries = []
+	with controller.lock:
+		result = controller._close_reservation(
+			reservation_id,
+			"expire",
+			now_ns=now_ns,
+			deliveries=deliveries,
+		)
+	controller._dispatch_completion_deliveries(deliveries)
+	controller._drain_provider_credential_cleanup()
+	return result
 
 
 class FakeAdmissionContext:
@@ -86,8 +121,10 @@ class FakeAdmissionContext:
 
 	def reserve_request(self, request):
 		with self.lock:
-			reservation_id = FakeAdmissionContext.next_reservation_id
-			FakeAdmissionContext.next_reservation_id += 1
+			reservation_id = request.get("reservation_id") or (
+				FakeAdmissionContext.next_reservation_id)
+			if not request.get("reservation_id"):
+				FakeAdmissionContext.next_reservation_id += 1
 		self.requests.append(("reserve", dict(request)))
 		self.reservations[reservation_id] = {
 			"reservation_id": reservation_id,
@@ -248,7 +285,7 @@ class NonCancellableAdmissionQPM(UTIL_QPM):
 
 
 def _setup(monkeypatch):
-	clear_target_controllers()
+	_clear_target_controllers_for_tests()
 	FakeAdmissionContext.next_reservation_id = 100
 	FakeAdmissionContext.decision_status = "accepted"
 	FakeAdmissionContext.usage_status = "accepted"
@@ -282,20 +319,113 @@ def test_reserve_stores_unverified_request_metadata(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
 
-	decision = qpm.reserve({
+	decision = qpm.reserve(request={
 		"owner": {"user": "alice"},
 		"job_id": "job-7",
 		"scope_id": "scope-a",
 		"target_device_id": "device-a",
 		"num_qubits": 4,
 	})
-	reservation = qpm.get_reservation(decision["reservation_id"])
+	reservation = qpm.get_reservation(
+		reservation_id=decision["reservation_id"])
 
 	assert decision["status"] == "accepted"
 	assert reservation["request_metadata"]["external_user_id"] == "alice"
 	assert reservation["request_metadata"]["external_job_id"] == "job-7"
 	assert qpm.controller.admission_context.requests[-1][1]["task_class"][
 		"qubit_count"] == 4
+
+
+def test_service_summary_reports_sanitized_runtime_state(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	idle = qpm.get_service_summary()
+	reservation_id = qpm.reserve(request={
+		"owner": {"user": "alice"},
+		"job_id": "41",
+		"allocation_id": "qfw-cluster:41",
+		"launcher": {
+			"scheduler": "slurm",
+			"cluster_name": "qfw-cluster",
+		},
+	})["reservation_id"]
+	busy = qpm.get_service_summary()
+
+	assert idle == {
+		"schema": "qfw-qpm-service-summary-v1",
+		"target_id": "admission-target",
+		"state": "IDLE",
+		"service_state": "running",
+		"ready": True,
+		"accepting_requests": True,
+		"provider_ready": True,
+		"dvm_ready": None,
+		"maintenance": False,
+		"active_reservation_count": 0,
+		"active_task_count": 0,
+		"assigned_hosts": ["localhost"],
+		"timestamp_ns": idle["timestamp_ns"],
+	}
+	assert busy["state"] == "BUSY"
+	assert busy["active_reservation_count"] == 1
+	assert "reservation_id" not in busy
+
+	qpm.release(reservation_id=reservation_id)
+	assert qpm.get_service_summary()["state"] == "IDLE"
+
+
+def test_scheduler_allocations_are_sanitized_and_filterable(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+	decision = qpm.reserve(request={
+		"owner": {"user": "alice", "uid": 1001},
+		"job_id": "41",
+		"allocation_id": "qfw-cluster:41",
+		"launcher": {
+			"scheduler": "slurm",
+			"cluster_name": "qfw-cluster",
+		},
+		"credential_hint": {"api_key": "never-return-this"},
+		"workload_kind": "hybrid",
+	})
+
+	result = qpm.list_scheduler_allocations(filters={
+		"scheduler": "slurm",
+		"cluster_name": "qfw-cluster",
+		"job_id": "41",
+	})
+
+	assert result["schema"] == "qfw-scheduler-allocation-list-v1"
+	assert result["target_id"] == "admission-target"
+	assert result["allocations"] == [{
+		"schema": "qfw-scheduler-allocation-summary-v1",
+		"scheduler": "slurm",
+		"cluster_name": "qfw-cluster",
+		"allocation_id": "qfw-cluster:41",
+		"job_id": "41",
+		"user": "alice",
+		"state": "active",
+		"qstate": "ACTIVE",
+		"workload_kind": "hybrid",
+		"active_task_count": 0,
+		"expires_at_ns": 0,
+	}]
+	assert "reservation_id" not in str(result)
+	assert "never-return-this" not in str(result)
+	assert qpm.list_scheduler_allocations(
+		filters={"user": "bob"})["allocations"] == []
+
+	qpm.release(reservation_id=decision["reservation_id"])
+	assert qpm.list_scheduler_allocations()["allocations"] == []
+
+
+def test_scheduler_allocation_filters_reject_unknown_fields(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM()
+
+	with pytest.raises(ValueError, match="unsupported.*credential"):
+		qpm.list_scheduler_allocations(filters={"credential": "secret"})
 
 
 def test_reserve_stores_structured_binding_without_provider_secrets(
@@ -305,8 +435,10 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 		json.dumps({
 			"users": {
 				"alice": {
+					"enabled": True,
 					"devices": {
 						"ornl-iqm-20q": {
+							"enabled": True,
 							"api_key": "alice-provider-api-key",
 						}
 					}
@@ -327,9 +459,10 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 		]),
 		encoding="utf-8")
 	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
+	monkeypatch.setenv("QFW_QPM_CREDENTIAL_MODE", "required")
 	qpm = AdmissionQPM()
 
-	decision = qpm.reserve({
+	decision = qpm.reserve(request={
 		"owner": {"user": "alice"},
 		"job_id": "slurm-77",
 		"allocation_id": "alloc-77",
@@ -358,7 +491,8 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 			"access_token": "secret-token",
 		},
 	})
-	reservation = qpm.get_reservation(decision["reservation_id"])
+	reservation = qpm.get_reservation(
+		reservation_id=decision["reservation_id"])
 	metadata = reservation["request_metadata"]
 	binding = metadata["reservation_binding"]
 	credential_binding = binding["provider_credential_binding"]
@@ -394,6 +528,124 @@ def test_reserve_stores_structured_binding_without_provider_secrets(
 	assert resolved_binding["secret_material"] == "cached-in-qpm"
 	assert "secret-value" not in str(metadata)
 	assert "alice-provider-api-key" not in str(metadata)
+	assert qpm.controller.admission_context.requests[0][0] == "reserve"
+
+
+def test_reserve_rejects_ineligible_user_before_admission(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	(tmp_path / "qpu_users.json").write_text(
+		json.dumps({
+			"users": {
+				"alice": {
+					"enabled": False,
+					"devices": {
+						"ornl-iqm-20q": {
+							"enabled": True,
+							"api_key": "configured-key",
+						},
+					},
+				},
+			},
+		}), encoding="utf-8")
+	config_path = tmp_path / "config.yaml"
+	config_path.write_text(
+		"qpus:\n"
+		"  ornl-iqm-20q:\n"
+		"    provider: iqm\n"
+		"    url: https://iqm.invalid/\n"
+		"    credential-db: qpu_users.json\n",
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
+	monkeypatch.setenv("QFW_QPM_CREDENTIAL_MODE", "required")
+	qpm = AdmissionQPM()
+
+	decision = qpm.reserve(request={
+		"owner": {"user": "alice"},
+		"job_id": "job-denied",
+		"scope_id": "scope-a",
+		"target_device_id": "ornl-iqm-20q",
+	})
+
+	assert decision["status"] == "rejected"
+	assert decision["reason"] == "credential-eligibility-failed"
+	assert qpm.controller.admission_context.requests == []
+
+
+def test_qpm_restart_invalidates_old_reservation_and_advances_identifier(
+		monkeypatch, tmp_path):
+	_setup(monkeypatch)
+	monkeypatch.setenv("QFW_QPM_RUN_DIR", str(tmp_path))
+	first_qpm = AdmissionQPM(target_id="sequence-first")
+	first_id = first_qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	_clear_target_controllers_for_tests()
+	second_qpm = AdmissionQPM(target_id="sequence-second")
+	second_id = second_qpm.reserve(request={"num_qubits": 2})[
+		"reservation_id"]
+
+	assert first_id == 1
+	assert second_id == 2
+	with pytest.raises(KeyError):
+		second_qpm.get_reservation(reservation_id=first_id)
+
+
+def test_release_cleans_reservation_owned_credentials(monkeypatch):
+	_setup(monkeypatch)
+	released = []
+
+	class Provider:
+		def release(self, binding):
+			released.append(binding)
+
+	response = qpm_credentials.CredentialProviderResponse(
+		secret={"api_key": "reservation-secret"},
+		metadata={"provider_type": "test"})
+	monkeypatch.setattr(
+		qpm_controller, "bind_reservation_credential",
+		lambda *args, **kwargs: (Provider(), response))
+	qpm = AdmissionQPM(target_id="credential-cleanup")
+	reservation_id = qpm.reserve(
+		request={"num_qubits": 2})["reservation_id"]
+
+	result = qpm.release(reservation_id=reservation_id)
+
+	assert result["status"] == "accepted"
+	assert len(released) == 1
+	assert "provider" not in released[0]
+	assert reservation_id not in qpm.controller.reservation_credentials_by_id
+	assert qpm.fake_qrc.evicted_reservations == [reservation_id]
+
+
+def test_release_failure_does_not_reopen_reservation(monkeypatch):
+	_setup(monkeypatch)
+	callback_lock_states = []
+
+	class Provider:
+		def release(self, binding):
+			callback_lock_states.append(
+				qpm.controller.lock._is_owned())
+			raise RuntimeError("provider cleanup unavailable")
+
+	response = qpm_credentials.CredentialProviderResponse(
+		secret={"api_key": "reservation-secret"},
+		metadata={"provider_type": "test"})
+	monkeypatch.setattr(
+		qpm_controller, "bind_reservation_credential",
+		lambda *args, **kwargs: (Provider(), response))
+	qpm = AdmissionQPM(target_id="credential-cleanup-failure")
+	reservation_id = qpm.reserve(
+		request={"num_qubits": 2})["reservation_id"]
+
+	result = qpm.release(reservation_id=reservation_id)
+
+	assert result["status"] == "accepted"
+	assert result["credential_cleanup_errors"][0]["stage"] == (
+		"credential-provider-release")
+	assert callback_lock_states == [False]
+	assert reservation_id not in qpm.controller.reservation_credentials_by_id
+	assert qpm.fake_qrc.evicted_reservations == [reservation_id]
+	assert qpm.get_reservation(
+		reservation_id=reservation_id)["state"] == "released"
 
 
 def test_completion_retention_loads_site_config(
@@ -465,7 +717,7 @@ def test_admission_decision_kinds_are_structured(monkeypatch):
 
 	for status in ("accepted", "delayed", "rejected"):
 		FakeAdmissionContext.decision_status = status
-		decision = qpm.evaluate({"num_qubits": 2})
+		decision = qpm.evaluate(request={"num_qubits": 2})
 		assert decision["status"] == status
 		assert "reason" in decision
 
@@ -682,7 +934,7 @@ def test_qtask_usage_uses_admission_estimator_output(monkeypatch):
 		"confidence_ppm": 1_000_000,
 	}
 	qpm = AdmissionQPM()
-	decision = qpm.reserve({
+	decision = qpm.reserve(request={
 		"owner": {"user": "alice"},
 		"job_id": "job-7",
 		"scope_id": "scope-a",
@@ -727,7 +979,7 @@ def test_execution_rejects_invalid_reservation_state(monkeypatch):
 	_setup(monkeypatch)
 	FakeAdmissionContext.reservation_state = "cancelled"
 	qpm = AdmissionQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 
 	try:
 		qpm.async_run({
@@ -744,7 +996,7 @@ def test_execution_rejects_invalid_reservation_state(monkeypatch):
 def test_execution_rejects_reservation_binding_mismatches(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
-	reservation_id = qpm.reserve({
+	reservation_id = qpm.reserve(request={
 		"owner": {"user": "alice"},
 		"job_id": "job-a",
 		"scope_id": "scope-a",
@@ -787,7 +1039,7 @@ def test_execution_rejects_reservation_binding_mismatches(monkeypatch):
 def test_public_execution_accepts_positional_reservation_id(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="admission-positional-async")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 
 	async_response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
@@ -800,7 +1052,7 @@ def test_public_execution_accepts_positional_reservation_id(monkeypatch):
 
 	_setup(monkeypatch)
 	qpm = AdmissionQPM(target_id="admission-positional-sync")
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 
 	sync_response = qpm.sync_run({
 		"qasm": "OPENQASM 2.0;",
@@ -815,7 +1067,7 @@ def test_public_execution_accepts_positional_reservation_id(monkeypatch):
 def test_usage_authorization_hold_and_pending_retry(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
@@ -832,7 +1084,7 @@ def test_usage_authorization_hold_and_pending_retry(monkeypatch):
 	_setup(monkeypatch)
 	FakeAdmissionContext.usage_status = "delayed"
 	qpm = AdmissionQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -850,7 +1102,7 @@ def _delayed_capacity_qpm(monkeypatch, target_id="admission-delayed"):
 	_setup(monkeypatch)
 	FakeAdmissionContext.usage_status = "delayed"
 	qpm = AdmissionQPM(target_id=target_id)
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -911,7 +1163,7 @@ def test_pending_capacity_retry_rejects_expired_reservation(monkeypatch):
 def test_release_cancel_and_expiration_reconcile_active_state(monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -920,7 +1172,7 @@ def test_release_cancel_and_expiration_reconcile_active_state(monkeypatch):
 	cid = response["cid"]
 	qtask_id = qpm.controller.task_for_cid(cid).qtask_id
 
-	qpm.release(reservation_id, reason=16)
+	qpm.release(reservation_id=reservation_id, reason=16)
 	close_state = qpm.controller.reservation_close_state[reservation_id]
 
 	assert qpm.controller.admission_context.returned[-1][1]["task_id"] == qtask_id
@@ -932,14 +1184,14 @@ def test_release_cancel_and_expiration_reconcile_active_state(monkeypatch):
 
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	qpm.cancel(reservation_id, reason=4)
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	qpm.cancel(reservation_id=reservation_id, reason=4)
 	assert qpm.controller.admission_context.cancelled == [(reservation_id, 4)]
 
 	_setup(monkeypatch)
 	FakeAdmissionContext.expires_at_ns = time.time_ns() - 1
 	qpm = AdmissionQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	try:
 		qpm.async_run({
 			"qasm": "OPENQASM 2.0;",
@@ -965,7 +1217,7 @@ def test_reservation_close_cancelled_tasks_do_not_block_completion_queue_gc(
 			"1")
 		qpm = AdmissionQPM(
 			target_id=f"admission-close-retention-gc-{close_kind}")
-		reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+		reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 		response = qpm.async_run({
 			"qasm": "OPENQASM 2.0;",
 			"num_qubits": 2,
@@ -973,15 +1225,17 @@ def test_reservation_close_cancelled_tasks_do_not_block_completion_queue_gc(
 		})
 
 		if close_kind == "release":
-			result = qpm.release(reservation_id, reason=reason)
+			result = qpm.release(
+				reservation_id=reservation_id, reason=reason)
 		elif close_kind == "cancel":
-			result = qpm.cancel(reservation_id, reason=reason)
+			result = qpm.cancel(
+				reservation_id=reservation_id, reason=reason)
 		else:
 			now_ns = time.time_ns()
 			qpm.controller.admission_context.reservations[
 				reservation_id]["expires_at_ns"] = now_ns - 1
-			result = qpm.controller.close_expired_reservation(
-				reservation_id, now_ns=now_ns)
+			result = _close_expired_reservation_for_test(
+				qpm.controller, reservation_id, now_ns)
 
 		runtime = qpm.controller.task_for_cid(response["cid"])
 
@@ -997,8 +1251,8 @@ def test_expiration_sweep_reconciles_all_expired_holds_before_expire(
 		monkeypatch):
 	_setup(monkeypatch)
 	qpm = AdmissionQPM()
-	reservation_a = qpm.reserve({"num_qubits": 2})["reservation_id"]
-	reservation_b = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_a = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	reservation_b = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -1010,8 +1264,8 @@ def test_expiration_sweep_reconciles_all_expired_holds_before_expire(
 		qpm.controller.admission_context.reservations[
 			reservation_id]["expires_at_ns"] = now_ns - 1
 
-	result = qpm.controller.close_expired_reservation(
-		reservation_a, now_ns=now_ns)
+	result = _close_expired_reservation_for_test(
+		qpm.controller, reservation_a, now_ns)
 	calls = qpm.controller.admission_context.calls
 	expire_index = next(
 		index for index, call in enumerate(calls)
@@ -1037,7 +1291,7 @@ def test_expiration_sweep_reconciles_all_expired_holds_before_expire(
 def test_release_waits_when_provider_cancellation_is_unsupported(monkeypatch):
 	_setup(monkeypatch)
 	qpm = NonCancellableAdmissionQPM()
-	reservation_id = qpm.reserve({"num_qubits": 2})["reservation_id"]
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
 	response = qpm.async_run({
 		"qasm": "OPENQASM 2.0;",
 		"num_qubits": 2,
@@ -1045,7 +1299,7 @@ def test_release_waits_when_provider_cancellation_is_unsupported(monkeypatch):
 	})
 	qtask_id = response["qtask_id"]
 
-	result = qpm.release(reservation_id, reason=16)
+	result = qpm.release(reservation_id=reservation_id, reason=16)
 	close_state = qpm.controller.reservation_close_state[reservation_id]
 	runtime = qpm.controller.task_for_cid(response["cid"])
 
@@ -1064,7 +1318,7 @@ def test_release_waits_when_provider_cancellation_is_unsupported(monkeypatch):
 		circuit,
 		result={"cid": response["cid"], "qtask_id": qtask_id},
 	)
-	finished = qpm.release(reservation_id, reason=16)
+	finished = qpm.release(reservation_id=reservation_id, reason=16)
 
 	assert finished["status"] == "accepted"
 	assert close_state["provider_cancel_pending"] == []
@@ -1081,7 +1335,7 @@ def test_shared_context_handles_concurrent_reservations(monkeypatch):
 	results = []
 
 	def reserve(qpm, index):
-		results.append(qpm.reserve({
+		results.append(qpm.reserve(request={
 			"owner": {"user": f"user-{index}"},
 			"job_id": f"job-{index}",
 			"num_qubits": 2,

@@ -9,7 +9,6 @@ from qfw_qiskit.qpm_resolver import (
 	QPMResolver,
 	QPMSimulatorFallbackPolicyError,
 	QPMStaleGenerationError,
-	QPMUnsupportedConfigurationError,
 	binding_name_for_category,
 )
 
@@ -41,7 +40,7 @@ class DirectoryClient:
 		self.latest_generation = latest_generation
 		self.queries = []
 
-	def resolve_service(self, **kwargs):
+	def resolve_services(self, **kwargs):
 		self.kwargs = kwargs
 		self.queries.append(kwargs)
 		return list(self.records)
@@ -154,6 +153,33 @@ def test_resolver_reports_ambiguous_same_rank_candidates():
 		raise AssertionError("expected ambiguous QPM resolution")
 
 
+def test_resolver_rejects_duplicate_service_id_across_scopes():
+	local = DirectoryClient([directory_record("shared-qpm")])
+	site = DirectoryClient([directory_record("shared-qpm")])
+	resolver = QPMResolver(
+		[
+			DirectoryScope(
+				"local", "allocation-local", client=local, priority=100),
+			DirectoryScope("site", "site", client=site, priority=50),
+		],
+		connector=Connector(),
+		selection_order=["site", "allocation-local"],
+		sleeper=lambda seconds: None,
+	)
+
+	try:
+		resolver.resolve(
+			service_type="qfw.qpm",
+			selector_resource="IQM-20q",
+			api_category="execution",
+			timeout=1,
+		)
+	except QPMAmbiguousResolutionError as exc:
+		assert "appears in multiple visible directories" in str(exc)
+	else:
+		raise AssertionError("expected duplicate service ID rejection")
+
+
 def test_resolver_rejects_stale_generation_before_connecting():
 	directory = DirectoryClient(
 		[directory_record("qpm-iqm", generation=1)],
@@ -192,7 +218,6 @@ def test_resolver_from_environment_selects_site_scoped_directory(monkeypatch):
 
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
 	resolver = QPMResolver.from_environment(
 		directory_client_factory=client_factory,
 		sleeper=lambda seconds: None,
@@ -222,8 +247,6 @@ def test_resolver_from_environment_site_scope_reuses_bound_site_dirsvc(
 
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
-	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	monkeypatch.delenv("QFW_LOCAL_DIRSVC_ENDPOINT", raising=False)
 	resolver = QPMResolver.from_environment(
 		dirsvc=bound_site,
@@ -260,7 +283,6 @@ def test_resolver_from_environment_keeps_order_with_local_and_site(
 		monkeypatch.setenv("QFW_LOCAL_DIRSVC_ENDPOINT", "local-a")
 		monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 		monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", order)
-		monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
 		resolver = QPMResolver.from_environment(
 			dirsvc=local,
 			directory_client_factory=client_factory,
@@ -280,7 +302,7 @@ def test_resolver_from_environment_keeps_order_with_local_and_site(
 		assert set(clients.keys()) == {"site-a"}
 
 
-def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
+def test_resolver_from_environment_local_scope_does_not_query_site(
 		monkeypatch):
 	local = DirectoryClient([])
 	clients = {}
@@ -292,8 +314,6 @@ def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a")
 	monkeypatch.setenv("QFW_LOCAL_DIRSVC_ENDPOINT", "local-a")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "local")
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
-	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
 	resolver = QPMResolver.from_environment(
 		dirsvc=local,
 		directory_client_factory=client_factory,
@@ -316,25 +336,6 @@ def test_resolver_from_environment_local_scope_does_not_query_site_or_direct(
 	assert clients == {}
 
 
-def test_resolver_from_environment_allows_direct_endpoint_fallback(monkeypatch):
-	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
-	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
-	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
-	resolver = QPMResolver.from_environment(sleeper=lambda seconds: None)
-
-	resolved = resolver.resolve(
-		service_type="qfw.qpm",
-		api_category="execution",
-		timeout=1,
-	)
-
-	assert resolved.service_id == "qpm-direct:9000"
-	assert resolved.directory_scope == "direct"
-	assert resolved.endpoint == "qpm-direct:9000"
-	assert resolved.api_binding.client_class == "QPMExecution"
-
-
 def test_resolver_from_environment_binds_site_directory_without_factory(
 		monkeypatch):
 	class FakeDefw:
@@ -353,7 +354,6 @@ def test_resolver_from_environment_binds_site_directory_without_factory(
 	fake_defw = FakeDefw()
 	monkeypatch.setenv("QFW_SITE_DIRSVC_ENDPOINTS", "site-a:8090")
 	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "site")
-	monkeypatch.delenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", raising=False)
 	resolver = QPMResolver.from_environment(
 		defw_module=fake_defw,
 		sleeper=lambda seconds: None,
@@ -398,7 +398,7 @@ def test_site_directory_client_accepts_resolve_services_only():
 	fake_defw = FakeDefw()
 	client = DEFwDirectoryClient("site-a:8090", defw_module=fake_defw)
 
-	records = client.resolve_service(
+	records = client.resolve_services(
 		service_name="QPM",
 		service_type="qfw.qpm",
 		binding_name="execution")
@@ -407,60 +407,6 @@ def test_site_directory_client_accepts_resolve_services_only():
 	assert records[0]["service_record"]["service_id"] == "site-services-qpm"
 	assert fake_defw.resolved_binding["selected_binding"]["binding_name"] == (
 		"directory")
-
-
-def test_direct_endpoint_connect_uses_defw_binding(monkeypatch):
-	class FakeDefw:
-		def __init__(self):
-			self.binding_connections = []
-
-		def connect_to_binding(self, resolved_binding):
-			self.binding_connections.append(resolved_binding)
-			return "qpm-proxy"
-
-	fake_defw = FakeDefw()
-	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
-	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
-	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
-	monkeypatch.setenv("QFW_QPM_IMPL", "nwqsim")
-	resolver = QPMResolver.from_environment(
-		defw_module=fake_defw,
-		sleeper=lambda seconds: None,
-	)
-
-	proxy = resolver.connect(service_type="qfw.qpm", timeout=1)
-
-	assert proxy == "qpm-proxy"
-	assert len(fake_defw.binding_connections) == 1
-	record = fake_defw.binding_connections[0]
-	assert record["selected_binding"]["binding_name"] == "execution"
-	assert record["selected_binding"]["service_module"] == (
-		"svc_nwqsim_qpm.svc_qpm")
-	assert record["service_record"]["endpoint"]["address"] == "qpm-direct"
-	assert record["service_record"]["endpoint"]["listen_port"] == 9000
-
-
-def test_direct_endpoint_connect_reports_unsupported_without_binding(
-		monkeypatch):
-	class FakeDefw:
-		pass
-
-	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
-	monkeypatch.setenv("QFW_QPM_DIRECT_ENDPOINT_FALLBACK", "yes")
-	monkeypatch.setenv("QFW_DIRECT_QPM_ENDPOINT", "qpm-direct:9000")
-	monkeypatch.setenv("QFW_QPM_RESOLVER_SCOPE_ORDER", "direct")
-	resolver = QPMResolver.from_environment(
-		defw_module=FakeDefw(),
-		sleeper=lambda seconds: None,
-	)
-
-	try:
-		resolver.connect(service_type="qfw.qpm", timeout=1)
-	except QPMUnsupportedConfigurationError as exc:
-		assert "connect_to_binding" in str(exc)
-	else:
-		raise AssertionError("expected unsupported direct endpoint binding")
 
 
 def test_category_routing_maps_to_binding_without_token_policy():
@@ -561,14 +507,11 @@ def test_resolver_rejects_directory_record_without_selected_binding():
 		raise AssertionError("expected invalid directory record rejection")
 
 
-def test_resolver_rejects_legacy_service_info_records():
-	class LegacyServiceInfo:
-		pass
-
+def test_resolver_rejects_non_dictionary_records():
 	resolver = QPMResolver(
 		[DirectoryScope(
 			"site", "site",
-			client=DirectoryClient([LegacyServiceInfo()]),
+			client=DirectoryClient([object()]),
 			priority=50)],
 		connector=Connector(),
 		selection_order=["site"],
@@ -578,9 +521,9 @@ def test_resolver_rejects_legacy_service_info_records():
 	try:
 		resolver.resolve(service_type="qfw.qpm", timeout=1)
 	except QPMInvalidDirectoryRecordError as exc:
-		assert "legacy DEFwServiceInfo" in str(exc)
+		assert "record dictionaries" in str(exc)
 	else:
-		raise AssertionError("expected legacy service-info rejection")
+		raise AssertionError("expected non-dictionary record rejection")
 
 
 def test_hardware_request_requires_explicit_simulator_fallback_policy():
@@ -667,8 +610,8 @@ def test_operation_modes_expose_same_qpm_api_after_binding():
 
 		assert proxy is qpm_api
 		results.append((
-			proxy.reserve({"device": "IQM-20q", "shots": 10}),
-			proxy.release("reservation-1"),
+			proxy.reserve(request={"device": "IQM-20q", "shots": 10}),
+			proxy.release(reservation_id="reservation-1"),
 			proxy.sync_run(
 				{"qasm": "OPENQASM 2.0;", "num_shots": 10},
 				reservation_id="reservation-1",

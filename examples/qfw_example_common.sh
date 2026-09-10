@@ -21,6 +21,96 @@ qfw_example_path() {
 	esac
 }
 
+qfw_example_parse_common_options() {
+	local verbose="${QFW_EXAMPLE_VERBOSE:-no}"
+
+	while [[ "${1:-}" == "--verbose" ]]; do
+		verbose="yes"
+		shift
+	done
+	QFW_EXAMPLE_REMAINING_ARGS=("$@")
+	export QFW_EXAMPLE_VERBOSE="${verbose}"
+
+	case "${verbose}" in
+		1|yes|true|on|y|YES|TRUE|ON|Y) set -x ;;
+	esac
+}
+
+qfw_example_parse_execution_options() {
+	local verbose="${QFW_EXAMPLE_VERBOSE:-no}"
+	local service_mode="${QFW_EXAMPLE_SERVICE_MODE:-local}"
+	local backend="${QFW_EXAMPLE_BACKEND:-}"
+	local site_config="${QFW_EXAMPLE_SITE_CONFIG_PATH:-${QFW_SITE_CONFIG:-}}"
+	local runtime_config="${QFW_EXAMPLE_RUNTIME_CONFIG_PATH:-${QFW_RUNTIME_CONFIG:-}}"
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			--verbose)
+				verbose="yes"
+				shift
+				;;
+			--service-mode)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --service-mode requires local or site" >&2
+					return 2
+				fi
+				service_mode="$2"
+				shift 2
+				;;
+			--backend)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --backend requires a value" >&2
+					return 2
+				fi
+				backend="$2"
+				shift 2
+				;;
+			--site-config)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --site-config requires a path" >&2
+					return 2
+				fi
+				site_config="$2"
+				shift 2
+				;;
+			--runtime-config)
+				if [[ $# -lt 2 || -z "${2:-}" ]]; then
+					echo "ERROR: --runtime-config requires a path" >&2
+					return 2
+				fi
+				runtime_config="$2"
+				shift 2
+				;;
+			--)
+				shift
+				break
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+
+	case "${service_mode}" in
+		local|site) ;;
+		*)
+			echo "ERROR: --service-mode must be local or site: ${service_mode}" >&2
+			return 2
+			;;
+	esac
+
+	QFW_EXAMPLE_REMAINING_ARGS=("$@")
+	export QFW_EXAMPLE_VERBOSE="${verbose}"
+	export QFW_EXAMPLE_SERVICE_MODE="${service_mode}"
+	export QFW_EXAMPLE_BACKEND="${backend}"
+	export QFW_EXAMPLE_SITE_CONFIG_PATH="${site_config}"
+	export QFW_EXAMPLE_RUNTIME_CONFIG_PATH="${runtime_config}"
+
+	case "${verbose}" in
+		1|yes|true|on|y|YES|TRUE|ON|Y) set -x ;;
+	esac
+}
+
 qfw_example_begin() {
 	QFW_EXAMPLE_NAME="$1"
 	shift || true
@@ -30,6 +120,7 @@ qfw_example_begin() {
 	QFW_EXAMPLE_TEARDOWN_DONE=0
 	QFW_EXAMPLE_RUNTIME_CONFIG=""
 	QFW_EXAMPLE_SITE_CONFIG=""
+	unset QFW_RUN_TMP_PATH
 	export QFW_EXAMPLE_NAME
 	trap 'qfw_example_exit "$?"' EXIT
 	qfw_example_emit "start" "running" 0 0
@@ -51,8 +142,16 @@ qfw_example_require_runtime() {
 
 qfw_example_setup() {
 	qfw_example_require_runtime
+	local setup_output
+	setup_output="$(qfw-setup "$@")" || return $?
+	printf '%s\n' "${setup_output}"
+	QFW_RUN_TMP_PATH="${setup_output##*$'\n'}"
+	if [[ -z "${QFW_RUN_TMP_PATH}" ]]; then
+		echo "ERROR: qfw-setup did not report a runtime directory" >&2
+		return 1
+	fi
+	export QFW_RUN_TMP_PATH
 	QFW_EXAMPLE_SETUP_STARTED=1
-	qfw-setup "$@"
 }
 
 qfw_example_make_local_runtime_config() {
@@ -138,15 +237,25 @@ qfw_example_setup_local_services() {
 	qfw_example_setup --runtime-config "${runtime_config}"
 }
 
-qfw_example_default_service_manifest() {
-	if [[ -n "${QFW_EXAMPLE_SERVICE_MANIFEST:-}" ]]; then
-		printf "%s\n" "${QFW_EXAMPLE_SERVICE_MANIFEST}"
-	elif [[ -n "${QFW_SHARE_DIR:-}" &&
-	        -r "${QFW_SHARE_DIR%/}/config/services/local-services.yaml" ]]; then
-		printf "%s\n" "${QFW_SHARE_DIR%/}/config/services/local-services.yaml"
-	else
-		qfw_example_path "../share/qfw/config/services/local-services.yaml"
+qfw_example_setup_site_services() {
+	local site_config="${QFW_EXAMPLE_SITE_CONFIG_PATH:-${QFW_SITE_CONFIG:-}}"
+	local runtime_config="${QFW_EXAMPLE_RUNTIME_CONFIG_PATH:-${QFW_RUNTIME_CONFIG:-}}"
+	local setup_args=()
+	if [[ -n "${site_config}" ]]; then
+		if [[ ! -r "${site_config}" ]]; then
+			echo "ERROR: site config is not readable: ${site_config}" >&2
+			return 2
+		fi
+		setup_args+=(--site-config "${site_config}")
 	fi
+	if [[ -n "${runtime_config}" ]]; then
+		if [[ ! -r "${runtime_config}" ]]; then
+			echo "ERROR: runtime config is not readable: ${runtime_config}" >&2
+			return 2
+		fi
+		setup_args+=(--runtime-config "${runtime_config}")
+	fi
+	qfw_example_setup "${setup_args[@]}"
 }
 
 qfw_example_service_for_backend() {
@@ -162,20 +271,60 @@ qfw_example_service_for_backend() {
 	esac
 }
 
-qfw_example_setup_qpm_services() {
-	local manifest_path
-	manifest_path="$(qfw_example_default_service_manifest)"
-	qfw_example_setup_local_services "${manifest_path}" "$@"
-}
-
 qfw_example_setup_backend_service() {
 	if [[ $# -lt 1 ]]; then
 		echo "ERROR: qfw_example_setup_backend_service requires a backend" >&2
 		return 2
 	fi
-	local service_name
-	service_name="$(qfw_example_service_for_backend "$1")"
-	qfw_example_setup_qpm_services "${service_name}"
+	case "${QFW_EXAMPLE_SERVICE_MODE:-local}" in
+		local)
+			local service_name
+			service_name="$(qfw_example_service_for_backend "$1")"
+			qfw_example_setup \
+				--profile local \
+				--service-id "${service_name}"
+			;;
+		site)
+			qfw_example_setup_site_services
+			;;
+		*)
+			echo "ERROR: unsupported service mode: ${QFW_EXAMPLE_SERVICE_MODE}" >&2
+			return 2
+			;;
+	esac
+}
+
+qfw_example_backend() {
+	local fallback="${1:-nwqsim}"
+	printf "%s\n" "${QFW_EXAMPLE_BACKEND:-${fallback}}"
+}
+
+qfw_example_result_is_terminal_success() {
+	local result_file="${1:-}"
+	if [[ -z "${result_file}" || ! -s "${result_file}" ]]; then
+		return 1
+	fi
+	python3 - "${result_file}" <<'PY'
+import json
+import sys
+
+terminal = None
+try:
+	with open(sys.argv[1], "r", encoding="utf-8") as stream:
+		for line in stream:
+			if not line.strip():
+				continue
+			record = json.loads(line)
+			if record.get("kind") == "wrapper" and record.get("event") == "finish":
+				terminal = record
+except (OSError, ValueError):
+	raise SystemExit(1)
+
+if terminal is None:
+	raise SystemExit(1)
+if terminal.get("status") != "ok" or terminal.get("rc") != 0:
+	raise SystemExit(1)
+PY
 }
 
 qfw_example_srun() {
@@ -224,11 +373,37 @@ qfw_example_srun_with_modules() {
 	)
 }
 
+qfw_example_archive_runtime_logs() {
+	local archive_dir="${QFW_EXAMPLE_LOG_ARCHIVE_DIR:-}"
+	local run_dir="${QFW_RUN_TMP_PATH:-}"
+	if [[ -z "${archive_dir}" || -z "${run_dir}" || ! -d "${run_dir}" ]]; then
+		return 0
+	fi
+	mkdir -p "${archive_dir}"
+	local relative target
+	while IFS= read -r -d '' relative; do
+		target="${archive_dir}/${relative#./}"
+		mkdir -p "$(dirname "${target}")"
+		cp -f "${run_dir}/${relative#./}" "${target}" || return 1
+	done < <(cd "${run_dir}" && find . -type f -name '*.log' -print0)
+}
+
+qfw_example_teardown_args() {
+	QFW_EXAMPLE_TEARDOWN_ARGS=()
+	case "${QFW_EXAMPLE_KEEP_RUN_DIR:-}" in
+		1|yes|true|on|y|YES|TRUE|ON|Y)
+			QFW_EXAMPLE_TEARDOWN_ARGS+=(--keep-run-dir)
+			;;
+	esac
+}
+
 qfw_example_teardown() {
 	if [[ "${QFW_EXAMPLE_SETUP_STARTED:-0}" == "1" &&
 	      "${QFW_EXAMPLE_TEARDOWN_DONE:-0}" == "0" ]]; then
 		QFW_EXAMPLE_TEARDOWN_DONE=1
-		qfw-teardown
+		qfw_example_archive_runtime_logs
+		qfw_example_teardown_args
+		qfw-teardown "${QFW_EXAMPLE_TEARDOWN_ARGS[@]}"
 	fi
 }
 
@@ -246,7 +421,9 @@ qfw_example_finish() {
 	if [[ "${QFW_EXAMPLE_SETUP_STARTED:-0}" == "1" &&
 	      "${QFW_EXAMPLE_TEARDOWN_DONE:-0}" == "0" ]]; then
 		QFW_EXAMPLE_TEARDOWN_DONE=1
-		qfw-teardown || teardown_rc=$?
+		qfw_example_archive_runtime_logs || teardown_rc=$?
+		qfw_example_teardown_args
+		qfw-teardown "${QFW_EXAMPLE_TEARDOWN_ARGS[@]}" || teardown_rc=$?
 	fi
 	if [[ -n "${QFW_EXAMPLE_RUNTIME_CONFIG:-}" &&
 	      -f "${QFW_EXAMPLE_RUNTIME_CONFIG}" ]]; then
@@ -293,7 +470,8 @@ record = {
 	"timestamp_ns": time.time_ns(),
 	"args": args,
 }
-line = "QFW_EXAMPLE_RESULT " + json.dumps(record, sort_keys=True)
+line = "QFW_EXAMPLE_RESULT " + json.dumps(
+	record, indent=2, sort_keys=True)
 print(line)
 if path:
 	directory = os.path.dirname(path)

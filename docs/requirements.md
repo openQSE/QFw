@@ -1,5 +1,7 @@
 # Requirements
 
+**Status:** draft
+
 ## Table Of Contents
 
 - [Operation Mode: QFw-Managed Services](#operation-mode-qfw-managed-services)
@@ -13,6 +15,8 @@
   - [QPM API Requirements](#qpm-api-requirements)
   - [Control Plane And Telemetry Requirements](#control-plane-and-telemetry-requirements)
   - [Runtime State Requirements](#runtime-state-requirements)
+  - [Provider Credential Requirements](#provider-credential-requirements)
+  - [Deferred Authentication Scope](#deferred-authentication-scope)
 
 <details open>
 <summary><strong>Operation Mode: QFw-Managed Services</strong></summary>
@@ -58,36 +62,76 @@ sequenceDiagram
 
 In long-running mode, the QPM service is already running on the resource as a
 DEFw-wrapped service. It listens for DEFw RPC calls on a known endpoint, but it
-does not have to register with DEFw-dirsvc. QFw initialization must
-resolve the QPM endpoint from configuration or another registry and then use the
-same QPM reservation and release APIs.
+does not have to register with DEFw-dirsvc. QFw initialization must resolve the
+QPM endpoint from configuration or another registry and then use the same QPM
+reservation, provider-credential, execution, and release workflow as
+QFw-managed mode.
+
+The following sequence describes the current milestone. The owner, allocation,
+job, and device are request metadata and are not authenticated caller claims.
+Launcher authentication, application tokens, caller-role enforcement, and
+refresh-token exchange are deferred to the authentication release.
 
 ```mermaid
 sequenceDiagram
-    participant Client
+    participant Slurm as Slurm plugin
     participant Resolver as QFw QPM resolver
-    participant DirSvc as DEFw-dirsvc
-    participant QPM as long-running QPM-service
-    participant Admission as admission-control
+    participant QPM as long-running QPM service
+    participant Users as qpu-users.json
+    participant Admission as qhw-admission
+    participant Credentials as credential provider
+    participant Cache as in-memory credential bindings
+    participant App as user application
+    participant IQM as IQM system
 
     QPM->>QPM: start DEFw RPC listener
-    Note over QPM,DirSvc: Registration with DEFw-dirsvc is optional in this mode.
+    Note over Resolver,QPM: Registration with DEFw-dirsvc is optional in this mode.
 
-    Client->>Resolver: request QPM handle
+    Slurm->>Resolver: request QPM handle
     Resolver->>Resolver: load configured QPM endpoint
-    Resolver->>QPM: health / capability query
-    QPM-->>Resolver: service info / capabilities
-    Resolver-->>Client: QPM client binding
+    Resolver->>QPM: health and capability query
+    QPM-->>Resolver: service info and capabilities
+    Resolver-->>Slurm: QPM client binding
 
-    Client->>QPM: reserve(request)
-    QPM->>Admission: reserve(request)
-    Admission-->>QPM: decision + reservation_id
-    QPM-->>Client: reservation lease / rejection
+    Slurm->>QPM: reserve(owner, allocation, job, device, scope)
+    QPM->>Users: check configured user and device eligibility
+    alt User and device are enabled
+        QPM->>Admission: reserve(request)
+        Admission-->>QPM: admission outcome and reservation_id
+        alt Reservation accepted
+            QPM->>Credentials: resolve static IQM credential(owner, device)
+            Credentials->>Users: read configured credential
+            Users-->>Credentials: credential or configuration failure
+            alt Credential available
+                Credentials-->>QPM: provider credential
+                QPM->>Cache: bind reservation_id to provider credential
+                QPM-->>Slurm: reservation_id
+            else Credential unavailable
+                QPM->>Admission: release(reservation_id)
+                QPM-->>Slurm: credential configuration failure
+            end
+        else Reservation delayed or rejected
+            QPM-->>Slurm: admission outcome
+        end
+    else User or device is not enabled
+        QPM-->>Slurm: eligibility failure
+    end
 
-    Client->>QPM: release(reservation_id)
+    Slurm->>App: export QFW_RESERVATION_ID
+    App->>QPM: execute(request, reservation_id)
+    QPM->>Admission: validate reservation and requested operation
+    Admission-->>QPM: active and matching reservation
+    QPM->>Cache: resolve provider credential for reservation_id
+    Cache-->>QPM: provider credential
+    QPM->>IQM: provider request with credential
+    IQM-->>QPM: provider result
+    QPM-->>App: execution result
+
+    Slurm->>QPM: release(reservation_id)
     QPM->>Admission: release(reservation_id)
     Admission-->>QPM: release result
-    QPM-->>Client: release result
+    QPM->>Cache: remove reservation credential binding
+    QPM-->>Slurm: release result
 ```
 
 </details>
@@ -105,25 +149,17 @@ Authentication requirements are maintained separately in
 integration milestone, where QPM APIs may accept token parameters but do not
 validate tokens or authorize callers from them.
 
-<details open>
-<summary><strong>Operation Mode Requirements</strong></summary>
-
 ### Operation Mode Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | OPM-001 | The QFw shall support a QFw-managed operation mode in which QFw starts DEFw-dirsvc and QPM services, and QPM services register with DEFw-dirsvc for discovery. |
 | OPM-002 | The QFw shall support a long-running QPM operation mode in which a DEFw-wrapped QPM service is already listening on a known endpoint and is not required to register with DEFw-dirsvc. |
 | OPM-003 | The QFw shall keep service deployment ownership independent from reservation ownership. A service may be QFw-managed or externally managed, but reservation state shall be owned by the QPM admission path backed by qhw-admission. |
 
-</details>
-
-<details open>
-<summary><strong>Discovery And Registration Requirements</strong></summary>
-
 ### Discovery And Registration Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | DISC-001 | DEFw-dirsvc shall provide service registration, deregistration, and discovery for services that choose to register with it. |
 | DISC-002 | DEFw-dirsvc shall not own QPM admission reservation state or perform QPM admission capacity accounting. |
@@ -131,14 +167,9 @@ validate tokens or authorize callers from them.
 | DISC-004 | The QFw shall provide a QPM resolution path that can obtain a QPM client binding from either DEFw-dirsvc discovery or a configured long-running QPM endpoint. |
 | DISC-005 | A long-running QPM service shall remain callable by DEFw clients and DEFw services through DEFw RPC. |
 
-</details>
-
-<details open>
-<summary><strong>Admission And Reservation Requirements</strong></summary>
-
 ### Admission And Reservation Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | ADM-001 | The QPM service shall use qhw-admission as the authoritative reservation store for reservation IDs, reservation state, request owner/job/device/scope correlation, usage, compliance, and lifecycle updates. |
 | ADM-002 | The QPM service shall expose a reservation operation that calls qhw-admission with reservation request fields sufficient to validate later reservation-scoped use, such as owner metadata, scheduler job or allocation identifier when applicable, target device, scope, expiration, and policy-specific request metadata; the operation shall return an admission decision and a reservation ID when the request is accepted. |
@@ -155,14 +186,9 @@ validate tokens or authorize callers from them.
 | ADM-021 | The QPM service shall treat estimated qtask capacity as an in-flight hold. When a reservation-scoped qtask is cancelled, rejected after the hold, fails before provider execution, or reaches a terminal state, the QPM service shall release the hold and record final usage according to admission policy. |
 | ADM-022 | When held capacity is released or additional reservation capacity becomes available, the QPM service shall retry pending qtasks for the affected reservation according to scheduler and site policy. |
 
-</details>
-
-<details open>
-<summary><strong>Scheduler And Task Lifecycle Requirements</strong></summary>
-
 ### Scheduler And Task Lifecycle Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | SCHED-001 | The QPM service shall route reservation-scoped execution work through qhw-scheduler and submit only scheduler-selected qtasks to the provider execution path during normal scheduled execution. |
 | SCHED-002 | The QPM service shall maintain scheduler state per managed QPU execution target. |
@@ -179,14 +205,9 @@ validate tokens or authorize callers from them.
 | SCHED-013 | The QPM service shall provide pending-queue position, scheduler queue position, or scheduling-order information for reservation-scoped tasks when permitted by site policy. |
 | SCHED-014 | The QPM service shall provide estimated wait time or estimated start time for pending or queued reservation-scoped tasks when the scheduler policy and available telemetry can support an estimate. |
 
-</details>
-
-<details open>
-<summary><strong>API Category Requirements</strong></summary>
-
 ### API Category Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | CAT-001 | The QFw service API model shall separate execution, admission control, admission policy configuration, scheduler control, telemetry/discovery, and privileged QPM control APIs. |
 | CAT-002 | Execution APIs shall provide task submission, synchronous execution, asynchronous execution, completion polling, event notification, cancellation, result retrieval, and task metadata behavior for application and runtime clients. |
@@ -197,28 +218,18 @@ validate tokens or authorize callers from them.
 | CAT-007 | QFw service APIs shall define observable workflow semantics independently of whether admission and scheduling are implemented directly in QPM, in a closely associated QPU control service, or by a future passive controller library. |
 | CAT-008 | QPM readiness, status, reconciliation, and shutdown shall be exposed only through a privileged control binding and shall not be part of execution or telemetry bindings. |
 
-</details>
-
-<details open>
-<summary><strong>QPM API Requirements</strong></summary>
-
 ### QPM API Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | API-001 | QPM execution APIs that submit, cancel, or otherwise affect reservation-scoped execution resources shall require a caller-supplied reservation ID. |
 | API-002 | QPM APIs that only provide discovery or read-only metadata may be callable without a reservation ID when site policy permits it. |
 | API-003 | QPM reservation, release, and execution APIs shall have the same externally visible semantics in QFw-managed mode and long-running QPM mode. |
 | API-004 | QPM APIs shall return structured status and error information that distinguishes invalid reservation, insufficient allowance, pending capacity, policy-delayed work, cancelled work, expired reservation, timeout, scheduler failure, and provider failure. |
 
-</details>
-
-<details open>
-<summary><strong>Control Plane And Telemetry Requirements</strong></summary>
-
 ### Control Plane And Telemetry Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | CTRL-001 | Admission policy configuration APIs and scheduler policy configuration APIs shall be exposed as control-plane operations at the QFw service API layer. |
 | CTRL-002 | The QPM service or associated QPU control service shall provide admission capacity snapshots that include pending qtask count, scheduler queue depth, estimated queued device time, active reservation count, held or in-flight capacity, available capacity or credits, current scheduler policy, device availability, and confidence. |
@@ -230,20 +241,36 @@ validate tokens or authorize callers from them.
 | CTRL-008 | Queue telemetry APIs shall label estimates with their confidence, timestamp, and policy context when those values are available. |
 | CTRL-009 | QPM shutdown shall quiesce new work, drain or cancel active work, finalize managed accounting, stop provider and background resources, and acknowledge before DEFw process exit and directory deregistration. |
 
-</details>
-
-<details open>
-<summary><strong>Runtime State Requirements</strong></summary>
-
 ### Runtime State Requirements
 
-| Requirement ID | Requirement |
+| ID | Requirement |
 | --- | --- |
 | STATE-001 | The QPM service shall maintain in-memory runtime mappings among reservation IDs, job IDs, qtask IDs, QFw circuit IDs, qhw-scheduler task IDs, qhw-admission usage events, provider job handles, request owner metadata, token placeholder metadata, QPM pending-queue entries, estimated in-flight capacity holds, worker state, event endpoints, and result state. |
 | STATE-002 | QPM runtime state for reservation-scoped work shall be associated with the relevant reservation ID. |
 | STATE-003 | The QPM service shall use its in-memory runtime state to correlate QFw circuit records, qhw-scheduler tasks, qhw-admission usage records, provider job handles, completion events, and client-visible status. |
 | STATE-004 | The QPM service shall clean up runtime state when reservation-scoped work reaches a terminal state or when the reservation is released, cancelled, or expired. |
 
-</details>
+### Provider Credential Requirements
+
+| ID | Requirement |
+| --- | --- |
+| CRED-001 | The QPM service shall use an operator-managed `qpu-users.json` registry to determine whether the requested owner is enabled for the requested QPU device and to resolve the static IQM provider credential configured for that owner and device. |
+| CRED-002 | For the current milestone, the QPM service shall treat owner, allocation, job, and device values supplied in a reservation request as unverified request metadata and shall not represent the `qpu-users.json` lookup as caller authentication or identity-based authorization. |
+| CRED-003 | The QPM service shall reject a reservation request before calling qhw-admission when `qpu-users.json` does not contain an enabled entry for the requested owner and QPU device. |
+| CRED-004 | After qhw-admission accepts a reservation, the QPM service shall obtain the configured static IQM provider credential through its credential-provider boundary before making the reservation available for execution. |
+| CRED-005 | If the QPM service cannot obtain the required provider credential after qhw-admission accepts a reservation, it shall release or cancel the admission reservation and return a structured credential-configuration failure without submitting work to the provider. |
+| CRED-006 | The QPM service shall maintain an in-memory binding from each accepted reservation ID to the provider credential used for that reservation; scheduler allocation and job identifiers shall remain correlated metadata rather than a separate QPM security-context identifier. |
+| CRED-007 | The QPM service shall support multiple concurrent reservations that reference the same configured provider credential while maintaining independent reservation, admission, accounting, task, and lifecycle state for each reservation. |
+| CRED-008 | Before resolving a provider credential binding for an execution request, the QPM service shall validate the supplied reservation ID and requested operation as required by ADM-005. |
+| CRED-009 | The QPM service shall use a resolved provider credential only for downstream calls to the provider associated with the validated reservation and shall not return that credential through QPM APIs, place it in the application environment, or store it in qhw-admission or qhw-scheduler state. |
+| CRED-010 | The Slurm integration shall export an accepted QPM reservation ID as `QFW_RESERVATION_ID` for reservation-scoped application calls and shall not export the IQM provider credential. |
+| CRED-011 | The QPM service shall remove a reservation's provider-credential binding when the reservation is released, cancelled, expired, invalidated, or otherwise reaches a terminal lifecycle state, and it shall remove all remaining provider-credential bindings during QPM shutdown. |
+
+### Deferred Authentication Scope
+
+The requested owner metadata used for `qpu-users.json` lookup is not an
+authenticated identity. Launcher credentials, application tokens, caller-role
+enforcement, and refresh-token exchange are reserved for a later authentication
+release.
 
 </details>

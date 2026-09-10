@@ -1,73 +1,3 @@
-def _install_service_info_stubs(monkeypatch):
-	import defw_agent_info
-
-	def get_bit_list(bitstring, enum_class):
-		return [
-			name for name, member in enum_class.__members__.items()
-			if int(member) & int(bitstring)
-		]
-
-	def get_bit_desc(type_names, cap_names):
-		return f"{','.join(type_names)} -> {','.join(cap_names)}"
-
-	class Capability:
-		def __init__(self, cap_type, cap_bitstr, cap_desc):
-			self._cap_type = cap_type
-			self._cap_bitstr = cap_bitstr
-			self._cap_desc = cap_desc
-
-		def get_capability_dict(self):
-			return {
-				"type": self._cap_type,
-				"caps": self._cap_bitstr,
-				"description": self._cap_desc,
-			}
-
-		def get_cap_type(self):
-			return self._cap_type
-
-		def get_caps(self):
-			return self._cap_bitstr
-
-	class DEFwServiceInfo:
-		def __init__(self, service_name, service_descr, cname, mname,
-			     capabilities, max_capacity, properties=None):
-			self._service_name = service_name
-			self._service_descr = service_descr
-			self._class_name = cname
-			self._module_name = mname
-			self._capabilities = capabilities
-			self._max_capacity = max_capacity
-			self._properties = dict(properties or {})
-
-		def get_service_name(self):
-			return self._service_name
-
-		def get_class_name(self):
-			return self._class_name
-
-		def get_module_name(self):
-			return self._module_name
-
-		def get_capabilities(self):
-			return self._capabilities
-
-		def get_properties(self):
-			return dict(self._properties)
-
-		def get_property(self, key, default=None):
-			return self._properties.get(key, default)
-
-	monkeypatch.setattr(defw_agent_info, "get_bit_list", get_bit_list,
-			    raising=False)
-	monkeypatch.setattr(defw_agent_info, "get_bit_desc", get_bit_desc,
-			    raising=False)
-	monkeypatch.setattr(defw_agent_info, "Capability", Capability,
-			    raising=False)
-	monkeypatch.setattr(defw_agent_info, "DEFwServiceInfo",
-			    DEFwServiceInfo, raising=False)
-
-
 def _register_directory_qpm(directory, service_id, type_bits, caps_bits, *,
 			    provider="iqm", resource="IQM-20q",
 			    runtime_id=None, peer_handle=None):
@@ -108,9 +38,7 @@ def _register_directory_qpm(directory, service_id, type_bits, caps_bits, *,
 	})
 
 
-def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
-	_install_service_info_stubs(monkeypatch)
-
+def test_qpm_metadata_resolves_through_defw_directory_shape():
 	import defw_directory
 	from api_qpm_common import QPMCapability, QPMType
 	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
@@ -131,13 +59,12 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 			"num_qubits": 20,
 		},
 	)
-	properties = info.get_properties()
-	capability = info.get_capabilities()
+	properties = info["properties"]
 	directory = defw_directory.Directory()
 	directory.register_service({
-		"service_id": properties["service_id"],
-		"service_name": info.get_service_name(),
-		"service_type": properties["service_type"],
+		"service_id": info["service_id"],
+		"service_name": info["service_name"],
+		"service_type": info["service_type"],
 		"runtime_id": "runtime-1",
 		"peer_handle": "peer-1",
 		"endpoint": {
@@ -147,12 +74,12 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 			"node_name": "qpm-node",
 			"hostname": "qpm.example",
 		},
-		"api_bindings": properties["api_bindings"],
-		"selector": properties["selector"],
+		"api_bindings": info["api_bindings"],
+		"selector": info["selector"],
 		"properties": properties,
-		"capability": capability.get_capability_dict(),
-		"qpm_type": capability.get_cap_type(),
-		"qpm_capabilities": capability.get_caps(),
+		"capability": info["capability"],
+		"qpm_type": info["qpm_type"],
+		"qpm_capabilities": info["qpm_capabilities"],
 	})
 	resolver = QPMResolver(
 		[DirectoryScope("site-a", "site", client=directory, priority=50)],
@@ -174,6 +101,9 @@ def test_qpm_metadata_resolves_through_defw_directory_shape(monkeypatch):
 	assert resolved.properties["qpm_type"] == int(QPMType.QPM_TYPE_HARDWARE)
 	assert resolved.properties["qpm_capabilities"] == int(
 		QPMCapability.QPM_CAP_SUPERCONDUCTING)
+	assert resolved.properties["controller_target_id"] == "iqm-target"
+	assert "controller" not in resolved.properties
+	assert "api_bindings" not in resolved.properties
 	assert resolved.selector_metadata["resources"] == ["IQM-20q"]
 	assert resolved.api_binding.binding_name == "execution"
 	assert resolved.api_binding.client_module == "api_qpm_execution"
@@ -214,7 +144,7 @@ def test_resolver_filters_real_directory_records_by_type_and_capability():
 		selector_resource="shared-target",
 		api_category="execution",
 		qpm_type=QPMType.QPM_TYPE_HARDWARE,
-		qpm_capability=QPMCapability.QPM_CAP_SUPERCONDUCTING,
+		qpm_capabilities=QPMCapability.QPM_CAP_SUPERCONDUCTING,
 		timeout=1,
 	)
 
@@ -262,6 +192,34 @@ def test_resolver_filters_real_directory_records_by_provider_metadata():
 
 	assert resolved.service_id == "qpm-nwqsim"
 	assert resolved.properties["provider"] == "nwqsim"
+
+
+def test_reserved_resolution_uses_exact_service_without_substitution():
+	import defw_directory
+	from api_qpm_common import QPMCapability, QPMType
+	from qfw_qiskit.qpm_resolver import DirectoryScope, QPMResolver
+
+	directory = defw_directory.Directory()
+	_register_directory_qpm(
+		directory, "qpm-a", QPMType.QPM_TYPE_SIMULATOR,
+		QPMCapability.QPM_CAP_STATEVECTOR, provider="nwqsim")
+	_register_directory_qpm(
+		directory, "qpm-b", QPMType.QPM_TYPE_SIMULATOR,
+		QPMCapability.QPM_CAP_STATEVECTOR, provider="nwqsim")
+
+	class Connector:
+		def connect(self, resolved):
+			return f"client:{resolved.service_id}"
+
+	resolver = QPMResolver([
+		DirectoryScope("site-a", "site", client=directory, priority=50),
+	], connector=Connector(), selection_order=["site"],
+		sleeper=lambda seconds: None)
+	binding = resolver.connect_reserved("qpm-b", 17, timeout=1)
+
+	assert binding.resolved.service_id == "qpm-b"
+	assert binding.client == "client:qpm-b"
+	assert binding.reservation_id == 17
 
 
 def test_resolver_rejects_real_directory_stale_generation_before_binding():

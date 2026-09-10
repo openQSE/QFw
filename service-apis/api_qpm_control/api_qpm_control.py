@@ -11,6 +11,9 @@ class QPMControl(QPMRemoteBase):
 	def get_service_status(self, token=None):
 		pass
 
+	def get_service_summary(self, token=None):
+		pass
+
 	def reconcile_runtime_state(self, token=None, reason=None):
 		pass
 

@@ -4,10 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
+qfw_example_parse_common_options "$@"
+set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
 
 usage() {
 	cat <<EOF
-Usage: ./qfw_slurm_driver.sh [driver options] -- <application> [args...]
+Usage: ./qfw_slurm_driver.sh [--verbose] [driver options] -- <application> [args...]
 
 Reserve QPM capacity, launch an application with the reservation context, and
 release the reservation. This script is the example stand-in for the future
@@ -135,7 +137,8 @@ record = {
 	"slurm_job_id": os.environ.get("SLURM_JOB_ID"),
 	"timestamp_ns": time.time_ns(),
 }
-line = "QFW_SLURM_DRIVER_RESULT " + json.dumps(record, sort_keys=True)
+line = "QFW_SLURM_DRIVER_RESULT " + json.dumps(
+	record, indent=2, sort_keys=True)
 print(line)
 if path:
 	directory = os.path.dirname(path)
@@ -147,15 +150,16 @@ PY
 }
 
 qfw_slurm_parse_reservation_id() {
+	PYTHONPATH="$(qfw_example_path tests)${PYTHONPATH:+:${PYTHONPATH}}" \
 	python3 -c '
-import json
 import sys
 
+from qfw_example_report import parse_console_records
+
 reservation_id = None
-for line in sys.stdin:
-	if not line.startswith("QFW_EXAMPLE_RESERVATION "):
-		continue
-	record = json.loads(line.split(" ", 1)[1])
+records = parse_console_records(
+	sys.stdin.read(), "QFW_EXAMPLE_RESERVATION")
+for record in records:
 	if record.get("kind") != "reserve":
 		continue
 	decision = record.get("decision") or {}
@@ -163,6 +167,42 @@ for line in sys.stdin:
 if not reservation_id:
 	raise SystemExit("ERROR: reservation_id not found in reservation output")
 print(reservation_id)
+'
+}
+
+qfw_slurm_parse_service_id() {
+	PYTHONPATH="$(qfw_example_path tests)${PYTHONPATH:+:${PYTHONPATH}}" \
+	python3 -c '
+import sys
+
+from qfw_example_report import parse_console_records
+
+service_id = None
+for record in parse_console_records(
+		sys.stdin.read(), "QFW_EXAMPLE_RESERVATION"):
+	if record.get("kind") == "reserve":
+		service_id = record.get("service_id")
+if not service_id:
+	raise SystemExit("ERROR: service_id not found in reservation output")
+print(service_id)
+'
+}
+
+qfw_slurm_parse_ownership() {
+	PYTHONPATH="$(qfw_example_path tests)${PYTHONPATH:+:${PYTHONPATH}}" \
+	python3 -c '
+import sys
+
+from qfw_example_report import parse_console_records
+
+ownership = None
+for record in parse_console_records(
+		sys.stdin.read(), "QFW_EXAMPLE_RESERVATION"):
+	if record.get("kind") == "reserve":
+		ownership = record.get("ownership")
+if ownership not in {"driver", "scheduler"}:
+	raise SystemExit("ERROR: reservation ownership not found in reservation output")
+print(ownership)
 '
 }
 
@@ -522,10 +562,13 @@ release_command=(
 )
 
 reservation_id=""
+service_id=""
+reservation_ownership=""
 release_done=0
 
 qfw_slurm_release() {
-	if [[ -z "${reservation_id}" || "${release_done}" == "1" ]]; then
+	if [[ -z "${reservation_id}" || "${release_done}" == "1" ||
+	      "${reservation_ownership}" == "scheduler" ]]; then
 		return 0
 	fi
 	local output rc
@@ -533,6 +576,7 @@ qfw_slurm_release() {
 	output="$(
 		qfw_example_srun "${qfw_srun_control[@]}" \
 			"${release_command[@]}" \
+			--service-id "${service_id}" \
 			--reservation-id "${reservation_id}"
 	)"
 	rc=$?
@@ -571,11 +615,25 @@ printf "%s\n" "${reserve_output}" >&2
 reservation_id="$(
 	printf "%s\n" "${reserve_output}" | qfw_slurm_parse_reservation_id
 )"
+service_id="$(
+	printf "%s\n" "${reserve_output}" | qfw_slurm_parse_service_id
+)"
+reservation_ownership="$(
+	printf "%s\n" "${reserve_output}" | qfw_slurm_parse_ownership
+)"
+reservation_context="$(
+	python3 - "${service_id}" "${reservation_id}" <<'PY'
+import json
+import sys
+
+print(json.dumps([[sys.argv[1], sys.argv[2]]], separators=(",", ":")))
+PY
+)"
 qfw_slurm_emit "reserved" "ok" 0 "${reservation_id}"
 
 set +e
 (
-	export QFW_RESERVATION_ID="${reservation_id}"
+	export QFW_RESERVATIONS="${reservation_context}"
 	qfw_example_srun "${qfw_srun_app[@]}" "$@"
 )
 app_rc=$?
