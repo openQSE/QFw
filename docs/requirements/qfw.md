@@ -141,11 +141,7 @@ sequenceDiagram
 
 ## Requirements
 
-Requirement IDs are stable references. Matching design notes are maintained in
-`docs/detailed-design.md` under the same IDs.
-
-Authentication requirements are maintained separately in
-`docs/requirements-authentication.md`. This document describes the current
+Requirement IDs are stable references. This document describes the current
 integration milestone, where QPM APIs may accept token parameters but do not
 validate tokens or authorize callers from them.
 

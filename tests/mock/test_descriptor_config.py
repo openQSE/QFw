@@ -3,7 +3,7 @@
 # execution-owner) so svc_lib_qpm's resolve_descriptor() can honor them. These
 # keys used to be dropped by select_qpu's fixed whitelist, which silently
 # defeated the descriptor customization documented in
-# docs/qpu-frontend-contract.md section 5.
+# docs/design/qpu-frontend-contract.md section 5.
 #
 # Everything here works on plain dicts, so it needs neither PyYAML nor a live
 # device: select_qpu() takes the parsed config dict directly, and the

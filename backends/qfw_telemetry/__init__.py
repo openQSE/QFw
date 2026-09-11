@@ -2,7 +2,7 @@
 QFw telemetry bootstrap.
 
 Owns OpenTelemetry provider setup, the deployment profile, and the sampling
-policy described in docs/benchmarking-design.md. This package emits no spans
+policy described in docs/design/benchmarking.md. This package emits no spans
 and no metrics of its own. Instrumentation sites import the accessors below.
 
 Three things matter for callers:

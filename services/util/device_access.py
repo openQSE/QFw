@@ -233,7 +233,7 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 
 	# Pass through the optional shim descriptor fields (svc_lib_qpm's
 	# resolve_descriptor reads these off the selected device; see
-	# docs/qpu-frontend-contract.md section 5). Only forward keys that are
+	# docs/design/qpu-frontend-contract.md section 5). Only forward keys that are
 	# actually configured so descriptor.py can apply its own defaults for the
 	# rest -- a key present with a None value would otherwise defeat the
 	# `device.get(key, DEFAULT)` fallbacks. The native resolve_device_access

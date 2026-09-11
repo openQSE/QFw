@@ -3,7 +3,7 @@ OTLP/JSON file exporters.
 
 The OpenTelemetry Python SDK can send OTLP over HTTP and can print spans to a
 console, but it has no exporter that writes OTLP to a file. The file profile
-in docs/benchmarking-design.md needs exactly that, so this module supplies
+in docs/design/benchmarking.md needs exactly that, so this module supplies
 it for traces and for metrics.
 
 Output is one JSON object per line. Each line is a complete OTLP export

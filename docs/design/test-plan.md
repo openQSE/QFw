@@ -3,9 +3,8 @@
 ## Purpose
 
 Define the system-level validation strategy for the admission, scheduler,
-operation-mode, and managed-execution work described in
-`docs/requirements.md`, `docs/detailed-design.md`, and
-`docs/implementation-plan.md`.
+operation-mode, and managed-execution work in the current QFw integration
+milestone.
 
 This plan focuses on observable behavior across QFw, DEFw-dirsvc, installed
 runtime commands, QPM, qhw-admission, qhw-scheduler, provider adapters, client
@@ -75,8 +74,8 @@ provider-independent admission, scheduler, resolver, and telemetry semantics.
 
 ## Entry Criteria
 
-- Phase-level automated tests from `docs/implementation-plan.md` have passed
-  for the implementation slice under test, including operation-mode,
+- Phase-level automated tests have passed for the implementation slice under
+  test, including operation-mode,
   API/token-pass-through, controller scaffolding, admission integration,
   scheduler integration, telemetry, reconciliation, hardening,
   runtime-startup, and completion-queue tests.
@@ -677,8 +676,8 @@ by the admission and scheduler fixture. Site services are started with
 - All ST-001 through ST-025 scenarios pass in the simulator or deterministic
   test target environment. Provider-specific hardware smoke tests may be
   reported separately when hardware is unavailable.
-- Every requirement group in `docs/requirements.md` has at least one passing
-  system scenario or a justified lower-level test with equivalent coverage.
+- Every requirement group has at least one passing system scenario or a
+  justified lower-level test with equivalent coverage.
 - QFw-managed and long-running modes expose the same reservation, release,
   execution, status, cancellation, result, and telemetry semantics after QPM
   binding.

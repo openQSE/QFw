@@ -19,9 +19,8 @@
 
 ## Purpose
 
-This document records implementation-oriented design notes for
-`docs/requirements.md`. Each requirement has a matching collapsible subsection
-identified by the same requirement ID.
+This document records implementation-oriented design notes for the current QFw
+integration milestone.
 
 </details>
 
@@ -2214,7 +2213,7 @@ queries, and metadata queries are implemented in the QPM subclasses or their
 QRC layers. They are telemetry/discovery methods rather than execution-path
 overrides. The API split should expose them through telemetry/discovery APIs
 instead of relying on task lifecycle calls. Policy-controlled filtering is
-deferred to `docs/detailed-design-authentication.md`.
+deferred to future authentication work.
 
 The shared utility layer should provide provider hooks instead of requiring
 subclasses to override the public run methods. Useful hooks include:
@@ -2280,9 +2279,8 @@ verify it, derive caller identity from it, or reject requests because of it.
 
 Reservation IDs remain the mechanism that ties execution calls to admission
 state. Any user, job, allocation, or project fields supplied with a request are
-treated as unverified metadata in this milestone. Authentication requirements
-and design are defined separately in `docs/requirements-authentication.md` and
-`docs/detailed-design-authentication.md`.
+treated as unverified metadata in this milestone. Authentication is deferred
+to future work.
 
 DEFw remains outside this token contract. It stores service records, resolves
 selected API bindings, establishes transport, and routes RPCs to
@@ -3559,7 +3557,7 @@ workload kind, owner metadata, and policy hints.
 Workflow managers, load managers, resource managers, prolog or epilog code,
 and site automation use these APIs to request and manage quantum capacity. The
 current milestone accepts token placeholders without validation. Caller
-validation is defined in `docs/detailed-design-authentication.md`.
+validation is deferred to future authentication work.
 
 </details>
 
@@ -3593,8 +3591,7 @@ managers, operators, telemetry collectors, and admission policy.
 
 QFw should treat telemetry as one API category that can serve applications,
 workflow managers, operators, telemetry collectors, and admission policy.
-Policy-controlled filtering is deferred to
-`docs/detailed-design-authentication.md`.
+Policy-controlled filtering is deferred to future authentication work.
 
 </details>
 
@@ -3728,9 +3725,8 @@ should distinguish invalid reservation, insufficient allowance, pending
 capacity, policy-delayed work, cancelled work, expired reservation, timeout,
 scheduler failure, and provider failure.
 
-Authentication-specific status codes are defined in
-`docs/requirements-authentication.md` and
-`docs/detailed-design-authentication.md`.
+Authentication-specific status codes are deferred to future authentication
+work.
 
 Structured outcomes should include machine-readable reason codes and enough
 context for callers to decide whether to retry, wait, cancel, renew a
@@ -3747,8 +3743,8 @@ reservation, or escalate to an operator.
 
 Admission policy configuration and scheduler policy configuration should be
 control-plane operations. The current milestone accepts token placeholders
-without validating them. Caller validation is deferred to
-`docs/detailed-design-authentication.md`.
+without validating them. Caller validation is deferred to future
+authentication work.
 
 The controller should receive normalized policy requests rather than raw
 unstructured input.

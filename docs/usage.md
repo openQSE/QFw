@@ -1314,10 +1314,10 @@ qfw-deactivate
 ## Further Reading
 
 - [README.md](README.md) provides the complete project overview.
-- [examples/README.md](examples/README.md) documents example arguments.
-- [docs/detailed-design.md](docs/detailed-design.md) defines runtime and
-  configuration behavior.
-- [docs/test-plan.md](docs/test-plan.md) defines system validation and
-  acceptance criteria.
+- [examples/README.md](../examples/README.md) documents example arguments.
+- [docs/design/](design/) collects design notes.
+- [docs/requirements/](requirements/) collects requirements and acceptance
+  criteria.
+- [docs/release/](release/) collects release notes and manifests.
 
 [slurm-cluster]: https://github.com/openQSE/QFw-SLURM-Cluster#readme

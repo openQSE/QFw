@@ -27,7 +27,7 @@ paramiko
 rich
 
 # OpenTelemetry: benchmarking and profiling telemetry, see
-# docs/benchmarking-design.md. QFw degrades to no-op instrumentation when
+# docs/design/benchmarking.md. QFw degrades to no-op instrumentation when
 # these are absent, so they are a soft dependency rather than a hard one.
 opentelemetry-api>=1.44.0
 opentelemetry-sdk>=1.44.0
