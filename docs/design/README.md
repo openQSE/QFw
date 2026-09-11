@@ -6,6 +6,7 @@ users and releases.
 | Document | Description |
 | --- | --- |
 | [QFw design](qfw.md) | Main architecture and implementation design for QFw-managed services, QPM discovery, admission and scheduler integration, API categories, telemetry, and lifecycle behavior. Read this first when changing core runtime or service behavior. |
+| [QFw operational components](operations-components.md) | High-level map of the framework, runtime, QHW libraries, provider adapters, Slurm integration, cluster environment, and dashboard. Use this when orienting a new reader to the pieces involved in QFw operations. |
 | [QFw service lifecycle](qfw-service-lifecycle.md) | Defines how QFw interprets QPM service records, service-type filtering, stale bindings, reconnect behavior, and lifecycle event handling. Use this when debugging discovery, reconnect, or QPM binding behavior. |
 | [Site service lifecycle](site-service-lifecycle.md) | Explains ownership and run-directory boundaries for long-running site services. Use this when changing service startup, teardown, logging, or operator recovery flows. |
 | [QPU front-end contract](qpu-frontend-contract.md) | Describes provider-facing metadata and device access expectations for QPU front ends. Use this when changing provider descriptors, credential forwarding, or backend metadata normalization. |
