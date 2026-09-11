@@ -68,10 +68,8 @@ class QPM(UTIL_QPM):
 			"provider": FAKE_IQM_PROVIDER,
 			"target_id": FAKE_IQM_TARGET_ID,
 			"device_id": FAKE_IQM_TARGET_ID,
-			"resource_id": FAKE_IQM_TARGET_ID,
 			"num_qubits": FAKE_IQM_MAX_QUBITS,
 			"max_shots": FAKE_IQM_MAX_SHOTS,
-			"test_backend": True,
 		})
 		info = self.query_helper(
 			QPMType.QPM_TYPE_HARDWARE,
@@ -94,7 +92,6 @@ class QPM(UTIL_QPM):
 			"backend": FAKE_IQM_PROVIDER,
 			"target_id": FAKE_IQM_TARGET_ID,
 			"metadata_supported": True,
-			"test_backend": True,
 		}
 
 	def get_device_info(self, lib=None, token=None):
@@ -104,7 +101,6 @@ class QPM(UTIL_QPM):
 			"num_qubits": FAKE_IQM_MAX_QUBITS,
 			"max_shots": FAKE_IQM_MAX_SHOTS,
 			"metadata_supported": True,
-			"test_backend": True,
 		}
 
 	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
@@ -119,7 +115,6 @@ class QPM(UTIL_QPM):
 			"backend": FAKE_IQM_PROVIDER,
 			"target_id": FAKE_IQM_TARGET_ID,
 			"calibration_set_id": calibration_set_id,
-			"test_backend": True,
 		}
 
 	def get_coupling_graph(self, calibration_set_id=None, lib=None, token=None):
@@ -131,5 +126,4 @@ class QPM(UTIL_QPM):
 				[index, index + 1]
 				for index in range(FAKE_IQM_MAX_QUBITS - 1)
 			],
-			"test_backend": True,
 		}

@@ -131,6 +131,51 @@ def configure_fake_credentials(monkeypatch, tmp_path, *users):
 	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config_path))
 
 
+def test_fake_iqm_query_metadata_matches_directory_contract(monkeypatch):
+	import defw_directory
+
+	_setup(monkeypatch)
+	qpm = QPM(
+		admission_context_factory=FakeAdmissionContext,
+		scheduler_context_factory=FakeSchedulerContext,
+	)
+	info = qpm.query()
+	properties = info["properties"]
+
+	assert "resource_id" not in properties
+	assert "test_backend" not in properties
+	assert "test_backend" not in info["selector"]
+	assert FAKE_IQM_TARGET_ID in info["selector"]["resources"]
+
+	directory = defw_directory.Directory()
+	directory.register_service({
+		"service_id": info["service_id"],
+		"service_name": info["service_name"],
+		"service_type": info["service_type"],
+		"runtime_id": "fake-iqm-runtime",
+		"peer_handle": "fake-iqm-peer",
+		"endpoint": {
+			"address": "fake-iqm.example",
+			"listen_port": 8590,
+			"pid": 123,
+			"node_name": "fake-iqm",
+			"hostname": "fake-iqm-head",
+		},
+		"api_bindings": info["api_bindings"],
+		"selector": info["selector"],
+		"properties": properties,
+		"capability": info["capability"],
+		"qpm_type": info["qpm_type"],
+		"qpm_capabilities": info["qpm_capabilities"],
+	})
+
+	records = directory.resolve_services(
+		service_type="qfw.qpm",
+		selector_resource=FAKE_IQM_TARGET_ID,
+	)
+	assert records[0]["service_record"]["service_id"] == info["service_id"]
+
+
 def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 	_setup(monkeypatch)
 	configure_fake_credentials(monkeypatch, tmp_path, "stress-user")

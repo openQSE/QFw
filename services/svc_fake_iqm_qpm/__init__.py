@@ -21,7 +21,6 @@ svc_info = {
 			'name': 'fake-iqm-20q',
 			'resources': ['fake-iqm-20q', 'FAKE-IQM-20q'],
 			'aliases': ['fake-iqm', 'iqm-test'],
-			'test_backend': True,
 		},
 	}
 }
