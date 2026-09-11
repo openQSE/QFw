@@ -9,26 +9,26 @@ execution recipe.
 
 ### Quick starts
 
-| Goal | Recipe |
+| Recipe | Description |
 | --- | --- |
-| Run the installed examples on one Slurm node | [One-node Slurm example](run-example-slurm-one-node.md) |
-| Run the installed examples in a heterogeneous allocation | [Heterogeneous Slurm example](run-example-slurm-heterogeneous.md) |
-| Run the installed examples against an existing QPM | [Long-running QPM example](run-example-long-running-qpm.md) |
+| [One-node Slurm example](run-example-slurm-one-node.md) | Runs the installed examples on one Slurm node. Use this as the shortest end-to-end validation path after a standard QFw installation. |
+| [Heterogeneous Slurm example](run-example-slurm-heterogeneous.md) | Runs the installed examples in a heterogeneous allocation with separate application and service placement. Use this when validating multi-component Slurm placement. |
+| [Long-running QPM example](run-example-long-running-qpm.md) | Runs the installed examples against an existing site-owned QPM. Use this when the QPM should outlive a single application allocation. |
 
 ### Installation, operation, and detailed testing
 
-| Goal | Recipe |
+| Recipe | Description |
 | --- | --- |
-| Configure the QFw Docker/Slurm development environment | [Docker Slurm environment](docker-slurm-environment.md) |
-| Install into an arbitrary user or development prefix | [Non-standard installation](install-nonstandard-location.md) |
-| Install into the conventional site prefix | [Standard site installation](install-standard-location.md) |
-| Build optional NWQSim or TNQVM dependencies | [Simulator dependencies](build-simulator-dependencies.md) |
-| Prepare a reusable, site-owned QPM | [Site-owned QPM configuration](configure-long-running-qpm.md) |
-| Exercise the qfw-slurm path from a normal allocation | [Site QPM, normal allocation](test-long-running-qpm-normal.md) |
-| Exercise the qfw-slurm path from a heterogeneous allocation | [Site QPM, heterogeneous allocation](test-long-running-qpm-heterogeneous.md) |
-| Run an application and its services on one node | [Same-node execution](test-same-node.md) |
-| Separate the application and services with a heterogeneous allocation | [Heterogeneous execution](test-heterogeneous-allocation.md) |
-| Recover interrupted directory, DVM, QPM, or reservation state | [Service recovery](recover-services.md) |
+| [Docker Slurm environment](docker-slurm-environment.md) | Configures the QFw Docker/Slurm development environment. Read this when building or testing in the local containerized cluster. |
+| [Non-standard installation](install-nonstandard-location.md) | Installs QFw into an arbitrary user or development prefix. Use this for private builds that should not write into the site paths. |
+| [Standard site installation](install-standard-location.md) | Installs QFw into the conventional `/opt/openqse` and `/etc/openqse` site layout. Use this for operator-style deployments. |
+| [Simulator dependencies](build-simulator-dependencies.md) | Builds optional NWQSim or TNQVM dependencies used by QPM services. Read this before enabling simulator-backed examples. |
+| [Site-owned QPM configuration](configure-long-running-qpm.md) | Prepares a reusable, site-owned QPM and its directory service integration. Use this before running applications against persistent services. |
+| [Site QPM, normal allocation](test-long-running-qpm-normal.md) | Exercises the qfw-slurm path from a normal allocation against a site-owned QPM. Use this to validate reservation delivery without heterogeneous groups. |
+| [Site QPM, heterogeneous allocation](test-long-running-qpm-heterogeneous.md) | Exercises the qfw-slurm path from a heterogeneous allocation against a site-owned QPM. Use this when validating separate application and quantum resource placement. |
+| [Same-node execution](test-same-node.md) | Runs an application and its services on one node. Use this for focused local-mode tests where service placement should stay simple. |
+| [Heterogeneous execution](test-heterogeneous-allocation.md) | Separates the application and services with a heterogeneous allocation. Use this for local-mode tests that need distinct Slurm groups. |
+| [Service recovery](recover-services.md) | Recovers interrupted directory, DVM, QPM, or reservation state. Read this when cleanup or restart behavior leaves stale runtime artifacts behind. |
 
 ## Command and Configuration References
 
