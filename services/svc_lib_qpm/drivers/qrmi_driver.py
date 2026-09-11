@@ -485,17 +485,42 @@ class QrmiDriver(BaseDriver):
 	def _device_id(self):
 		return self._descriptor.get("id", "iqm-device")
 
-	# --- introspection facet: reuse qhw-iqm on QRMI's raw IQM data ------
+	def _provider(self):
+		return str(self._descriptor.get("provider") or "iqm").lower()
+
+	# --- introspection facet: reuse qhw-iqm / qhw-ibm on QRMI's raw data -
 
 	def get_device_info(self):
+		provider = self._provider()
+		if provider == "ibm":
+			# IBM target() is {"configuration": {...}, "properties": {...}};
+			# the device normalizer reads the configuration sub-dict.
+			from qhw_ibm import normalize_device
+			return normalize_device(
+				self._target().get("configuration") or {},
+				device_id=self._device_id())
 		from qhw_iqm import normalize_device
 		return normalize_device(self._arch_raw(), device_id=self._device_id())
 
 	def get_coupling_graph(self, calibration_set_id=None):
+		provider = self._provider()
+		if provider == "ibm":
+			from qhw_ibm import normalize_coupling
+			return normalize_coupling(
+				self._target().get("configuration") or {},
+				device_id=self._device_id())
 		from qhw_iqm import normalize_coupling
 		return normalize_coupling(self._arch_raw(), device_id=self._device_id())
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
+		provider = self._provider()
+		if provider == "ibm":
+			# The calibration normalizer reads the properties sub-dict
+			# (qubits, gates, last_update_date).
+			from qhw_ibm import normalize_calibration
+			return normalize_calibration(
+				self._target().get("properties") or {},
+				device_id=self._device_id())
 		# target() carries the IQM calibration_set + quality_metrics; feed them
 		# (with the dynamic architecture) to qhw-iqm — the same normalizer the
 		# native svc_iqm_qpm path uses — to build a qhw-calibration-v1 record.
