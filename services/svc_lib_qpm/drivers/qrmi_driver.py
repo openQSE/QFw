@@ -79,7 +79,6 @@ import time
 # QRMI names each IBM service's variables after the service, so the resource
 # type selects the family: {backend}_QRMI_IBM_<kind>_ENDPOINT and friends.
 IBM_RESOURCE_ENV_KINDS = {
-	"IBMQiskitRuntimeService": "QRS",
 	"IBMQuantumComputeService": "QCS",
 	"IBMQuantumSystem": "QS",
 }
@@ -92,8 +91,7 @@ IBM_DEFAULT_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
 
 PROVIDER_RESOURCE_TYPES = {
 	"iqm": ("IQMServer",),
-	"ibm": ("IBMQiskitRuntimeService", "IBMQuantumComputeService",
-		"IBMQuantumSystem"),
+	"ibm": ("IBMQuantumComputeService", "IBMQuantumSystem"),
 	"pasqal": ("PasqalCloud", "PasqalLocal"),
 	"alicebob": ("AliceBobFelis",),
 }
