@@ -1,10 +1,27 @@
 from pathlib import Path
 import json
 import sys
+import types
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO_ROOT / "setup"))
+
+# _process_launcher imports util.device_access from services/, which imports
+# defw_exception from DEFw. An activated QFw environment makes both importable.
+sys.path.insert(0, str(_REPO_ROOT / "services"))
+sys.path.insert(0, str(_REPO_ROOT / "DEFw" / "python" / "infra"))
+
+# defw_exception also imports cdefw_global, which SWIG generates when DEFw is
+# built. CI checks DEFw out but does not build it. Stand in for the one
+# function defw_exception calls, and use the real module when it exists.
+try:
+    import cdefw_global
+except ImportError:
+    _cdefw_global = types.ModuleType("cdefw_global")
+    _cdefw_global.get_node_name = lambda: "qfw-test"
+    sys.modules["cdefw_global"] = _cdefw_global
 
 from qfw_runtime import commands
 from qfw_runtime import config as qfw_config
