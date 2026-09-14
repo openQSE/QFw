@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import shlex
+import socket
 import sys
 import types
 
@@ -463,6 +464,66 @@ def test_teardown_keep_run_dir_clears_marker_after_cleanup(
 
     assert run_dir.exists()
     assert not (run_base / "current").exists()
+
+
+@pytest.mark.parametrize(
+    "variable, label",
+    [("DEFW_LISTEN_PORT", "listen"), ("DEFW_TELNET_PORT", "telnet")],
+)
+def test_private_process_launcher_refuses_a_port_already_in_use(
+        tmp_path, monkeypatch, variable, label):
+    started = []
+    monkeypatch.setattr(
+        process_launcher,
+        "_command_path",
+        lambda name, env=None: Path("/usr/bin/defw-python"),
+    )
+    monkeypatch.setattr(
+        process_launcher.subprocess,
+        "Popen",
+        lambda argv, **kwargs: started.append(argv),
+    )
+    pid_file = tmp_path / "svc.pid"
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as leftover:
+        leftover.bind(("", 0))
+        leftover.listen(1)
+        port = leftover.getsockname()[1]
+
+        with pytest.raises(RuntimeError) as error:
+            process_launcher._start_defw_owned_process(
+                "mpi-smoke",
+                {"DEFW_LOG_DIR": str(tmp_path / "logs"), variable: str(port)},
+                pid_file,
+                tmp_path / "svc-ready.json",
+                5,
+                True,
+                False,
+                {"role": "service"},
+                lambda: True,
+            )
+
+    assert f"{label} port {port} is already in use" in str(error.value)
+    assert started == []
+    assert not pid_file.exists()
+
+
+def test_private_process_launcher_port_probe_ignores_time_wait():
+    # Set SO_REUSEADDR on the listener, as DEFw does on its own, so the
+    # closed connection leaves the port in TIME_WAIT the way a stopped
+    # service does.
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    accepted, _address = listener.accept()
+    accepted.close()
+    client.close()
+    listener.close()
+
+    assert process_launcher._tcp_port_free(port)
 
 
 def test_private_process_launcher_uses_defw_python_wrapper(

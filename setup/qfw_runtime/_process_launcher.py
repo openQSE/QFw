@@ -1,6 +1,7 @@
 """Private remote-node launcher for QFw-owned DEFw processes."""
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -324,6 +325,7 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
         _write_ready(ready_file, ready_payload)
         return 0
 
+    _require_free_defw_ports(name, env)
     defw_python = _command_path("defw-python", env=env)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
@@ -350,6 +352,33 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
         pid_file.unlink(missing_ok=True)
         ready_file.unlink(missing_ok=True)
         raise
+
+
+def _require_free_defw_ports(name, env):
+    # A service left over from an earlier run still holds its ports, and a
+    # new DEFw process would only exit during startup. Name the port instead.
+    for variable, label in (
+            ("DEFW_LISTEN_PORT", "listen"),
+            ("DEFW_TELNET_PORT", "telnet")):
+        port = int(env.get(variable) or 0)
+        if port > 0 and not _tcp_port_free(port):
+            raise RuntimeError(
+                f"{name} cannot start: {label} port {port} is already in use "
+                f"on {socket.gethostname()}, possibly by a service left over "
+                "from an earlier run")
+
+
+def _tcp_port_free(port):
+    # DEFw sets SO_REUSEADDR on its listener. Probe the same way, so a port
+    # still in TIME_WAIT after a clean stop reads as free and only a live
+    # listener reads as taken.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("", port))
+        except OSError as exc:
+            return exc.errno != errno.EADDRINUSE
+    return True
 
 
 def _wait_foreground(process, pid_file, ready_file):
