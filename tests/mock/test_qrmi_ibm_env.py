@@ -84,8 +84,9 @@ def test_each_service_gets_its_own_family(monkeypatch):
 	assert "ibm_torino_QRMI_IBM_QRS_ENDPOINT" not in os.environ
 
 
-def test_never_overrides_values_already_set(monkeypatch):
-	# Inside a reservation the SPANK plugin owns these.
+def test_without_a_credential_keeps_values_already_set(monkeypatch):
+	# With no credential to go on, an operator or a SPANK plugin may have set
+	# these, so they are left alone.
 	import os
 	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:from-env")
 	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_ENDPOINT", "https://spank")
@@ -169,6 +170,127 @@ def test_alias_is_trimmed_at_the_first_comma(monkeypatch):
 	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
 	_driver()._ensure_ibm_env("QRS", "ibm_torino,extra")
 	assert "ibm_torino_QRMI_IBM_QRS_ENDPOINT" in os.environ
+
+
+# --- reservation credentials ------------------------------------------------
+#
+# On a long-running service the QPM controller attaches a credential bound to
+# the caller's reservation to each circuit, and run_circuit passes it down.
+# These variables are process-wide, so that credential has to replace what an
+# earlier reservation left behind rather than only fill gaps.
+
+def _driver_resolving_by_user(**descriptor):
+	# Resolves each credential to its own endpoint and key, the way a
+	# reservation-bound credential resolves through device access.
+	descriptor.setdefault("provider", "ibm")
+	driver = QrmiDriver(descriptor)
+
+	def _access(credential=None):
+		user = dict(credential or {}).get("user", "operator")
+		return {
+			"base_url": f"https://{user}.example.org",
+			"token": f"{user}-key",
+		}
+
+	driver._access = _access
+	return driver
+
+
+def test_credential_replaces_an_earlier_reservations_key(monkeypatch):
+	import os
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	driver = _driver_resolving_by_user()
+
+	driver._ensure_ibm_env("QRS", "ibm_torino", credential={"user": "alice"})
+	driver._ensure_ibm_env("QRS", "ibm_torino", credential={"user": "bob"})
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_ENDPOINT"] == \
+		"https://bob.example.org"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"] == "bob-key"
+
+
+def test_credential_replaces_only_the_endpoint_and_key(monkeypatch):
+	# The CRN and IAM endpoint have no per-credential source (blocker 3), so
+	# values already set for them are kept.
+	import os
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:from-env")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_ENDPOINT", "https://preset")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_IAM_APIKEY", "preset-key")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_SERVICE_CRN", "crn:preset")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT", "https://iam")
+
+	_driver_resolving_by_user()._ensure_ibm_env(
+		"QRS", "ibm_torino", credential={"user": "alice"})
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_ENDPOINT"] == \
+		"https://alice.example.org"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"] == "alice-key"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:preset"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT"] == "https://iam"
+
+
+def test_unresolvable_credential_fails_instead_of_reusing_a_key(monkeypatch):
+	# Unlike the no-credential path, this does not fall back to the
+	# missing-variable report. The key already in the environment belongs to
+	# some other reservation, so the resolution error has to surface.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_ENDPOINT", "https://earlier")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_IAM_APIKEY", "earlier-key")
+	driver = QrmiDriver({"provider": "ibm"})
+
+	def _boom(credential=None):
+		raise DEFwExecutionError("credential cannot be resolved")
+
+	driver._access = _boom
+
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		driver._ensure_ibm_env(
+			"QRS", "ibm_torino", credential={"user": "alice"})
+	assert "credential cannot be resolved" in str(excinfo.value)
+
+
+def test_credential_without_a_key_does_not_inherit_one(monkeypatch):
+	# A credential that resolves no key clears the old one, so the
+	# missing-variable report fires instead of the resource opening with it.
+	import os
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_IAM_APIKEY", "earlier-key")
+	driver = _driver(access={"base_url": "https://example.org", "token": None})
+
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		driver._ensure_ibm_env(
+			"QRS", "ibm_torino", credential={"user": "alice"})
+	assert "ibm_torino_QRMI_IBM_QRS_IAM_APIKEY" in str(excinfo.value)
+	assert "ibm_torino_QRMI_IBM_QRS_IAM_APIKEY" not in os.environ
+
+
+def test_each_reservation_opens_its_resource_with_its_own_key(monkeypatch):
+	# The failure this guards, end to end. _qpu opens one QuantumResource per
+	# credential and QRMI reads the key from the environment when it does, so
+	# filling only missing values handed the first reservation's key to every
+	# resource opened after it.
+	import os
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	driver = _driver_resolving_by_user(
+		provider_device_id="ibm_torino",
+		resource_type="IBMQiskitRuntimeService")
+	opened = []
+
+	class _Qrmi:
+		class ResourceType:
+			IBMQiskitRuntimeService = "IBMQiskitRuntimeService"
+
+		@staticmethod
+		def QuantumResource(alias, resource_type):
+			opened.append(os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"])
+			return object()
+
+	driver._qrmi = _Qrmi
+
+	driver._qpu(credential={"user": "alice"})
+	driver._qpu(credential={"user": "bob"})
+
+	assert opened == ["alice-key", "bob-key"]
 
 
 # --- routing ---------------------------------------------------------------

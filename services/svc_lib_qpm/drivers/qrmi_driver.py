@@ -331,9 +331,15 @@ class QrmiDriver(BaseDriver):
 
 	def _ensure_ibm_env(self, kind, alias, credential=None):
 		# QRMI's IBM resources read endpoint, IAM endpoint, API key and service
-		# CRN at construction, so resolve whatever is missing before opening
-		# one. Never override what is already set: inside a reservation the
-		# SPANK plugin owns these.
+		# CRN at construction, so resolve them before opening one.
+		#
+		# A credential bound to the caller's reservation always supplies the
+		# endpoint and API key, replacing whatever is already set, as
+		# _ensure_iqm_isa_env does for IQM. These variables are process-wide, so
+		# filling in only what is missing would let the first reservation's key
+		# open every later reservation's resource in a long-running service.
+		# Without a credential, only missing values are resolved and anything
+		# already set is kept, since an operator or a SPANK plugin may have set it.
 		#
 		# The endpoint and API key come from device-access config, the same
 		# source the IQM path uses. The service CRN and the IAM endpoint have
@@ -348,7 +354,19 @@ class QrmiDriver(BaseDriver):
 		apikey_var = f"{prefix}_IAM_APIKEY"
 		crn_var = f"{prefix}_SERVICE_CRN"
 
-		if not (os.environ.get(endpoint_var) and os.environ.get(apikey_var)):
+		if credential:
+			# No fallback on this path. A credential that cannot be resolved has
+			# to fail rather than leave another reservation's endpoint or key in
+			# place, so a value it does not supply is cleared, not inherited.
+			access = self._access(credential=credential)
+			for name, value in (
+					(endpoint_var, access.get("base_url")),
+					(apikey_var, access.get("token"))):
+				if value:
+					os.environ[name] = value
+				else:
+					os.environ.pop(name, None)
+		elif not (os.environ.get(endpoint_var) and os.environ.get(apikey_var)):
 			try:
 				access = self._access(credential=credential)
 			except DEFwExecutionError:
