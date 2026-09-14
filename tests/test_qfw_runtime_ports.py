@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import shlex
 import sys
 import types
 
@@ -401,6 +402,67 @@ def test_cleanup_application_service_managers_uses_reverse_order(
         "/run/qpm/nwqsim",
         "/run/directory",
     ]
+
+
+def _write_application_runtime(tmp_path, monkeypatch):
+    run_base = tmp_path / "runs"
+    run_dir = run_base / "runtime-1"
+    (run_dir / "state").mkdir(parents=True)
+    state = {
+        "run_id": "runtime-1",
+        "run_dir": str(run_dir),
+        "run_base_dir": str(run_base),
+        "service_managers": [{
+            "owner": "application",
+            "role": "qpm",
+            "service_id": "mpi-smoke",
+            "run_dir": str(run_dir / "service-plane" / "qpm"),
+        }],
+    }
+    (run_dir / "state" / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    qfw_config.write_current_run(run_base, "runtime-1")
+    monkeypatch.delenv("QFW_RUN_TMP_PATH", raising=False)
+    monkeypatch.setenv("QFW_RUN_BASE_DIR", str(run_base))
+    return run_base, run_dir
+
+
+def test_teardown_keeps_runtime_state_until_cleanup_succeeds(
+        tmp_path, monkeypatch, capsys):
+    run_base, run_dir = _write_application_runtime(tmp_path, monkeypatch)
+
+    def still_running(_run_dir):
+        raise RuntimeError("mpi-smoke pid 1941 did not stop")
+
+    monkeypatch.setattr(commands.qfw_service_plane, "stop", still_running)
+
+    assert commands.qfw_teardown([]) == 1
+
+    stderr = capsys.readouterr().err
+    assert "qpm:mpi-smoke: mpi-smoke pid 1941 did not stop" in stderr
+    assert f"qfw-teardown --run-dir {shlex.quote(str(run_dir))}" in stderr
+    assert (run_dir / "state" / "runtime-state.json").exists()
+    assert (run_base / "current").read_text(encoding="utf-8") == "runtime-1\n"
+
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "stop", lambda _run_dir: None)
+
+    assert commands.qfw_teardown([]) == 0
+
+    assert not run_dir.exists()
+    assert not (run_base / "current").exists()
+
+
+def test_teardown_keep_run_dir_clears_marker_after_cleanup(
+        tmp_path, monkeypatch):
+    run_base, run_dir = _write_application_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "stop", lambda _run_dir: None)
+
+    assert commands.qfw_teardown(["--keep-run-dir"]) == 0
+
+    assert run_dir.exists()
+    assert not (run_base / "current").exists()
 
 
 def test_private_process_launcher_uses_defw_python_wrapper(

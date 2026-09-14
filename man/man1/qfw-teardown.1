@@ -13,6 +13,12 @@ stops recorded application-owned QPM managers in reverse order, stops the
 application-owned directory manager, clears the current-run marker, and removes
 the application run directory.
 .PP
+If any application-owned component fails to stop,
+.B qfw-teardown
+reports each failure, keeps the current-run marker and the run directory, and
+prints the command that retries the teardown. The kept state records the
+processes that still need to be stopped.
+.PP
 Site-owned directory services, DVMs, and QPMs are outside this ownership
 boundary and are never stopped by application teardown.
 .SH OPTIONS

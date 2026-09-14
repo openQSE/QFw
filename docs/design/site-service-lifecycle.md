@@ -46,7 +46,9 @@ lifecycle commands above.
 allocation, generated endpoints, setup state, and owned manager run
 directories. `qfw-status` reads this file and composes current manager health.
 `qfw-teardown` stops managers in reverse order, clears the current-run marker,
-and removes the application directory unless `--keep-run-dir` is specified.
+and removes the application directory unless `--keep-run-dir` is specified. If
+a manager fails to stop, teardown keeps both the marker and the directory, so
+the state that names the leftover processes survives for a retry.
 
 ## Site Directory-Service Run Directory
 
