@@ -181,6 +181,11 @@ install(DIRECTORY backends/qfw_qiskit
 	FILES_MATCHING
 		PATTERN "*.py"
 		PATTERN "__pycache__" EXCLUDE)
+install(DIRECTORY backends/qfw_telemetry
+	DESTINATION "${QFW_PYTHON_INSTALL_DIR}"
+	FILES_MATCHING
+		PATTERN "*.py"
+		PATTERN "__pycache__" EXCLUDE)
 install(DIRECTORY services/
 	DESTINATION "${CMAKE_INSTALL_LIBDIR}/qfw/services"
 	FILES_MATCHING
