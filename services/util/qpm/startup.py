@@ -27,6 +27,7 @@ REGISTRATION_MONITOR_THREAD_ATTR = "_qfw_dirsvc_registration_monitor_thread"
 REGISTRATION_RETRY_SECONDS = 1
 _site_registration_lock = threading.RLock()
 
+
 def startup_timeout():
 	try:
 		return int(os.environ.get(STARTUP_TIMEOUT_ENV, DEFAULT_STARTUP_TIMEOUT))
@@ -316,8 +317,10 @@ def _install_defw_peer_lifecycle_hook(defw_module):
 	listener = getattr(defw_module, REGISTRATION_LISTENER_ATTR, None)
 	if listener is not None:
 		return True
-	listener = lambda event: _handle_defw_peer_lifecycle_event(
-		defw_module, event)
+
+	def listener(event):
+		_handle_defw_peer_lifecycle_event(defw_module, event)
+
 	try:
 		add_listener(listener)
 	except Exception:

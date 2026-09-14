@@ -19,6 +19,7 @@ def _add_repo_paths():
 		REPO_ROOT / "services",
 		REPO_ROOT / "service-apis",
 		REPO_ROOT / "DEFw" / "python" / "infra",
+		REPO_ROOT / "examples" / "tests",
 	]
 	for path in paths:
 		path_str = str(path)
