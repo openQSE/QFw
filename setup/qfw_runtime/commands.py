@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -191,13 +192,22 @@ def qfw_teardown(argv):
 
     state = qfw_config.read_state(args.run_dir)
     errors = _cleanup_application_service_managers(state)
+    if errors:
+        # Keep the current-run marker and the run directory. They hold the
+        # manager state and logs for whatever failed to stop, and a retry
+        # needs them.
+        for error in errors:
+            print(error, file=sys.stderr)
+        print(
+            "qfw-teardown: cleanup is incomplete, so the runtime state was "
+            f"kept in {state['run_dir']}. Retry with: qfw-teardown --run-dir "
+            f"{shlex.quote(state['run_dir'])}",
+            file=sys.stderr,
+        )
+        return 1
     qfw_config.clear_current_run(state)
     if not args.keep_run_dir:
         shutil.rmtree(state["run_dir"], ignore_errors=True)
-    if errors:
-        for error in errors:
-            print(error, file=sys.stderr)
-        return 1
     return 0
 
 

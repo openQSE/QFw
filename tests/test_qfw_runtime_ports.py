@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import shlex
+import socket
 import sys
 import types
 
@@ -401,6 +403,127 @@ def test_cleanup_application_service_managers_uses_reverse_order(
         "/run/qpm/nwqsim",
         "/run/directory",
     ]
+
+
+def _write_application_runtime(tmp_path, monkeypatch):
+    run_base = tmp_path / "runs"
+    run_dir = run_base / "runtime-1"
+    (run_dir / "state").mkdir(parents=True)
+    state = {
+        "run_id": "runtime-1",
+        "run_dir": str(run_dir),
+        "run_base_dir": str(run_base),
+        "service_managers": [{
+            "owner": "application",
+            "role": "qpm",
+            "service_id": "mpi-smoke",
+            "run_dir": str(run_dir / "service-plane" / "qpm"),
+        }],
+    }
+    (run_dir / "state" / "runtime-state.json").write_text(
+        json.dumps(state), encoding="utf-8")
+    qfw_config.write_current_run(run_base, "runtime-1")
+    monkeypatch.delenv("QFW_RUN_TMP_PATH", raising=False)
+    monkeypatch.setenv("QFW_RUN_BASE_DIR", str(run_base))
+    return run_base, run_dir
+
+
+def test_teardown_keeps_runtime_state_until_cleanup_succeeds(
+        tmp_path, monkeypatch, capsys):
+    run_base, run_dir = _write_application_runtime(tmp_path, monkeypatch)
+
+    def still_running(_run_dir):
+        raise RuntimeError("mpi-smoke pid 1941 did not stop")
+
+    monkeypatch.setattr(commands.qfw_service_plane, "stop", still_running)
+
+    assert commands.qfw_teardown([]) == 1
+
+    stderr = capsys.readouterr().err
+    assert "qpm:mpi-smoke: mpi-smoke pid 1941 did not stop" in stderr
+    assert f"qfw-teardown --run-dir {shlex.quote(str(run_dir))}" in stderr
+    assert (run_dir / "state" / "runtime-state.json").exists()
+    assert (run_base / "current").read_text(encoding="utf-8") == "runtime-1\n"
+
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "stop", lambda _run_dir: None)
+
+    assert commands.qfw_teardown([]) == 0
+
+    assert not run_dir.exists()
+    assert not (run_base / "current").exists()
+
+
+def test_teardown_keep_run_dir_clears_marker_after_cleanup(
+        tmp_path, monkeypatch):
+    run_base, run_dir = _write_application_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "stop", lambda _run_dir: None)
+
+    assert commands.qfw_teardown(["--keep-run-dir"]) == 0
+
+    assert run_dir.exists()
+    assert not (run_base / "current").exists()
+
+
+@pytest.mark.parametrize(
+    "variable, label",
+    [("DEFW_LISTEN_PORT", "listen"), ("DEFW_TELNET_PORT", "telnet")],
+)
+def test_private_process_launcher_refuses_a_port_already_in_use(
+        tmp_path, monkeypatch, variable, label):
+    started = []
+    monkeypatch.setattr(
+        process_launcher,
+        "_command_path",
+        lambda name, env=None: Path("/usr/bin/defw-python"),
+    )
+    monkeypatch.setattr(
+        process_launcher.subprocess,
+        "Popen",
+        lambda argv, **kwargs: started.append(argv),
+    )
+    pid_file = tmp_path / "svc.pid"
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as leftover:
+        leftover.bind(("", 0))
+        leftover.listen(1)
+        port = leftover.getsockname()[1]
+
+        with pytest.raises(RuntimeError) as error:
+            process_launcher._start_defw_owned_process(
+                "mpi-smoke",
+                {"DEFW_LOG_DIR": str(tmp_path / "logs"), variable: str(port)},
+                pid_file,
+                tmp_path / "svc-ready.json",
+                5,
+                True,
+                False,
+                {"role": "service"},
+                lambda: True,
+            )
+
+    assert f"{label} port {port} is already in use" in str(error.value)
+    assert started == []
+    assert not pid_file.exists()
+
+
+def test_private_process_launcher_port_probe_ignores_time_wait():
+    # Set SO_REUSEADDR on the listener, as DEFw does on its own, so the
+    # closed connection leaves the port in TIME_WAIT the way a stopped
+    # service does.
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    accepted, _address = listener.accept()
+    accepted.close()
+    client.close()
+    listener.close()
+
+    assert process_launcher._tcp_port_free(port)
 
 
 def test_private_process_launcher_uses_defw_python_wrapper(
