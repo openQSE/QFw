@@ -18,3 +18,7 @@
 	path = external/qhw-scheduler
 	url = git@github.com:openQSE/qhw-scheduler.git
 	branch = main
+[submodule "external/qhw-ibm"]
+	path = external/qhw-ibm
+	url = https://github.com/cclaudio/qhw-ibm.git
+	branch = main
