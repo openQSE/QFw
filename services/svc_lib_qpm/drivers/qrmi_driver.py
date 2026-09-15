@@ -79,7 +79,6 @@ import time
 # QRMI names each IBM service's variables after the service, so the resource
 # type selects the family: {backend}_QRMI_IBM_<kind>_ENDPOINT and friends.
 IBM_RESOURCE_ENV_KINDS = {
-	"IBMQiskitRuntimeService": "QRS",
 	"IBMQuantumComputeService": "QCS",
 	"IBMQuantumSystem": "QS",
 }
@@ -92,8 +91,7 @@ IBM_DEFAULT_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
 
 PROVIDER_RESOURCE_TYPES = {
 	"iqm": ("IQMServer",),
-	"ibm": ("IBMQiskitRuntimeService", "IBMQuantumComputeService",
-		"IBMQuantumSystem"),
+	"ibm": ("IBMQuantumComputeService", "IBMQuantumSystem"),
 	"pasqal": ("PasqalCloud", "PasqalLocal"),
 	"alicebob": ("AliceBobFelis",),
 }
@@ -505,17 +503,42 @@ class QrmiDriver(BaseDriver):
 	def _device_id(self):
 		return self._descriptor.get("id", "iqm-device")
 
-	# --- introspection facet: reuse qhw-iqm on QRMI's raw IQM data ------
+	def _provider(self):
+		return str(self._descriptor.get("provider") or "iqm").lower()
+
+	# --- introspection facet: reuse qhw-iqm / qhw-ibm on QRMI's raw data -
 
 	def get_device_info(self):
+		provider = self._provider()
+		if provider == "ibm":
+			# IBM target() is {"configuration": {...}, "properties": {...}};
+			# the device normalizer reads the configuration sub-dict.
+			from qhw_ibm import normalize_device
+			return normalize_device(
+				self._target().get("configuration") or {},
+				device_id=self._device_id())
 		from qhw_iqm import normalize_device
 		return normalize_device(self._arch_raw(), device_id=self._device_id())
 
 	def get_coupling_graph(self, calibration_set_id=None):
+		provider = self._provider()
+		if provider == "ibm":
+			from qhw_ibm import normalize_coupling
+			return normalize_coupling(
+				self._target().get("configuration") or {},
+				device_id=self._device_id())
 		from qhw_iqm import normalize_coupling
 		return normalize_coupling(self._arch_raw(), device_id=self._device_id())
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
+		provider = self._provider()
+		if provider == "ibm":
+			# The calibration normalizer reads the properties sub-dict
+			# (qubits, gates, last_update_date).
+			from qhw_ibm import normalize_calibration
+			return normalize_calibration(
+				self._target().get("properties") or {},
+				device_id=self._device_id())
 		# target() carries the IQM calibration_set + quality_metrics; feed them
 		# (with the dynamic architecture) to qhw-iqm — the same normalizer the
 		# native svc_iqm_qpm path uses — to build a qhw-calibration-v1 record.
@@ -559,15 +582,14 @@ class QrmiDriver(BaseDriver):
 					self._arch_raw(), device_id=self._device_id()),
 		}
 
-	# --- execution: OpenQASM -> IQM JSON -> QRMI task lifecycle ----------
+	# --- execution: OpenQASM -> QRMI task lifecycle ----------------------
 
 	def run_circuit(self, circuit):
-		# Canonical form is OpenQASM (circuit.info["qasm"]). Transcode it to an
-		# IQM circuit with the shared util, submit through QRMI's task lifecycle,
-		# poll to completion, and normalize the counts to qhw-result-v1 (the same
-		# normalizer the native svc_iqm_qpm path uses). QRMI-for-IQM has no
-		# acquire/release, so there is no reservation step.
-		qrmi = self._resource()
+		# Dispatch to the provider-specific execution path. Both paths share the
+		# same task lifecycle (task_start → _poll_task → task_result) and only
+		# differ in how the circuit is encoded into a payload and how the raw
+		# result is normalized to qhw-result-v1.
+		provider = self._provider()
 		info = getattr(circuit, "info", None) or {}
 		credential = getattr(circuit, "provider_credential", None)
 		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
@@ -576,10 +598,22 @@ class QrmiDriver(BaseDriver):
 			raise DEFwExecutionError(
 				"QRMI run_circuit requires OpenQASM in circuit info['qasm']")
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
-		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
-		use_timeslot = bool(info.get("use_timeslot", False))
 		timeout = float(info.get("timeout", 300.0))
 		poll = float(info.get("poll_interval", 1.0))
+
+		if provider == "ibm":
+			return self._run_ibm_circuit(
+				circuit, cid, qasm, shots, timeout, poll, credential)
+		return self._run_iqm_circuit(
+			circuit, cid, qasm, shots, timeout, poll, credential, info)
+
+	def _run_iqm_circuit(self, circuit, cid, qasm, shots, timeout, poll,
+			credential, info):
+		# OpenQASM -> IQM JSON -> Payload.IQMServer -> task lifecycle.
+		# QRMI-for-IQM has no acquire/release, so there is no reservation step.
+		qrmi = self._resource()
+		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
+		use_timeslot = bool(info.get("use_timeslot", False))
 
 		target = self._target(credential=credential)
 		dynamic = target.get("dynamic_quantum_architecture") or {}
@@ -640,6 +674,61 @@ class QrmiDriver(BaseDriver):
 			"id": str(job_id), "status": "completed", "cid": cid,
 			"timing": timing, "shots": shots,
 			"measurements": result_json.get("measurements")}
+		return record
+
+	def _run_ibm_circuit(self, circuit, cid, qasm, shots, timeout, poll,
+			credential):
+		# OpenQASM -> Payload.QiskitPrimitive(sampler) -> task lifecycle.
+		# IBM QRMI uses the Qiskit Sampler V2 primitive wire format: the input
+		# is a JSON object with a "pubs" list where each pub is a
+		# (qasm3_str, param_values, shots) tuple. The result is a Qiskit
+		# Result.to_dict() shaped payload normalized with qhw_ibm.
+		qrmi = self._resource()
+		input_json = json.dumps({
+			"pubs": [(qasm, None, shots)],
+			"shots": shots,
+			"version": 2,
+			"support_qiskit": True,
+		})
+		# TODO: program_id should be provided by the user somehow.
+		# QRMI will use the program_id to determine what QiskitPrimitive
+		# (Sampler, Estimator, NoiseLearner) should be used to wrap the input.
+		payload = qrmi.Payload.QiskitPrimitive(
+			input=input_json, program_id="sampler")
+
+		timing = {}
+		start = time.monotonic()
+		try:
+			job_id = self._qpu(credential=credential).task_start(payload)
+		except Exception as exc:
+			raise self._qrmi_error(exc, "QRMI task_start failed") from exc
+		timing["submit_seconds"] = time.monotonic() - start
+
+		status = self._poll_task(job_id, timeout, poll, credential=credential)
+		timing["wait_seconds"] = (
+			time.monotonic() - start - timing["submit_seconds"])
+		if status != "completed":
+			self._last_job = {
+				"id": str(job_id), "status": status, "cid": cid,
+				"timing": timing, "shots": shots}
+			raise DEFwExecutionError(
+				f"QRMI job {job_id} finished with status {status!r}")
+
+		result_started = time.monotonic()
+		try:
+			result_json = json.loads(
+				self._qpu(credential=credential).task_result(job_id).value)
+		except Exception as exc:
+			raise self._qrmi_error(exc, "QRMI task_result failed") from exc
+		timing["result_fetch_seconds"] = time.monotonic() - result_started
+		timing["total_wall_seconds"] = time.monotonic() - start
+
+		from qhw_ibm import normalize_result
+		record = normalize_result(result_json, device_id=self._device_id())
+
+		self._last_job = {
+			"id": str(job_id), "status": "completed", "cid": cid,
+			"timing": timing, "shots": shots}
 		return record
 
 	def _build_iqmjson(self, iqm_circuit, shots, calibration_set_id):
