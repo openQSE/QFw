@@ -49,6 +49,38 @@ when a site integrates another credential source.
 .TP
 .B aliases
 Optional alternate names that may resolve to this device.
+.TP
+.B resource-type
+QRMI resource type to open for the device, such as
+.B IQMServer
+or
+.BR IBMQiskitRuntimeService .
+Optional when the provider serves only one resource type. An
+.B ibm
+device must set it, because IBM serves
+.BR IBMQiskitRuntimeService ,
+.BR IBMQuantumComputeService ,
+and
+.BR IBMQuantumSystem .
+.TP
+.B service-crn
+IBM Cloud service instance CRN for an
+.B ibm
+device. QRMI requires one for every IBM resource type. The instance belongs to
+the device, so all of its users share it, while each user's API key still comes
+from the credential provider. Quote the value, since a CRN ends in colons that
+YAML would otherwise misread.
+.B QFW_IBM_SERVICE_CRN
+overrides it when set in the QPM's environment.
+.TP
+.B iam-endpoint
+IBM Cloud IAM endpoint that exchanges an API key for a token, for an
+.B ibm
+device. Optional. The default,
+.BR https://iam.cloud.ibm.com ,
+serves public IBM Cloud.
+.B QFW_IBM_IAM_ENDPOINT
+overrides it when set in the QPM's environment.
 .SH CREDENTIAL PROVIDERS
 The optional
 .B credential-providers
@@ -69,8 +101,9 @@ A plugin provider uses
 and may select a class with
 .BR class .
 .SH SECURITY
-The device-access file contains device endpoints and credential-provider
-references. A referenced file credential database contains provider secrets
+The device-access file contains device endpoints, credential-provider
+references, and IBM service instance CRNs. A referenced file credential
+database contains provider secrets
 and must be readable only by the QPM service account. Keep both files outside
 client-readable runtime directories.
 .SH EXAMPLE
@@ -80,6 +113,13 @@ qpus:
     provider: iqm
     provider-device-id: default
     url: https://provider.example/
+    credential-db: qpu-users.json
+  ibm-qpu:
+    provider: ibm
+    provider-device-id: ibm_torino
+    resource-type: IBMQiskitRuntimeService
+    url: https://quantum.cloud.ibm.com/api/v1
+    service-crn: "crn:v1:bluemix:public:quantum-computing:us-east:a/ACCT:INST::"
     credential-db: qpu-users.json
 .EE
 .SH SEE ALSO

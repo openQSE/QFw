@@ -342,11 +342,13 @@ class QrmiDriver(BaseDriver):
 		# already set is kept, since an operator or a SPANK plugin may have set it.
 		#
 		# The endpoint and API key come from device-access config, the same
-		# source the IQM path uses. The service CRN and the IAM endpoint have
-		# no field in that config (#59 blocker 3), so they come from the
-		# environment, mirroring how _access falls back to QFW_QC_URL and
-		# QFW_API_KEY. That makes them process-wide rather than per-device,
-		# which is a real limitation and the reason blocker 3 still matters.
+		# source the IQM path uses. The service CRN and the IAM endpoint belong
+		# to the device, so they come from its service-crn and iam-endpoint
+		# keys, which reach this driver through the descriptor. A site service
+		# needs that, since nothing a user or a job exports reaches it.
+		# QFW_IBM_SERVICE_CRN and QFW_IBM_IAM_ENDPOINT still win when set, the
+		# way _access prefers QFW_QC_URL and QFW_API_KEY, so a job-local
+		# service can point at another instance.
 		backend = alias.split(",")[0]
 		prefix = f"{backend}_QRMI_IBM_{kind}"
 		endpoint_var = f"{prefix}_ENDPOINT"
@@ -381,12 +383,16 @@ class QrmiDriver(BaseDriver):
 
 		if not os.environ.get(iam_endpoint_var):
 			iam_endpoint = (os.environ.get("QFW_IBM_IAM_ENDPOINT")
+				or self._descriptor.get("iam_endpoint")
+				or self._descriptor.get("iam-endpoint")
 				or IBM_DEFAULT_IAM_ENDPOINT)
-			os.environ[iam_endpoint_var] = iam_endpoint
+			os.environ[iam_endpoint_var] = str(iam_endpoint)
 
-		crn = os.environ.get("QFW_IBM_SERVICE_CRN")
+		crn = (os.environ.get("QFW_IBM_SERVICE_CRN")
+			or self._descriptor.get("service_crn")
+			or self._descriptor.get("service-crn"))
 		if crn and not os.environ.get(crn_var):
-			os.environ[crn_var] = crn
+			os.environ[crn_var] = str(crn)
 
 		# Object storage applies only to IBMQuantumSystem, which stages results
 		# through a bucket. No config field carries these either, and the other
@@ -410,12 +416,11 @@ class QrmiDriver(BaseDriver):
 			if not os.environ.get(name)]
 		if missing:
 			raise DEFwExecutionError(
-				"QRMI IBM access needs " + " and ".join(missing) +
-				"; the endpoint and API key come from device-access config or "
-				"QFW_QC_URL/QFW_API_KEY, and the service CRN from "
-				"QFW_IBM_SERVICE_CRN (no device-access field carries a CRN "
-				"yet, see openQSE/QFw#59). Inside a reservation the SPANK "
-				"plugin normally supplies all of these")
+				"QRMI IBM access needs " + " and ".join(missing) + ". The "
+				"endpoint and API key come from device-access config or "
+				"QFW_QC_URL/QFW_API_KEY. The service CRN comes from the "
+				"device's service-crn key in device-access config, or from "
+				"QFW_IBM_SERVICE_CRN")
 
 	def _qpu(self, credential=None):
 		# Lazy: open the QRMI QuantumResource this descriptor names. QRMI reads

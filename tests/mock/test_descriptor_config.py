@@ -44,8 +44,22 @@ BARE_DEVICE = {
 	"credential-db": "creds.json",
 }
 
+# An IBM device carries its service instance and IAM endpoint in device-access
+# config (#59 blocker 3), since a site service has no other way to get them.
+IBM_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/acct:inst::"
+IBM_DEVICE = {
+	"provider": "ibm",
+	"provider-device-id": "ibm_torino",
+	"url": "https://quantum.cloud.ibm.com/api/v1",
+	"credential-db": "creds.json",
+	"resource-type": "IBMQiskitRuntimeService",
+	"service-crn": IBM_CRN,
+	"iam-endpoint": "https://iam.test.cloud.ibm.com",
+}
+
 DESCRIPTOR_KEYS = (
-	"libraries", "preference", "caps", "execution_owner")
+	"libraries", "preference", "caps", "execution_owner",
+	"service-crn", "iam-endpoint")
 
 
 def _config(device, device_id="dev"):
@@ -130,6 +144,14 @@ def test_select_qpu_accepts_named_provider_without_credential_file(
 	assert "credential_db" not in selected
 
 
+def test_select_qpu_passes_through_the_ibm_instance_fields(monkeypatch):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	selected = device_access.select_qpu(
+		_config(IBM_DEVICE), "cfg.yaml", provider="ibm")
+	assert selected["service-crn"] == IBM_CRN
+	assert selected["iam-endpoint"] == "https://iam.test.cloud.ibm.com"
+
+
 @pytest.mark.parametrize("key", [
 	"provider_device_id",
 	"quantum-computer",
@@ -212,3 +234,21 @@ def test_resolve_descriptor_defaults_when_unconfigured(monkeypatch):
 	assert resolved["preference"] == descriptor.DEFAULT_PREFERENCE
 	assert resolved["execution_owner"] == descriptor.DEFAULT_EXECUTION_OWNER
 	assert resolved["caps"] == descriptor.DEFAULT_CAPS
+	assert resolved["service_crn"] is None
+	assert resolved["iam_endpoint"] is None
+
+
+def test_resolve_descriptor_carries_the_ibm_instance_fields(monkeypatch):
+	descriptor = _load_descriptor()
+	monkeypatch.setattr(
+		device_access, "device_access_config_path", lambda: "cfg.yaml")
+	monkeypatch.setattr(
+		device_access, "load_yaml_config",
+		lambda path: _config(IBM_DEVICE))
+	monkeypatch.setenv(device_access.QPU_DEVICE_ENV, "dev")
+
+	resolved = descriptor.resolve_descriptor()
+	assert resolved["provider"] == "ibm"
+	assert resolved["resource_type"] == "IBMQiskitRuntimeService"
+	assert resolved["service_crn"] == IBM_CRN
+	assert resolved["iam_endpoint"] == "https://iam.test.cloud.ibm.com"
