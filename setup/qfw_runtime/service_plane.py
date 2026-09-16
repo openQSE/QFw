@@ -913,7 +913,10 @@ def _recorded_instance_active(state):
             continue
         if _component_ready(component, state):
             return True
-        if _component_process_status(component, state) == "alive":
+        # "unknown" means the probe did not answer, so the recorded component
+        # may still be running. Treating it as gone would let a new run take
+        # over the directory holding the only record of it.
+        if _component_process_status(component, state) in {"alive", "unknown"}:
             return True
     return False
 
@@ -949,13 +952,15 @@ def _stop_components(state):
             if component["role"] == "prte-dvm":
                 _stop_prte(
                     component, state, _stopped_service_environment(state))
-            elif (
-                not state.get("dry_run")
-                and _component_process_status(component, state) == "alive"
-            ):
-                _terminate_pid(
-                    int(component["pid"]), component.get("node"),
-                    state["allocation"])
+            elif not state.get("dry_run"):
+                # A probe that cannot answer fails the stop. Marking the
+                # component stopped here is what let a teardown which never
+                # reached the node report success and then discard the state
+                # naming a process that is still running.
+                if _verified_component_status(component, state) == "alive":
+                    _terminate_pid(
+                        int(component["pid"]), component.get("node"),
+                        state["allocation"])
             _discard_component_control_files(component)
             component["ready"] = False
             component["state"] = "stopped"
@@ -983,24 +988,26 @@ def _stop_prte(component, state, environment=None):
     if state.get("dry_run"):
         _discard_component_control_files(component)
         return
-    live = _component_process_status(component, state) == "alive"
+    # Both probes run before anything is discarded, so a DVM whose liveness
+    # could not be established keeps its uri and pid files for the retry.
+    live = _verified_component_status(component, state) == "alive"
+    if live and uri_path.exists():
+        environment = environment or os.environ.copy()
+        command = [
+            _command_path("pterm", env=environment),
+            "--dvm", f"file:{uri_path}",
+        ]
+        try:
+            _run_on_node(component.get("node"), command, environment,
+                         state["allocation"])
+        except ServicePlaneError:
+            pass
+    running = live and _verified_component_status(component, state) == "alive"
     try:
-        if live:
-            if uri_path.exists():
-                environment = environment or os.environ.copy()
-                command = [
-                    _command_path("pterm", env=environment),
-                    "--dvm", f"file:{uri_path}",
-                ]
-                try:
-                    _run_on_node(component.get("node"), command, environment,
-                                 state["allocation"])
-                except ServicePlaneError:
-                    pass
-            if _component_process_status(component, state) == "alive":
-                _terminate_pid(
-                    int(component["pid"]), component.get("node"),
-                    state["allocation"])
+        if running:
+            _terminate_pid(
+                int(component["pid"]), component.get("node"),
+                state["allocation"])
     finally:
         _discard_component_control_files(component)
 
@@ -1028,6 +1035,28 @@ def _require_process_identity(pid, node, allocation):
 
 
 def _component_process_status(component, state):
+    """Return a component's liveness for reporting.
+
+    A probe that could not answer reads as "unknown" rather than dead, since
+    the process may well still be running.
+    """
+    try:
+        return _verified_component_status(component, state)
+    except ServicePlaneError:
+        return "unknown"
+
+
+def _verified_component_status(component, state):
+    """Return a component's liveness, or raise when the probe cannot tell.
+
+    Stopping a component uses this instead of `_component_process_status`.
+    Reading an unanswered probe as a dead process is what let a teardown
+    which never reached the node mark the component stopped, report success,
+    and then discard the state naming the process it never stopped.
+
+    Raises:
+        ServicePlaneError: the probe did not answer.
+    """
     pid = component.get("pid")
     expected = component.get("process_identity")
     if pid is None or not expected:
@@ -1042,8 +1071,19 @@ def _component_process_status(component, state):
 
 
 def _read_process_identity(pid, node, allocation):
+    """Return the identity of *pid*, or None when it is confirmed gone.
+
+    Raises:
+        ServicePlaneError: the probe could not answer, which is a different
+            outcome from the process being gone. Under `slurm` and
+            `heterogeneous` the probe runs through `srun`, so an unreachable
+            node lands here rather than looking like a dead process.
+    """
     if allocation.get("mode") not in {"slurm", "heterogeneous"}:
-        return qfw_process_state.local_process_identity(pid)
+        try:
+            return qfw_process_state.local_process_identity(pid)
+        except qfw_process_state.ProcessProbeError as exc:
+            raise ServicePlaneError(_unknown_liveness(pid, node, exc)) from exc
     launch = _node_launch(
         node,
         [sys.executable or "python3", "-m", "qfw_runtime.process_state",
@@ -1058,11 +1098,27 @@ def _read_process_identity(pid, node, allocation):
         text=True,
     )
     if result.returncode:
-        return None
+        # Includes a process_state too old to answer "gone" as JSON, which
+        # exited non-zero for it. Reporting that loudly is the safe direction.
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        reason = f"probe exited {result.returncode}"
+        if detail:
+            reason = f"{reason}: {detail[-1]}"
+        raise ServicePlaneError(_unknown_liveness(pid, node, reason))
     try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
+        observed = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ServicePlaneError(
+            _unknown_liveness(pid, node, "unreadable probe output")) from exc
+    if isinstance(observed, dict) and observed.get("alive") is False:
         return None
+    return observed
+
+
+def _unknown_liveness(pid, node, reason):
+    return (
+        f"cannot determine whether process {pid} on {node or 'localhost'} "
+        f"is still running: {reason}")
 
 
 def _terminate_pid(pid, node, allocation):
