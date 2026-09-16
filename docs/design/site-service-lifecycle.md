@@ -48,7 +48,10 @@ directories. `qfw-status` reads this file and composes current manager health.
 `qfw-teardown` stops managers in reverse order, clears the current-run marker,
 and removes the application directory unless `--keep-run-dir` is specified. If
 a manager fails to stop, teardown keeps both the marker and the directory, so
-the state that names the leftover processes survives for a retry.
+the state that names the leftover processes survives for a retry. A manager
+that cannot determine whether its component is still running counts as a
+failure to stop for the same reason, so an unreachable node never leads to the
+record being discarded.
 
 ## Site Directory-Service Run Directory
 

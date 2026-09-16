@@ -1059,3 +1059,229 @@ def test_foreground_run_stops_on_sigterm(tmp_path):
     assert process.returncode == 0, (stdout, stderr)
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["state"] == "stopped"
+
+
+def unreachable_probe(pid, node, _allocation):
+    raise service_plane.ServicePlaneError(
+        f"cannot determine whether process {pid} on {node} is still running: "
+        "probe exited 1: srun: error: Unable to contact node")
+
+
+def completed_probe(returncode, stdout="", stderr=""):
+    def run(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            ["srun"], returncode, stdout=stdout, stderr=stderr)
+    return run
+
+
+def test_failed_remote_probe_is_not_read_as_a_dead_process(monkeypatch):
+    monkeypatch.setattr(
+        service_plane, "_node_launch",
+        lambda node, command, _allocation: ["srun", "-w", node, *command])
+    monkeypatch.setattr(
+        service_plane.subprocess, "run",
+        completed_probe(1, stderr="srun: error: Unable to contact node c1\n"))
+
+    with pytest.raises(service_plane.ServicePlaneError) as failure:
+        service_plane._read_process_identity(
+            7501, "c1", {"mode": "slurm"})
+
+    assert "cannot determine whether process 7501 on c1" in str(failure.value)
+    assert "Unable to contact node c1" in str(failure.value)
+
+
+def test_unreadable_remote_probe_output_is_not_a_dead_process(monkeypatch):
+    monkeypatch.setattr(
+        service_plane, "_node_launch",
+        lambda node, command, _allocation: ["srun", "-w", node, *command])
+    monkeypatch.setattr(
+        service_plane.subprocess, "run",
+        completed_probe(0, stdout="slurmstepd: task 0 exited\n"))
+
+    with pytest.raises(service_plane.ServicePlaneError):
+        service_plane._read_process_identity(7502, "c1", {"mode": "slurm"})
+
+
+def test_remote_probe_reports_a_process_that_is_gone(monkeypatch):
+    monkeypatch.setattr(
+        service_plane, "_node_launch",
+        lambda node, command, _allocation: ["srun", "-w", node, *command])
+    monkeypatch.setattr(
+        service_plane.subprocess, "run",
+        completed_probe(0, stdout='{"alive": false}\n'))
+
+    assert service_plane._read_process_identity(
+        7503, "c1", {"mode": "slurm"}) is None
+
+
+def test_failed_local_probe_is_not_read_as_a_dead_process(monkeypatch):
+    def unreadable(_pid):
+        raise process_state.ProcessProbeError(
+            "cannot read /proc/7504/stat: [Errno 13] Permission denied")
+
+    monkeypatch.setattr(
+        service_plane.qfw_process_state, "local_process_identity", unreadable)
+
+    with pytest.raises(service_plane.ServicePlaneError) as failure:
+        service_plane._read_process_identity(7504, None, {"mode": "local"})
+
+    assert "Permission denied" in str(failure.value)
+
+
+def test_unverified_component_fails_the_stop(tmp_path, monkeypatch):
+    pid_file = tmp_path / "pid"
+    ready_file = tmp_path / "ready.json"
+    for path in (pid_file, ready_file):
+        path.write_text("retained\n", encoding="utf-8")
+    component = {
+        "role": "qpm",
+        "state": "ready",
+        "pid": 7601,
+        "node": "c1",
+        "process_identity": process_identity(7601),
+        "pid_file": str(pid_file),
+        "ready_file": str(ready_file),
+    }
+    state = {
+        "dry_run": False,
+        "allocation": {"mode": "slurm"},
+        "configuration": {"components": {"directory": False}},
+        "components": {"qpm:test": component},
+    }
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", unreachable_probe)
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *_args: pytest.fail("an unverified process must not be killed"))
+
+    errors = service_plane._stop_components(state)
+
+    assert len(errors) == 1
+    assert "cannot determine whether process 7601 on c1" in errors[0]
+    assert component["state"] == "error"
+    assert "stopped_at_ns" not in component
+    assert pid_file.exists()
+    assert ready_file.exists()
+
+
+def test_unreachable_node_fails_the_stop(tmp_path, monkeypatch):
+    pid_file = tmp_path / "pid"
+    pid_file.write_text("8001\n", encoding="utf-8")
+    component = {
+        "role": "qpm",
+        "state": "ready",
+        "pid": 8001,
+        "node": "c1",
+        "process_identity": process_identity(8001),
+        "pid_file": str(pid_file),
+    }
+    state = {
+        "dry_run": False,
+        "allocation": {"mode": "slurm"},
+        "configuration": {"components": {"directory": False}},
+        "components": {"qpm:test": component},
+    }
+    monkeypatch.setattr(
+        service_plane, "_node_launch",
+        lambda node, command, _allocation: ["srun", "-w", node, *command])
+    monkeypatch.setattr(
+        service_plane.subprocess, "run",
+        completed_probe(1, stderr="srun: error: Unable to contact node c1\n"))
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *_args: pytest.fail("an unverified process must not be killed"))
+
+    errors = service_plane._stop_components(state)
+
+    assert len(errors) == 1
+    assert component["state"] == "error"
+    assert pid_file.exists()
+
+
+def test_unverified_dvm_keeps_its_control_files(tmp_path, monkeypatch):
+    uri_path = tmp_path / "dvm-uri"
+    pid_file = tmp_path / "pid"
+    uri_path.write_text("test-dvm-uri\n", encoding="utf-8")
+    pid_file.write_text("7701\n", encoding="utf-8")
+    component = {
+        "role": "prte-dvm",
+        "state": "ready",
+        "pid": 7701,
+        "node": "c1",
+        "process_identity": process_identity(7701),
+        "uri_path": str(uri_path),
+        "pid_file": str(pid_file),
+    }
+    state = {
+        "dry_run": False,
+        "services": [],
+        "allocation": {"mode": "slurm"},
+        "configuration": {"components": {"directory": False}},
+        "components": {"prte-dvm": component},
+    }
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", unreachable_probe)
+    monkeypatch.setattr(
+        service_plane, "_run_on_node",
+        lambda *_args, **_kwargs: pytest.fail("pterm must not run"))
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *_args: pytest.fail("an unverified process must not be killed"))
+
+    errors = service_plane._stop_components(state)
+
+    assert len(errors) == 1
+    assert component["state"] == "error"
+    assert uri_path.exists()
+    assert pid_file.exists()
+
+
+def test_unverified_component_still_counts_as_active(tmp_path, monkeypatch):
+    component = {
+        "role": "qpm",
+        "state": "ready",
+        "pid": 7801,
+        "node": "c1",
+        "process_identity": process_identity(7801),
+        "ready_file": str(tmp_path / "ready.json"),
+    }
+    state = {
+        "dry_run": False,
+        "allocation": {"mode": "slurm"},
+        "components": {"qpm:test": component},
+    }
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", unreachable_probe)
+
+    assert service_plane._component_process_status(
+        component, state) == "unknown"
+    assert service_plane._component_ready(component, state) is False
+    assert service_plane._recorded_instance_active(state) is True
+    assert service_plane._observed_component_state(
+        component, state, ready=False) == "stale"
+    assert component["liveness"] == "unknown"
+
+
+def test_process_state_answers_alive_and_gone_on_stdout(capsys):
+    assert process_state.main([str(os.getpid())]) == 0
+    identity = json.loads(capsys.readouterr().out)
+    assert identity["pid"] == os.getpid()
+
+    finished = subprocess.Popen([sys.executable, "-c", ""])
+    finished.wait()
+
+    assert process_state.main([str(finished.pid)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"alive": False}
+
+
+def test_process_state_reports_a_failed_probe_on_stderr(monkeypatch, capsys):
+    def unreadable(_pid):
+        raise process_state.ProcessProbeError(
+            "cannot read /proc/7901/stat: [Errno 13] Permission denied")
+
+    monkeypatch.setattr(process_state, "local_process_identity", unreadable)
+
+    assert process_state.main(["7901"]) == process_state.PROBE_FAILED_EXIT
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Permission denied" in captured.err
