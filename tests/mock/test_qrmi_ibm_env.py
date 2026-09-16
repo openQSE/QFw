@@ -4,9 +4,10 @@
 # variable family. Before this the driver populated only the IQM pair, so an
 # IBM resource could be selected but never opened from configuration.
 #
-# The CRN and IAM endpoint have no device-access field yet (blocker 3), so they
-# come from the environment. That is process-wide rather than per-device, which
-# these tests pin down so the limitation is visible rather than implied.
+# The CRN and IAM endpoint belong to the device (blocker 3). They come from its
+# service-crn and iam-endpoint keys in device-access config, which reach the
+# driver through the descriptor, and QFW_IBM_SERVICE_CRN and
+# QFW_IBM_IAM_ENDPOINT override them when set.
 
 import pathlib
 import sys
@@ -113,13 +114,15 @@ def test_iam_endpoint_is_overridable(monkeypatch):
 
 
 def test_missing_crn_names_what_to_set():
-	# The CRN is the one required value with no config source, so the error
-	# has to say where it comes from.
+	# The CRN is the one required value with no default, so the error has to
+	# say where it comes from, and a site service can only use the config key.
 	with pytest.raises(DEFwExecutionError) as excinfo:
 		_driver()._ensure_ibm_env("QRS", "ibm_torino")
 	message = str(excinfo.value)
 	assert "ibm_torino_QRMI_IBM_QRS_SERVICE_CRN" in message
+	assert "service-crn" in message
 	assert "QFW_IBM_SERVICE_CRN" in message
+	assert "SPANK" not in message
 
 
 def test_unresolvable_device_access_still_reports_what_is_missing(monkeypatch):
@@ -210,7 +213,7 @@ def test_credential_replaces_an_earlier_reservations_key(monkeypatch):
 
 
 def test_credential_replaces_only_the_endpoint_and_key(monkeypatch):
-	# The CRN and IAM endpoint have no per-credential source (blocker 3), so
+	# The CRN and IAM endpoint belong to the device, not the reservation, so
 	# values already set for them are kept.
 	import os
 	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:from-env")
@@ -291,6 +294,106 @@ def test_each_reservation_opens_its_resource_with_its_own_key(monkeypatch):
 	driver._qpu(credential={"user": "bob"})
 
 	assert opened == ["alice-key", "bob-key"]
+
+
+# --- the device's service instance ------------------------------------------
+#
+# A site service is started by the site's service manager, so nothing a user
+# or a job exports reaches it. Its CRN has to come from device-access config.
+
+def test_crn_and_iam_endpoint_come_from_the_device():
+	import os
+	driver = _driver(
+		service_crn="crn:from-device",
+		iam_endpoint="https://iam.device.example")
+
+	driver._ensure_ibm_env("QRS", "ibm_torino")
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == \
+		"crn:from-device"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT"] == \
+		"https://iam.device.example"
+
+
+def test_device_without_an_iam_endpoint_uses_the_public_one():
+	import os
+	_driver(service_crn="crn:from-device")._ensure_ibm_env(
+		"QRS", "ibm_torino")
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT"] == \
+		qd.IBM_DEFAULT_IAM_ENDPOINT
+
+
+def test_environment_overrides_the_device(monkeypatch):
+	# The same precedence _access gives QFW_QC_URL and QFW_API_KEY over the
+	# device's url and key, so a job-local service can use another instance.
+	import os
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:from-env")
+	monkeypatch.setenv("QFW_IBM_IAM_ENDPOINT", "https://iam.env.example")
+	driver = _driver(
+		service_crn="crn:from-device",
+		iam_endpoint="https://iam.device.example")
+
+	driver._ensure_ibm_env("QRS", "ibm_torino")
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:from-env"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT"] == \
+		"https://iam.env.example"
+
+
+def test_device_crn_holds_across_reservations():
+	# Each reservation's credential replaces the endpoint and key, and the
+	# device's CRN serves all of them.
+	import os
+	driver = _driver_resolving_by_user(service_crn="crn:from-device")
+
+	driver._ensure_ibm_env("QRS", "ibm_torino", credential={"user": "alice"})
+	driver._ensure_ibm_env("QRS", "ibm_torino", credential={"user": "bob"})
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == \
+		"crn:from-device"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"] == "bob-key"
+
+
+def test_site_service_opens_the_resource_with_the_configured_crn(
+		monkeypatch, tmp_path):
+	# Blocker 3 end to end, with nothing in the environment. The CRN written
+	# in device-access config has to be in place when QRMI opens the resource.
+	# A real CRN ends in colons, so the file quotes it as YAML requires.
+	import os
+	from svc_lib_qpm.descriptor import resolve_descriptor
+	crn = "crn:v1:bluemix:public:quantum-computing:us-east:a/acct:inst::"
+	config = tmp_path / "device-access.yaml"
+	config.write_text(
+		"qpus:\n"
+		"  ibm-torino:\n"
+		"    provider: ibm\n"
+		"    provider-device-id: ibm_torino\n"
+		"    resource-type: IBMQiskitRuntimeService\n"
+		"    url: https://quantum.cloud.ibm.com/api/v1\n"
+		"    credential-db: qpu-users.json\n"
+		f"    service-crn: \"{crn}\"\n",
+		encoding="utf-8")
+	monkeypatch.setenv("QFW_DEVICE_ACCESS_CFG", str(config))
+	monkeypatch.setenv("QFW_QPU_DEVICE_ID", "ibm-torino")
+	driver = QrmiDriver(resolve_descriptor())
+	driver._access = lambda credential=None: {
+		"base_url": "https://quantum.cloud.ibm.com/api/v1", "token": "tok"}
+	opened = []
+
+	class _Qrmi:
+		class ResourceType:
+			IBMQiskitRuntimeService = "IBMQiskitRuntimeService"
+
+		@staticmethod
+		def QuantumResource(alias, resource_type):
+			opened.append(
+				(alias, os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"]))
+			return object()
+
+	driver._qrmi = _Qrmi
+	driver._qpu()
+
+	assert opened == [("ibm_torino", crn)]
 
 
 # --- routing ---------------------------------------------------------------

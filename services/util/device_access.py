@@ -239,7 +239,7 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 	# `device.get(key, DEFAULT)` fallbacks. The native resolve_device_access
 	# path ignores these keys, so forwarding them here is harmless.
 	for key in ("libraries", "preference", "caps", "resource-type",
-			"resource_type"):
+			"resource_type", "service-crn", "iam-endpoint"):
 		if key in device:
 			selected[key] = device[key]
 	if "execution-owner" in device:

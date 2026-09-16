@@ -69,4 +69,10 @@ def resolve_descriptor(device_id=None):
 		# exactly one resolves without it. See drivers/qrmi_driver.py.
 		"resource_type": (device.get("resource-type")
 			or device.get("resource_type")),
+		# The IBM service instance and IAM endpoint, which QRMI's IBM resource
+		# types read when they open. They belong to the device, and a site
+		# service has no other way to receive them. Other providers ignore
+		# both. See _ensure_ibm_env in drivers/qrmi_driver.py.
+		"service_crn": device.get("service-crn"),
+		"iam_endpoint": device.get("iam-endpoint"),
 	}
