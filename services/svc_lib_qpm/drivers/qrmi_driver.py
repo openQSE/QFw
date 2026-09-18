@@ -206,8 +206,11 @@ class QrmiDriver(BaseDriver):
 		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
 		# env vars the native svc_iqm_qpm uses, then fall back to the shared
 		# device-access config (util.device_access). Mirrors QdmiDriver._access.
+		# The IBM service CRN is returned too, from the credential or the user's
+		# credential DB entry, when either names one. See _ensure_ibm_env.
 		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", "iqm")
+		service_crn = credential.get("service_crn")
 		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
 		token = (
 			credential.get("api_key") or
@@ -234,6 +237,7 @@ class QrmiDriver(BaseDriver):
 					f"configure device access: {exc}") from exc
 			base_url = base_url or cfg.get("url")
 			token = token or cfg.get("api_key")
+			service_crn = service_crn or cfg.get("service_crn")
 			provider_device_id = (
 				provider_device_id
 				or cfg.get("provider_device_id")
@@ -248,6 +252,7 @@ class QrmiDriver(BaseDriver):
 			"token": token,
 			"provider_device_id": provider_device_id,
 			"quantum_computer": provider_device_id,
+			"service_crn": service_crn,
 		}
 
 	def _ensure_iqm_isa_env(self, alias, credential=None):
@@ -342,13 +347,18 @@ class QrmiDriver(BaseDriver):
 		# already set is kept, since an operator or a SPANK plugin may have set it.
 		#
 		# The endpoint and API key come from device-access config, the same
-		# source the IQM path uses. The service CRN and the IAM endpoint belong
-		# to the device, so they come from its service-crn and iam-endpoint
-		# keys, which reach this driver through the descriptor. A site service
-		# needs that, since nothing a user or a job exports reaches it.
-		# QFW_IBM_SERVICE_CRN and QFW_IBM_IAM_ENDPOINT still win when set, the
-		# way _access prefers QFW_QC_URL and QFW_API_KEY, so a job-local
-		# service can point at another instance.
+		# source the IQM path uses. The IAM endpoint belongs to the device, so
+		# it comes from the device's iam-endpoint key through the descriptor,
+		# and QFW_IBM_IAM_ENDPOINT still wins when set.
+		#
+		# The service CRN names the IBM instance a job runs under. An instance
+		# can serve several devices and many users, and a user can be assigned
+		# to several instances. So the CRN comes from, in order: the
+		# reservation's credential, QFW_IBM_SERVICE_CRN, the user's credential
+		# DB entry, and the device's service-crn key as the default. That is
+		# the order _access uses for the endpoint and key. A site service
+		# relies on the config sources, since nothing a user or a job exports
+		# reaches it.
 		backend = alias.split(",")[0]
 		prefix = f"{backend}_QRMI_IBM_{kind}"
 		endpoint_var = f"{prefix}_ENDPOINT"
@@ -356,6 +366,7 @@ class QrmiDriver(BaseDriver):
 		apikey_var = f"{prefix}_IAM_APIKEY"
 		crn_var = f"{prefix}_SERVICE_CRN"
 
+		access = {}
 		if credential:
 			# No fallback on this path. A credential that cannot be resolved has
 			# to fail rather than leave another reservation's endpoint or key in
@@ -388,10 +399,21 @@ class QrmiDriver(BaseDriver):
 				or IBM_DEFAULT_IAM_ENDPOINT)
 			os.environ[iam_endpoint_var] = str(iam_endpoint)
 
-		crn = (os.environ.get("QFW_IBM_SERVICE_CRN")
+		crn = (dict(credential or {}).get("service_crn")
+			or os.environ.get("QFW_IBM_SERVICE_CRN")
+			or access.get("service_crn")
 			or self._descriptor.get("service_crn")
 			or self._descriptor.get("service-crn"))
-		if crn and not os.environ.get(crn_var):
+		if credential:
+			# Set for every reservation and cleared when nothing supplies one,
+			# like the endpoint and key. A CRN can belong to the user, so
+			# keeping the value already set would run this reservation under
+			# the previous user's instance.
+			if crn:
+				os.environ[crn_var] = str(crn)
+			else:
+				os.environ.pop(crn_var, None)
+		elif crn and not os.environ.get(crn_var):
 			os.environ[crn_var] = str(crn)
 
 		# Object storage applies only to IBMQuantumSystem, which stages results
@@ -419,7 +441,8 @@ class QrmiDriver(BaseDriver):
 				"QRMI IBM access needs " + " and ".join(missing) + ". The "
 				"endpoint and API key come from device-access config or "
 				"QFW_QC_URL/QFW_API_KEY. The service CRN comes from the "
-				"device's service-crn key in device-access config, or from "
+				"user's service_crn entry in the credential DB, the device's "
+				"service-crn key in device-access config, or "
 				"QFW_IBM_SERVICE_CRN")
 
 	def _qpu(self, credential=None):
@@ -462,6 +485,7 @@ class QrmiDriver(BaseDriver):
 			credential.get("device_id"),
 			credential.get("user"),
 			credential.get("api_key") or credential.get("token"),
+			credential.get("service_crn"),
 		)
 
 	def _target(self, credential=None):

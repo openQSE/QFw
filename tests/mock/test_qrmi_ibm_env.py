@@ -4,10 +4,11 @@
 # variable family. Before this the driver populated only the IQM pair, so an
 # IBM resource could be selected but never opened from configuration.
 #
-# The CRN and IAM endpoint belong to the device (blocker 3). They come from its
-# service-crn and iam-endpoint keys in device-access config, which reach the
-# driver through the descriptor, and QFW_IBM_SERVICE_CRN and
-# QFW_IBM_IAM_ENDPOINT override them when set.
+# The IAM endpoint belongs to the device, and comes from its iam-endpoint key
+# unless QFW_IBM_IAM_ENDPOINT is set. The CRN names an IBM instance, which can
+# serve several devices and many users (blocker 3 and its follow-up). It comes
+# from the reservation's credential, QFW_IBM_SERVICE_CRN, the user's
+# credential DB entry, or the device's service-crn key, in that order.
 
 import pathlib
 import sys
@@ -212,9 +213,11 @@ def test_credential_replaces_an_earlier_reservations_key(monkeypatch):
 	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"] == "bob-key"
 
 
-def test_credential_replaces_only_the_endpoint_and_key(monkeypatch):
-	# The CRN and IAM endpoint belong to the device, not the reservation, so
-	# values already set for them are kept.
+def test_credential_replaces_the_endpoint_key_and_crn(monkeypatch):
+	# With a credential, the endpoint, key and CRN are all set for that
+	# reservation, whatever was set before. The CRN can belong to the user, so
+	# it is no longer kept. Only the IAM endpoint, which belongs to the device,
+	# keeps a value already set.
 	import os
 	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:from-env")
 	monkeypatch.setenv("ibm_torino_QRMI_IBM_QRS_ENDPOINT", "https://preset")
@@ -228,7 +231,7 @@ def test_credential_replaces_only_the_endpoint_and_key(monkeypatch):
 	assert os.environ["ibm_torino_QRMI_IBM_QRS_ENDPOINT"] == \
 		"https://alice.example.org"
 	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"] == "alice-key"
-	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:preset"
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:from-env"
 	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT"] == "https://iam"
 
 
@@ -394,6 +397,157 @@ def test_site_service_opens_the_resource_with_the_configured_crn(
 	driver._qpu()
 
 	assert opened == [("ibm_torino", crn)]
+
+
+# --- a user's service instance ----------------------------------------------
+#
+# An IBM instance is shared by its users rather than tied to one device, and
+# a user can be assigned to several instances. A user's credential DB entry
+# can therefore name the one to run under, which reaches the driver in the
+# reservation's credential. The device's service-crn is the default.
+
+def test_each_reservation_runs_under_its_own_instance():
+	import os
+	driver = _driver_resolving_by_user(service_crn="crn:device")
+
+	driver._ensure_ibm_env(
+		"QRS", "ibm_torino",
+		credential={"user": "alice", "service_crn": "crn:alice"})
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:alice"
+
+	driver._ensure_ibm_env(
+		"QRS", "ibm_torino",
+		credential={"user": "bob", "service_crn": "crn:bob"})
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:bob"
+
+
+def test_reservation_without_its_own_instance_uses_the_device_default():
+	# Not the previous reservation's instance, which is what keeping the value
+	# already set would have given.
+	import os
+	driver = _driver_resolving_by_user(service_crn="crn:device")
+
+	driver._ensure_ibm_env(
+		"QRS", "ibm_torino",
+		credential={"user": "alice", "service_crn": "crn:alice"})
+	driver._ensure_ibm_env("QRS", "ibm_torino", credential={"user": "bob"})
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:device"
+
+
+def test_reservation_with_no_instance_fails_rather_than_inherit_one():
+	import os
+	driver = _driver_resolving_by_user()
+
+	driver._ensure_ibm_env(
+		"QRS", "ibm_torino",
+		credential={"user": "alice", "service_crn": "crn:alice"})
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		driver._ensure_ibm_env(
+			"QRS", "ibm_torino", credential={"user": "bob"})
+
+	assert "ibm_torino_QRMI_IBM_QRS_SERVICE_CRN" in str(excinfo.value)
+	assert "ibm_torino_QRMI_IBM_QRS_SERVICE_CRN" not in os.environ
+
+
+def test_credential_instance_outranks_the_environment_and_the_device(
+		monkeypatch):
+	import os
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:from-env")
+	driver = _driver_resolving_by_user(service_crn="crn:device")
+
+	driver._ensure_ibm_env(
+		"QRS", "ibm_torino",
+		credential={"user": "alice", "service_crn": "crn:alice"})
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:alice"
+
+
+def test_without_a_credential_the_users_entry_names_the_instance():
+	# Introspection outside a reservation resolves the service's own user
+	# through device access, and that user's entry can carry a CRN.
+	import os
+	access = {"base_url": "https://example.org", "token": "tok",
+		"service_crn": "crn:user"}
+
+	_driver(access=access, service_crn="crn:device")._ensure_ibm_env(
+		"QRS", "ibm_torino")
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:user"
+
+
+def test_environment_outranks_the_users_entry_without_a_credential(
+		monkeypatch):
+	# The same order _access gives QFW_API_KEY over the key found through
+	# device access.
+	import os
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:from-env")
+	access = {"base_url": "https://example.org", "token": "tok",
+		"service_crn": "crn:user"}
+
+	_driver(access=access, service_crn="crn:device")._ensure_ibm_env(
+		"QRS", "ibm_torino")
+
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == "crn:from-env"
+
+
+def test_each_instance_opens_its_own_resource():
+	# The same user and key under two instances are two resources. QRMI reads
+	# the CRN when it opens one, so a resource cached for the first instance
+	# must not be handed out for the second.
+	import os
+	driver = _driver_resolving_by_user(
+		provider_device_id="ibm_torino",
+		resource_type="IBMQiskitRuntimeService")
+	opened = []
+
+	class _Qrmi:
+		class ResourceType:
+			IBMQiskitRuntimeService = "IBMQiskitRuntimeService"
+
+		@staticmethod
+		def QuantumResource(alias, resource_type):
+			opened.append(os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"])
+			return object()
+
+	driver._qrmi = _Qrmi
+	driver._qpu(credential={"user": "alice", "service_crn": "crn:project-a"})
+	driver._qpu(credential={"user": "alice", "service_crn": "crn:project-b"})
+
+	assert opened == ["crn:project-a", "crn:project-b"]
+
+
+def test_file_credential_provider_carries_the_users_instance(tmp_path):
+	# From the credential DB to the environment QRMI reads, with the driver's
+	# own device-access resolution. The bound secret carries the user's CRN,
+	# and the driver sets it for that reservation over the device default.
+	import json
+	import os
+	import util.qpm.credentials as qpm_credentials
+	crn = "crn:v1:bluemix:public:quantum-computing:us-east:a/acct:alice::"
+	database = tmp_path / "qpu-users.json"
+	database.write_text(json.dumps({"users": {"alice": {
+		"enabled": True,
+		"devices": {"ibm-torino": {
+			"enabled": True, "api_key": "alice-key", "service_crn": crn}},
+	}}}), encoding="utf-8")
+	device = {
+		"device_id": "ibm-torino",
+		"provider_device_id": "ibm_torino",
+		"provider": "ibm",
+		"url": "https://quantum.cloud.ibm.com/api/v1",
+		"credential_db": str(database),
+	}
+	provider = qpm_credentials.FileCredentialProvider(
+		str(tmp_path / "device-access.yaml"), device)
+
+	secret = provider.bind({"user": "alice"}).secret
+	assert secret["service_crn"] == crn
+
+	QrmiDriver({"provider": "ibm", "service_crn": "crn:device"}) \
+		._ensure_ibm_env("QRS", "ibm_torino", credential=secret)
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == crn
+	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"] == "alice-key"
 
 
 # --- routing ---------------------------------------------------------------

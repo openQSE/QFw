@@ -317,7 +317,9 @@ def _credential_hint_user(credential_hint):
 		or credential_hint.get("record"))
 
 
-def get_api_key_from_user_record(record, device_id, provider_device_id=None):
+def _entitled_device_record(record, device_id, provider_device_id=None):
+	# The user's entry for this device, only when both the user and the
+	# device entitlement are enabled. Every per-user device value comes from it.
 	if not isinstance(record, dict):
 		return None
 	if record.get("enabled") is not True:
@@ -332,9 +334,27 @@ def get_api_key_from_user_record(record, device_id, provider_device_id=None):
 			if isinstance(device_record, dict):
 				if device_record.get("enabled") is not True:
 					return None
-				value = device_record.get("api_key")
-				return str(value).strip() if value else None
+				return device_record
 	return None
+
+
+def get_api_key_from_user_record(record, device_id, provider_device_id=None):
+	device_record = _entitled_device_record(
+		record, device_id, provider_device_id) or {}
+	value = device_record.get("api_key")
+	return str(value).strip() if value else None
+
+
+def get_service_crn_from_user_record(
+		record, device_id, provider_device_id=None):
+	# Optional, for IBM devices. An IBM instance is shared by its users rather
+	# than tied to one device, and a user can be assigned to several
+	# instances, so a user's entry can name the one to run under. Without one,
+	# the device's service-crn in device-access config applies.
+	device_record = _entitled_device_record(
+		record, device_id, provider_device_id) or {}
+	value = device_record.get("service_crn")
+	return str(value).strip() if value else None
 
 
 def resolve_qpu_credentials(device, user=None, credential_hint=None,
@@ -359,6 +379,8 @@ def resolve_qpu_credentials(device, user=None, credential_hint=None,
 	return {
 		"user": user,
 		"api_key": api_key,
+		"service_crn": get_service_crn_from_user_record(
+			record, device["device_id"], device.get("provider_device_id")),
 	}
 
 
@@ -382,4 +404,5 @@ def resolve_device_access(provider=None, device_id=None, user=None,
 		"api_key": credentials["api_key"],
 		"user": credentials["user"],
 		"quantum_computer": device["provider_device_id"],
+		"service_crn": credentials.get("service_crn"),
 	}

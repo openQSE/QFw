@@ -998,8 +998,10 @@ Its JSON input file can be written as:
 {
   "users": {
     "alice": {
+      "enabled": true,
       "devices": {
         "ornl-iqm-20q": {
+          "enabled": true,
           "api_key": "iqm-token-reference-or-secret"
         }
       }
@@ -1007,6 +1009,11 @@ Its JSON input file can be written as:
   }
 }
 ```
+
+Both `enabled` flags are required. An entry for an IBM device can also set
+`service_crn`, the instance that user runs under. A user can be assigned to
+several instances, so the entry names one. It takes precedence over the
+device's `service-crn` in the device-access file.
 
 **Status:** draft
 
