@@ -89,8 +89,8 @@ class FileCredentialProvider(CredentialProvider):
 		self._select_credential(request)
 
 	def bind(self, request):
-		record_key, api_key, credential_db_path = self._select_credential(
-			request)
+		record_key, api_key, service_crn, credential_db_path = (
+			self._select_credential(request))
 		now_ns = time.time_ns()
 		expires_at_ns = self._expires_at_ns(now_ns)
 		metadata = {
@@ -119,6 +119,7 @@ class FileCredentialProvider(CredentialProvider):
 		secret = {
 			"api_key": api_key,
 			"token": api_key,
+			"service_crn": service_crn,
 			"url": self.device.get("url"),
 			"device_id": self.device.get("device_id"),
 			"provider": self.device.get("provider"),
@@ -149,7 +150,13 @@ class FileCredentialProvider(CredentialProvider):
 			raise QPMCredentialBindingMissing(
 				"file credential provider did not return an API key for "
 				f"user={record_key!r} device={self.device.get('device_id')!r}")
-		return record_key, api_key, credential_db_path
+		# Optional, for IBM: the instance this user's key belongs to. Without
+		# one, the device's service-crn from device-access config applies.
+		service_crn = device_access.get_service_crn_from_user_record(
+			user_record,
+			self.device.get("device_id"),
+			self.device.get("provider_device_id"))
+		return record_key, api_key, service_crn, credential_db_path
 
 	def _credential_db_path(self):
 		value = (
