@@ -1011,8 +1011,9 @@ Its JSON input file can be written as:
 ```
 
 Both `enabled` flags are required. An entry for an IBM device can also set
-`service_crn`, the instance that user's API key belongs to. It takes
-precedence over the device's `service-crn` in the device-access file.
+`service_crn`, the instance that user runs under. A user can be assigned to
+several instances, so the entry names one. It takes precedence over the
+device's `service-crn` in the device-access file.
 
 **Status:** draft
 

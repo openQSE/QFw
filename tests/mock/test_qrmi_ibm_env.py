@@ -402,9 +402,9 @@ def test_site_service_opens_the_resource_with_the_configured_crn(
 # --- a user's service instance ----------------------------------------------
 #
 # An IBM instance is shared by its users rather than tied to one device, and
-# each user's API key belongs to the instances that user can reach. A user's
-# credential DB entry can therefore name its own CRN, which reaches the driver
-# in the reservation's credential. The device's service-crn is the default.
+# a user can be assigned to several instances. A user's credential DB entry
+# can therefore name the one to run under, which reaches the driver in the
+# reservation's credential. The device's service-crn is the default.
 
 def test_each_reservation_runs_under_its_own_instance():
 	import os

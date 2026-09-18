@@ -67,10 +67,9 @@ and
 IBM Cloud service instance CRN for an
 .B ibm
 device. QRMI requires one for every IBM resource type. An instance can serve
-several devices and many users, and each user's API key belongs to the
-instances that user can reach. This value is the default for users whose
-credential entry does not name an instance, which a file credential database
-does with
+several devices and many users, and a user can be assigned to several
+instances. This value is the default for users whose credential entry does not
+name an instance, which a file credential database does with
 .BR service_crn .
 Quote the value, since a CRN ends in colons that YAML would otherwise misread.
 .B QFW_IBM_SERVICE_CRN

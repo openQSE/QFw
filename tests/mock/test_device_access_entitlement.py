@@ -52,8 +52,8 @@ def test_missing_or_disabled_entitlement_is_rejected(database):
 # --- a user's IBM service instance ------------------------------------------
 #
 # An IBM instance (CRN) is shared by its users rather than tied to one device,
-# and each user's API key belongs to the instances that user can reach. So a
-# user's entry can name its own, and the device's service-crn is the default.
+# and a user can be assigned to several instances. So a user's entry can name
+# the one to run under, and the device's service-crn is the default.
 
 def _database_with_instance(crn="crn:alice", **kwargs):
 	database = _database(**kwargs)

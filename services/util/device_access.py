@@ -348,9 +348,9 @@ def get_api_key_from_user_record(record, device_id, provider_device_id=None):
 def get_service_crn_from_user_record(
 		record, device_id, provider_device_id=None):
 	# Optional, for IBM devices. An IBM instance is shared by its users rather
-	# than tied to one device, and each user's API key belongs to the instances
-	# that user can reach, so a user's entry can name its own. Without one, the
-	# device's service-crn in device-access config applies.
+	# than tied to one device, and a user can be assigned to several
+	# instances, so a user's entry can name the one to run under. Without one,
+	# the device's service-crn in device-access config applies.
 	device_record = _entitled_device_record(
 		record, device_id, provider_device_id) or {}
 	value = device_record.get("service_crn")

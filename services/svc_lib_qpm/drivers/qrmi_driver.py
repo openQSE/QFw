@@ -351,14 +351,14 @@ class QrmiDriver(BaseDriver):
 		# it comes from the device's iam-endpoint key through the descriptor,
 		# and QFW_IBM_IAM_ENDPOINT still wins when set.
 		#
-		# The service CRN names the IBM instance the API key is used against.
-		# An instance can serve several devices and many users, and a user's
-		# key belongs to the instances that user can reach. So the CRN comes
-		# from, in order: the reservation's credential, QFW_IBM_SERVICE_CRN,
-		# the user's credential DB entry, and the device's service-crn key as
-		# the default. That is the order _access uses for the endpoint and key.
-		# A site service relies on the config sources, since nothing a user or
-		# a job exports reaches it.
+		# The service CRN names the IBM instance a job runs under. An instance
+		# can serve several devices and many users, and a user can be assigned
+		# to several instances. So the CRN comes from, in order: the
+		# reservation's credential, QFW_IBM_SERVICE_CRN, the user's credential
+		# DB entry, and the device's service-crn key as the default. That is
+		# the order _access uses for the endpoint and key. A site service
+		# relies on the config sources, since nothing a user or a job exports
+		# reaches it.
 		backend = alias.split(",")[0]
 		prefix = f"{backend}_QRMI_IBM_{kind}"
 		endpoint_var = f"{prefix}_ENDPOINT"

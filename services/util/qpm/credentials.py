@@ -150,8 +150,9 @@ class FileCredentialProvider(CredentialProvider):
 			raise QPMCredentialBindingMissing(
 				"file credential provider did not return an API key for "
 				f"user={record_key!r} device={self.device.get('device_id')!r}")
-		# Optional, for IBM: the instance this user's key belongs to. Without
-		# one, the device's service-crn from device-access config applies.
+		# Optional, for IBM: which of the user's instances to run under.
+		# Without one, the device's service-crn from device-access config
+		# applies.
 		service_crn = device_access.get_service_crn_from_user_record(
 			user_record,
 			self.device.get("device_id"),
