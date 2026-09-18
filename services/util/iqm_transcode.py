@@ -1,11 +1,13 @@
-# Shared OpenQASM -> IQM circuit transcode.
+# Shared circuit -> IQM circuit transcode.
 #
 # Extracted from svc_iqm_qpm/util_iqm.py so both the native IQM service and the
-# QRMI/QDMI shim (svc_lib_qpm) build IQM circuits from OpenQASM the same way.
-# build_iqm_circuit(qasm, dynamic_architecture, mapping) is the entry point: it
-# serializes via iqm.qiskit_iqm when possible and falls back to a manual
-# translation of native OpenQASM gates. dynamic_architecture is the IQM dynamic
-# quantum architecture (a dict or an iqm-client object; to_jsonable coerces it).
+# QRMI/QDMI shim (svc_lib_qpm) build IQM circuits the same way.
+# build_iqm_circuit(circuit, dynamic_architecture, mapping) is the entry point.
+# circuit is OpenQASM 2 text, or a QuantumCircuit that arrived as QPY (see
+# util.circuit_payload). It serializes via iqm.qiskit_iqm when possible and
+# falls back to a manual translation of native OpenQASM gates.
+# dynamic_architecture is the IQM dynamic quantum architecture (a dict or an
+# iqm-client object; to_jsonable coerces it).
 
 from defw_exception import DEFwExecutionError
 from dataclasses import asdict, is_dataclass
@@ -91,7 +93,12 @@ def split_qasm_statements(qasm):
 	return statements
 
 
-def load_qiskit_circuit(qasm):
+def load_qiskit_circuit(circuit):
+	# A QuantumCircuit, loaded from QPY by util.circuit_payload, is used as it
+	# is. OpenQASM 2 text is parsed.
+	if not isinstance(circuit, str):
+		return circuit
+	qasm = circuit
 	try:
 		from qiskit import QuantumCircuit
 		try:
@@ -109,7 +116,8 @@ def _iqm_backend_calibration_set_id(backend):
 	return str(calibration_set_id) if calibration_set_id is not None else None
 
 
-def transpile_qiskit_to_iqm(qasm, client, calibration_set_id=None, mapping=None):
+def transpile_qiskit_to_iqm(circuit, client, calibration_set_id=None,
+		mapping=None):
 	Circuit, _ = load_iqm_pulse_module()
 	try:
 		from iqm.qiskit_iqm import IQMBackend, transpile_to_IQM
@@ -118,7 +126,7 @@ def transpile_qiskit_to_iqm(qasm, client, calibration_set_id=None, mapping=None)
 			"iqm.qiskit_iqm is required to transpile qiskit circuits "
 			f"for IQM execution: {exc}") from exc
 
-	qiskit_circuit = load_qiskit_circuit(qasm)
+	qiskit_circuit = load_qiskit_circuit(circuit)
 	try:
 		backend = IQMBackend(client, calibration_set_id=calibration_set_id)
 		restrict_to_qubits = None
@@ -149,7 +157,7 @@ def transpile_qiskit_to_iqm(qasm, client, calibration_set_id=None, mapping=None)
 	)
 
 
-def serialize_qiskit_to_iqm(qasm, dynamic_architecture, mapping):
+def serialize_qiskit_to_iqm(circuit, dynamic_architecture, mapping):
 	Circuit, _ = load_iqm_pulse_module()
 	try:
 		from iqm.qiskit_iqm import qiskit_to_iqm
@@ -158,7 +166,7 @@ def serialize_qiskit_to_iqm(qasm, dynamic_architecture, mapping):
 			"iqm.qiskit_iqm is required to serialize qiskit circuits "
 			f"for IQM execution: {exc}") from exc
 
-	qiskit_circuit = load_qiskit_circuit(qasm)
+	qiskit_circuit = load_qiskit_circuit(circuit)
 	index_to_name = logical_to_physical_qubits(
 		qiskit_circuit, dynamic_architecture, mapping)
 	try:
@@ -301,12 +309,26 @@ def build_manual_iqm_circuit(qasm, dynamic_architecture, mapping):
 	)
 
 
-def build_iqm_circuit(qasm, dynamic_architecture, mapping,
+def openqasm2_for_manual_translation(circuit):
+	# The manual translation reads OpenQASM 2 text. A circuit that arrived as
+	# QPY is exported for it, which fails for anything OpenQASM 2 cannot hold.
+	if isinstance(circuit, str):
+		return circuit
+	try:
+		from qiskit import qasm2
+		return qasm2.dumps(circuit)
+	except Exception as exc:
+		raise DEFwExecutionError(
+			"IQM could not serialize the circuit, and it cannot be written as "
+			f"OpenQASM 2 for the manual translation either: {exc}") from exc
+
+
+def build_iqm_circuit(circuit, dynamic_architecture, mapping,
 		      client=None, calibration_set_id=None):
 	if client is not None:
 		try:
 			return transpile_qiskit_to_iqm(
-				qasm,
+				circuit,
 				client,
 				calibration_set_id=calibration_set_id,
 				mapping=mapping,
@@ -315,7 +337,9 @@ def build_iqm_circuit(qasm, dynamic_architecture, mapping,
 			logging.debug(
 				f"falling back to direct IQM QASM serialization: {exc}")
 	try:
-		return serialize_qiskit_to_iqm(qasm, dynamic_architecture, mapping)
+		return serialize_qiskit_to_iqm(circuit, dynamic_architecture, mapping)
 	except DEFwExecutionError as exc:
 		logging.debug(f"falling back to manual IQM QASM translation: {exc}")
-		return build_manual_iqm_circuit(qasm, dynamic_architecture, mapping)
+		return build_manual_iqm_circuit(
+			openqasm2_for_manual_translation(circuit),
+			dynamic_architecture, mapping)
