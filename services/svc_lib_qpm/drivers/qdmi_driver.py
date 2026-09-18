@@ -182,9 +182,10 @@ class QdmiDriver(BaseDriver):
 	# --- execution: OpenQASM -> IQM circuit -> FoMaC submit_job ----------
 
 	def run_circuit(self, circuit):
-		# Canonical form is OpenQASM (circuit.info["qasm"]). Transcode it to an
-		# IQM circuit with the shared util, then submit through QDMI's FoMaC job
-		# interface as an IQM_JSON program. Note the QRMI/QDMI difference: QDMI's
+		# The circuit arrives as QPY or OpenQASM 2 (see util.circuit_payload).
+		# Transcode it to an IQM circuit with the shared util, then submit
+		# through QDMI's FoMaC job interface as an IQM_JSON program. Note the
+		# QRMI/QDMI difference: QDMI's
 		# IQM_JSON program is a SINGLE circuit -- QDMI-on-IQM wraps it into the
 		# run request (circuits/shots/calibration_set) itself -- whereas QRMI
 		# submits the whole run request. Poll to completion and normalize the
@@ -192,10 +193,8 @@ class QdmiDriver(BaseDriver):
 		device = self._device()
 		info = getattr(circuit, "info", None) or {}
 		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
-		qasm = info.get("qasm")
-		if not qasm:
-			raise DEFwExecutionError(
-				"QDMI run_circuit requires OpenQASM in circuit info['qasm']")
+		from util.circuit_payload import qiskit_input
+		source = qiskit_input(info)
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
 		timeout = float(info.get("timeout", 300.0))
@@ -207,7 +206,7 @@ class QdmiDriver(BaseDriver):
 		from util.iqm_transcode import build_iqm_circuit
 		topo = fomac_normalize.extract_topology(device)
 		dynamic = {"qubits": topo.get("qubits") or []}
-		iqm_circuit = build_iqm_circuit(qasm, dynamic, mapping)
+		iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
 		program = self._serialize_program(iqm_circuit)
 
 		try:

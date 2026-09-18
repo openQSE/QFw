@@ -53,6 +53,7 @@ from .credentials import (
 	validate_reservation_credential,
 )
 from .reservation_sequence import PersistentReservationSequence
+from util.circuit_payload import payload_bytes
 
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -3295,9 +3296,9 @@ class QPMTargetController:
 
 	def _scheduler_task_desc(self, circuit, runtime):
 		info = circuit.info
-		payload = info.get("qasm")
-		if isinstance(payload, str):
-			payload = payload.encode("utf-8")
+		# The circuit as submitted, in whatever format it came. The scheduler
+		# keeps it as opaque bytes.
+		payload = payload_bytes(info)
 		return {
 			"task_id": runtime.qtask_id,
 			"owner_id": runtime.canonical_ids.get("owner_id", 0),
