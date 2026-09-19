@@ -626,6 +626,13 @@ class QrmiDriver(BaseDriver):
 			iqmjson=iqmjson, job_type="circuit",
 			use_timeslot=use_timeslot, tag=None)
 
+		# Set by the shim QRC when the QPM cancels this circuit. A cancel that
+		# arrives before submission starts nothing at the provider.
+		cancel_event = getattr(circuit, "cancel_event", None)
+		if cancel_event is not None and cancel_event.is_set():
+			raise DEFwExecutionError(
+				"QRMI job was cancelled before it was submitted")
+
 		timing = {}
 		start = time.monotonic()
 		try:
@@ -634,7 +641,9 @@ class QrmiDriver(BaseDriver):
 			raise self._qrmi_error(exc, "QRMI task_start failed") from exc
 		timing["submit_seconds"] = time.monotonic() - start
 
-		status = self._poll_task(job_id, timeout, poll, credential=credential)
+		status = self._poll_task(
+			job_id, timeout, poll, credential=credential,
+			cancel_event=cancel_event)
 		timing["wait_seconds"] = (
 			time.monotonic() - start - timing["submit_seconds"])
 		if status != "completed":
@@ -703,11 +712,20 @@ class QrmiDriver(BaseDriver):
 				from exc
 		return iqmjson, json.loads(iqmjson)
 
-	def _poll_task(self, job_id, timeout, poll, credential=None):
-		# Poll QRMI task_status until a terminal state; returns
-		# completed/failed/cancelled (or raises on timeout).
+	def _poll_task(self, job_id, timeout, poll, credential=None,
+			cancel_event=None):
+		# Poll QRMI task_status until a terminal state, and return
+		# completed, failed or cancelled.
+		#
+		# A cancel from the QPM (cancel_event, set by the shim QRC) or the
+		# timeout stops the provider job with task_stop, so it does not keep
+		# running after QFw has given up on it. The wait between polls ends as
+		# soon as a cancel arrives.
 		deadline = time.monotonic() + max(timeout, 0.0)
 		while True:
+			if cancel_event is not None and cancel_event.is_set():
+				self._stop_task(job_id, credential=credential)
+				return "cancelled"
 			try:
 				raw = self._qpu(credential=credential).task_status(job_id)
 			except Exception as exc:
@@ -721,10 +739,28 @@ class QrmiDriver(BaseDriver):
 			if "cancel" in state:
 				return "cancelled"
 			if time.monotonic() >= deadline:
+				stop_error = self._stop_task(job_id, credential=credential)
+				stopped = (
+					f"task_stop failed: {stop_error}" if stop_error
+					else "it was stopped")
 				raise DEFwExecutionError(
 					f"QRMI job {job_id} timed out after {timeout}s "
-					f"(last status {state!r})")
-			time.sleep(max(poll, 0.0))
+					f"(last status {state!r}), and {stopped}")
+			if cancel_event is not None:
+				cancel_event.wait(max(poll, 0.0))
+			else:
+				time.sleep(max(poll, 0.0))
+
+	def _stop_task(self, job_id, credential=None):
+		# Best effort, since the job may already have ended at the provider.
+		# Returns the error text, or None when task_stop succeeded.
+		try:
+			self._qpu(credential=credential).task_stop(job_id)
+		except Exception as exc:
+			logging.warning(
+				"shim: QRMI task_stop for job %s failed: %s", job_id, exc)
+			return str(exc)
+		return None
 
 	# --- last-job timing / metadata (from the cached run_circuit job) ----
 

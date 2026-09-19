@@ -210,6 +210,13 @@ class QdmiDriver(BaseDriver):
 		iqm_circuit = build_iqm_circuit(qasm, dynamic, mapping)
 		program = self._serialize_program(iqm_circuit)
 
+		# Set by the shim QRC when the QPM cancels this circuit. A cancel that
+		# arrives before submission starts nothing at the provider.
+		cancel_event = getattr(circuit, "cancel_event", None)
+		if cancel_event is not None and cancel_event.is_set():
+			raise DEFwExecutionError(
+				"QDMI job was cancelled before it was submitted")
+
 		try:
 			from mqt.core.qdmi import ProgramFormat
 		except Exception as exc:
@@ -225,7 +232,7 @@ class QdmiDriver(BaseDriver):
 		timing["submit_seconds"] = time.monotonic() - start
 		queue_position = self._queue_position(job)
 
-		status = self._poll_job(job, timeout, poll)
+		status = self._poll_job(job, timeout, poll, cancel_event=cancel_event)
 		timing["wait_seconds"] = (
 			time.monotonic() - start - timing["submit_seconds"])
 		try:
@@ -313,11 +320,19 @@ class QdmiDriver(BaseDriver):
 			return None
 		return int(position) if position is not None else None
 
-	def _poll_job(self, job, timeout, poll):
-		# Poll FoMaC job.check() until a terminal state; returns
-		# completed/failed/cancelled (or raises on timeout).
+	def _poll_job(self, job, timeout, poll, cancel_event=None):
+		# Poll FoMaC job.check() until a terminal state, and return
+		# completed, failed or cancelled.
+		#
+		# A cancel from the QPM (cancel_event, set by the shim QRC) or the
+		# timeout cancels the provider job, so it does not keep running after
+		# QFw has given up on it. The wait between polls ends as soon as a
+		# cancel arrives.
 		deadline = time.monotonic() + max(timeout, 0.0)
 		while True:
+			if cancel_event is not None and cancel_event.is_set():
+				self._cancel_job(job)
+				return "cancelled"
 			try:
 				state = _job_status(job.check())
 			except Exception as exc:
@@ -330,9 +345,27 @@ class QdmiDriver(BaseDriver):
 			if state in ("canceled", "cancelled"):
 				return "cancelled"
 			if time.monotonic() >= deadline:
+				cancel_error = self._cancel_job(job)
+				cancelled = (
+					f"job.cancel() failed: {cancel_error}" if cancel_error
+					else "it was cancelled")
 				raise DEFwExecutionError(
-					f"QDMI job timed out after {timeout}s (status {state!r})")
-			time.sleep(max(poll, 0.0))
+					f"QDMI job timed out after {timeout}s (status {state!r}), "
+					f"and {cancelled}")
+			if cancel_event is not None:
+				cancel_event.wait(max(poll, 0.0))
+			else:
+				time.sleep(max(poll, 0.0))
+
+	def _cancel_job(self, job):
+		# Best effort, since the job may already have ended at the provider.
+		# Returns the error text, or None when the cancel went through.
+		try:
+			job.cancel()
+		except Exception as exc:
+			logging.warning("shim: QDMI job.cancel() failed: %s", exc)
+			return str(exc)
+		return None
 
 	# --- task timing / metadata (from the cached run_circuit job) -------
 
