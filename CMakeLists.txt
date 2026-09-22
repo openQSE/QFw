@@ -84,6 +84,7 @@ endfunction()
 
 qfw_install_python_source_package(qhw_data external/qhw-data)
 qfw_install_python_source_package(qhw_iqm external/qhw-iqm)
+qfw_install_python_source_package(qhw_ibm external/qhw-ibm)
 
 qfw_add_external_cmake_package(qfw_external_qhw_admission
 	external/qhw-admission
