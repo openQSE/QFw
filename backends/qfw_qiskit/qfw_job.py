@@ -3,12 +3,13 @@ import uuid
 import time
 import select
 
-from qiskit import qasm2, QuantumCircuit
+from qiskit import QuantumCircuit
 from qiskit.providers import JobError, JobV1 as Job
 from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError
+from util.circuit_payload import encode_qiskit_circuit
 from util.qpm.statevector import (
 	decode_statevector_payload,
 	statevector_payload_size_summary,
@@ -63,17 +64,17 @@ class QFwJob(Job):
 
 	def _run_experiment_async(self, circuit):
 		self.start_time = time.time()
-		# get qasm string from experiment
-		qasm_string = qasm2.dumps(circuit)
 		# get num_qubits from experiment
 		num_qubits = circuit.num_qubits
 		# let's form the info object to give to QFw!!
 		info = {
-			"qasm": qasm_string,
 			"num_qubits": num_qubits,
 			"num_shots": self.options()["shots"],
 			"compiler": "staq",
 		}
+		# Serialize in the best format this QPM says it reads. A QPM that
+		# declares nothing gets OpenQASM 2 in info["qasm"], exactly as before.
+		info.update(encode_qiskit_circuit(circuit, self._declared_properties()))
 		qubit_mapping = get_qubit_mapping(circuit)
 		if qubit_mapping:
 			info["qubit_mapping"] = qubit_mapping
@@ -89,6 +90,11 @@ class QFwJob(Job):
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
+
+	def _declared_properties(self):
+		# What the QPM published about itself in the directory. The resolver
+		# records it on the client when it connects.
+		return getattr(self._qpm, "qpm_properties", None)
 
 	def _execution_context(self):
 		context = {

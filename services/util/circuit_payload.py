@@ -15,6 +15,11 @@
 # as control flow, unbound parameters, gates like ecr, delays and circuit
 # metadata. A QPM that reads QPY also declares "qpy_version", the newest QPY
 # format its Qiskit loads, so a client can write one the QPM can read.
+#
+# The reading half of this module runs in the QPM. The writing half runs in
+# the client: choose_circuit_format reads what the QPM declared and
+# encode_qiskit_circuit turns a Qiskit circuit into the info fields that carry
+# it. Both halves live here so the format is defined once.
 
 import base64
 import binascii
@@ -128,3 +133,94 @@ def qiskit_circuit_formats():
 		"circuit_formats": [QPY, OPENQASM2],
 		"qpy_version": version,
 	}
+
+
+def _qpy_write_version(declared):
+	# The QPY version to write for a QPM that reads up to `declared`, or None
+	# when there is no version this client can write and that QPM can read.
+	#
+	# Qiskit writes its own newest format and back to a compatibility floor,
+	# and a reader loads any version up to its own. So the version to write is
+	# the lower of the two, and there is none when the QPM reads only formats
+	# older than this Qiskit can write.
+	try:
+		from qiskit import qpy
+		from qiskit.qpy import common
+	except Exception:
+		return None
+	try:
+		reader = int(declared)
+	except (TypeError, ValueError):
+		# A QPM that reads QPY declares which version. One that does not is
+		# not saying enough to write for, and a QPY it cannot load is worse
+		# than the OpenQASM 2 it certainly reads.
+		return None
+	version = min(int(qpy.QPY_VERSION), reader)
+	if version < int(common.QPY_COMPATIBILITY_VERSION):
+		return None
+	return version
+
+
+def choose_circuit_format(properties=None):
+	# Pick the format to send from the formats a QPM declares, preferred
+	# first. Returns (format, qpy_version), where the version is the QPY
+	# format to write and None for OpenQASM 2.
+	#
+	# A QPM that declares nothing reads OpenQASM 2, which is what every client
+	# sent before formats were declared. A declared format this client cannot
+	# write is passed over rather than refused, so a QPM can advertise a
+	# format for other clients without breaking this one.
+	properties = properties or {}
+	declared = properties.get("circuit_formats") or DEFAULT_CIRCUIT_FORMATS
+	if isinstance(declared, str):
+		declared = [declared]
+	for entry in declared:
+		fmt = str(entry).strip().lower()
+		if fmt == OPENQASM2:
+			return OPENQASM2, None
+		if fmt == QPY:
+			version = _qpy_write_version(properties.get("qpy_version"))
+			if version is not None:
+				return QPY, version
+	return OPENQASM2, None
+
+
+def dump_qpy(circuit, version=None):
+	# Serialize one circuit as QPY and return it base64 encoded.
+	try:
+		from qiskit import qpy
+	except Exception as exc:
+		raise DEFwExecutionError(
+			f"writing a QPY circuit needs qiskit: {exc}") from exc
+	buffer = io.BytesIO()
+	options = {} if version is None else {"version": int(version)}
+	try:
+		qpy.dump(circuit, buffer, **options)
+	except Exception as exc:
+		raise DEFwExecutionError(
+			f"could not write the circuit as QPY version {version}: "
+			f"{exc}") from exc
+	return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def encode_qiskit_circuit(circuit, properties=None):
+	# The circuit info fields carrying a Qiskit circuit, in the format the QPM
+	# declares. QPY travels in info["circuit"], OpenQASM 2 stays in
+	# info["qasm"], the field every QPM has always read.
+	declared = (properties or {}).get("circuit_formats")
+	fmt, version = choose_circuit_format(properties)
+	if fmt == QPY:
+		return {"circuit": {"format": QPY, "data": dump_qpy(circuit, version)}}
+	try:
+		from qiskit import qasm2
+	except Exception as exc:
+		raise DEFwExecutionError(
+			f"writing an OpenQASM 2 circuit needs qiskit: {exc}") from exc
+	try:
+		return {"qasm": qasm2.dumps(circuit)}
+	except Exception as exc:
+		reads = ", ".join(str(item) for item in (
+			declared or DEFAULT_CIRCUIT_FORMATS))
+		raise DEFwExecutionError(
+			f"this QPM reads {reads}, and the circuit cannot be written as "
+			f"OpenQASM 2: {exc}") from exc

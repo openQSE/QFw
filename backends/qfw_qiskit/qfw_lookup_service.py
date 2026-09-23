@@ -13,6 +13,19 @@ from .reservation_set import (
 )
 
 
+def _with_declared_properties(client, resolved):
+	# Keep the QPM's declared directory properties on the client, so a job can
+	# see what the service said about itself. The circuit formats it reads are
+	# the ones that matter here: QFwJob asks for them before it serializes.
+	# A client object that will not take the attribute is left alone, since a
+	# missing declaration only means the defaults.
+	try:
+		setattr(client, "qpm_properties", dict(resolved.properties or {}))
+	except Exception:
+		logging.debug("could not record QPM properties on the client")
+	return client
+
+
 def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 		 timeout=SYSTEM_UP_TIMEOUT, provider=None, service_id=None):
 	want = provider or os.environ.get(QPM_IMPL_ENV)
@@ -26,7 +39,8 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 			selected.reservation_id,
 			timeout=timeout,
 			binding_name="execution")
-		return binding.client, binding.reservation_id
+		return (_with_declared_properties(binding.client, binding.resolved),
+			binding.reservation_id)
 	request = {
 		"timeout": timeout,
 		"binding_name": "execution",
@@ -37,10 +51,11 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 		request["provider"] = want
 	resolved = resolver.resolve(**request)
 	lifecycle_binding = resolver.managed_binding(resolved)
-	return lifecycle_binding.api(
+	client = lifecycle_binding.api(
 		resolved.api_binding.binding_name,
 		expected_runtime_id=resolved.runtime_id,
-	), None
+	)
+	return _with_declared_properties(client, resolved), None
 
 
 def get_qpm(qpm_type=-1, qpm_capabilities=-1, timeout=SYSTEM_UP_TIMEOUT,
