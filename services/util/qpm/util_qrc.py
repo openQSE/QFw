@@ -10,6 +10,7 @@ import psutil
 from defw_exception import DEFwExecutionError, DEFwInProgress, DEFwOutOfResources
 import svc_launcher
 import cdefw_global
+from util.circuit_payload import openqasm2_text
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
@@ -247,7 +248,7 @@ class UTIL_QRC:
 
 		tmp_dir = cdefw_global.get_defw_tmp_dir()
 
-		qasm_c = circ.info["qasm"]
+		qasm_c = openqasm2_text(circ.info)
 		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
 		with open(qasm_file, 'w') as f:
 			f.write(qasm_c)
@@ -276,7 +277,7 @@ class UTIL_QRC:
 
 		tmp_dir = cdefw_global.get_defw_tmp_dir()
 
-		qasm_c = circ.info["qasm"]
+		qasm_c = openqasm2_text(circ.info)
 		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
 		with open(qasm_file, 'w') as f:
 			f.write(qasm_c)

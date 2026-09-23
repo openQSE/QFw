@@ -591,19 +591,18 @@ class QrmiDriver(BaseDriver):
 	# --- execution: OpenQASM -> IQM JSON -> QRMI task lifecycle ----------
 
 	def run_circuit(self, circuit):
-		# Canonical form is OpenQASM (circuit.info["qasm"]). Transcode it to an
-		# IQM circuit with the shared util, submit through QRMI's task lifecycle,
-		# poll to completion, and normalize the counts to qhw-result-v1 (the same
-		# normalizer the native svc_iqm_qpm path uses). QRMI-for-IQM has no
-		# acquire/release, so there is no reservation step.
+		# The circuit arrives in a format this QPM declares, QPY or OpenQASM 2
+		# (see util.circuit_payload). Transcode it to an IQM circuit with the
+		# shared util, submit through QRMI's task lifecycle, poll to completion,
+		# and normalize the counts to qhw-result-v1 (the same normalizer the
+		# native svc_iqm_qpm path uses). QRMI-for-IQM has no acquire/release, so
+		# there is no reservation step.
 		qrmi = self._resource()
 		info = getattr(circuit, "info", None) or {}
 		credential = getattr(circuit, "provider_credential", None)
 		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
-		qasm = info.get("qasm")
-		if not qasm:
-			raise DEFwExecutionError(
-				"QRMI run_circuit requires OpenQASM in circuit info['qasm']")
+		from util.circuit_payload import qiskit_input
+		source = qiskit_input(info)
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
 		use_timeslot = bool(info.get("use_timeslot", False))
@@ -618,7 +617,7 @@ class QrmiDriver(BaseDriver):
 			or dynamic.get("calibration_set_id"))
 
 		from util.iqm_transcode import build_iqm_circuit
-		iqm_circuit = build_iqm_circuit(qasm, dynamic, mapping)
+		iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
 		iqmjson, run_request = self._build_iqmjson(
 				iqm_circuit, shots, calibration_set_id)
 

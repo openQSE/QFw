@@ -362,8 +362,10 @@ concern.
 
 ## 12. Open decisions
 
-1. **Canonical circuit form** — OpenQASM3 vs QIR. Affects every driver's
-   transcoder.
+1. **Canonical circuit form** — replaced by declared formats rather than one
+   canonical form. Each QPM lists the circuit formats it reads, preferred
+   first, and the client sends one of them. See "Circuit formats" in Section
+   13. OpenQASM 3 and QIR can be added as further formats.
 2. **Capability discovery** — static (declared in config) vs dynamic (queried
    from the library at bind time). QDMI can self-report; QRMI metadata is more
    static. The descriptor must pick a model or absorb both.
@@ -431,8 +433,9 @@ composite / the dynamic architecture, from `target()`); they stay QRMI-only for
 now because their shape carries raw IQM architecture data QDMI's neutral model
 does not expose.
 
-Execution is implemented on QRMI: `run_circuit` takes the
-canonical **OpenQASM** form, transcodes it to an IQM circuit with the shared
+Execution is implemented on QRMI: `run_circuit` takes the circuit in a
+declared format (QPY or OpenQASM 2, see "Circuit formats" below), transcodes
+it to an IQM circuit with the shared
 `util/iqm_transcode.py` (the same transcode the native `svc_iqm_qpm` path uses),
 submits it through QRMI's task lifecycle (`Payload.IQMServer` → `task_start` →
 poll `task_status` → `task_result`), and normalizes the counts to
@@ -441,7 +444,7 @@ first cut runs without the reservation/SPANK machinery. `get_last_job_timing`
 and `get_last_job_metadata` report the cached last job.
 
 Execution is **composable** for the QRMI-vs-QDMI comparison. QDMI runs the same
-canonical OpenQASM through the same `util/iqm_transcode.py`, but submits the
+circuit through the same `util/iqm_transcode.py`, but submits the
 single transcoded circuit through FoMaC's `submit_job` with the `IQM_JSON`
 program format (QDMI-on-IQM wraps the circuit into a run request itself, where
 QRMI submits the whole run request — a genuine interface difference), polls
@@ -449,8 +452,35 @@ QRMI submits the whole run request — a genuine interface difference), polls
 `qhw-result-v1` via `fomac_normalize.to_result_record`. In the descriptor
 `run_circuit` and the job calls list `[qrmi, qdmi]`; the execution owner (QRMI)
 serves the default, and `--lib qdmi` runs the QDMI path. Still to come: the
-richer job lifecycle. The canonical-form decision (OpenQASM3 vs QIR) is recorded
-in the `openQSE/development-analysis` comparison.
+richer job lifecycle. The comparison of OpenQASM 3 and QIR as circuit forms is
+in the `openQSE/development-analysis` repository.
+
+### Circuit formats
+
+A client does not convert every circuit to one canonical form. Each QPM
+declares the formats it reads in its directory properties, and the client
+sends the circuit in one of them. `services/util/circuit_payload.py`
+implements this.
+
+| Property | Meaning |
+| --- | --- |
+| `circuit_formats` | Formats the QPM reads, preferred first. Every QPM declares at least `openqasm2`. |
+| `qpy_version` | For a QPM that reads `qpy`, the newest QPY format version its Qiskit loads. |
+
+The circuit travels in the circuit info as
+`info["circuit"] = {"format": ..., "data": ...}`. OpenQASM data is text. QPY
+data is base64 text, so the info dict stays plain data on any transport. A
+client that sends only `info["qasm"]` is read as OpenQASM 2, as before.
+
+QPY is Qiskit's own serialization, and it is lossless for Qiskit circuits.
+OpenQASM 2 cannot carry control flow, unbound parameters, gates such as `ecr`,
+delays or circuit metadata. The IQM paths read QPY into a `QuantumCircuit` and
+transcode it as before. The simulator QPMs pass OpenQASM 2 files to their
+executables, so they declare `openqasm2` only and reject any other format by
+name. The scheduler receives the submitted circuit bytes unchanged.
+
+Where transpilation happens is a separate decision that is still open. A
+circuit travels the same way whether it is abstract or already transpiled.
 
 ## 14. Strategic positioning: implementation-first to a specification
 

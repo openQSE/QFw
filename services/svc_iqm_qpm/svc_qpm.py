@@ -3,6 +3,7 @@ import os
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
+from util.circuit_payload import qiskit_circuit_formats
 
 MAX_IQM_QUBITS = int(os.environ.get("QFW_IQM_MAX_QUBITS", "20"))
 MAX_IQM_SHOTS = int(os.environ.get("QFW_IQM_MAX_SHOTS", "10000"))
@@ -35,6 +36,10 @@ class QPM(UTIL_QPM):
 		device_id = os.environ.get('QFW_QPU_DEVICE_ID')
 		if device_id:
 			properties['device_id'] = device_id
+		# Circuits are read through Qiskit, so QPY as well as OpenQASM 2,
+		# unless the service's own configuration says otherwise.
+		for key, value in qiskit_circuit_formats().items():
+			properties.setdefault(key, value)
 		info = self.query_helper(
 			QPMType.QPM_TYPE_HARDWARE,
 			QPMCapability.QPM_CAP_SUPERCONDUCTING,

@@ -832,6 +832,7 @@ class UTIL_QPM:
 	def query_helper(self, type_bits, caps_bits, svc_name, svc_desc,
 					 properties=None):
 		from api_qpm_common import QPMType, QPMCapability
+		from util.circuit_payload import DEFAULT_CIRCUIT_FORMATS
 		properties = dict(properties or {})
 		service_module = self.__class__.__module__
 		service_class = self.__class__.__name__
@@ -840,6 +841,11 @@ class UTIL_QPM:
 		service_id = _qpm_service_id(
 			svc_name, service_module, provider, properties)
 		properties.pop("selector", None)
+		# The circuit formats this QPM reads, preferred first, so a client can
+		# choose one before it submits. A QPM that reads more than OpenQASM 2
+		# declares its own. See util.circuit_payload.
+		properties.setdefault(
+			"circuit_formats", list(DEFAULT_CIRCUIT_FORMATS))
 		properties.setdefault("qpm_type", int(type_bits))
 		properties.setdefault("qpm_capabilities", int(caps_bits))
 		properties.setdefault(
