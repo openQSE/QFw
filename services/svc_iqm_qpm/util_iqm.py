@@ -4,6 +4,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from util.device_access import (
 	QPU_DEVICE_ENV, resolve_device_access, resolve_qpu_user)
+from util.circuit_payload import qiskit_input
 from util.iqm_transcode import (
 	build_iqm_circuit, to_jsonable)
 from urllib.parse import urlsplit, urlunsplit
@@ -491,7 +492,7 @@ class IQMServiceClient:
 		dynamic = self.get_dynamic_architecture(
 			calibration_set_id, credential=credential)
 		iqm_circuit = build_iqm_circuit(
-			info["qasm"],
+			qiskit_input(info),
 			dynamic,
 			mapping,
 			client=client,
