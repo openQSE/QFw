@@ -89,8 +89,11 @@ class FileCredentialProvider(CredentialProvider):
 		self._select_credential(request)
 
 	def bind(self, request):
-		record_key, api_key, service_crn, credential_db_path = (
-			self._select_credential(request))
+		selected = self._select_credential(request)
+		record_key = selected["user"]
+		api_key = selected["api_key"]
+		service_crn = selected["service_crn"]
+		credential_db_path = selected["credential_db_path"]
 		now_ns = time.time_ns()
 		expires_at_ns = self._expires_at_ns(now_ns)
 		metadata = {
@@ -127,6 +130,8 @@ class FileCredentialProvider(CredentialProvider):
 			"quantum_computer": self.device.get("provider_device_id"),
 			"user": record_key,
 		}
+		# The object storage key pair, when this user's entry carries one.
+		secret.update(selected["object_storage"])
 		return CredentialProviderResponse(
 			secret={key: value for key, value in secret.items()
 				if value not in (None, "")},
@@ -157,7 +162,19 @@ class FileCredentialProvider(CredentialProvider):
 			user_record,
 			self.device.get("device_id"),
 			self.device.get("provider_device_id"))
-		return record_key, api_key, service_crn, credential_db_path
+		# Optional, for IBM Quantum System: the key pair for the bucket it
+		# stages results through.
+		object_storage = device_access.get_object_storage_from_user_record(
+			user_record,
+			self.device.get("device_id"),
+			self.device.get("provider_device_id"))
+		return {
+			"user": record_key,
+			"api_key": api_key,
+			"service_crn": service_crn,
+			"object_storage": object_storage,
+			"credential_db_path": credential_db_path,
+		}
 
 	def _credential_db_path(self):
 		value = (

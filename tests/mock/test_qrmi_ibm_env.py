@@ -28,13 +28,14 @@ from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 
 ALL_VARS = (
 	"ENDPOINT", "IAM_ENDPOINT", "IAM_APIKEY", "SERVICE_CRN",
-	"S3_ENDPOINT", "S3_BUCKET", "S3_REGION",
+	"S3_ENDPOINT", "S3_ENDPOINT_FOR_QSAPI", "S3_BUCKET", "S3_REGION",
 	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
 )
 
 QFW_VARS = (
 	"QFW_IBM_SERVICE_CRN", "QFW_IBM_IAM_ENDPOINT",
-	"QFW_IBM_S3_ENDPOINT", "QFW_IBM_S3_BUCKET", "QFW_IBM_S3_REGION",
+	"QFW_IBM_S3_ENDPOINT", "QFW_IBM_S3_ENDPOINT_FOR_QSAPI",
+	"QFW_IBM_S3_BUCKET", "QFW_IBM_S3_REGION",
 	"QFW_IBM_AWS_ACCESS_KEY_ID", "QFW_IBM_AWS_SECRET_ACCESS_KEY",
 )
 
@@ -574,3 +575,100 @@ def test_resource_env_routes_by_type():
 	ibm_calls.clear()
 	driver._ensure_resource_env("PasqalCloud", "fresnel")
 	assert not iqm_calls and not ibm_calls
+
+
+# --- object storage from configuration, not only the environment ---------
+
+
+def _qs_var(suffix):
+	import os
+	return os.environ.get(f"ibm_torino_QRMI_IBM_QS_{suffix}")
+
+
+def test_the_store_is_described_by_the_device_entry(monkeypatch):
+	# What a site service can actually reach. Nothing a user or a job exports
+	# arrives there, so the bucket has to come from device-access config.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	driver = _driver(**{
+		"s3-endpoint": "https://store.example",
+		"s3-endpoint-for-qsapi": "https://store.internal",
+		"s3-bucket": "results",
+		"s3-region": "us-east",
+	})
+	driver._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("S3_ENDPOINT") == "https://store.example"
+	assert _qs_var("S3_ENDPOINT_FOR_QSAPI") == "https://store.internal"
+	assert _qs_var("S3_BUCKET") == "results"
+	assert _qs_var("S3_REGION") == "us-east"
+
+
+def test_the_environment_still_wins_over_the_device_entry(monkeypatch):
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("QFW_IBM_S3_BUCKET", "from-env")
+	driver = _driver(**{"s3-bucket": "from-config"})
+	driver._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("S3_BUCKET") == "from-env"
+
+
+def test_the_key_pair_comes_from_the_users_credential(monkeypatch):
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	driver = _driver(access={
+		"base_url": "https://example.org",
+		"token": "tok",
+		"aws_access_key_id": "AKIA-db",
+		"aws_secret_access_key": "secret-db",
+	})
+	driver._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("AWS_ACCESS_KEY_ID") == "AKIA-db"
+	assert _qs_var("AWS_SECRET_ACCESS_KEY") == "secret-db"
+
+
+def test_a_credential_replaces_the_previous_reservations_key_pair(
+		monkeypatch):
+	# The #65 lesson, for object storage. These variables are process-wide, so
+	# a credential that supplies nothing has to clear them rather than leave
+	# the last reservation's key in place.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QS_AWS_ACCESS_KEY_ID", "AKIA-old")
+	monkeypatch.setenv(
+		"ibm_torino_QRMI_IBM_QS_AWS_SECRET_ACCESS_KEY", "secret-old")
+
+	driver = _driver(access={"base_url": "https://example.org", "token": "t"})
+	driver._ensure_ibm_env("QS", "ibm_torino", credential={
+		"api_key": "tok",
+		"aws_access_key_id": "AKIA-new",
+		"aws_secret_access_key": "secret-new",
+	})
+	assert _qs_var("AWS_ACCESS_KEY_ID") == "AKIA-new"
+	assert _qs_var("AWS_SECRET_ACCESS_KEY") == "secret-new"
+
+	driver = _driver(access={"base_url": "https://example.org", "token": "t"})
+	driver._ensure_ibm_env("QS", "ibm_torino", credential={"api_key": "tok"})
+	assert _qs_var("AWS_ACCESS_KEY_ID") is None
+	assert _qs_var("AWS_SECRET_ACCESS_KEY") is None
+
+
+def test_the_key_pair_is_never_read_from_the_device_entry(monkeypatch):
+	# Secrets do not belong in the admin-owned YAML, so a key put there is
+	# ignored rather than quietly honoured.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	driver = _driver(**{
+		"aws-access-key-id": "AKIA-yaml",
+		"aws_secret_access_key": "secret-yaml",
+	})
+	driver._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("AWS_ACCESS_KEY_ID") is None
+	assert _qs_var("AWS_SECRET_ACCESS_KEY") is None
+
+
+def test_the_resource_cache_separates_users_by_key_pair():
+	driver = _driver()
+	first = driver._credential_cache_key({
+		"user": "alice", "api_key": "k", "aws_access_key_id": "AKIA-1"})
+	second = driver._credential_cache_key({
+		"user": "alice", "api_key": "k", "aws_access_key_id": "AKIA-2"})
+	assert first != second
