@@ -1,3 +1,7 @@
+import base64
+import sys
+import types
+
 import pytest
 
 from tests.mock.fakes import (
@@ -32,6 +36,15 @@ class FakeBackend:
 		return "test-version"
 
 
+def _stub_qasm(monkeypatch, text="OPENQASM 2.0;"):
+	# The circuit is serialized in util.circuit_payload now, which imports
+	# qiskit when it is called rather than at module import, so the stub goes
+	# on the qiskit module itself.
+	import qiskit
+
+	monkeypatch.setattr(qiskit.qasm2, "dumps", lambda circ: text)
+
+
 def _driver_options(**options):
 	return FakeSlurmDriver().execution_options(**options)
 
@@ -53,7 +66,7 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 	circuit = qfw_job.QuantumCircuit(3, name="payload-circuit")
 	options = _driver_options(shots=17, seed=5, seed_simulator=11)
 
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, fake_event_api, circuit, options)
 	job.submit()
@@ -85,7 +98,7 @@ def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 		return (readable, [], [])
 
 	monkeypatch.setattr(qfw_job.select, "select", fake_select)
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
 	job.submit()
@@ -114,7 +127,7 @@ def test_qfw_job_result_raises_when_no_results(monkeypatch):
 	circuit = qfw_job.QuantumCircuit(1, name="timeout-path")
 	options = _driver_options(shots=2, seed=1, seed_simulator=1)
 
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 	# COMPLETION_TIMEOUT_SEC == 0 makes _result_reader return immediately with no
 	# completed circuits -- a real timeout without the wall-clock wait.
 	monkeypatch.setattr(backend, "COMPLETION_TIMEOUT_SEC", 0)
@@ -144,7 +157,7 @@ def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
 		return (readable, [], [])
 
 	monkeypatch.setattr(qfw_job.select, "select", fake_select)
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
 	job.submit()
@@ -219,7 +232,7 @@ def test_qfw_job_result_raises_job_error_for_provider_failure(monkeypatch):
 
 	monkeypatch.setattr(
 		qfw_job.select, "select", lambda readable, *_: (readable, [], []))
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
 	job.submit()
@@ -271,7 +284,7 @@ def test_qfw_job_result_reports_every_failed_circuit(monkeypatch):
 
 	monkeypatch.setattr(
 		qfw_job.select, "select", lambda readable, *_: (readable, [], []))
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuits, options)
 	job.submit()
@@ -321,7 +334,7 @@ def test_qfw_job_does_not_register_per_task_completion_event(monkeypatch):
 		"token": "opaque-token",
 	}
 
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
 
@@ -338,7 +351,7 @@ def test_qfw_job_submit_propagates_async_run_errors(monkeypatch):
 	circuit = qfw_job.QuantumCircuit(1, name="error-path")
 	options = _driver_options(shots=2, seed=1, seed_simulator=1)
 
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
 
@@ -360,7 +373,7 @@ def test_qfw_job_submit_requires_driver_reservation(monkeypatch):
 	circuit = qfw_job.QuantumCircuit(1, name="unreserved")
 	options = {"shots": 2, "seed": 1, "seed_simulator": 1}
 
-	monkeypatch.setattr(qfw_job.qasm2, "dumps", lambda circ: "OPENQASM 2.0;")
+	_stub_qasm(monkeypatch)
 
 	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
 
@@ -368,3 +381,68 @@ def test_qfw_job_submit_requires_driver_reservation(monkeypatch):
 		job.submit()
 
 	assert fake_qpm.submitted_payloads == []
+
+
+def _fake_qpy(monkeypatch, dumped):
+	# A qiskit.qpy the conftest stub does not carry. The job's encoder imports
+	# it when it runs, so it only has to exist by then.
+	import qiskit
+
+	qpy = types.ModuleType("qiskit.qpy")
+	qpy.QPY_VERSION = 16
+
+	def dump(circuit, stream, version=None):
+		dumped.append((circuit.name, version))
+		stream.write(f"QPY{version}".encode("ascii"))
+
+	qpy.dump = dump
+	common = types.ModuleType("qiskit.qpy.common")
+	common.QPY_COMPATIBILITY_VERSION = 13
+	qpy.common = common
+	monkeypatch.setattr(qiskit, "qpy", qpy, raising=False)
+	monkeypatch.setitem(sys.modules, "qiskit.qpy", qpy)
+	monkeypatch.setitem(sys.modules, "qiskit.qpy.common", common)
+
+
+def test_qfw_job_sends_qpy_to_a_qpm_that_declares_it(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	dumped = []
+	_fake_qpy(monkeypatch, dumped)
+	fake_qpm = FakeQPM(cids=["cid-qpy"])
+	fake_qpm.qpm_properties = {
+		"circuit_formats": ["qpy", "openqasm2"],
+		"qpy_version": 15,
+	}
+	circuit = qfw_job.QuantumCircuit(2, name="declared")
+	job = qfw_job.QFwJob(
+		FakeBackend(), fake_qpm, FakeEventAPI(), circuit,
+		_driver_options(shots=4))
+	job.submit()
+
+	payload = fake_qpm.submitted_payloads[0]
+	# Written at the version the QPM said it reads, not this client's newest.
+	assert dumped == [("declared", 15)]
+	assert payload["circuit"] == {
+		"format": "qpy",
+		"data": base64.b64encode(b"QPY15").decode("ascii"),
+	}
+	# Nothing calls qasm2.dumps, which is the point: a circuit OpenQASM 2
+	# cannot express is no longer serialized through it.
+	assert "qasm" not in payload
+
+
+def test_qfw_job_still_sends_qasm_when_the_qpm_declares_nothing(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	_stub_qasm(monkeypatch, "OPENQASM 2.0; // declared nothing")
+	fake_qpm = FakeQPM(cids=["cid-qasm"])
+	circuit = qfw_job.QuantumCircuit(1, name="plain")
+	job = qfw_job.QFwJob(
+		FakeBackend(), fake_qpm, FakeEventAPI(), circuit,
+		_driver_options(shots=1))
+	job.submit()
+
+	payload = fake_qpm.submitted_payloads[0]
+	assert payload["qasm"] == "OPENQASM 2.0; // declared nothing"
+	assert "circuit" not in payload

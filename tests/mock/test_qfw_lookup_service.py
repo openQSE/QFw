@@ -19,7 +19,7 @@ QPM_BINDINGS = (
 
 
 def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
-			 endpoint=None):
+			 endpoint=None, properties=None):
 	bindings = [
 		{**binding, "service_module": f"svc_{provider}_qpm.svc_qpm"}
 		for binding in QPM_BINDINGS
@@ -42,6 +42,7 @@ def qpm_directory_record(service_id, fake_qpm, *, provider="iqm",
 				"provider": provider,
 				"qpm_type": int(DEFAULT_QPM_TYPE),
 				"qpm_capabilities": int(DEFAULT_QPM_CAPABILITIES),
+				**(properties or {}),
 			},
 			"api_bindings": bindings,
 		},
@@ -345,3 +346,34 @@ def test_resolver_normalizes_directory_service_records():
 	assert connector.resolved.directory_scope == "site"
 	assert connector.resolved.directory_identity == "site-dir-a"
 	assert connector.resolved.api_binding.client_class == "QPMExecution"
+
+
+def test_get_qpm_keeps_the_declared_properties_on_the_client(monkeypatch):
+	# The QPM declares the circuit formats it reads. QFwJob asks the client
+	# for them before it serializes, so the connection has to carry them.
+	import qfw_qiskit.qfw_lookup_service as lookup_service
+
+	fake_qpm = FakeQPM()
+	record = qpm_directory_record("qpm-iqm", fake_qpm, properties={
+		"circuit_formats": ["qpy", "openqasm2"],
+		"qpy_version": 16,
+	})
+	dirsvc = FakeDirectoryService([record])
+	fake_defw = BindingDefwModule([record])
+
+	monkeypatch.setattr(
+		lookup_service, "defw_get_directory_service",
+		lambda timeout=None: dirsvc)
+	monkeypatch.setattr(lookup_service, "defw", fake_defw)
+
+	result = lookup_service.get_qpm(
+		qpm_type=DEFAULT_QPM_TYPE,
+		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
+		timeout=7,
+	)
+
+	declared = getattr(result, "qpm_properties", None)
+	assert declared is not None, "the client lost the declared properties"
+	assert declared["circuit_formats"] == ["qpy", "openqasm2"]
+	assert declared["qpy_version"] == 16
+	result.lifecycle_binding.close()

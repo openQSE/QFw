@@ -24,9 +24,11 @@ def _qpy_info(data=b"QISKIT-qpy-bytes"):
 	}}
 
 
-def _fake_qiskit(monkeypatch, version=13, circuits=("loaded",), error=None):
-	# A stand-in for qiskit.qpy, so the loader and the declaration behave the
-	# same with or without a real qiskit installed.
+def _fake_qiskit(monkeypatch, version=13, circuits=("loaded",), error=None,
+		compatibility=13, dumped=None, qasm=None, qasm_error=None):
+	# A stand-in for qiskit, so the loader, the declaration and the client
+	# encoder behave the same with or without a real qiskit installed.
+	# `dumped` collects (circuit, version) for every QPY write.
 	qpy = types.ModuleType("qiskit.qpy")
 	qpy.QPY_VERSION = version
 
@@ -36,11 +38,39 @@ def _fake_qiskit(monkeypatch, version=13, circuits=("loaded",), error=None):
 		stream.read()
 		return list(circuits)
 
+	def dump(circuit, stream, version=None):
+		if dumped is not None:
+			dumped.append((circuit, version))
+		stream.write(f"QPY{version}:{circuit}".encode("ascii"))
+
 	qpy.load = load
+	qpy.dump = dump
+	common = types.ModuleType("qiskit.qpy.common")
+	common.QPY_COMPATIBILITY_VERSION = compatibility
+	qpy.common = common
+
+	qasm2 = types.ModuleType("qiskit.qasm2")
+
+	def dumps(circuit):
+		if qasm_error is not None:
+			raise qasm_error
+		return qasm if qasm is not None else f"OPENQASM 2.0; // {circuit}"
+
+	qasm2.dumps = dumps
+
 	qiskit = types.ModuleType("qiskit")
 	qiskit.qpy = qpy
+	qiskit.qasm2 = qasm2
 	monkeypatch.setitem(sys.modules, "qiskit", qiskit)
 	monkeypatch.setitem(sys.modules, "qiskit.qpy", qpy)
+	monkeypatch.setitem(sys.modules, "qiskit.qpy.common", common)
+	monkeypatch.setitem(sys.modules, "qiskit.qasm2", qasm2)
+
+
+def _no_qiskit(monkeypatch):
+	# The client has no qiskit at all, so nothing can be written as QPY.
+	for name in ("qiskit", "qiskit.qpy", "qiskit.qpy.common", "qiskit.qasm2"):
+		monkeypatch.setitem(sys.modules, name, None)
 
 
 class _Circuit:
@@ -365,3 +395,119 @@ def test_a_simulator_rejects_qpy_before_launching_anything(
 	assert launched == []
 	assert circuit.states == []
 	assert list(tmp_path.iterdir()) == []
+
+
+# --- choosing a format from what the QPM declared ------------------------
+
+
+def test_a_qpm_that_declares_nothing_is_sent_openqasm2(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16)
+	assert circuit_payload.choose_circuit_format(None) == ("openqasm2", None)
+	assert circuit_payload.choose_circuit_format({}) == ("openqasm2", None)
+
+
+def test_a_qpm_that_reads_only_openqasm2_is_sent_openqasm2(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16)
+	properties = {"circuit_formats": ["openqasm2"], "qpy_version": 16}
+	assert circuit_payload.choose_circuit_format(properties) == (
+		"openqasm2", None)
+
+
+def test_the_preferred_format_wins_over_a_later_one(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16)
+	properties = {"circuit_formats": ["openqasm2", "qpy"], "qpy_version": 16}
+	assert circuit_payload.choose_circuit_format(properties) == (
+		"openqasm2", None)
+
+
+def test_qpy_is_written_at_the_version_both_sides_can_use(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16, compatibility=13)
+	properties = {"circuit_formats": ["qpy", "openqasm2"], "qpy_version": 16}
+	assert circuit_payload.choose_circuit_format(properties) == ("qpy", 16)
+	properties["qpy_version"] = 14
+	assert circuit_payload.choose_circuit_format(properties) == ("qpy", 14)
+
+
+def test_a_qpm_reading_older_qpy_than_this_client_writes_falls_back(
+		monkeypatch):
+	# The QPM reads up to 12, this Qiskit writes no older than 13.
+	_fake_qiskit(monkeypatch, version=16, compatibility=13)
+	properties = {"circuit_formats": ["qpy", "openqasm2"], "qpy_version": 12}
+	assert circuit_payload.choose_circuit_format(properties) == (
+		"openqasm2", None)
+
+
+def test_qpy_without_a_declared_version_falls_back(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16)
+	properties = {"circuit_formats": ["qpy", "openqasm2"]}
+	assert circuit_payload.choose_circuit_format(properties) == (
+		"openqasm2", None)
+
+
+def test_a_client_without_qiskit_falls_back(monkeypatch):
+	_no_qiskit(monkeypatch)
+	properties = {"circuit_formats": ["qpy", "openqasm2"], "qpy_version": 16}
+	assert circuit_payload.choose_circuit_format(properties) == (
+		"openqasm2", None)
+
+
+def test_a_format_this_client_does_not_write_is_passed_over(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16)
+	properties = {
+		"circuit_formats": ["qir", "qpy", "openqasm2"],
+		"qpy_version": 16,
+	}
+	assert circuit_payload.choose_circuit_format(properties) == ("qpy", 16)
+
+
+def test_a_single_declared_format_may_be_a_string(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16)
+	properties = {"circuit_formats": "qpy", "qpy_version": 15}
+	assert circuit_payload.choose_circuit_format(properties) == ("qpy", 15)
+
+
+# --- encoding the circuit the client sends -------------------------------
+
+
+def test_a_qpy_reader_is_sent_the_envelope_and_no_qasm(monkeypatch):
+	dumped = []
+	_fake_qiskit(monkeypatch, version=16, compatibility=13, dumped=dumped)
+	properties = {"circuit_formats": ["qpy", "openqasm2"], "qpy_version": 14}
+	fields = circuit_payload.encode_qiskit_circuit("circ", properties)
+	assert set(fields) == {"circuit"}
+	assert fields["circuit"]["format"] == "qpy"
+	assert dumped == [("circ", 14)]
+	# The QPM reads back exactly what was written.
+	assert base64.b64decode(fields["circuit"]["data"]) == b"QPY14:circ"
+
+
+def test_an_openqasm2_reader_is_sent_qasm_as_before(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16, qasm="OPENQASM 2.0; qreg q[1];")
+	fields = circuit_payload.encode_qiskit_circuit("circ", {})
+	assert fields == {"qasm": "OPENQASM 2.0; qreg q[1];"}
+
+
+def test_a_circuit_openqasm2_cannot_hold_says_what_the_qpm_reads(monkeypatch):
+	_fake_qiskit(
+		monkeypatch, version=16,
+		qasm_error=ValueError("cannot represent if_else"))
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		circuit_payload.encode_qiskit_circuit(
+			"circ", {"circuit_formats": ["openqasm2"]})
+	message = str(excinfo.value)
+	assert "openqasm2" in message
+	assert "cannot represent if_else" in message
+
+
+def test_a_failed_qpy_write_names_the_version(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16, compatibility=13)
+	qpy = sys.modules["qiskit.qpy"]
+
+	def boom(circuit, stream, version=None):
+		raise ValueError("annotations need a newer format")
+
+	monkeypatch.setattr(qpy, "dump", boom)
+	properties = {"circuit_formats": ["qpy"], "qpy_version": 13}
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		circuit_payload.encode_qiskit_circuit("circ", properties)
+	assert "version 13" in str(excinfo.value)
