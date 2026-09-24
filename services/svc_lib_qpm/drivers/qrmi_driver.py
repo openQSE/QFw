@@ -29,6 +29,7 @@ from defw_exception import (DEFwExecutionError, DEFwNotFound,
 import json
 import logging
 import os
+import threading
 import time
 
 
@@ -129,6 +130,23 @@ OBJECT_STORAGE_REQUIRED = (
 JOB_TIMEOUT_ENV = "QFW_IBM_JOB_TIMEOUT_SECONDS"
 JOB_TIMEOUT_KEY = "job_timeout_seconds"
 DEFAULT_JOB_TIMEOUT_SECONDS = 300
+
+# Setting the environment and constructing the resource are one step.
+#
+# QRMI takes its endpoint, key, CRN and object storage from the process
+# environment at construction, so _ensure_resource_env writes those variables
+# and QuantumResource() reads them. The shim QRC runs a circuit per thread,
+# and circuits from different reservations resolve different credentials, so
+# two threads interleaving those halves would have one of them open a resource
+# from the other one's environment. That is another user's API key, silently,
+# with the right resource id.
+#
+# QRMI has no way to pass the configuration in directly, its own config file
+# populates the same variables, so serializing the pair is the fix available
+# to us. The lock is module level rather than per driver because the
+# environment is process wide and one shim process holds a driver per wired
+# library.
+RESOURCE_ENV_LOCK = threading.Lock()
 
 PROVIDER_RESOURCE_TYPES = {
 	"iqm": ("IQMServer",),
@@ -557,8 +575,9 @@ class QrmiDriver(BaseDriver):
 		# supplies the IQM ones from device-access config when no reservation
 		# has).
 		cache_key = self._credential_cache_key(credential)
-		if cache_key in self._resource_objs:
-			return self._resource_objs[cache_key]
+		cached = self._resource_objs.get(cache_key)
+		if cached is not None:
+			return cached
 		qrmi = self._resource()
 		alias = self._qc_alias(credential=credential)
 		if not alias:
@@ -566,15 +585,22 @@ class QrmiDriver(BaseDriver):
 				"QRMI introspection needs a QFw device id; set "
 				"QFW_QPU_DEVICE_ID or configure a device descriptor")
 		type_name, resource_type = self._resource_type(qrmi)
-		self._ensure_resource_env(type_name, alias, credential=credential)
-		try:
-			resource_obj = qrmi.QuantumResource(alias, resource_type)
-		except Exception as exc:
-			raise self._qrmi_error(
-				exc,
-				f"failed to open QRMI {type_name} resource "
-				f"{alias!r}") from exc
-		self._resource_objs[cache_key] = resource_obj
+		with RESOURCE_ENV_LOCK:
+			# Another thread may have opened this very resource while this one
+			# waited, so look again before building a second.
+			cached = self._resource_objs.get(cache_key)
+			if cached is not None:
+				return cached
+			self._ensure_resource_env(
+				type_name, alias, credential=credential)
+			try:
+				resource_obj = qrmi.QuantumResource(alias, resource_type)
+			except Exception as exc:
+				raise self._qrmi_error(
+					exc,
+					f"failed to open QRMI {type_name} resource "
+					f"{alias!r}") from exc
+			self._resource_objs[cache_key] = resource_obj
 		logging.debug(
 			"shim: QRMI resource opened (%s, %s)", type_name, alias)
 		return resource_obj
