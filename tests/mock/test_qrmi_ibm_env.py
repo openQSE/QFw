@@ -28,14 +28,16 @@ from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 
 ALL_VARS = (
 	"ENDPOINT", "IAM_ENDPOINT", "IAM_APIKEY", "SERVICE_CRN",
-	"S3_ENDPOINT", "S3_BUCKET", "S3_REGION",
+	"S3_ENDPOINT", "S3_ENDPOINT_FOR_QSAPI", "S3_BUCKET", "S3_REGION",
 	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
 )
 
 QFW_VARS = (
 	"QFW_IBM_SERVICE_CRN", "QFW_IBM_IAM_ENDPOINT",
-	"QFW_IBM_S3_ENDPOINT", "QFW_IBM_S3_BUCKET", "QFW_IBM_S3_REGION",
+	"QFW_IBM_S3_ENDPOINT", "QFW_IBM_S3_ENDPOINT_FOR_QSAPI",
+	"QFW_IBM_S3_BUCKET", "QFW_IBM_S3_REGION",
 	"QFW_IBM_AWS_ACCESS_KEY_ID", "QFW_IBM_AWS_SECRET_ACCESS_KEY",
+	"QFW_IBM_JOB_TIMEOUT_SECONDS",
 )
 
 
@@ -47,6 +49,8 @@ def clean_env(monkeypatch):
 		for suffix in ALL_VARS:
 			monkeypatch.delenv(
 				f"ibm_torino_QRMI_IBM_{kind}_{suffix}", raising=False)
+	monkeypatch.delenv(
+		"ibm_torino_QRMI_JOB_TIMEOUT_SECONDS", raising=False)
 	for name in QFW_VARS:
 		monkeypatch.delenv(name, raising=False)
 
@@ -148,8 +152,11 @@ def test_unresolvable_device_access_still_reports_what_is_missing(monkeypatch):
 def test_object_storage_is_forwarded_for_quantum_system_only(monkeypatch):
 	import os
 	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("QFW_IBM_S3_ENDPOINT", "https://store.example")
 	monkeypatch.setenv("QFW_IBM_S3_BUCKET", "results")
 	monkeypatch.setenv("QFW_IBM_S3_REGION", "us-east")
+	monkeypatch.setenv("QFW_IBM_AWS_ACCESS_KEY_ID", "AKIA-env")
+	monkeypatch.setenv("QFW_IBM_AWS_SECRET_ACCESS_KEY", "secret-env")
 
 	_driver()._ensure_ibm_env("QS", "ibm_torino")
 	assert os.environ["ibm_torino_QRMI_IBM_QS_S3_BUCKET"] == "results"
@@ -160,11 +167,26 @@ def test_object_storage_is_forwarded_for_quantum_system_only(monkeypatch):
 	assert "ibm_torino_QRMI_IBM_QRS_S3_BUCKET" not in os.environ
 
 
-def test_object_storage_absent_does_not_block_construction(monkeypatch):
-	# Object storage is environment-only, so an unset bucket must not turn
-	# into a required-variable error here; QRMI reports that itself.
+def test_object_storage_absent_is_reported_before_qrmi_is_opened(monkeypatch):
+	# QRMI resolves the storage variables with required_env(), so a missing
+	# one fails construction, and task_start fails anyway with no S3 config to
+	# stage results through. Say so here, naming the configuration to set,
+	# rather than letting QRMI report a variable name the operator never set
+	# by hand.
 	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
-	_driver()._ensure_ibm_env("QS", "ibm_torino")
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		_driver()._ensure_ibm_env("QS", "ibm_torino")
+
+	message = str(excinfo.value)
+	assert "ibm_torino_QRMI_IBM_QS_S3_BUCKET" in message
+	assert "s3-bucket" in message
+	assert "aws_access_key_id" in message
+
+
+def test_the_other_ibm_services_do_not_require_object_storage(monkeypatch):
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	_driver()._ensure_ibm_env("QRS", "ibm_torino")
+	_driver()._ensure_ibm_env("QCS", "ibm_torino")
 
 
 def test_alias_is_trimmed_at_the_first_comma(monkeypatch):
@@ -574,3 +596,196 @@ def test_resource_env_routes_by_type():
 	ibm_calls.clear()
 	driver._ensure_resource_env("PasqalCloud", "fresnel")
 	assert not iqm_calls and not ibm_calls
+
+
+# --- object storage from configuration, not only the environment ---------
+#
+# QRMI requires the store and its key pair for IBMQuantumSystem, so most of
+# these start from a complete configuration and vary one thing.
+
+
+def _qs_var(suffix):
+	import os
+	return os.environ.get(f"ibm_torino_QRMI_IBM_QS_{suffix}")
+
+
+STORE = {
+	"s3-endpoint": "https://store.example",
+	"s3-endpoint-for-qsapi": "https://store.internal",
+	"s3-bucket": "results",
+	"s3-region": "us-east",
+}
+KEY_PAIR = {
+	"aws_access_key_id": "AKIA-db",
+	"aws_secret_access_key": "secret-db",
+}
+
+
+def _qs_driver(store=None, key_pair=None, **descriptor):
+	descriptor.update(STORE if store is None else store)
+	access = {"base_url": "https://example.org", "token": "tok"}
+	access.update(KEY_PAIR if key_pair is None else key_pair)
+	return _driver(access=access, **descriptor)
+
+
+def test_the_store_is_described_by_the_device_entry(monkeypatch):
+	# What a site service can actually reach. Nothing a user or a job exports
+	# arrives there, so the store has to come from device-access config.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	_qs_driver()._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("S3_ENDPOINT") == "https://store.example"
+	assert _qs_var("S3_ENDPOINT_FOR_QSAPI") == "https://store.internal"
+	assert _qs_var("S3_BUCKET") == "results"
+	assert _qs_var("S3_REGION") == "us-east"
+
+
+def test_the_environment_still_wins_over_the_device_entry(monkeypatch):
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("QFW_IBM_S3_BUCKET", "from-env")
+	store = dict(STORE, **{"s3-bucket": "from-config"})
+	_qs_driver(store=store)._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("S3_BUCKET") == "from-env"
+
+
+def test_the_key_pair_comes_from_the_users_credential(monkeypatch):
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	_qs_driver()._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("AWS_ACCESS_KEY_ID") == "AKIA-db"
+	assert _qs_var("AWS_SECRET_ACCESS_KEY") == "secret-db"
+
+
+def test_a_credential_replaces_the_previous_reservations_key_pair(
+		monkeypatch):
+	# The #65 lesson, for object storage. These variables are process-wide, so
+	# a credential that supplies nothing has to clear them rather than leave
+	# the last reservation's key in place.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("ibm_torino_QRMI_IBM_QS_AWS_ACCESS_KEY_ID", "AKIA-old")
+	monkeypatch.setenv(
+		"ibm_torino_QRMI_IBM_QS_AWS_SECRET_ACCESS_KEY", "secret-old")
+
+	driver = _qs_driver(key_pair={})
+	driver._ensure_ibm_env("QS", "ibm_torino", credential={
+		"api_key": "tok",
+		"aws_access_key_id": "AKIA-new",
+		"aws_secret_access_key": "secret-new",
+	})
+	assert _qs_var("AWS_ACCESS_KEY_ID") == "AKIA-new"
+	assert _qs_var("AWS_SECRET_ACCESS_KEY") == "secret-new"
+
+	# A credential with no key pair clears what the last one left, which then
+	# fails the required check rather than running under the wrong key.
+	driver = _qs_driver(key_pair={})
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		driver._ensure_ibm_env(
+			"QS", "ibm_torino", credential={"api_key": "tok"})
+	assert "AWS_ACCESS_KEY_ID" in str(excinfo.value)
+	assert _qs_var("AWS_ACCESS_KEY_ID") is None
+
+
+def test_the_key_pair_is_never_read_from_the_device_entry(monkeypatch):
+	# Secrets do not belong in the admin-owned YAML, so a key put there is
+	# ignored rather than quietly honoured, and the required check then says
+	# the key pair is missing.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	driver = _qs_driver(key_pair={}, **{
+		"aws-access-key-id": "AKIA-yaml",
+		"aws_secret_access_key": "secret-yaml",
+	})
+	with pytest.raises(DEFwExecutionError):
+		driver._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("AWS_ACCESS_KEY_ID") is None
+	assert _qs_var("AWS_SECRET_ACCESS_KEY") is None
+
+
+def test_the_resource_cache_separates_users_by_key_pair():
+	driver = _driver()
+	first = driver._credential_cache_key({
+		"user": "alice", "api_key": "k", "aws_access_key_id": "AKIA-1"})
+	second = driver._credential_cache_key({
+		"user": "alice", "api_key": "k", "aws_access_key_id": "AKIA-2"})
+	assert first != second
+
+
+def test_object_storage_absent_is_reported_before_qrmi_is_opened(monkeypatch):
+	# QRMI resolves the storage variables with required_env(), so a missing one
+	# fails construction, and task_start fails anyway with no S3 config to
+	# stage results through. Say so here, naming the configuration to set,
+	# rather than letting QRMI report a variable the operator never set by hand.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		_driver()._ensure_ibm_env("QS", "ibm_torino")
+
+	message = str(excinfo.value)
+	assert "ibm_torino_QRMI_IBM_QS_S3_BUCKET" in message
+	assert "s3-bucket" in message
+	assert "aws_access_key_id" in message
+
+
+def test_the_optional_qsapi_endpoint_is_not_required(monkeypatch):
+	# The one storage variable QRMI treats as optional.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	store = {key: value for key, value in STORE.items()
+		if key != "s3-endpoint-for-qsapi"}
+	_qs_driver(store=store)._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _qs_var("S3_ENDPOINT_FOR_QSAPI") is None
+	assert _qs_var("S3_BUCKET") == "results"
+
+
+def test_the_other_ibm_services_do_not_require_object_storage(monkeypatch):
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	_driver()._ensure_ibm_env("QRS", "ibm_torino")
+	_driver()._ensure_ibm_env("QCS", "ibm_torino")
+
+
+# --- the job timeout IBMQuantumSystem requires ---------------------------
+
+
+def _timeout_var():
+	import os
+	return os.environ.get("ibm_torino_QRMI_JOB_TIMEOUT_SECONDS")
+
+
+def test_quantum_system_gets_a_job_timeout(monkeypatch):
+	# QRMI requires it for QS and reads it outside the per-service prefix.
+	# Without it the resource cannot be constructed at all.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	_qs_driver()._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _timeout_var() == str(qd.DEFAULT_JOB_TIMEOUT_SECONDS)
+
+
+def test_the_job_timeout_can_be_configured_and_overridden(monkeypatch):
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	_qs_driver(**{"job-timeout-seconds": 900})._ensure_ibm_env(
+		"QS", "ibm_torino")
+	assert _timeout_var() == "900"
+
+	monkeypatch.delenv("ibm_torino_QRMI_JOB_TIMEOUT_SECONDS", raising=False)
+	monkeypatch.setenv("QFW_IBM_JOB_TIMEOUT_SECONDS", "120")
+	_qs_driver(**{"job-timeout-seconds": 900})._ensure_ibm_env(
+		"QS", "ibm_torino")
+	assert _timeout_var() == "120"
+
+
+def test_a_job_timeout_already_set_is_kept(monkeypatch):
+	# A SPANK plugin or an operator may have set it.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	monkeypatch.setenv("ibm_torino_QRMI_JOB_TIMEOUT_SECONDS", "45")
+	_qs_driver()._ensure_ibm_env("QS", "ibm_torino")
+
+	assert _timeout_var() == "45"
+
+
+def test_the_other_ibm_services_are_not_given_a_job_timeout(monkeypatch):
+	# QRS and QCS read the same variable but treat it as optional, so QFw
+	# leaves it to them rather than inventing a limit.
+	monkeypatch.setenv("QFW_IBM_SERVICE_CRN", "crn:x")
+	_driver()._ensure_ibm_env("QRS", "ibm_torino")
+
+	assert _timeout_var() is None

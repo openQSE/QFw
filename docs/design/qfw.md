@@ -1015,6 +1015,12 @@ Both `enabled` flags are required. An entry for an IBM device can also set
 several instances, so the entry names one. It takes precedence over the
 device's `service-crn` in the device-access file.
 
+An entry for an `IBMQuantumSystem` device can also set `aws_access_key_id` and
+`aws_secret_access_key`, the key pair for the object storage that system
+stages results through. The store itself, its endpoints, bucket and region, is
+described on the device in the device-access file, because it is not secret.
+The key pair is, so it lives here.
+
 **Status:** draft
 
 ### Reservation-Scoped Provider Credentials

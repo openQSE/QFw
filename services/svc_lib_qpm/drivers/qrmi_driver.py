@@ -90,6 +90,46 @@ IBM_RESOURCE_ENV_KINDS = {
 # needs it overridden, so it defaults rather than being required.
 IBM_DEFAULT_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
 
+# The object storage IBMQuantumSystem stages results through, as
+# (QRMI variable suffix, QFW_IBM_* override, config key). The first four
+# describe the store and come from device-access config. The last two are
+# secret and come from the credential DB, so they are kept apart. QRMI reads
+# S3_ENDPOINT_FOR_QSAPI as well as S3_ENDPOINT: a deployment can put the QS
+# API on a different address from the one the client uses.
+OBJECT_STORAGE_FIELDS = (
+	("S3_ENDPOINT", "QFW_IBM_S3_ENDPOINT", "s3_endpoint"),
+	("S3_ENDPOINT_FOR_QSAPI", "QFW_IBM_S3_ENDPOINT_FOR_QSAPI",
+		"s3_endpoint_for_qsapi"),
+	("S3_BUCKET", "QFW_IBM_S3_BUCKET", "s3_bucket"),
+	("S3_REGION", "QFW_IBM_S3_REGION", "s3_region"),
+)
+OBJECT_STORAGE_SECRETS = (
+	("AWS_ACCESS_KEY_ID", "QFW_IBM_AWS_ACCESS_KEY_ID", "aws_access_key_id"),
+	("AWS_SECRET_ACCESS_KEY", "QFW_IBM_AWS_SECRET_ACCESS_KEY",
+		"aws_secret_access_key"),
+)
+OBJECT_STORAGE_SECRET_KEYS = tuple(
+	key for _suffix, _env, key in OBJECT_STORAGE_SECRETS)
+
+# What IBMQuantumSystem cannot open without. QRMI resolves these with
+# required_env(), so a missing one fails construction, and task_start fails
+# later anyway because the client has no S3 config to stage results through.
+# S3_ENDPOINT_FOR_QSAPI is the one that is genuinely optional.
+OBJECT_STORAGE_REQUIRED = (
+	"S3_ENDPOINT", "S3_BUCKET", "S3_REGION",
+	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+)
+
+# IBMQuantumSystem also requires a job timeout, and it sits outside the
+# per-service prefix as {resource}_QRMI_JOB_TIMEOUT_SECONDS. QRS and QCS read
+# the same variable but treat it as optional, so only QS needs it supplied.
+# It is a number rather than a credential, so a device can set
+# job-timeout-seconds and otherwise it defaults, which is friendlier than
+# failing for the want of a value we can pick.
+JOB_TIMEOUT_ENV = "QFW_IBM_JOB_TIMEOUT_SECONDS"
+JOB_TIMEOUT_KEY = "job_timeout_seconds"
+DEFAULT_JOB_TIMEOUT_SECONDS = 300
+
 PROVIDER_RESOURCE_TYPES = {
 	"iqm": ("IQMServer",),
 	"ibm": ("IBMQiskitRuntimeService", "IBMQuantumComputeService",
@@ -211,6 +251,9 @@ class QrmiDriver(BaseDriver):
 		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", "iqm")
 		service_crn = credential.get("service_crn")
+		object_storage = {
+			key: credential[key] for key in OBJECT_STORAGE_SECRET_KEYS
+			if credential.get(key)}
 		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
 		token = (
 			credential.get("api_key") or
@@ -238,6 +281,9 @@ class QrmiDriver(BaseDriver):
 			base_url = base_url or cfg.get("url")
 			token = token or cfg.get("api_key")
 			service_crn = service_crn or cfg.get("service_crn")
+			for key in OBJECT_STORAGE_SECRET_KEYS:
+				if not object_storage.get(key) and cfg.get(key):
+					object_storage[key] = cfg[key]
 			provider_device_id = (
 				provider_device_id
 				or cfg.get("provider_device_id")
@@ -247,13 +293,15 @@ class QrmiDriver(BaseDriver):
 		# yields "//api/v1/..." which the IQM server rejects (empty target).
 		if base_url:
 			base_url = base_url.rstrip("/")
-		return {
+		resolved = {
 			"base_url": base_url,
 			"token": token,
 			"provider_device_id": provider_device_id,
 			"quantum_computer": provider_device_id,
 			"service_crn": service_crn,
 		}
+		resolved.update(object_storage)
+		return resolved
 
 	def _ensure_iqm_isa_env(self, alias, credential=None):
 		# QRMI's IQM resource reads its endpoint/token from
@@ -417,33 +465,89 @@ class QrmiDriver(BaseDriver):
 			os.environ[crn_var] = str(crn)
 
 		# Object storage applies only to IBMQuantumSystem, which stages results
-		# through a bucket. No config field carries these either, and the other
-		# IBM services never read them, so they are environment-only and stay
-		# unset when absent rather than being required here.
+		# through a bucket. The other IBM services never read these.
+		required = [endpoint_var, iam_endpoint_var, apikey_var, crn_var]
 		if kind == "QS":
-			for suffix, source in (
-					("S3_ENDPOINT", "QFW_IBM_S3_ENDPOINT"),
-					("S3_BUCKET", "QFW_IBM_S3_BUCKET"),
-					("S3_REGION", "QFW_IBM_S3_REGION"),
-					("AWS_ACCESS_KEY_ID", "QFW_IBM_AWS_ACCESS_KEY_ID"),
-					("AWS_SECRET_ACCESS_KEY",
-						"QFW_IBM_AWS_SECRET_ACCESS_KEY")):
-				value = os.environ.get(source)
-				name = f"{prefix}_{suffix}"
-				if value and not os.environ.get(name):
-					os.environ[name] = value
+			self._ensure_object_storage_env(prefix, access, credential)
+			self._ensure_job_timeout_env(backend)
+			required += [
+				f"{prefix}_{suffix}" for suffix in OBJECT_STORAGE_REQUIRED]
+			required.append(f"{backend}_QRMI_JOB_TIMEOUT_SECONDS")
 
-		missing = [name for name in (
-			endpoint_var, iam_endpoint_var, apikey_var, crn_var)
-			if not os.environ.get(name)]
+		missing = [name for name in required if not os.environ.get(name)]
 		if missing:
-			raise DEFwExecutionError(
+			message = (
 				"QRMI IBM access needs " + " and ".join(missing) + ". The "
 				"endpoint and API key come from device-access config or "
 				"QFW_QC_URL/QFW_API_KEY. The service CRN comes from the "
 				"user's service_crn entry in the credential DB, the device's "
 				"service-crn key in device-access config, or "
 				"QFW_IBM_SERVICE_CRN")
+			if kind == "QS":
+				message += (
+					". IBMQuantumSystem also requires its object storage: the "
+					"store from the device's s3-endpoint, s3-bucket and "
+					"s3-region keys, and the key pair from the user's "
+					"aws_access_key_id and aws_secret_access_key entries in "
+					"the credential DB")
+			raise DEFwExecutionError(message)
+
+	def _ensure_object_storage_env(self, prefix, access, credential=None):
+		# QRMI's IBM Quantum System stages results through object storage and
+		# reads six more variables for it.
+		#
+		# The bucket, region and the two endpoints describe the store, so they
+		# come from the device's own device-access entry, the way iam-endpoint
+		# does. The AWS key pair is secret, so it comes from the reservation's
+		# credential or from the user's credential DB entry, never from the
+		# admin-owned YAML. QFW_IBM_* wins for both, for an operator driving
+		# the shim by hand.
+		#
+		# Config is what makes this reachable at all. Nothing a user or a job
+		# exports reaches a site service, so an IBM Quantum System configured
+		# only through the environment cannot be driven from one.
+		for suffix, env_name, key in OBJECT_STORAGE_FIELDS:
+			name = f"{prefix}_{suffix}"
+			value = (
+				os.environ.get(env_name)
+				or self._descriptor.get(key)
+				or self._descriptor.get(key.replace("_", "-")))
+			if value and not os.environ.get(name):
+				os.environ[name] = str(value)
+
+		credential = dict(credential or {})
+		for suffix, env_name, key in OBJECT_STORAGE_SECRETS:
+			name = f"{prefix}_{suffix}"
+			value = (
+				credential.get(key)
+				or os.environ.get(env_name)
+				or access.get(key))
+			if not credential:
+				if value and not os.environ.get(name):
+					os.environ[name] = str(value)
+				continue
+			# With a credential these are replaced, not filled in, for the
+			# reason the endpoint and key are: the variables are process-wide,
+			# so one reservation's key would otherwise serve the next.
+			if value:
+				os.environ[name] = str(value)
+			else:
+				os.environ.pop(name, None)
+
+	def _ensure_job_timeout_env(self, backend):
+		# {resource}_QRMI_JOB_TIMEOUT_SECONDS, which IBMQuantumSystem requires.
+		# Note the name is not under the per-service prefix. The value matches
+		# run_circuit's own default, so QRMI does not abandon a job while this
+		# driver is still polling for it.
+		name = f"{backend}_QRMI_JOB_TIMEOUT_SECONDS"
+		if os.environ.get(name):
+			return
+		value = (
+			os.environ.get(JOB_TIMEOUT_ENV)
+			or self._descriptor.get(JOB_TIMEOUT_KEY)
+			or self._descriptor.get(JOB_TIMEOUT_KEY.replace("_", "-"))
+			or DEFAULT_JOB_TIMEOUT_SECONDS)
+		os.environ[name] = str(value)
 
 	def _qpu(self, credential=None):
 		# Lazy: open the QRMI QuantumResource this descriptor names. QRMI reads
@@ -486,6 +590,7 @@ class QrmiDriver(BaseDriver):
 			credential.get("user"),
 			credential.get("api_key") or credential.get("token"),
 			credential.get("service_crn"),
+			credential.get("aws_access_key_id"),
 		)
 
 	def _target(self, credential=None):
@@ -606,7 +711,7 @@ class QrmiDriver(BaseDriver):
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
 		use_timeslot = bool(info.get("use_timeslot", False))
-		timeout = float(info.get("timeout", 300.0))
+		timeout = float(info.get("timeout", DEFAULT_JOB_TIMEOUT_SECONDS))
 		poll = float(info.get("poll_interval", 1.0))
 
 		target = self._target(credential=credential)

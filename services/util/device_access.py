@@ -239,7 +239,9 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 	# `device.get(key, DEFAULT)` fallbacks. The native resolve_device_access
 	# path ignores these keys, so forwarding them here is harmless.
 	for key in ("libraries", "preference", "caps", "resource-type",
-			"resource_type", "service-crn", "iam-endpoint"):
+			"resource_type", "service-crn", "iam-endpoint",
+			"s3-endpoint", "s3-endpoint-for-qsapi", "s3-bucket",
+			"s3-region", "job-timeout-seconds"):
 		if key in device:
 			selected[key] = device[key]
 	if "execution-owner" in device:
@@ -357,6 +359,28 @@ def get_service_crn_from_user_record(
 	return str(value).strip() if value else None
 
 
+# The object storage QRMI's IBM Quantum System stages results through. The
+# bucket, region and endpoints describe the store and live in device-access
+# config, alongside the device they belong to. The AWS key pair is secret, so
+# it comes from the per-user credential DB, the same place the API key comes
+# from, and never from the admin-owned YAML.
+OBJECT_STORAGE_SECRET_KEYS = ("aws_access_key_id", "aws_secret_access_key")
+
+
+def get_object_storage_from_user_record(
+		record, device_id, provider_device_id=None):
+	# Optional, for IBM Quantum System. A user's entry can carry the key pair
+	# for the bucket that device stages results through.
+	device_record = _entitled_device_record(
+		record, device_id, provider_device_id) or {}
+	found = {}
+	for key in OBJECT_STORAGE_SECRET_KEYS:
+		value = device_record.get(key)
+		if value:
+			found[key] = str(value).strip()
+	return found
+
+
 def resolve_qpu_credentials(device, user=None, credential_hint=None,
 			    credential_handle=None):
 	user = user or resolve_qpu_user()
@@ -376,12 +400,15 @@ def resolve_qpu_credentials(device, user=None, credential_hint=None,
 			f"QPU credential DB does not contain an API key for user "
 			f"{user!r} and device {device['device_id']!r}")
 
-	return {
+	resolved = {
 		"user": user,
 		"api_key": api_key,
 		"service_crn": get_service_crn_from_user_record(
 			record, device["device_id"], device.get("provider_device_id")),
 	}
+	resolved.update(get_object_storage_from_user_record(
+		record, device["device_id"], device.get("provider_device_id")))
+	return resolved
 
 
 def resolve_device_access(provider=None, device_id=None, user=None,
@@ -396,7 +423,7 @@ def resolve_device_access(provider=None, device_id=None, user=None,
 		credential_hint=credential_hint,
 		credential_handle=credential_handle)
 
-	return {
+	access = {
 		"device_id": device["device_id"],
 		"provider_device_id": device["provider_device_id"],
 		"provider": device["provider"],
@@ -406,3 +433,7 @@ def resolve_device_access(provider=None, device_id=None, user=None,
 		"quantum_computer": device["provider_device_id"],
 		"service_crn": credentials.get("service_crn"),
 	}
+	for key in OBJECT_STORAGE_SECRET_KEYS:
+		if credentials.get(key):
+			access[key] = credentials[key]
+	return access

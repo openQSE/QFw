@@ -84,6 +84,42 @@ device. Optional. The default,
 serves public IBM Cloud.
 .B QFW_IBM_IAM_ENDPOINT
 overrides it when set in the QPM's environment.
+.TP
+.BR s3-endpoint ", " s3-bucket ", " s3-region
+Object storage that an
+.B IBMQuantumSystem
+device stages results through.
+.B Required
+for that resource type: QRMI resolves them when the resource is opened and
+fails without them, and result staging fails later regardless. The matching
+.BR QFW_IBM_S3_ENDPOINT ,
+.BR QFW_IBM_S3_ENDPOINT_FOR_QSAPI ,
+.B QFW_IBM_S3_BUCKET
+and
+.B QFW_IBM_S3_REGION
+override them when set in the QPM's environment. A site service inherits no
+such variables, so configure the store here for one. The access key pair that
+goes with it is secret and belongs in the credential database, under
+.B aws_access_key_id
+and
+.BR aws_secret_access_key ,
+never in this file. It is required too.
+.TP
+.B s3-endpoint-for-qsapi
+Optional. The address the quantum system itself reaches the store on, when it
+differs from the one the client uses.
+.B QFW_IBM_S3_ENDPOINT_FOR_QSAPI
+overrides it.
+.TP
+.B job-timeout-seconds
+Seconds QRMI allows a job before abandoning it, for an
+.B IBMQuantumSystem
+device, which requires the value. Optional here: it defaults to the same
+timeout this driver polls for, so QRMI does not give up on a job still being
+waited on.
+.B QFW_IBM_JOB_TIMEOUT_SECONDS
+overrides it. The other IBM resource types treat the same QRMI variable as
+optional, so QFw leaves it unset for them.
 .SH CREDENTIAL PROVIDERS
 The optional
 .B credential-providers
@@ -105,10 +141,11 @@ and may select a class with
 .BR class .
 .SH SECURITY
 The device-access file contains device endpoints, credential-provider
-references, and IBM service instance CRNs. A referenced file credential
-database contains provider secrets
-and must be readable only by the QPM service account. Keep both files outside
-client-readable runtime directories.
+references, IBM service instance CRNs, and the location of the object storage
+an IBM Quantum System stages results through. It holds no secrets: API keys
+and object storage access keys live only in a referenced file credential
+database, which must be readable only by the QPM service account. Keep both
+files outside client-readable runtime directories.
 .SH EXAMPLE
 .EX
 qpus:
@@ -123,6 +160,16 @@ qpus:
     resource-type: IBMQiskitRuntimeService
     url: https://quantum.cloud.ibm.com/api/v1
     service-crn: "crn:v1:bluemix:public:quantum-computing:us-east:a/ACCT:INST::"
+    credential-db: qpu-users.json
+  ibm-onprem:
+    provider: ibm
+    provider-device-id: ibm_system_two
+    resource-type: IBMQuantumSystem
+    url: https://qs.example/api/v1
+    service-crn: "crn:v1:bluemix:public:quantum-computing:us-east:a/ACCT:INST::"
+    s3-endpoint: https://store.example
+    s3-bucket: qfw-results
+    s3-region: us-east
     credential-db: qpu-users.json
 .EE
 .SH SEE ALSO
