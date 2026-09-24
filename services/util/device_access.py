@@ -85,6 +85,14 @@ def validate_credential_configuration(path, device_id):
 	return device
 
 
+# Credential provider types, defined here because both this module and
+# util.qpm.credentials classify them and credentials imports this one.
+FILE_PROVIDER_TYPES = ("file", "json", "file-backed", "development-file")
+NO_SECRET_PROVIDER = "no-secret"
+NO_SECRET_PROVIDER_TYPES = (NO_SECRET_PROVIDER, "none")
+PLUGIN_PROVIDER_TYPES = ("python", "plugin", "module")
+
+
 def resolve_relative_path(path, base_path):
 	if os.path.isabs(path):
 		return path
@@ -231,6 +239,27 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 		selected["credential_db"] = resolve_relative_path(
 			str(credential_db), path)
 
+	# A device can name a credential provider instead of a database, and a
+	# file provider carries the database itself. Resolve that here, so every
+	# consumer sees one shape: credential_db when there is one to read, and
+	# credential_provider_type to explain it when there is not. Without this a
+	# device that named a provider reached resolve_qpu_credentials with no
+	# credential_db at all (openQSE/QFw#78).
+	if credential_provider:
+		provider_config, defined = _credential_provider_config(
+			device_config, credential_provider)
+		selected["credential_provider_type"] = str(
+			provider_config.get("type", "file")).strip().lower()
+		selected["credential_provider_defined"] = defined
+		# The same precedence FileCredentialProvider uses.
+		provider_db = (
+			provider_config.get("credential-db")
+			or provider_config.get("credential_db")
+			or provider_config.get("path"))
+		if provider_db and "credential_db" not in selected:
+			selected["credential_db"] = resolve_relative_path(
+				str(provider_db), path)
+
 	# Pass through the optional shim descriptor fields (svc_lib_qpm's
 	# resolve_descriptor reads these off the selected device; see
 	# docs/design/qpu-frontend-contract.md section 5). Only forward keys that are
@@ -248,6 +277,29 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 		selected["execution_owner"] = device["execution-owner"]
 
 	return selected
+
+
+def _credential_provider_config(device_config, provider_ref):
+	# The named provider's entry under credential-providers, or the mapping the
+	# device gave inline, with whether the reference actually resolved.
+	# Mirrors _provider_config_for_device in util.qpm.credentials, which
+	# resolves the same reference for the reservation path and also treats an
+	# unresolvable name as a file provider rather than an error. select_qpu
+	# stays permissive to match: it records what it found and leaves the
+	# complaining to whoever needs a credential.
+	if isinstance(provider_ref, dict):
+		provider_config = dict(provider_ref)
+		defined = True
+	else:
+		providers = device_config.get("credential-providers") or {}
+		if not isinstance(providers, dict):
+			raise DEFwExecutionError(
+				"credential-providers must be a mapping of provider names")
+		defined = provider_ref in providers
+		provider_config = dict(providers.get(provider_ref) or {})
+		provider_config.setdefault("name", provider_ref)
+	provider_config.setdefault("type", "file")
+	return provider_config, defined
 
 
 def get_user_records(credential_db):
@@ -384,7 +436,10 @@ def get_object_storage_from_user_record(
 def resolve_qpu_credentials(device, user=None, credential_hint=None,
 			    credential_handle=None):
 	user = user or resolve_qpu_user()
-	credential_db = load_json_config(device["credential_db"])
+	credential_db_path = device.get("credential_db")
+	if not credential_db_path:
+		return _credentials_without_a_database(device, user)
+	credential_db = load_json_config(credential_db_path)
 	user, record = select_user_record(
 		credential_db,
 		user,
@@ -409,6 +464,35 @@ def resolve_qpu_credentials(device, user=None, credential_hint=None,
 	resolved.update(get_object_storage_from_user_record(
 		record, device["device_id"], device.get("provider_device_id")))
 	return resolved
+
+
+def _credentials_without_a_database(device, user):
+	# The device named a credential provider rather than a database. A
+	# no-secret provider means there is no key to find, which is a legitimate
+	# configuration: the endpoint still resolves and the caller reports a
+	# missing token itself if it needs one. Anything else cannot be resolved on
+	# this path, so say which device and provider rather than failing on a
+	# missing key.
+	provider_type = device.get("credential_provider_type") or "file"
+	if provider_type in NO_SECRET_PROVIDER_TYPES:
+		return {"user": user, "api_key": None, "service_crn": None}
+	name = device.get("credential_provider")
+	if device.get("credential_provider_defined") is False:
+		raise DEFwExecutionError(
+			f"QPU device {device.get('device_id')!r} names credential "
+			f"provider {name!r}, which is not defined under "
+			"credential-providers, so there is no credential-db to read an "
+			"API key from")
+	if provider_type in PLUGIN_PROVIDER_TYPES:
+		raise DEFwExecutionError(
+			f"QPU device {device.get('device_id')!r} uses the plugin "
+			f"credential provider {name!r}, which only the QPM reservation "
+			"path can resolve. Set QFW_QC_URL and QFW_API_KEY to use this "
+			"device outside a reservation")
+	raise DEFwExecutionError(
+		f"QPU device {device.get('device_id')!r} names credential provider "
+		f"{name!r} of type {provider_type!r}, which defines no credential-db "
+		"to read an API key from")
 
 
 def resolve_device_access(provider=None, device_id=None, user=None,

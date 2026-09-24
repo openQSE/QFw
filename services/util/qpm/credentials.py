@@ -12,8 +12,10 @@ CREDENTIAL_BINDING_SCHEMA = "qfw-provider-credential-binding-v1"
 CREDENTIAL_PROVIDER_CONFIG_KEYS = (
 	"credential_provider",
 )
-FILE_PROVIDER_TYPES = ("file", "json", "file-backed", "development-file")
-NO_SECRET_PROVIDER = "no-secret"
+# Defined in util.device_access, which classifies them too, and aliased here
+# so there is one list rather than two that can drift apart.
+FILE_PROVIDER_TYPES = device_access.FILE_PROVIDER_TYPES
+NO_SECRET_PROVIDER = device_access.NO_SECRET_PROVIDER
 CREDENTIAL_MODE_ENV = "QFW_QPM_CREDENTIAL_MODE"
 
 
