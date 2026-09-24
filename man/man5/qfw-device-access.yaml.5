@@ -85,13 +85,13 @@ serves public IBM Cloud.
 .B QFW_IBM_IAM_ENDPOINT
 overrides it when set in the QPM's environment.
 .TP
-.BR s3-endpoint ", " s3-endpoint-for-qsapi ", " s3-bucket ", " s3-region
+.BR s3-endpoint ", " s3-bucket ", " s3-region
 Object storage that an
 .B IBMQuantumSystem
-device stages results through. QRMI reads all four, and
-.B s3-endpoint-for-qsapi
-lets the system reach the store on a different address from the one the client
-uses. The matching
+device stages results through.
+.B Required
+for that resource type: QRMI resolves them when the resource is opened and
+fails without them, and result staging fails later regardless. The matching
 .BR QFW_IBM_S3_ENDPOINT ,
 .BR QFW_IBM_S3_ENDPOINT_FOR_QSAPI ,
 .B QFW_IBM_S3_BUCKET
@@ -103,7 +103,23 @@ goes with it is secret and belongs in the credential database, under
 .B aws_access_key_id
 and
 .BR aws_secret_access_key ,
-never in this file.
+never in this file. It is required too.
+.TP
+.B s3-endpoint-for-qsapi
+Optional. The address the quantum system itself reaches the store on, when it
+differs from the one the client uses.
+.B QFW_IBM_S3_ENDPOINT_FOR_QSAPI
+overrides it.
+.TP
+.B job-timeout-seconds
+Seconds QRMI allows a job before abandoning it, for an
+.B IBMQuantumSystem
+device, which requires the value. Optional here: it defaults to the same
+timeout this driver polls for, so QRMI does not give up on a job still being
+waited on.
+.B QFW_IBM_JOB_TIMEOUT_SECONDS
+overrides it. The other IBM resource types treat the same QRMI variable as
+optional, so QFw leaves it unset for them.
 .SH CREDENTIAL PROVIDERS
 The optional
 .B credential-providers
