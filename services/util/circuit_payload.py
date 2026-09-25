@@ -4,6 +4,7 @@
 # "circuit_formats", preferred first, so a client can choose one before it
 # submits. The client sends the circuit in info["circuit"]:
 #
+#	{"format": "qpy+gzip", "data": "<base64 of gzipped QPY>"}
 #	{"format": "qpy", "data": "<base64 of the QPY bytes>"}
 #	{"format": "openqasm2", "data": "OPENQASM 2.0; ..."}
 #
@@ -15,6 +16,8 @@
 # as control flow, unbound parameters, gates like ecr, delays and circuit
 # metadata. A QPM that reads QPY also declares "qpy_version", the newest QPY
 # format its Qiskit loads, so a client can write one the QPM can read.
+# qpy+gzip is the same QPY with gzip around it, declared separately so a QPM
+# that cannot decompress is simply sent plain QPY instead.
 #
 # The reading half of this module runs in the QPM. The writing half runs in
 # the client: choose_circuit_format reads what the QPM declared and
@@ -23,6 +26,7 @@
 
 import base64
 import binascii
+import gzip
 import io
 
 from defw_exception import DEFwExecutionError
@@ -30,7 +34,9 @@ from defw_exception import DEFwExecutionError
 
 OPENQASM2 = "openqasm2"
 QPY = "qpy"
-CIRCUIT_FORMATS = (OPENQASM2, QPY)
+QPY_GZIP = "qpy+gzip"
+CIRCUIT_FORMATS = (OPENQASM2, QPY, QPY_GZIP)
+QPY_FORMATS = (QPY, QPY_GZIP)
 
 # Every QPM runs OpenQASM 2, so a QPM declares that unless it says more.
 DEFAULT_CIRCUIT_FORMATS = (OPENQASM2,)
@@ -39,6 +45,10 @@ DEFAULT_CIRCUIT_FORMATS = (OPENQASM2,)
 def circuit_payload(info):
 	# Return (format, data) for the circuit in a circuit info dict. data is
 	# text for OpenQASM 2 and bytes for QPY.
+	#
+	# The format returned is the format of the content, so a qpy+gzip payload
+	# comes back as QPY with the gzip already removed. Compression is framing
+	# rather than a different circuit, and every consumer then handles one QPY.
 	info = info or {}
 	circuit = info.get("circuit")
 	if circuit is None:
@@ -61,12 +71,20 @@ def circuit_payload(info):
 		raise DEFwExecutionError(
 			f"info['circuit'] carries no {fmt} data. The data is text, with "
 			"binary formats base64 encoded")
-	if fmt == QPY:
+	if fmt in QPY_FORMATS:
 		try:
-			return QPY, base64.b64decode(data, validate=True)
+			raw = base64.b64decode(data, validate=True)
 		except (binascii.Error, ValueError) as exc:
 			raise DEFwExecutionError(
-				f"the QPY circuit data is not valid base64: {exc}") from exc
+				f"the {fmt} circuit data is not valid base64: {exc}") from exc
+		if fmt == QPY_GZIP:
+			try:
+				raw = gzip.decompress(raw)
+			except Exception as exc:
+				raise DEFwExecutionError(
+					f"the {fmt} circuit data did not decompress: "
+					f"{exc}") from exc
+		return QPY, raw
 	return fmt, data
 
 
@@ -130,7 +148,10 @@ def qiskit_circuit_formats():
 	except Exception:
 		return {"circuit_formats": list(DEFAULT_CIRCUIT_FORMATS)}
 	return {
-		"circuit_formats": [QPY, OPENQASM2],
+		# Compressed first. A client that does not know qpy+gzip passes over
+		# it and sends plain QPY, which is what choose_circuit_format does
+		# with any format it cannot write.
+		"circuit_formats": [QPY_GZIP, QPY, OPENQASM2],
 		"qpy_version": version,
 	}
 
@@ -178,15 +199,20 @@ def choose_circuit_format(properties=None):
 		fmt = str(entry).strip().lower()
 		if fmt == OPENQASM2:
 			return OPENQASM2, None
-		if fmt == QPY:
+		if fmt in QPY_FORMATS:
 			version = _qpy_write_version(properties.get("qpy_version"))
 			if version is not None:
-				return QPY, version
+				return fmt, version
 	return OPENQASM2, None
 
 
-def dump_qpy(circuit, version=None):
-	# Serialize one circuit as QPY and return it base64 encoded.
+def dump_qpy(circuit, version=None, compress=False):
+	# Serialize one circuit as QPY and return it base64 encoded, gzipped
+	# first when the QPM reads qpy+gzip. QPY is repetitive enough that gzip
+	# takes most of it back: on Qiskit 2.2.3 a 20-qubit 200-layer circuit goes
+	# from 458 KB of base64 to 18 KB, which also puts it back under DEFw's
+	# 64 KiB RMA threshold. Compressing costs a few ms against ~20 ms to write
+	# the QPY in the first place.
 	try:
 		from qiskit import qpy
 	except Exception as exc:
@@ -200,7 +226,12 @@ def dump_qpy(circuit, version=None):
 		raise DEFwExecutionError(
 			f"could not write the circuit as QPY version {version}: "
 			f"{exc}") from exc
-	return base64.b64encode(buffer.getvalue()).decode("ascii")
+	raw = buffer.getvalue()
+	if compress:
+		# mtime=0 so the same circuit always encodes to the same bytes. The
+		# default stamps the current time into the gzip header.
+		raw = gzip.compress(raw, mtime=0)
+	return base64.b64encode(raw).decode("ascii")
 
 
 def encode_qiskit_circuit(circuit, properties=None):
@@ -209,8 +240,12 @@ def encode_qiskit_circuit(circuit, properties=None):
 	# info["qasm"], the field every QPM has always read.
 	declared = (properties or {}).get("circuit_formats")
 	fmt, version = choose_circuit_format(properties)
-	if fmt == QPY:
-		return {"circuit": {"format": QPY, "data": dump_qpy(circuit, version)}}
+	if fmt in QPY_FORMATS:
+		return {"circuit": {
+			"format": fmt,
+			"data": dump_qpy(
+				circuit, version, compress=fmt == QPY_GZIP),
+		}}
 	try:
 		from qiskit import qasm2
 	except Exception as exc:
