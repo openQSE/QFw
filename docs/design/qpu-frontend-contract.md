@@ -472,12 +472,27 @@ The circuit travels in the circuit info as
 data is base64 text, so the info dict stays plain data on any transport. A
 client that sends only `info["qasm"]` is read as OpenQASM 2, as before.
 
+The formats are `openqasm2`, `qpy`, and `qpy+gzip`, which is the same QPY with
+gzip around it before the base64. It is a separate declared format rather than
+an unconditional transform, so a QPM that cannot decompress is sent plain QPY
+instead, and `qpy_version` means the same thing for both. QPY is repetitive
+enough that this is worth having: on Qiskit 2.2.3 a 20-qubit 200-layer circuit
+goes from 458 KB of base64 to 18 KB, a 20-qubit GHZ from 3.2 KB to 500 B, and a
+decomposed 20x20 quantum volume circuit, the least compressible of the set,
+from 120 KB to 68 KB. That also decides which DEFw transport path a circuit
+takes, since DEFw switches to RMA above 64 KiB. Compression costs a few
+milliseconds against about 20 for writing the QPY at all.
+
+A payload is read back as the format of its content, so `qpy+gzip` arrives as
+QPY with the gzip already removed and every consumer handles one QPY.
+
 QPY is Qiskit's own serialization, and it is lossless for Qiskit circuits.
 OpenQASM 2 cannot carry control flow, unbound parameters, gates such as `ecr`,
 delays or circuit metadata. The IQM paths read QPY into a `QuantumCircuit` and
 transcode it as before. The simulator QPMs pass OpenQASM 2 files to their
 executables, so they declare `openqasm2` only and reject any other format by
-name. The scheduler receives the submitted circuit bytes unchanged.
+name. The scheduler receives the circuit bytes as the QPM read them, so a
+compressed payload reaches it decompressed.
 
 Where transpilation happens is a separate decision that is still open. A
 circuit travels the same way whether it is abstract or already transpiled.

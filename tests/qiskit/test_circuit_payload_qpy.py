@@ -77,7 +77,7 @@ def test_the_oldest_qpy_this_qiskit_writes_still_loads():
 
 def test_the_declared_qpy_version_is_the_one_this_qiskit_reads():
 	assert circuit_payload.qiskit_circuit_formats() == {
-		"circuit_formats": ["qpy", "openqasm2"],
+		"circuit_formats": ["qpy+gzip", "qpy", "openqasm2"],
 		"qpy_version": qpy.QPY_VERSION,
 	}
 
@@ -117,3 +117,52 @@ def test_manual_translation_rejects_what_openqasm2_cannot_hold():
 	assert openqasm2_for_manual_translation("OPENQASM 2.0;") == "OPENQASM 2.0;"
 	with pytest.raises(Exception, match="manual translation"):
 		openqasm2_for_manual_translation(circuit)
+
+
+def test_gzip_round_trips_a_real_circuit_and_is_smaller():
+	# qpy+gzip is the same QPY with gzip around it, so a real circuit has to
+	# come back identical, and the point of it is that it is smaller.
+	circuit = QuantumCircuit(20, 20, name="deep")
+	for layer in range(40):
+		for qubit in range(20):
+			circuit.rz(0.1 * layer, qubit)
+		for qubit in range(0, 19, 2):
+			circuit.cx(qubit, qubit + 1)
+	circuit.measure(range(20), range(20))
+	circuit.metadata = {"note": "survives compression"}
+
+	properties = {
+		"circuit_formats": ["qpy+gzip", "qpy", "openqasm2"],
+		"qpy_version": qpy.QPY_VERSION,
+	}
+	compressed = circuit_payload.encode_qiskit_circuit(circuit, properties)
+	assert compressed["circuit"]["format"] == "qpy+gzip"
+
+	loaded = circuit_payload.qiskit_input(compressed)
+	assert loaded.name == "deep"
+	assert loaded.metadata == {"note": "survives compression"}
+	assert len(loaded.data) == len(circuit.data)
+
+	plain = circuit_payload.encode_qiskit_circuit(
+		circuit, {"circuit_formats": ["qpy"], "qpy_version": qpy.QPY_VERSION})
+	assert len(compressed["circuit"]["data"]) < \
+		len(plain["circuit"]["data"]) / 2
+
+
+def test_a_dynamic_circuit_survives_gzip_too():
+	circuit = QuantumCircuit(2, 2, name="dynamic-gzip")
+	circuit.h(0)
+	circuit.measure(0, 0)
+	with circuit.if_test((circuit.clbits[0], 1)):
+		circuit.x(1)
+
+	properties = {
+		"circuit_formats": ["qpy+gzip"],
+		"qpy_version": qpy.QPY_VERSION,
+	}
+	fields = circuit_payload.encode_qiskit_circuit(circuit, properties)
+	loaded = circuit_payload.qiskit_input(fields)
+
+	assert loaded.name == "dynamic-gzip"
+	assert [item.name for item in loaded.data] == \
+		[item.name for item in circuit.data]

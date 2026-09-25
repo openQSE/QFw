@@ -7,6 +7,7 @@
 # are in tests/qiskit/test_circuit_payload_qpy.py.
 
 import base64
+import gzip
 import importlib
 import sys
 import types
@@ -207,9 +208,10 @@ def test_qpy_without_qiskit_says_so(monkeypatch):
 # --- what a QPM declares ----------------------------------------------------
 
 def test_a_qiskit_qpm_declares_qpy_first_with_its_version(monkeypatch):
+	# Compressed QPY, then plain QPY, then the format every QPM reads.
 	_fake_qiskit(monkeypatch, version=13)
 	assert circuit_payload.qiskit_circuit_formats() == {
-		"circuit_formats": ["qpy", "openqasm2"],
+		"circuit_formats": ["qpy+gzip", "qpy", "openqasm2"],
 		"qpy_version": 13,
 	}
 
@@ -256,7 +258,8 @@ def test_the_iqm_qpms_declare_qpy(monkeypatch, package):
 
 	properties = qpm.query()["properties"]
 
-	assert properties["circuit_formats"] == ["qpy", "openqasm2"]
+	assert properties["circuit_formats"] == [
+		"qpy+gzip", "qpy", "openqasm2"]
 	assert properties["qpy_version"] == 13
 
 
@@ -511,3 +514,97 @@ def test_a_failed_qpy_write_names_the_version(monkeypatch):
 	with pytest.raises(DEFwExecutionError) as excinfo:
 		circuit_payload.encode_qiskit_circuit("circ", properties)
 	assert "version 13" in str(excinfo.value)
+
+
+# --- qpy+gzip, the same QPY with gzip around it ---------------------------
+
+
+def _gzip_info(data=b"QISKIT-qpy-bytes"):
+	return {"circuit": {
+		"format": "qpy+gzip",
+		"data": base64.b64encode(gzip.compress(data, mtime=0)).decode("ascii"),
+	}}
+
+
+def test_a_gzipped_payload_reads_back_as_qpy(monkeypatch):
+	# The format reported is the content's, so every consumer handles one QPY
+	# and the compression is framing.
+	fmt, data = circuit_payload.circuit_payload(_gzip_info(b"raw-qpy"))
+
+	assert fmt == "qpy"
+	assert data == b"raw-qpy"
+
+
+def test_a_gzipped_payload_loads_through_qiskit_input(monkeypatch):
+	_fake_qiskit(monkeypatch, version=16, circuits=("loaded",))
+
+	assert circuit_payload.qiskit_input(_gzip_info()) == "loaded"
+
+
+def test_the_scheduler_payload_is_the_decompressed_circuit():
+	assert circuit_payload.payload_bytes(_gzip_info(b"raw-qpy")) == b"raw-qpy"
+
+
+def test_data_that_is_not_gzip_says_so():
+	info = {"circuit": {
+		"format": "qpy+gzip",
+		"data": base64.b64encode(b"not gzip at all").decode("ascii"),
+	}}
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		circuit_payload.circuit_payload(info)
+
+	assert "qpy+gzip" in str(excinfo.value)
+	assert "did not decompress" in str(excinfo.value)
+
+
+def test_a_qpm_declaring_gzip_is_sent_gzip(monkeypatch):
+	dumped = []
+	_fake_qiskit(monkeypatch, version=16, compatibility=13, dumped=dumped)
+	properties = {
+		"circuit_formats": ["qpy+gzip", "qpy", "openqasm2"],
+		"qpy_version": 15,
+	}
+	assert circuit_payload.choose_circuit_format(properties) == (
+		"qpy+gzip", 15)
+
+	fields = circuit_payload.encode_qiskit_circuit("circ", properties)
+	assert fields["circuit"]["format"] == "qpy+gzip"
+	assert dumped == [("circ", 15)]
+	# What the QPM will read back out of it.
+	raw = gzip.decompress(base64.b64decode(fields["circuit"]["data"]))
+	assert raw == b"QPY15:circ"
+
+
+def test_a_qpm_that_cannot_decompress_is_sent_plain_qpy(monkeypatch):
+	# An older QPM declares qpy only. The client must not compress for it.
+	_fake_qiskit(monkeypatch, version=16, compatibility=13)
+	properties = {"circuit_formats": ["qpy", "openqasm2"], "qpy_version": 16}
+
+	assert circuit_payload.choose_circuit_format(properties) == ("qpy", 16)
+	fields = circuit_payload.encode_qiskit_circuit("circ", properties)
+	assert fields["circuit"]["format"] == "qpy"
+	assert base64.b64decode(fields["circuit"]["data"]) == b"QPY16:circ"
+
+
+def test_a_client_that_cannot_write_gzip_qpy_falls_back(monkeypatch):
+	# choose_circuit_format passes over a format it cannot write, so a QPM
+	# declaring only qpy+gzip and openqasm2 still gets served.
+	_no_qiskit(monkeypatch)
+	properties = {
+		"circuit_formats": ["qpy+gzip", "openqasm2"],
+		"qpy_version": 16,
+	}
+	assert circuit_payload.choose_circuit_format(properties) == (
+		"openqasm2", None)
+
+
+def test_the_same_circuit_always_encodes_to_the_same_bytes(monkeypatch):
+	# gzip stamps the current time into its header unless told otherwise, which
+	# would make an identical circuit encode differently each call.
+	_fake_qiskit(monkeypatch, version=16)
+	properties = {"circuit_formats": ["qpy+gzip"], "qpy_version": 16}
+
+	first = circuit_payload.encode_qiskit_circuit("circ", properties)
+	second = circuit_payload.encode_qiskit_circuit("circ", properties)
+
+	assert first == second

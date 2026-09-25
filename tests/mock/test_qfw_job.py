@@ -446,3 +446,32 @@ def test_qfw_job_still_sends_qasm_when_the_qpm_declares_nothing(monkeypatch):
 	payload = fake_qpm.submitted_payloads[0]
 	assert payload["qasm"] == "OPENQASM 2.0; // declared nothing"
 	assert "circuit" not in payload
+
+
+def test_qfw_job_sends_gzipped_qpy_when_the_qpm_declares_it(monkeypatch):
+	# The whole client path, from what the QPM published to what goes on the
+	# wire. The job only passes the declaration through, so this is the piece
+	# that proves the wiring rather than the encoder.
+	import gzip
+
+	import qfw_qiskit.qfw_job as qfw_job
+
+	dumped = []
+	_fake_qpy(monkeypatch, dumped)
+	fake_qpm = FakeQPM(cids=["cid-gzip"])
+	fake_qpm.qpm_properties = {
+		"circuit_formats": ["qpy+gzip", "qpy", "openqasm2"],
+		"qpy_version": 16,
+	}
+	circuit = qfw_job.QuantumCircuit(2, name="compressed")
+	job = qfw_job.QFwJob(
+		FakeBackend(), fake_qpm, FakeEventAPI(), circuit,
+		_driver_options(shots=4))
+	job.submit()
+
+	payload = fake_qpm.submitted_payloads[0]
+	assert payload["circuit"]["format"] == "qpy+gzip"
+	assert dumped == [("compressed", 16)]
+	assert gzip.decompress(
+		base64.b64decode(payload["circuit"]["data"])) == b"QPY16"
+	assert "qasm" not in payload
