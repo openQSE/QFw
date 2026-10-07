@@ -73,7 +73,9 @@ class QRC(UTIL_QRC):
 		}
 
 	def parse_statevector_dump(self, dump_file, num_qubits):
-		amplitudes = np.fromfile(dump_file, dtype=np.complex128)
+		raw = np.fromfile(dump_file, dtype=np.float64)
+		half = raw.size // 2
+		amplitudes = raw[:half] + 1j * raw[half:]
 		return QFwStatevector.from_complex_sequence(
 			amplitudes, num_qubits=num_qubits, source="nwqsim")
 
