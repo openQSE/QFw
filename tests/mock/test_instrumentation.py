@@ -8,6 +8,7 @@ way CI does. The QPM side is driven through the fake IQM QPM, whose run queue
 is the simplest real one, and the client side through QFwJob with the mock
 QPM the job tests already use.
 """
+import logging
 import time
 import types
 
@@ -32,9 +33,17 @@ from util import instrumentation
 
 
 class _Recording:
-	def __init__(self, exporter, reader):
+	def __init__(self, exporter, reader, log_exporter=None):
 		self.exporter = exporter
 		self.reader = reader
+		self.log_exporter = log_exporter
+
+	def logs(self):
+		"""(body, trace_id) of every record the logs tier exported."""
+		finished = getattr(
+			self.log_exporter, "get_finished_log_records",
+			getattr(self.log_exporter, "get_finished_logs", None))()
+		return [(r.log_record.body, r.log_record.trace_id) for r in finished]
 
 	def spans_by_name(self):
 		groups = {}
@@ -70,14 +79,30 @@ def recording():
 		InMemorySpanExporter)
 	from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
+	from opentelemetry.sdk._logs import LoggerProvider
+	from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+	try:
+		from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+	except ImportError:  # older SDKs
+		from opentelemetry.sdk._logs.export import (
+			InMemoryLogExporter as InMemoryLogRecordExporter)
+
 	exporter = InMemorySpanExporter()
 	tracer_provider = TracerProvider(sampler=ALWAYS_ON)
 	tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
 	reader = InMemoryMetricReader()
 	meter_provider = MeterProvider(metric_readers=[reader])
-	qfw_telemetry.use_providers(tracer_provider, meter_provider)
+	# The logs tier too, at the level that carries every DEFw line.
+	log_exporter = InMemoryLogRecordExporter()
+	logger_provider = LoggerProvider()
+	logger_provider.add_log_record_processor(
+		SimpleLogRecordProcessor(log_exporter))
+	qfw_telemetry.use_providers(
+		tracer_provider, meter_provider,
+		logger_provider=logger_provider, logs_level=logging.WARNING)
 	assert instrumentation.enabled()
-	yield _Recording(exporter, reader)
+	assert qfw_telemetry.logs_enabled()
+	yield _Recording(exporter, reader, log_exporter)
 	qfw_telemetry.shutdown()
 	assert not instrumentation.enabled()
 
@@ -131,9 +156,14 @@ def test_qpm_run_is_one_trace_with_every_hop(monkeypatch, tmp_path, recording):
 	with qfw_telemetry.tracer().start_as_current_span("qfw.app.job") as job:
 		response = qpm.async_run(
 			dict(_CIRCUIT), reservation_id=decision["reservation_id"])
+		# A line written while the job's span is current, the way DEFw's
+		# own logging does inside the receive handler, carries its trace.
+		logging.getLogger("qfw.test").log(33, "job %s submitted", "job-trace")
 	completion = _wait_for_completion(
 		qpm, response["cid"], decision["reservation_id"])
 	assert completion["outcome"] == "COMPLETED"
+	assert ("job job-trace submitted", job.get_span_context().trace_id) in \
+		recording.logs()
 
 	spans = recording.spans_by_name()
 	assert set(spans) == {
