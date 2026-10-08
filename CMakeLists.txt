@@ -257,6 +257,7 @@ install(PROGRAMS
 	examples/qfw_ghz.sh
 	examples/qfw_init_test.sh
 	examples/qfw_iqm_chem_driver.sh
+	examples/qfw_job_stream.sh
 	examples/qfw_mpi_smoke.sh
 	examples/qfw_pennylane.sh
 	examples/qfw_qaoa.sh

@@ -87,4 +87,20 @@ def resolve_descriptor(device_id=None):
 		"s3_bucket": device.get("s3-bucket"),
 		"s3_region": device.get("s3-region"),
 		"job_timeout_seconds": device.get("job-timeout-seconds"),
+		# Amazon Braket through QDMI (drivers/qdmi_profiles.py). The device
+		# ARN is the provider-device-id. The stable QDMI id names the
+		# catalogue entry to register the device library under; the Region,
+		# the S3 results URI and a Braket Direct reservation ARN are optional.
+		# None of these is a secret: the AWS identity is the service process's
+		# own, through the AWS SDK credential chain.
+		"qdmi_device_id": device.get("qdmi-device-id"),
+		"aws_region": device.get("aws-region"),
+		"s3_results_uri": device.get("s3-results-uri"),
+		"reservation_arn": device.get("reservation-arn"),
+		# What a service advertises and enforces for a device whose library
+		# does not say up front: the qubit count for the directory record,
+		# which is built before any session opens, and a shot cap the driver
+		# refuses above, before anything is billed.
+		"num_qubits": device.get("num-qubits"),
+		"max_shots": device.get("max-shots"),
 	}

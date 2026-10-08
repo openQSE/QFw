@@ -4,6 +4,7 @@ import os
 import threading
 import time
 
+from util import instrumentation
 from util.qpm.statevector import QFwStatevector
 
 try:
@@ -133,17 +134,21 @@ class QRC:
 
 	def _execute(self, circuit, cancel_event=None):
 		info = circuit.info
-		circuit.set_launching()
-		start_ns = time.time_ns()
-		circuit.set_running()
-		sleep_seconds = self._sleep_seconds(info)
-		cancelled = self._sleep_or_cancel(sleep_seconds, cancel_event)
-		end_ns = time.time_ns()
-		observed_ns = end_ns - start_ns
-		if cancelled:
-			circuit.set_fail()
-		else:
-			circuit.set_exec_done()
+		with instrumentation.backend_execution(
+				circuit, api_path=instrumentation.API_PATH_SIMULATOR,
+				device=self.target_id, backend_kind="fake-iqm",
+				cancel_event=cancel_event):
+			circuit.set_launching()
+			start_ns = time.time_ns()
+			circuit.set_running()
+			sleep_seconds = self._sleep_seconds(info)
+			cancelled = self._sleep_or_cancel(sleep_seconds, cancel_event)
+			end_ns = time.time_ns()
+			observed_ns = end_ns - start_ns
+			if cancelled:
+				circuit.set_fail()
+			else:
+				circuit.set_exec_done()
 		result = self._result(circuit, observed_ns, cancelled)
 		self._remember_result_metadata(result)
 		return result

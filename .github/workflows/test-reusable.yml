@@ -92,7 +92,8 @@ jobs:
         python -m pip install --upgrade pip pytest pyyaml \
           'opentelemetry-api>=1.44.0' \
           'opentelemetry-sdk>=1.44.0' \
-          'opentelemetry-exporter-otlp-proto-common>=1.44.0'
+          'opentelemetry-exporter-otlp-proto-common>=1.44.0' \
+          'opentelemetry-exporter-otlp-proto-http>=1.44.0'
 
     - name: Run ci-mock
       # The ci-mock helper mirrors the CI-safe mock pytest suite.

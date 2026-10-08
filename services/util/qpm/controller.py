@@ -54,6 +54,7 @@ from .credentials import (
 )
 from .reservation_sequence import PersistentReservationSequence
 from util.circuit_payload import payload_bytes
+from util import instrumentation
 
 
 TARGET_ID_ENV = "QFW_QPM_TARGET_ID"
@@ -191,6 +192,9 @@ class QPMRuntimeTask:
 	external_ids: dict = field(default_factory=dict)
 	canonical_ids: dict = field(default_factory=dict)
 	state: str = QPM_TASK_CREATED
+	# The trace context the circuit was received in, kept here because the
+	# circuit itself is gone by the time its completion is published.
+	trace_context: object = None
 
 
 @dataclass
@@ -991,6 +995,10 @@ class QPMTargetController:
 			self._enqueue_completion_record_locked(queue, record)
 			delivery = self._completion_delivery_locked(
 				evtype, record, event=event)
+			# The push to the client runs on this thread, outside any span,
+			# so it joins the job's trace through the circuit's own context.
+			delivery["trace_context"] = (
+				getattr(circuit, "otel_context", None) or runtime.trace_context)
 		self._dispatch_completion_deliveries([delivery])
 		return True
 
@@ -2004,6 +2012,7 @@ class QPMTargetController:
 			external_ids=dict(runtime.external_ids),
 			canonical_ids=dict(runtime.canonical_ids),
 			state=runtime.state,
+			trace_context=runtime.trace_context,
 		)
 		self.terminal_tasks_by_cid[snapshot.cid] = snapshot
 		self.terminal_tasks_by_qtask_id[snapshot.qtask_id] = snapshot
@@ -2105,7 +2114,10 @@ class QPMTargetController:
 				continue
 			for registration in delivery["matches"]:
 				try:
-					registration["class"].put(delivery["event"])
+					with instrumentation.transport_rpc(
+							instrumentation.TRANSPORT_OP_EVENT,
+							context=delivery.get("trace_context")):
+						registration["class"].put(delivery["event"])
 				except Exception:
 					stale_registration_ids.add(id(registration))
 					continue

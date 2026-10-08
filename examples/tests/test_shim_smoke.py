@@ -117,6 +117,11 @@ def parse_args():
 	parser.add_argument(
 		"--shots", type=int, default=100,
 		help="Shots for the run_circuit smoke request.")
+	parser.add_argument(
+		"--circuit", choices=sorted(SMOKE_CIRCUITS), default="x",
+		help="The circuit async_run submits. 'asymmetric' measures three "
+		     "qubits into permuted classical bits, so a result keyed by "
+		     "qubit rather than by classical bit fails the check.")
 	return parser.parse_args()
 
 
@@ -233,14 +238,83 @@ def call_api(label, func, failures, **kwargs):
 		return None
 
 
-def smoke_qasm():
-	return """OPENQASM 2.0;
+# The circuits async_run can submit, with the counts key every shot should
+# produce on an ideal device, in Qiskit's order (classical bit 0 rightmost).
+# "x" is the one-qubit check. "asymmetric" puts X on qubit 0 alone and
+# measures the three qubits into permuted classical bits, out of qubit order,
+# so the only correct key is "100": a result keyed by qubit instead of by
+# classical bit, or by measurement order, reads differently. Bell and GHZ
+# states cannot tell those apart.
+SMOKE_CIRCUITS = {
+	"x": {
+		"num_qubits": 1,
+		"expected": "1",
+		"qasm": """OPENQASM 2.0;
 include "qelib1.inc";
 qreg q[1];
 creg c[1];
 x q[0];
 measure q[0] -> c[0];
-"""
+""",
+	},
+	"asymmetric": {
+		"num_qubits": 3,
+		"expected": "100",
+		"qasm": """OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[3];
+creg c[3];
+x q[0];
+measure q[2] -> c[0];
+measure q[0] -> c[2];
+measure q[1] -> c[1];
+""",
+	},
+}
+
+
+def smoke_qasm(circuit="x"):
+	return SMOKE_CIRCUITS[circuit]["qasm"]
+
+
+def result_counts(result):
+	# The shim run-queue delivers {"counts", "qhw_result"}; a service without
+	# that envelope delivers the qhw-result-v1 record itself.
+	output = result.get("result") if isinstance(result, dict) else None
+	if not isinstance(output, dict):
+		return None
+	if "counts" in output:
+		return output["counts"]
+	nested = output.get("result")
+	if isinstance(nested, dict):
+		return nested.get("counts")
+	return None
+
+
+def normalize_key(key, width):
+	text = str(key).strip()
+	if text.startswith(("0x", "0X")):
+		return format(int(text, 16), f"0{width}b")
+	return text.replace(" ", "").rjust(width, "0")
+
+
+def check_counts(result, circuit):
+	# On hardware, readout error puts a few shots under other keys, so the
+	# check is on the key most shots landed under, not on every key.
+	spec = SMOKE_CIRCUITS[circuit]
+	counts = result_counts(result)
+	if not counts:
+		raise DEFwError(f"run_circuit returned no counts: {result}")
+	dominant = normalize_key(
+		max(counts, key=lambda key: counts[key]), spec["num_qubits"])
+	if dominant != spec["expected"]:
+		raise DEFwError(
+			f"most shots of the {circuit} circuit read {dominant!r}, "
+			f"expected {spec['expected']!r} (counts {counts}). A key in "
+			"qubit order rather than classical-bit order means the result "
+			"is keyed wrongly on the way back from the device.")
+	print(f"[shim-smoke] counts check: {dominant!r} as expected "
+	      f"for the {circuit} circuit")
 
 
 def event_payload(event):
@@ -323,7 +397,7 @@ def can_skip_qrmi_provider_completion(qpm, lib):
 	return True
 
 
-def run_circuit(qpm, lib, shots, timeout, reservation_id):
+def run_circuit(qpm, lib, shots, timeout, reservation_id, circuit="x"):
 	event_api = BaseEventAPI()
 	event_api.register_external()
 	qpm.register_event_notification(
@@ -331,8 +405,8 @@ def run_circuit(qpm, lib, shots, timeout, reservation_id):
 		reservation_id=reservation_id)
 
 	info = {
-		"qasm": smoke_qasm(),
-		"num_qubits": 1,
+		"qasm": smoke_qasm(circuit),
+		"num_qubits": SMOKE_CIRCUITS[circuit]["num_qubits"],
 		"num_shots": shots,
 		"compiler": "staq",
 	}
@@ -350,6 +424,7 @@ def run_circuit(qpm, lib, shots, timeout, reservation_id):
 		if can_skip_qrmi_provider_completion(qpm, lib):
 			return cid, result, False
 		raise DEFwError(f"run_circuit failed for cid={cid}: {result}")
+	check_counts(result, circuit)
 	return cid, result, True
 
 
@@ -378,7 +453,8 @@ def run_named_call(call, qpm, libs, cap_map, failures, args,
 		try:
 			cid, _, completed = run_circuit(
 				qpm, requested_lib(args), args.shots,
-				args.circuit_run_timeout, reservation_id)
+				args.circuit_run_timeout, reservation_id,
+				circuit=args.circuit)
 			if not completed:
 				cid = None
 		except Exception as exc:
@@ -449,6 +525,7 @@ def main():
 			"call": args.call,
 			"device_id": args.device_id,
 			"shots": args.shots,
+			"circuit": args.circuit,
 		},
 		metrics={
 			"failed_call_count": len(failures),

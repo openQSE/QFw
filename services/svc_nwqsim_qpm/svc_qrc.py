@@ -13,6 +13,16 @@ from util.qpm.statevector import (
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
 
+def _split_planar_doubles(doubles):
+	half = len(doubles) // 2
+	if hasattr(np, "empty"):
+		amplitudes = np.empty(half, dtype=np.complex128)
+		amplitudes.real = doubles[:half]
+		amplitudes.imag = doubles[half:]
+		return amplitudes
+	return [complex(r, i) for r, i in zip(doubles[:half], doubles[half:])]
+
+
 class QRC(UTIL_QRC):
 	def __init__(self, start=True):
 		super().__init__(start=start)
@@ -73,7 +83,12 @@ class QRC(UTIL_QRC):
 		}
 
 	def parse_statevector_dump(self, dump_file, num_qubits):
-		amplitudes = np.fromfile(dump_file, dtype=np.complex128)
+		raw = np.fromfile(dump_file, dtype=np.float64)
+		if num_qubits is not None and raw.size != (2 << num_qubits):
+			raise DEFwExecutionError(
+				f"{dump_file}: statevector dump has {raw.size} doubles, "
+				f"expected {2 << num_qubits} for {num_qubits} qubits")
+		amplitudes = _split_planar_doubles(raw)
 		return QFwStatevector.from_complex_sequence(
 			amplitudes, num_qubits=num_qubits, source="nwqsim")
 

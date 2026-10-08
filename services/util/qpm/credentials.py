@@ -16,6 +16,7 @@ CREDENTIAL_PROVIDER_CONFIG_KEYS = (
 # so there is one list rather than two that can drift apart.
 FILE_PROVIDER_TYPES = device_access.FILE_PROVIDER_TYPES
 NO_SECRET_PROVIDER = device_access.NO_SECRET_PROVIDER
+ENTITLEMENT_PROVIDER_TYPES = device_access.ENTITLEMENT_PROVIDER_TYPES
 CREDENTIAL_MODE_ENV = "QFW_QPM_CREDENTIAL_MODE"
 
 
@@ -201,6 +202,89 @@ class FileCredentialProvider(CredentialProvider):
 		return now_ns + ttl_ns
 
 
+class EntitlementCredentialProvider(CredentialProvider):
+	# For a device whose library authenticates on its own, as the AWS SDK's
+	# credential chain does for Braket. QFw holds no key for it, but the
+	# credential DB still says who may use the device, so binding checks the
+	# user's entitlement and carries no secret material. Unlike no-secret,
+	# this is a required-credential provider: a user without an enabled
+	# entry for the device is refused.
+	name = "entitlement"
+
+	def __init__(self, config_path, device, provider_config=None):
+		self.config_path = config_path
+		self.device = dict(device or {})
+		self.provider_config = dict(provider_config or {})
+
+	def validate(self, request):
+		self._select_entitlement(request)
+
+	def bind(self, request):
+		record_key, credential_db_path = self._select_entitlement(request)
+		now_ns = time.time_ns()
+		metadata = {
+			"schema": CREDENTIAL_BINDING_SCHEMA,
+			"provider": self.provider_config.get("name", self.name),
+			"provider_type": self.name,
+			"credential_scope": (
+				request.get("credential_scope") or
+				self.provider_config.get("scope")),
+			"credential_handle": request.get("credential_handle"),
+			"credential_hint": _redacted_hint(request.get("credential_hint")),
+			"target_device_id": self.device.get("device_id"),
+			"provider_device_id": self.device.get("provider_device_id"),
+			"user": record_key,
+			"bound_at_ns": now_ns,
+			"expires_at_ns": 0,
+			"refresh_policy": "none",
+			"source": {
+				"type": self.name,
+				"config": self.config_path,
+				"credential_db": credential_db_path,
+			},
+			"secret_material": "none",
+		}
+		# What a driver needs to know which device the circuit is for, and
+		# nothing it could authenticate with.
+		secret = {
+			"url": self.device.get("url"),
+			"device_id": self.device.get("device_id"),
+			"provider": self.device.get("provider"),
+			"provider_device_id": self.device.get("provider_device_id"),
+			"quantum_computer": self.device.get("provider_device_id"),
+			"user": record_key,
+		}
+		return CredentialProviderResponse(
+			secret={key: value for key, value in secret.items()
+				if value not in (None, "")},
+			metadata=_drop_none(metadata))
+
+	def _select_entitlement(self, request):
+		credential_db_path = self._credential_db_path()
+		credential_db = device_access.load_json_config(credential_db_path)
+		try:
+			record_key, _record = device_access.select_entitled_record(
+				credential_db,
+				request.get("user"),
+				device_id=self.device.get("device_id"),
+				provider_device_id=self.device.get("provider_device_id"),
+				credential_hint=request.get("credential_hint"),
+				credential_handle=request.get("credential_handle"))
+		except DEFwExecutionError as exc:
+			raise QPMCredentialBindingMissing(str(exc)) from exc
+		return record_key, credential_db_path
+
+	def _credential_db_path(self):
+		value = (
+			self.provider_config.get("credential-db") or
+			self.provider_config.get("path") or
+			self.device.get("credential_db"))
+		if not value:
+			raise QPMCredentialProviderUnavailable(
+				"entitlement credential provider requires credential-db")
+		return device_access.resolve_relative_path(value, self.config_path)
+
+
 def bind_reservation_credential(binding, credential_mode=None):
 	request = credential_request_from_binding(binding)
 	provider = provider_for_request(request, credential_mode=credential_mode)
@@ -266,6 +350,9 @@ def provider_for_request(request, credential_mode=None):
 	provider_type = str(provider_config.get("type", "file")).strip().lower()
 	if provider_type in FILE_PROVIDER_TYPES:
 		return FileCredentialProvider(config_path, device, provider_config)
+	if provider_type in ENTITLEMENT_PROVIDER_TYPES:
+		return EntitlementCredentialProvider(
+			config_path, device, provider_config)
 	if provider_type in ("none", "no-secret"):
 		raise QPMCredentialProviderUnavailable(
 			"hardware QPM cannot use a no-secret credential provider")

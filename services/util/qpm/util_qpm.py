@@ -31,6 +31,7 @@ from .admission import (
 from .scheduler import QPMSchedulerError, QPMSchedulerUnavailable
 from .util_circuit import Circuit, CircuitStates, MAX_PPN
 from .request import parse_execution_request
+from util import instrumentation
 
 QPM_SERVICE_TYPE = "qfw.qpm"
 MANAGED_SUBMISSION_FAILURE_REASONS = (
@@ -149,6 +150,10 @@ class UTIL_QPM:
 		     controller_serialization_mode=None,
 		     admission_context_factory=None,
 		     scheduler_context_factory=None):
+		# Telemetry for this service process, named for the device it serves.
+		# Off unless QFW_TELEMETRY says otherwise; see util.instrumentation.
+		instrumentation.configure_process(
+			"qpm", device=target_id or os.environ.get("QFW_QPU_DEVICE_ID"))
 		self.qrc = qrc
 		self.max_ppn = max_ppn
 		config = controller_config(
@@ -214,6 +219,9 @@ class UTIL_QPM:
 			self.circuits[cid] = Circuit(
 				cid, request_payload, self.free_resources_and_oor)
 			self.circuits[cid].set_ready()
+		instrumentation.bind_circuit(
+			self.circuits[cid], qtask_id=runtime.qtask_id)
+		runtime.trace_context = getattr(self.circuits[cid], "otel_context", None)
 		logging.debug(
 			f"{cid} qtask {runtime.qtask_id} added to circuit database "
 			f"in {time.time() - start}")
@@ -485,6 +493,7 @@ class UTIL_QPM:
 			circuit.set_resources_consumed()
 			self.controller.set_task_state(
 				runtime.qtask_id, QPM_TASK_RESOURCES_CONSUMED)
+		instrumentation.record_queue(circuit)
 		return circuit
 
 	def prepare_provider_submission(self, circuit):
@@ -721,6 +730,10 @@ class UTIL_QPM:
 		return self._sync_run_request(request)
 
 	def _sync_run_request(self, request):
+		with instrumentation.qpm_receive("sync_run"):
+			return self._sync_run_submission(request)
+
+	def _sync_run_submission(self, request):
 		cid = self.create_circuit(request.payload, request=request)
 		deadline = _sync_deadline(request.context.timeout)
 		while True:
@@ -839,6 +852,10 @@ class UTIL_QPM:
 		return self._async_run_request(request)
 
 	def _async_run_request(self, request):
+		with instrumentation.qpm_receive("async_run"):
+			return self._async_run_submission(request)
+
+	def _async_run_submission(self, request):
 		cid = None
 		circuit = None
 		try:
@@ -1191,6 +1208,7 @@ class UTIL_QPM:
 		self.controller.set_service_state("stopping")
 		self.shutdown_provider()
 		self.controller.set_service_state("stopped")
+		instrumentation.shutdown_process()
 		time.sleep(0.05)
 		me.exit()
 

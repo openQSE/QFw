@@ -1,6 +1,7 @@
 from api_events import Event
 from defw_exception import DEFwExecutionError
 from .util_iqm import IQMServiceClient
+from util import instrumentation
 import logging
 import threading
 import time
@@ -47,10 +48,13 @@ class QRC:
 
 	def _run_circuit(self, circ, raise_on_error):
 		try:
-			circ.set_launching()
-			circ.set_running()
-			output = self.iqm.run_circuit(circ)
-			circ.set_exec_done()
+			with instrumentation.backend_execution(
+					circ, api_path=instrumentation.API_PATH_NATIVE,
+					device=self._device_name(), backend_kind="iqm"):
+				circ.set_launching()
+				circ.set_running()
+				output = self.iqm.run_circuit(circ)
+				circ.set_exec_done()
 			return self._result_dict(circ, output, 0)
 		except Exception as e:
 			circ.set_fail()
@@ -65,6 +69,12 @@ class QRC:
 				},
 			}
 			return self._result_dict(circ, output, -1)
+
+	def _device_name(self):
+		try:
+			return self.iqm.device_id()
+		except Exception:
+			return None
 
 	def _async_runner(self, circ):
 		result = None

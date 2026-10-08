@@ -16,13 +16,23 @@
 # (e.g. "QB1"). get_backend_info / get_dynamic_backend_info stay with QRMI
 # because their native shape carries raw IQM architecture data that QDMI does
 # not expose.
+#
+# QDMI is one interface, but the vendor-defined parts differ per device
+# library: how a session is opened and from which settings, which program
+# format a job takes, what the CUSTOM slots mean, and how counts are keyed.
+# Those live in a per-provider profile (qdmi_profiles.py), chosen from the
+# resource descriptor's provider. This driver keeps the session and job
+# lifecycle (open, submit, poll, cancel, results) in one place and asks the
+# profile for the rest.
 
 from .base_driver import BaseDriver
+from .qdmi_profiles import profile_for
 from . import fomac_normalize
 from defw_exception import DEFwExecutionError
+from util import instrumentation
 import json
 import logging
-import os
+import sys
 import time
 
 
@@ -50,107 +60,70 @@ class QdmiDriver(BaseDriver):
 		# Per-resource descriptor (descriptor.py); carries device identity for
 		# binding/creds and, later, dynamic capability discovery.
 		self._descriptor = descriptor or {}
+		# The vendor-defined parts of QDMI for this resource's provider. An
+		# unknown provider fails here, when the service starts, rather than
+		# at the first call.
+		self._profile = profile_for(self._descriptor)
 		self._device_obj = None
 		self._last_job = None
 
 	# --- QDMI session / device binding -------------------------------
 
 	def _access(self):
-		# Resolve connection settings for the QDMI device. Honor the same env
-		# vars the native svc_iqm_qpm uses, then fall back to the shared
-		# device-access config (util.device_access).
-		provider = self._descriptor.get("provider", "iqm")
-		device_id = self._descriptor.get("id")
-		provider_device_id = (
-			self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
-		base_url = os.environ.get("QFW_QC_URL")
-		token = os.environ.get("QFW_API_KEY")
-		if not (base_url and token):
-			try:
-				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(provider=provider)
-			except Exception as exc:
-				raise DEFwExecutionError(
-					"QDMI driver could not resolve device access for "
-					f"provider {provider!r}: set QFW_QC_URL/QFW_API_KEY or "
-					f"configure device access: {exc}") from exc
-			base_url = base_url or cfg.get("url")
-			token = token or cfg.get("api_key")
-			device_id = device_id or cfg.get("device_id")
-			provider_device_id = (
-				provider_device_id
-				or cfg.get("provider_device_id")
-				or cfg.get("quantum_computer"))
-		# The IQM QDMI library refuses to initialize a device session without a
-		# base URL + token, and every device-property query then fails with a
-		# bad-session-state error. Catch the missing credentials here so the
-		# failure names what to set instead of surfacing deep inside FoMaC.
-		missing = []
-		if not base_url:
-			missing.append("base URL (QFW_QC_URL or device-access url)")
-		if not token:
-			missing.append("API token (QFW_API_KEY or device-access api_key)")
-		if missing:
-			raise DEFwExecutionError(
-				"QDMI driver cannot open a device session without " +
-				" and ".join(missing))
-		# Strip trailing slashes so URL construction can't produce "//" (the
-		# IQM server rejects a doubled slash); keeps the base URL canonical.
-		base_url = base_url.rstrip("/")
-		return {
-			"base_url": base_url,
-			"token": token,
-			"qc_alias": provider_device_id or device_id,
-		}
+		# The settings this resource's session opens with. What they are and
+		# where they come from is the provider's business (qdmi_profiles):
+		# IQM takes a server URL, an API token and a quantum computer alias,
+		# Braket a device ARN and a Region.
+		return self._profile.access()
 
 	def _device(self):
 		# Lazy: open the QDMI device through MQT Core's QDMI driver once. Import
 		# and construction are deferred so the service/Frontend build and route
 		# even where the libraries are absent or credentials are unset; only a
-		# real introspection call needs a live device. The IQM device library is
-		# registered under the stable device ID iqm-qdmi publishes, then opened
-		# with this resource's connection settings; qc_alias is passed as the
-		# device session's custom2 parameter (as iqm.qdmi.qiskit does).
+		# real introspection call needs a live device. The profile names the
+		# device library and the stable device ID to register it under, and
+		# maps this resource's settings onto the session parameters, because
+		# QDMI's BASEURL, TOKEN and CUSTOM slots carry different things for
+		# different vendors.
 		if self._device_obj is not None:
 			return self._device_obj
 		try:
-			from iqm.qdmi import (IQM_QDMI_DEVICE_ID, IQM_QDMI_LIBRARY_PATH,
-					IQM_QDMI_PREFIX)
-			from mqt.core.qdmi.driver import (DeviceDefinition, open_device,
+			from mqt.core.qdmi.driver import (open_device,
 					register_device_if_absent)
 		except Exception as exc:
 			raise DEFwExecutionError(
-				"failed to import the QDMI driver API (mqt.core.qdmi.driver / "
-				"iqm.qdmi). Install iqm-qdmi and mqt-core >= 3.9 before using "
-				f"the QDMI driver: {exc}") from exc
+				"failed to import the QDMI driver API (mqt.core.qdmi.driver). "
+				"Install mqt-core >= 3.9 before using the QDMI driver: "
+				f"{exc}") from exc
 		access = self._access()
+		try:
+			definition = self._profile.definition(access)
+		except DEFwExecutionError:
+			raise
+		except Exception as exc:
+			raise DEFwExecutionError(
+				"failed to import the QDMI device library for provider "
+				f"{self._profile.provider!r}. Install {self._profile.requires} "
+				f"before using the QDMI driver: {exc}") from exc
 		# Registration only validates and stores the definition -- it loads no
 		# native code, and register_device_if_absent makes a second driver
 		# instance in the same process a no-op instead of a duplicate-ID error.
 		# open_device then allocates a fresh QDMI device session, applies these
-		# parameters, and initializes it (the IQM library fetches the
+		# parameters, and initializes it (the device library fetches the
 		# device/calibration data during init). A query before a session is
 		# initialized returns a bad-session-state error, so surface an init
 		# failure here as exactly that: the session could not be opened.
 		try:
-			register_device_if_absent(DeviceDefinition(
-				IQM_QDMI_DEVICE_ID,
-				str(IQM_QDMI_LIBRARY_PATH),
-				IQM_QDMI_PREFIX))
+			register_device_if_absent(definition)
 			self._device_obj = open_device(
-				IQM_QDMI_DEVICE_ID,
-				base_url=access.get("base_url"),
-				token=access.get("token"),
-				custom2=access.get("qc_alias"),
-			)
+				definition.device_id, **self._profile.open_kwargs(access))
 		except Exception as exc:
 			raise DEFwExecutionError(
 				"failed to open the QDMI device session (MQT Core could not "
 				"initialize it; device introspection requires an initialized "
 				f"session): {exc}") from exc
 		logging.debug("shim: QDMI device opened (%s)",
-				access.get("qc_alias") or access.get("base_url"))
+				self._profile.describe(access))
 		return self._device_obj
 
 	def _ids(self):
@@ -162,7 +135,9 @@ class QdmiDriver(BaseDriver):
 	def get_device_info(self):
 		provider, device_id = self._ids()
 		topo = fomac_normalize.extract_topology(self._device())
-		return fomac_normalize.to_device_record(topo, provider, device_id)
+		return fomac_normalize.to_device_record(
+			topo, provider, device_id,
+			technology=self._profile.technology())
 
 	def get_coupling_graph(self, calibration_set_id=None):
 		provider, device_id = self._ids()
@@ -176,38 +151,35 @@ class QdmiDriver(BaseDriver):
 		# one. Selecting a *different* set is still a follow-up: the device
 		# session always reflects the active one, so the argument is a no-op.
 		provider, device_id = self._ids()
-		cal = fomac_normalize.extract_calibration(self._device())
+		cal = fomac_normalize.extract_calibration(
+			self._device(),
+			calibration_set_slot=self._profile.calibration_set_slot)
 		return fomac_normalize.to_calibration_record(cal, provider, device_id)
 
-	# --- execution: OpenQASM -> IQM circuit -> FoMaC submit_job ----------
+	# --- execution: circuit -> provider program -> FoMaC submit_job ------
 
 	def run_circuit(self, circuit):
 		# The circuit arrives in a format this QPM declares, QPY or OpenQASM 2
-		# (see util.circuit_payload). Transcode it to an IQM circuit with the
-		# shared util, then submit through QDMI's FoMaC job interface as an
-		# IQM_JSON program. Note the QRMI/QDMI difference: QDMI's
-		# IQM_JSON program is a SINGLE circuit -- QDMI-on-IQM wraps it into the
-		# run request (circuits/shots/calibration_set) itself -- whereas QRMI
-		# submits the whole run request. Poll to completion and normalize the
-		# counts to qhw-result-v1 (the same record the QRMI path produces).
-		device = self._device()
+		# (see util.circuit_payload). The profile encodes it as the program
+		# its device library takes (IQM_JSON for QDMI-on-IQM, OpenQASM 3 for
+		# Braket), then it is submitted through QDMI's FoMaC job interface,
+		# polled to completion, and the counts are normalized to
+		# qhw-result-v1 (the same record the QRMI path produces).
+		with instrumentation.backend_phase("acquire"):
+			device = self._device()
 		info = getattr(circuit, "info", None) or {}
 		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
 		from util.circuit_payload import qiskit_input
 		source = qiskit_input(info)
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
-		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
-		timeout = float(info.get("timeout", 300.0))
+		self._profile.check_shots(shots)
+		timeout = self._profile.timeout_seconds(info)
 		poll = float(info.get("poll_interval", 1.0))
 		provider, device_id = self._ids()
 
-		# The transcode needs the device's active qubits; FoMaC sites supply
-		# them (QDMI has no raw dynamic-architecture dict like QRMI's target()).
-		from util.iqm_transcode import build_iqm_circuit
-		topo = fomac_normalize.extract_topology(device)
-		dynamic = {"qubits": topo.get("qubits") or []}
-		iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
-		program = self._serialize_program(iqm_circuit)
+		with instrumentation.qpm_transpile():
+			program, program_format, measurement = self._profile.encode(
+				self, source, info, device)
 
 		# Set by the shim QRC when the QPM cancels this circuit. A cancel that
 		# arrives before submission starts nothing at the provider.
@@ -216,22 +188,44 @@ class QdmiDriver(BaseDriver):
 			raise DEFwExecutionError(
 				"QDMI job was cancelled before it was submitted")
 
+		# The profile names the format rather than importing it, so nothing
+		# here needs mqt.core until the job is about to be submitted.
 		try:
 			from mqt.core.qdmi import ProgramFormat
 		except Exception as exc:
 			raise DEFwExecutionError(
 				f"failed to import mqt.core.qdmi ProgramFormat: {exc}") from exc
+		try:
+			fmt = getattr(ProgramFormat, program_format)
+		except AttributeError as exc:
+			raise DEFwExecutionError(
+				"mqt.core.qdmi knows no program format "
+				f"{program_format!r}") from exc
 
 		timing = {}
 		start = time.monotonic()
-		try:
-			job = device.submit_job(program, ProgramFormat.IQM_JSON, int(shots))
-		except Exception as exc:
-			raise DEFwExecutionError(f"QDMI submit_job failed: {exc}") from exc
+		with instrumentation.backend_phase("submit"):
+			try:
+				job = device.submit_job(
+					program, fmt, int(shots), **self._profile.job_kwargs(info))
+			except Exception as exc:
+				raise DEFwExecutionError(
+					f"QDMI submit_job failed: {exc}") from exc
 		timing["submit_seconds"] = time.monotonic() - start
 		queue_position = self._queue_position(job)
+		instrumentation.set_attribute(
+			instrumentation.ATTR_VENDOR_QUEUE_POSITION, queue_position)
 
-		status = self._poll_job(job, timeout, poll, cancel_event=cancel_event)
+		collect = instrumentation.backend_phase("collect")
+		collect.__enter__()
+		instrumentation.set_attribute(
+			instrumentation.ATTR_POLL_INTERVAL, float(poll))
+		try:
+			status = self._poll_job(
+				job, timeout, poll, cancel_event=cancel_event)
+		except BaseException:
+			collect.__exit__(*sys.exc_info())
+			raise
 		timing["wait_seconds"] = (
 			time.monotonic() - start - timing["submit_seconds"])
 		try:
@@ -246,7 +240,11 @@ class QdmiDriver(BaseDriver):
 			# it, but leave a trace rather than dropping it silently.
 			logging.debug("shim: QDMI job id unavailable: %s", exc)
 			job_id = None
+		instrumentation.set_attribute(
+			instrumentation.ATTR_VENDOR_JOB_ID,
+			None if job_id is None else str(job_id))
 		if status != "completed":
+			collect.__exit__(None, None, None)
 			self._last_job = {
 				"id": job_id, "status": status, "cid": cid,
 				"timing": timing, "shots": shots,
@@ -258,9 +256,15 @@ class QdmiDriver(BaseDriver):
 		try:
 			counts = job.get_counts()
 		except Exception as exc:
+			collect.__exit__(*sys.exc_info())
 			raise DEFwExecutionError(f"QDMI get_counts failed: {exc}") from exc
+		collect.__exit__(None, None, None)
 		timing["result_fetch_seconds"] = time.monotonic() - result_started
 		timing["total_wall_seconds"] = time.monotonic() - start
+		# QDMI keys a histogram by measured qubit, in the device library's
+		# order. The profile maps it back onto the circuit's classical bits
+		# where that differs (identity for IQM).
+		counts = self._profile.result_counts(counts, measurement)
 
 		record = fomac_normalize.to_result_record(
 			counts, shots, provider, device_id, job_id=job_id,
@@ -275,7 +279,8 @@ class QdmiDriver(BaseDriver):
 		# Serialize the transcoded IQM circuit to the single-circuit JSON QDMI's
 		# IQM_JSON program expects. Prefer iqm-client's canonical serializer;
 		# fall back to a generic coercion. Validated against the live IQM circuit
-		# schema on hardware.
+		# schema on hardware. The IQM profile calls this; it stays a driver
+		# method so a test can stand in for it.
 		from util.iqm_transcode import to_jsonable
 		try:
 			# to_json_dict() is typed to take a dict, but build_iqm_circuit
@@ -328,6 +333,7 @@ class QdmiDriver(BaseDriver):
 		# QFw has given up on it. The wait between polls ends as soon as a
 		# cancel arrives.
 		deadline = time.monotonic() + max(timeout, 0.0)
+		polls = 0
 		while True:
 			if cancel_event is not None and cancel_event.is_set():
 				self._cancel_job(job)
@@ -337,6 +343,9 @@ class QdmiDriver(BaseDriver):
 			except Exception as exc:
 				raise DEFwExecutionError(
 					f"QDMI job.check() failed: {exc}") from exc
+			polls += 1
+			instrumentation.add_event("poll", {"qfw.vendor.status": state})
+			instrumentation.set_attribute(instrumentation.ATTR_POLL_COUNT, polls)
 			if state == "done":
 				return "completed"
 			if state == "failed":

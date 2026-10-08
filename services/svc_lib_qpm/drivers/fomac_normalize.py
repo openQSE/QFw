@@ -23,8 +23,10 @@ _COUPLING_SOURCE = "qdmi.fomac.coupling_map"
 # declares CUSTOM1..CUSTOM5 with no assigned meaning, so reading one means
 # knowing the provider's convention. QDMI-on-IQM publishes the active
 # calibration set's UUID in CUSTOM1 -- verified equal to QRMI's
-# dynamic_quantum_architecture.calibration_set_id on the same q20. Point this
-# at a different slot for a provider that uses one.
+# dynamic_quantum_architecture.calibration_set_id on the same q20. That is
+# the default here; the QDMI driver passes its provider profile's slot, and
+# None for a provider that publishes no calibration set id (Braket's CUSTOM1
+# holds its supported-operations list instead).
 _CALIBRATION_SET_ID_SLOT = "CUSTOM1"
 
 
@@ -52,7 +54,7 @@ def extract_topology(device):
 	}
 
 
-def extract_calibration(device):
+def extract_calibration(device, calibration_set_slot=_CALIBRATION_SET_ID_SLOT):
 	"""Read provider-neutral calibration metrics off a FoMaC Device.
 
 	Returns a dict with:
@@ -67,6 +69,9 @@ def extract_calibration(device):
 	duration per operation locus; this reads them vendor-neutrally. Like
 	extract_topology, this is the only calibration function that touches the
 	live FoMaC Device -- to_calibration_record is pure over the returned dict.
+
+	`calibration_set_slot` names the device CUSTOM slot the provider keeps
+	its calibration set id in (see _CALIBRATION_SET_ID_SLOT); None reads none.
 	"""
 	sites = list(device.regular_sites() or [])
 	qubit_metrics = []
@@ -84,18 +89,27 @@ def extract_calibration(device):
 		"qubit_metrics": qubit_metrics,
 		"gate_metrics": _operation_metrics(device),
 		"duration_unit": _device_duration_unit(device),
-		"calibration_set_id": _calibration_set_id(device),
+		"calibration_set_id": _calibration_set_id(
+			device, calibration_set_slot),
 	}
 
 
 def to_device_record(topo, provider, device_id, include_raw=False,
-		validate=True):
-	"""Build a `qhw-device-v1` record from an extracted topology dict."""
+		validate=True, technology=None):
+	"""Build a `qhw-device-v1` record from an extracted topology dict.
+
+	`technology` is the qhw technology family (superconducting, trapped-ion,
+	simulator, ...) when the provider profile knows it; QDMI itself does not
+	say, so it is left out of the record otherwise.
+	"""
 	from qhw_data import new_device
 	qubits = topo.get("qubits") or []
+	device_fields = {"num_qubits": len(qubits)}
+	if technology:
+		device_fields["technology"] = technology
 	builder = (
 		new_device(provider, device_id, num_qubits=len(qubits))
-		.device(device_id, num_qubits=len(qubits))
+		.device(device_id, **device_fields)
 		.qubits(qubits)
 		.metadata({"source": "qdmi", "via": "mqt.core.qdmi"})
 	)
@@ -354,7 +368,7 @@ def _op_metric(op, attr, locus_sites):
 		return None
 
 
-def _calibration_set_id(device):
+def _calibration_set_id(device, slot=_CALIBRATION_SET_ID_SLOT):
 	# Read the provider's calibration set identifier out of the vendor custom
 	# property slot (see _CALIBRATION_SET_ID_SLOT). Needs MQT Core >= 3.8 for
 	# the typed custom-property query; imported lazily, as qhw_data is, so this
@@ -362,13 +376,16 @@ def _calibration_set_id(device):
 	# library, the query, or the slot is unavailable: the id is provenance and
 	# must never be the reason an introspection call fails. The typed query
 	# raises rather than returning None when the slot holds another type, so
-	# the guard has to cover exceptions, not just a falsy result.
+	# the guard has to cover exceptions, not just a falsy result. A provider
+	# that publishes no such id passes slot=None, and nothing is queried.
+	if slot is None:
+		return None
 	query = getattr(device, "query_custom_property", None)
 	if query is None:
 		return None
 	try:
 		from mqt.core.qdmi import CustomProperty
-		value = query(getattr(CustomProperty, _CALIBRATION_SET_ID_SLOT), str)
+		value = query(getattr(CustomProperty, slot), str)
 	except Exception:
 		return None
 	return str(value) if value else None

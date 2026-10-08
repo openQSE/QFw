@@ -11,6 +11,7 @@ from defw_exception import DEFwExecutionError, DEFwInProgress, DEFwOutOfResource
 import svc_launcher
 import cdefw_global
 from util.circuit_payload import openqasm2_text
+from util import instrumentation
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
@@ -80,6 +81,7 @@ class UTIL_QRC:
 			cid = circ.get_cid()
 			qasm_file = task_info['qasm_file']
 
+			error = None
 			try:
 				if rc == 0:
 					try:
@@ -89,14 +91,18 @@ class UTIL_QRC:
 						logging.critical(f"parse result failure = {e}")
 						output = "{result: missing, exception: " + f"{e}" + "}"
 						circ.set_fail()
+						error = e
 				else:
 					stdout = stdout.decode('utf-8')
 					stderr = stderr.decode('utf-8')
 					res = stdout + '\n' + stderr
 					output = "{result: " + f"{res}" + "}"
 					circ.set_fail()
+					error = DEFwExecutionError(f"circuit runner exited {rc}")
 			finally:
 				self.cleanup_task(circ, task_info)
+				instrumentation.finish_backend_execution(
+					task_info.get('telemetry'), circ, error=error)
 
 			try:
 				os.remove(qasm_file)
@@ -253,8 +259,14 @@ class UTIL_QRC:
 		with open(qasm_file, 'w') as f:
 			f.write(qasm_c)
 
-		circ.set_launching()
 		cmd = self.form_cmd(circ, qasm_file)
+		# The run spans two visits by the worker: the launch here and the
+		# completion check_active_tasks sees later, so the execution span is
+		# carried in task_info rather than scoped to a block.
+		execution = instrumentation.begin_backend_execution(
+			circ, instrumentation.API_PATH_SIMULATOR,
+			device=self._device_name(circ), backend_kind=self._backend_kind(circ))
+		circ.set_launching()
 		try:
 			task_info = {}
 			logging.debug(f"Running -- {cmd}")
@@ -262,6 +274,7 @@ class UTIL_QRC:
 			logging.debug(f"Running -- {cmd} -- with pid {pid}")
 			circ.set_running()
 		except Exception as e:
+			instrumentation.finish_backend_execution(execution, circ, error=e)
 			os.remove(qasm_file)
 			logging.critical(f"Failed to launch {cmd}")
 			raise e
@@ -269,6 +282,7 @@ class UTIL_QRC:
 		task_info['circ'] = circ
 		task_info['qasm_file'] = qasm_file
 		task_info['pid'] = pid
+		task_info['telemetry'] = execution
 
 		return task_info
 
@@ -282,10 +296,13 @@ class UTIL_QRC:
 		with open(qasm_file, 'w') as f:
 			f.write(qasm_c)
 
-		circ.set_launching()
 		launcher = svc_launcher.Launcher()
 
 		cmd = self.form_cmd(circ, qasm_file)
+		execution = instrumentation.begin_backend_execution(
+			circ, instrumentation.API_PATH_SIMULATOR,
+			device=self._device_name(circ), backend_kind=self._backend_kind(circ))
+		circ.set_launching()
 		try:
 			logging.debug(f"Running -- {cmd}")
 			circ.set_running()
@@ -295,6 +312,7 @@ class UTIL_QRC:
 			launcher.shutdown()
 			logging.debug(f"Completed -- {cmd} -- returned {rc} -- {output} -- {error}")
 		except Exception as e:
+			instrumentation.finish_backend_execution(execution, circ, error=e)
 			launcher.shutdown()
 			self.cleanup_task(circ, {'qasm_file': qasm_file})
 			os.remove(qasm_file)
@@ -306,6 +324,7 @@ class UTIL_QRC:
 
 		if rc == 0:
 			circ.set_exec_done()
+			instrumentation.finish_backend_execution(execution, circ)
 			r = {
 				'cid': cid,
 				'result': output,
@@ -326,7 +345,19 @@ class UTIL_QRC:
 			f"{error.decode('utf-8')}:"
 			f"total run-time = {circ.exec_time - circ.completion_time}")
 		logging.debug(error_str)
-		raise DEFwExecutionError(error_str)
+		failure = DEFwExecutionError(error_str)
+		instrumentation.finish_backend_execution(execution, circ, error=failure)
+		raise failure
+
+	def _backend_kind(self, circ):
+		info = getattr(circ, "info", None) or {}
+		return info.get("qfw_backend")
+
+	def _device_name(self, circ):
+		# A simulator QPM has no device of its own; the device id the
+		# deployment gave it, else the simulator's name, keeps its signals
+		# apart from other services on a dashboard.
+		return os.environ.get("QFW_QPU_DEVICE_ID") or self._backend_kind(circ)
 
 	def sync_run(self, circ):
 		return self.run_circuit(circ)

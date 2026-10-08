@@ -17,6 +17,7 @@ from .qpm_selection import qpm_selection_for_provider
 from api_qpm_common import QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
+from util import instrumentation
 
 QFW_RUN_CONTEXT_OPTIONS = (
 	"reservation_id",
@@ -77,6 +78,9 @@ class QFwBackend(BackendV2):
 	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
 				 num_qubits=QFW_NUM_QUBITS, lookup_timeout=None,
 				 provider=None, backend=None, service_id=None):
+		# Telemetry for the application process. Off unless QFW_TELEMETRY
+		# says otherwise; see util.instrumentation.
+		instrumentation.configure_process("client")
 		self.log_time = time.time()
 		self._provider = None
 		selector = provider if provider is not None else backend

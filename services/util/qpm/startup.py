@@ -8,6 +8,7 @@ from time import monotonic, sleep, time_ns
 
 import util.qpm.util_qpm as uq
 from .controller import find_target_controller
+from util import instrumentation
 
 
 OPERATION_MODE_ENV = "QFW_QPM_OPERATION_MODE"
@@ -686,3 +687,6 @@ def uninitialize_qpm_service(message):
 	uq.qpm_shutdown = True
 	uq.qpm_directory_registered = False
 	logging.debug(message)
+	# The last thing the service does, so batched spans and the pending
+	# metric export reach the file or the collector.
+	instrumentation.shutdown_process()

@@ -274,6 +274,39 @@ def test_qfw_job_metadata_keeps_only_qhw_result():
 	assert metadata == {"qhw_result": qhw_result}
 
 
+def test_qfw_job_reads_the_shim_result_envelope():
+	# The QRMI/QDMI shim run-queue hoists a driver's qhw-result-v1 record
+	# into {"counts", "qhw_result"} (svc_lib_qpm.svc_qrc._result_envelope),
+	# the shape the native IQM path delivers. The client reads the counts
+	# off the top and keeps the record as metadata, with no statevector key
+	# present.
+	from qfw_qiskit.qfw_job import QFwJob
+
+	class FakeBackend:
+		def returns_statevector(self):
+			return False
+
+	job = QFwJob(
+		FakeBackend(),
+		FakeQPM(),
+		FakeEventAPI(),
+		FakeCircuit(1),
+		{"seed_simulator": 34, "shots": 10, "seed": 21},
+	)
+	record = {
+		"schema": "qhw-result-v1",
+		"provider": "aws",
+		"result": {"shots": 10, "counts": {"1": 10}},
+	}
+
+	counts, statevector, metadata = job._split_result_payload(
+		{"counts": {"1": 10}, "qhw_result": record})
+
+	assert counts == {"1": 10}
+	assert statevector == []
+	assert metadata == {"qhw_result": record}
+
+
 def test_backend_sets_qubit_mapping_metadata(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
 

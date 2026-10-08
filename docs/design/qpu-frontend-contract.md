@@ -160,6 +160,20 @@ resource:
 `NULL` means no wired library implements the capability — a gap-map entry.
 A list (e.g. `[qdmi, qrmi]`) means composable; preference breaks the tie.
 
+In the implementation the descriptor is read from the device's entry in
+device-access config (`services/util/device_access.py` forwards the keys,
+`svc_lib_qpm/descriptor.py` keeps them, and both lists have to name a key
+for it to arrive). Beside `libraries`, `preference`, `caps` and
+`execution-owner`, a device can carry what its provider's library needs and
+a site service has no other way to receive. An IBM device carries
+`resource-type`, `service-crn`, `iam-endpoint` and the object storage fields.
+An Amazon Braket device carries its device ARN as `provider-device-id`, the
+stable QDMI catalogue id as `qdmi-device-id`, and optionally `aws-region`,
+`s3-results-uri` and a Braket Direct `reservation-arn`. Any device can carry
+`num-qubits`, for the directory record a service publishes before a session
+opens, and `max-shots`, a cap the driver refuses above. None of these is a
+secret.
+
 ### 5.1 Capabilities are per resource — libfabric-style providers
 
 QRMI and QDMI are not monolithic; each is **itself a multi-provider layer**.
@@ -262,6 +276,19 @@ by the library itself.** Two shapes cover what we have:
   vendor-neutral query interface (QDMI-on-IQM via MQT Core's FoMaC API) is
   normalized from the FoMaC `Device` by `drivers/fomac_normalize.py`.
 
+The Braket path through QDMI shows both directions. In: the circuit a client
+sent, QPY or OpenQASM 2, becomes Braket's self-contained OpenQASM 3 in
+`services/util/braket_transcode.py`, in the gate names the device accepts
+(Braket spells `cx` as `cnot`, `sx` as `v`, and so on). A gate the device does
+not accept is decomposed into ones it does, with no coupling map, because
+Braket compiles and routes a non-verbatim program itself; anything still
+unexpressible fails before a task is created. Out: the device library keys
+its histogram by measured qubit, highest first, while a Qiskit result is
+keyed by classical bit, so the transcode records the measurement map and the
+counts are rebuilt in classical-bit order before `qhw-result-v1` is built.
+That is the "shape, not library" rule again: the same FoMaC `Device` and
+`Job` objects, a different vendor-defined content.
+
 This keeps normalization decoupled from the libraries and lets the shim absorb
 both "thick" libraries (raw vendor data) and "thin"/neutral ones (a standard
 `Target`). A *single* universal normalizer would have to be the `Target`-based
@@ -328,6 +355,12 @@ implementation to evaluate the shim against.
     the per-resource descriptor narrows. Lower-level libraries
     are imported lazily, so the service constructs and routes before any real
     library call is made.
+  - `drivers/qdmi_profiles.py` — the vendor-defined parts of QDMI, per
+    provider: how a session opens and from which settings, the program
+    format, what the CUSTOM slots mean, how counts are keyed. `QdmiDriver`
+    keeps the session and job lifecycle and asks the resource's profile for
+    the rest. There is an IQM profile (QDMI-on-IQM) and a Braket profile
+    (MQSC's Amazon Braket device library).
 - **`dev-config/config.yaml`** (resolved via `services/util/device_access.py`)
   gains `libraries:`, `preference:`, and per-resource `caps:` — the persistent
   source for `resolve_descriptor()`, replacing the built-in default.
@@ -454,6 +487,25 @@ QRMI submits the whole run request — a genuine interface difference), polls
 serves the default, and `--lib qdmi` runs the QDMI path. Still to come: the
 richer job lifecycle. The comparison of OpenQASM 3 and QIR as circuit forms is
 in the `openQSE/development-analysis` repository.
+
+**QDMI serves a second provider: Amazon Braket.** MQSC's Amazon Braket QDMI
+device library (`amazon-braket-qdmi`) maps a QDMI session to one Braket
+device ARN and a QDMI job to one Braket quantum task, and reads results from
+S3. QRMI has no Braket resource, so this is a QDMI-only resource
+(`libraries: [qdmi]`, `execution-owner: qdmi`), and the driver's Braket
+profile supplies the vendor-defined parts. The session opens on the device
+ARN, which the library takes in QDMI's `BASEURL` slot, with the Region in
+`CUSTOM2` and an optional Braket Direct reservation ARN in `CUSTOM3`. There
+is no token: the library authenticates through the AWS SDK's default
+credential chain, so the identity is the service process's own, and QFw's
+`entitlement` credential provider decides who may use the device without
+holding a key. The program is Braket's OpenQASM 3 (Section 8), a job's S3
+results URI rides in job `CUSTOM1`, and the device's `CUSTOM1` holds Braket's
+broader `supportedOperations` set rather than a calibration set id, which
+Braket does not publish. The counts come back keyed by measured qubit and
+are rebuilt in classical-bit order. Because every task is billed, a device
+can carry `max-shots`, which the profile refuses above before a task exists,
+and `job-timeout-seconds` sets how long a queued QPU task is waited for.
 
 ### Circuit formats
 
