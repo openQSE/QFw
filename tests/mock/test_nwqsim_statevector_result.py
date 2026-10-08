@@ -3,7 +3,7 @@ import types
 import pytest
 
 from defw_exception import DEFwError
-from svc_nwqsim_qpm.svc_qrc import QRC
+from svc_nwqsim_qpm.svc_qrc import QRC, _split_planar_doubles
 
 
 class _Statevector:
@@ -57,6 +57,24 @@ def test_statevector_result_keeps_measurement_parsing_strict(tmp_path):
 
 	with pytest.raises(DEFwError):
 		qrc.parse_task_result(out, _circuit(dump_file), {})
+
+
+def test_split_planar_doubles_matches_a_real_dump():
+	c = 2 ** -1.5
+	real = [0.0, 0.0, 0.0, 0.0, 0.5, 0.0, c, -c]
+	imag = [0.0, 0.0, 0.0, 0.0, 0.0, 0.5, c, c]
+
+	amplitudes = _split_planar_doubles(real + imag)
+
+	expected = [
+		0j, 0j, 0j, 0j,
+		complex(0.5, 0.0),
+		complex(0.0, 0.5),
+		complex(c, c),
+		complex(-c, c),
+	]
+	for actual, wanted in zip(amplitudes, expected):
+		assert abs(complex(actual) - wanted) < 1e-9
 
 
 def test_count_result_still_requires_measurements(tmp_path):

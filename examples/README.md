@@ -69,6 +69,7 @@ artifacts: generated files, when any
 ./qfw_qaoa.sh nwqsim
 ./qfw_qiskit_vqe.sh 1
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
+./qfw_job_stream.sh --jobs 10 --interval 0.5
 ```
 
 Run the compatible examples locally against NWQSim:
@@ -272,6 +273,35 @@ Example:
 ```bash
 ./qfw_supermarq.sh sync 1 4 128 false ghz nwqsim
 ```
+
+### `qfw_job_stream.sh`
+
+Streams Qiskit jobs through one QFw backend: a mix of GHZ and random circuits
+over a range of qubit counts, at an interval, from one or more concurrent
+workers, for a number of jobs or a length of time. It is the load generator
+for the telemetry dashboards (`docs/design/benchmarking.md`), and a plain way
+to keep a QPM busy.
+
+```bash
+./qfw_job_stream.sh --jobs 20                              # twenty jobs, one a second
+./qfw_job_stream.sh --jobs 0 --duration 600 --interval 2   # ten minutes
+./qfw_job_stream.sh --workers 3 --jobs 30 --qubits 3-8     # three concurrent submitters
+./qfw_job_stream.sh --service-mode site --backend fake-iqm --jobs 50 --tolerate-failures
+```
+
+Each worker owns a `QFwBackend`, so `--workers` above one means concurrent
+jobs at the QPM, which is what makes the queue and dispatch hops visible on
+the dashboard. The reservation the wrapper makes is sized from the options:
+its task count is the number of jobs and its walltime covers the run with a
+margin. One line per job is printed with the `QFW_JOB_STREAM ` prefix, and
+the terminal `qfw-example-result-v1` record carries the counts, latency
+p50/p95/mean/max, jobs per minute, and every job's outcome. A failed job
+does not end the stream unless `--stop-on-error` is given; the exit status
+is nonzero if any job failed unless `--tolerate-failures` is given. `--seed`
+makes the plan and the random circuits reproducible.
+
+With the telemetry stack up (`QFW_TELEMETRY=otlp` in the environment), every
+job shows on the QFw Jobs dashboard as it runs.
 
 ### `qfw_fake_iqm_stress.sh`
 

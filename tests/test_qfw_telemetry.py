@@ -62,6 +62,36 @@ def test_sampler_rejects_out_of_range_and_nonsense_ratios(monkeypatch):
             telemetry._build_sampler()
 
 
+def test_metric_export_interval_defaults_short_and_honours_otel_env(
+        monkeypatch):
+    monkeypatch.delenv(telemetry.METRIC_EXPORT_INTERVAL_ENV, raising=False)
+    assert telemetry._metric_export_interval_ms() == \
+        telemetry.DEFAULT_METRIC_EXPORT_INTERVAL_MS
+    monkeypatch.setenv(telemetry.METRIC_EXPORT_INTERVAL_ENV, "2500")
+    assert telemetry._metric_export_interval_ms() == 2500.0
+    for value in ("0", "-5", "soon"):
+        monkeypatch.setenv(telemetry.METRIC_EXPORT_INTERVAL_ENV, value)
+        with pytest.raises(ValueError,
+                           match=telemetry.METRIC_EXPORT_INTERVAL_ENV):
+            telemetry._metric_export_interval_ms()
+
+
+def test_otlp_endpoint_names_the_collector_not_the_signal(monkeypatch):
+    # An endpoint handed to the OTLP/HTTP exporters is used verbatim, so the
+    # signal path has to be appended here or the collector answers 404.
+    monkeypatch.delenv(telemetry.TELEMETRY_ENDPOINT_ENV, raising=False)
+    assert telemetry._otlp_endpoint("v1/traces") is None
+    for value in ("http://otel-collector:4318", "http://otel-collector:4318/"):
+        monkeypatch.setenv(telemetry.TELEMETRY_ENDPOINT_ENV, value)
+        assert telemetry._otlp_endpoint("v1/traces") == \
+            "http://otel-collector:4318/v1/traces"
+        assert telemetry._otlp_endpoint("v1/metrics") == \
+            "http://otel-collector:4318/v1/metrics"
+    monkeypatch.setenv(
+        telemetry.TELEMETRY_ENDPOINT_ENV, "http://c:4318/v1/traces")
+    assert telemetry._otlp_endpoint("v1/traces") == "http://c:4318/v1/traces"
+
+
 def test_export_dir_prefers_explicit_setting(monkeypatch, tmp_path):
     monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
     assert telemetry._export_dir() == str(tmp_path)
@@ -87,8 +117,44 @@ def test_off_profile_is_inert(tmp_path, monkeypatch):
         span.set_attribute("qfw.stack.api_path", "qrmi")
     telemetry.duration_histogram("qfw.qpm.duration").record(
         0.1, {"qfw.qpm.op": "receive"})
+    telemetry.counter("qfw.app.job.count").add(1, {"qfw.outcome": "completed"})
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_adopted_providers_record_without_touching_the_global_slot():
+    # A host that owns its OpenTelemetry setup, or a test that needs a fresh
+    # recording provider per test, hands providers in. The global providers
+    # stay as they were, so this can run before or after configure().
+    sdk_trace = pytest.importorskip("opentelemetry.sdk.trace")
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter)
+    from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+
+    before = otel_trace.get_tracer_provider()
+    exporter = InMemorySpanExporter()
+    provider = sdk_trace.TracerProvider(sampler=ALWAYS_ON)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    assert telemetry.use_providers(provider) == telemetry.PROFILE_FILE
+    assert telemetry.enabled() is True
+    assert otel_trace.get_tracer_provider() is before
+    if defw_trace is not None:
+        assert defw_trace.hooks_registered() is True
+
+    with telemetry.tracer().start_as_current_span("qfw.app.job") as span:
+        assert span.is_recording() is True
+    # No meter was handed in, so metrics degrade to no-ops rather than fail.
+    telemetry.duration_histogram("qfw.app.job.duration").record(1.0, {})
+    telemetry.counter("qfw.app.job.count").add(1, {})
+    assert [s.name for s in exporter.get_finished_spans()] == ["qfw.app.job"]
+
+    telemetry.shutdown()
+    assert telemetry.enabled() is False
+    if defw_trace is not None:
+        assert defw_trace.hooks_registered() is False
 
 
 def test_defw_hooks_are_not_registered_when_telemetry_is_off():
@@ -145,7 +211,10 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
     monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(telemetry.TELEMETRY_SAMPLE_ENV, telemetry.SAMPLE_ALWAYS)
 
-    assert telemetry.configure("qfw-qpm", "0.1", role="qpm") == \
+    assert telemetry.configure(
+        "qfw-qpm", "0.1", role="qpm",
+        attributes={"qfw.device.name": "q20", "ignored": None,
+                    "service.name": "not-this-one"}) == \
         telemetry.PROFILE_FILE
     assert telemetry.enabled() is True
 
@@ -168,6 +237,9 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
 
     telemetry.duration_histogram("qfw.qpm.duration").record(
         0.0042, {"qfw.qpm.op": "receive"})
+    counter = telemetry.counter("qfw.app.job.count")
+    assert telemetry.counter("qfw.app.job.count") is counter
+    counter.add(1, {"qfw.outcome": "completed"})
     telemetry.shutdown()
 
     exports = sorted(tmp_path.glob("*.spans.jsonl"))
@@ -189,6 +261,10 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
     assert resource["qfw.component.role"] == "qpm"
     assert resource["qfw.conventions.version"] == \
         telemetry.CONVENTIONS_VERSION
+    # Caller-supplied resource attributes ride along; None is dropped and
+    # the fixed keys are not overridable.
+    assert resource["qfw.device.name"] == "q20"
+    assert "ignored" not in resource
 
     # OTLP/JSON departs from the protobuf JSON mapping and requires hex
     # identifiers, where protobuf would emit these bytes fields as base64.
@@ -200,4 +276,14 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
     assert re.fullmatch(
         r"[0-9a-f]{16}", by_name["qfw.qpm.receive"]["parentSpanId"])
 
-    assert sorted(tmp_path.glob("*.metrics.jsonl"))
+    metrics = sorted(tmp_path.glob("*.metrics.jsonl"))
+    assert metrics
+    names = set()
+    for line in metrics[0].read_text().splitlines():
+        if not line.strip():
+            continue
+        for resource_metrics in json.loads(line)["resourceMetrics"]:
+            for scope_metrics in resource_metrics["scopeMetrics"]:
+                for metric in scope_metrics["metrics"]:
+                    names.add(metric["name"])
+    assert {"qfw.qpm.duration", "qfw.app.job.count"} <= names

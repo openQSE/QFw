@@ -5,6 +5,7 @@ from importlib.metadata import version as package_version
 from util.device_access import (
 	QPU_DEVICE_ENV, resolve_device_access, resolve_qpu_user)
 from util.circuit_payload import qiskit_input
+from util import instrumentation
 from util.iqm_transcode import (
 	build_iqm_circuit, to_jsonable)
 from urllib.parse import urlsplit, urlunsplit
@@ -489,43 +490,50 @@ class IQMServiceClient:
 
 		timing = {}
 		start = time.monotonic()
-		dynamic = self.get_dynamic_architecture(
-			calibration_set_id, credential=credential)
-		iqm_circuit = build_iqm_circuit(
-			qiskit_input(info),
-			dynamic,
-			mapping,
-			client=client,
-			calibration_set_id=calibration_set_id,
-		)
-		effective_calibration_set_id = calibration_set_id
-		circuit_metadata = getattr(iqm_circuit, "metadata", None)
-		if (effective_calibration_set_id is None and
-				isinstance(circuit_metadata, dict)):
-			effective_calibration_set_id = circuit_metadata.get(
-				"iqm_calibration_set_id")
-		run_request = client.create_run_request(
-			[iqm_circuit],
-			calibration_set_id=effective_calibration_set_id,
-			shots=shots)
+		with instrumentation.backend_phase("acquire"):
+			dynamic = self.get_dynamic_architecture(
+				calibration_set_id, credential=credential)
+		with instrumentation.qpm_transpile():
+			iqm_circuit = build_iqm_circuit(
+				qiskit_input(info),
+				dynamic,
+				mapping,
+				client=client,
+				calibration_set_id=calibration_set_id,
+			)
+			effective_calibration_set_id = calibration_set_id
+			circuit_metadata = getattr(iqm_circuit, "metadata", None)
+			if (effective_calibration_set_id is None and
+					isinstance(circuit_metadata, dict)):
+				effective_calibration_set_id = circuit_metadata.get(
+					"iqm_calibration_set_id")
+			run_request = client.create_run_request(
+				[iqm_circuit],
+				calibration_set_id=effective_calibration_set_id,
+				shots=shots)
 
 		submit_started = time.monotonic()
-		job = client.submit_run_request(
-			run_request, use_timeslot=use_timeslot)
+		with instrumentation.backend_phase("submit"):
+			job = client.submit_run_request(
+				run_request, use_timeslot=use_timeslot)
 		timing["submit_seconds"] = time.monotonic() - submit_started
+		instrumentation.set_attribute(
+			instrumentation.ATTR_VENDOR_JOB_ID, str(job.job_id))
 
-		wait_started = time.monotonic()
-		status = normalize_status(job.wait_for_completion(timeout_secs=timeout))
-		timing["wait_seconds"] = time.monotonic() - wait_started
-		job_data = to_jsonable(job.data)
+		with instrumentation.backend_phase("collect"):
+			wait_started = time.monotonic()
+			status = normalize_status(
+				job.wait_for_completion(timeout_secs=timeout))
+			timing["wait_seconds"] = time.monotonic() - wait_started
+			job_data = to_jsonable(job.data)
 
-		if status != "completed":
-			raise DEFwExecutionError(
-				f"IQM job {job.job_id} completed with status {status}")
+			if status != "completed":
+				raise DEFwExecutionError(
+					f"IQM job {job.job_id} completed with status {status}")
 
-		result_started = time.monotonic()
-		measurement_counts = client.get_job_measurement_counts(job.job_id)
-		timing["result_fetch_seconds"] = time.monotonic() - result_started
+			result_started = time.monotonic()
+			measurement_counts = client.get_job_measurement_counts(job.job_id)
+			timing["result_fetch_seconds"] = time.monotonic() - result_started
 		timing["total_wall_seconds"] = time.monotonic() - start
 
 		counts_data = to_jsonable(measurement_counts)

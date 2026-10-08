@@ -73,9 +73,31 @@ IBM_QS_DEVICE = dict(IBM_DEVICE, **{
 	"job-timeout-seconds": "30",
 })
 
+# An Amazon Braket device reached through QDMI. The ARN is the device, the
+# stable QDMI id names the device library's catalogue entry, and the Region,
+# results URI and reservation ARN are session and job settings. The qubit
+# count and shot cap are what the service advertises and enforces for a
+# device whose library does not say before a session opens.
+SV1_ARN = "arn:aws:braket:::device/quantum-simulator/amazon/sv1"
+AWS_DEVICE = {
+	"provider": "aws",
+	"provider-device-id": SV1_ARN,
+	"qdmi-device-id": "amazon.braket.sv1",
+	"aws-region": "us-east-1",
+	"url": "https://braket.us-east-1.amazonaws.com",
+	"s3-results-uri": "s3://results/qfw/sv1",
+	"reservation-arn": "arn:aws:braket:us-east-1:123:reservation/r1",
+	"num-qubits": 34,
+	"max-shots": 1000,
+	"credential-db": "creds.json",
+	"libraries": ["qdmi"],
+	"execution-owner": "qdmi",
+}
+
 DESCRIPTOR_KEYS = (
 	"libraries", "preference", "caps", "execution_owner",
-	"service-crn", "iam-endpoint")
+	"service-crn", "iam-endpoint", "qdmi-device-id", "aws-region",
+	"s3-results-uri", "reservation-arn", "num-qubits", "max-shots")
 
 
 def _config(device, device_id="dev"):
@@ -106,6 +128,15 @@ def test_shim_example_uses_no_secret_credential_provider():
 	assert config["credential-providers"]["shim-no-secret"] == {
 		"type": "no-secret",
 	}
+	# The Braket simulator entry the smoke can bind with --device-id aws-sv1.
+	# Its identity is the process's AWS one, so no-secret is right here too.
+	sv1 = config["qpus"]["aws-sv1"]
+	assert sv1["provider"] == "aws"
+	assert sv1["provider-device-id"] == SV1_ARN
+	assert sv1["qdmi-device-id"] == "amazon.braket.sv1"
+	assert sv1["credential-provider"] == "shim-no-secret"
+	assert sv1["libraries"] == ["qdmi"]
+	assert sv1["execution-owner"] == "qdmi"
 
 
 # --- select_qpu(): the fix site --------------------------------------------
@@ -302,6 +333,58 @@ def test_resolve_descriptor_carries_the_object_storage_fields(monkeypatch):
 	assert resolved["s3_bucket"] == "results-bucket"
 	assert resolved["s3_region"] == "us-east"
 	assert resolved["job_timeout_seconds"] == "30"
+
+
+def test_select_qpu_passes_through_the_braket_fields(monkeypatch):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	selected = device_access.select_qpu(
+		_config(AWS_DEVICE), "cfg.yaml", provider="aws")
+	assert selected["provider_device_id"] == SV1_ARN
+	assert selected["qdmi-device-id"] == "amazon.braket.sv1"
+	assert selected["aws-region"] == "us-east-1"
+	assert selected["s3-results-uri"] == "s3://results/qfw/sv1"
+	assert selected["reservation-arn"] == AWS_DEVICE["reservation-arn"]
+	assert selected["num-qubits"] == 34
+	assert selected["max-shots"] == 1000
+
+
+def test_resolve_descriptor_carries_the_braket_fields(monkeypatch):
+	# Both halves of the path, the same way the object storage fields had to
+	# be carried: select_qpu forwards and resolve_descriptor keeps.
+	descriptor = _load_descriptor()
+	monkeypatch.setattr(
+		device_access, "device_access_config_path", lambda: "cfg.yaml")
+	monkeypatch.setattr(
+		device_access, "load_yaml_config",
+		lambda path: _config(AWS_DEVICE))
+	monkeypatch.setenv(device_access.QPU_DEVICE_ENV, "dev")
+
+	resolved = descriptor.resolve_descriptor()
+	assert resolved["provider"] == "aws"
+	assert resolved["provider_device_id"] == SV1_ARN
+	assert resolved["qdmi_device_id"] == "amazon.braket.sv1"
+	assert resolved["aws_region"] == "us-east-1"
+	assert resolved["s3_results_uri"] == "s3://results/qfw/sv1"
+	assert resolved["reservation_arn"] == AWS_DEVICE["reservation-arn"]
+	assert resolved["num_qubits"] == 34
+	assert resolved["max_shots"] == 1000
+	assert resolved["libraries"] == ["qdmi"]
+	assert resolved["execution_owner"] == "qdmi"
+
+
+def test_resolve_descriptor_leaves_the_braket_fields_unset_when_unconfigured(
+		monkeypatch):
+	descriptor = _load_descriptor()
+	monkeypatch.setattr(
+		device_access, "device_access_config_path", lambda: "cfg.yaml")
+	monkeypatch.setattr(
+		device_access, "load_yaml_config", lambda path: _config(BARE_DEVICE))
+	monkeypatch.setenv(device_access.QPU_DEVICE_ENV, "dev")
+
+	resolved = descriptor.resolve_descriptor()
+	for key in ("qdmi_device_id", "aws_region", "s3_results_uri",
+			"reservation_arn", "num_qubits", "max_shots"):
+		assert resolved[key] is None
 
 
 def test_resolve_descriptor_leaves_object_storage_unset_when_unconfigured(

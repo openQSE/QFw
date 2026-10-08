@@ -25,6 +25,11 @@ for production readiness:
 - **Phases are sequenced production-first.** Phase 1 is the lean slice that
   makes overhead work possible, the per-hop duration histograms move into it
   from phase 3, and phases 2 to 5 are explicitly deferred behind remediation.
+- **The transport extension has call sites** (October 2026). Three of them,
+  on the job path rather than inside DEFw, because the first dashboards
+  showed the job-path spans accounting for 4 ms of a 27 ms job and the
+  question "where is the rest" needed an answer the trace could give. See
+  [Optional Extension: Transport Profiling](#optional-extension-transport-profiling).
 
 Revision 3 incorporates the second round of review feedback (PR #30):
 
@@ -324,8 +329,16 @@ run. A run is not the same thing as one application invocation: a sweep
 across qubit counts, or the same circuit across `native`, `qrmi`, and
 `qdmi`, is one run and many jobs.
 
-DEFw RPC round-trips can additionally be recorded as `qfw.transport.rpc`
-spans. That is an optional extension, off by default. See
+What the tree leaves out is the transport between the two processes: the
+run RPC on the way in and the completion event on the way back. On a fast
+job that is most of the client's time. On the reference cluster a fake-IQM
+job takes 27 ms end to end of which the spans above cover 4 ms; the other
+23 ms is the two legs, roughly half each. The optional transport extension
+covers them, off by default: `qfw.transport.rpc` around the client's run
+RPC and around the QPM's push of the completion event, and
+`qfw.transport.return` from the provider's completion to the client's
+receipt. With it on, the QPM's spans nest under the client's run RPC, which
+is where they happen. See
 [Optional Extension: Transport Profiling](#optional-extension-transport-profiling).
 
 ### Trace-Context Propagation Through DEFw RPC
@@ -421,10 +434,114 @@ which is not the Python version or the distribution any given deployment
 runs, so treat them as the right order of magnitude rather than as exact.
 They are single-threaded, so they do not capture the batch export thread
 contending for the GIL under concurrent load, which is the most likely way a
-real deployment comes out worse than this table. Re-measuring in the target
-environment is a Phase 1 deliverable, together with an
-instrumented-versus-uninstrumented delta on a real workload and a budget
-that later changes are checked against.
+real deployment comes out worse than this table. The re-measurement in the
+target environment that Phase 1 asked for follows.
+
+#### Measured in the target environment, October 2026: the budget
+
+The instrumented-versus-uninstrumented delta on the QFw-SLURM-Cluster
+reference deployment (the image of 2026-10-07: Rocky Linux 10 on an arm64
+Docker VM, CPython 3.12, `opentelemetry-sdk` 1.45.1 in the service plane and
+1.44.0 in the client's venv), through the production path: a Qiskit client
+in a Slurm allocation, the site fake IQM QPM, and this design's collector
+profile receiving OTLP over HTTP.
+
+Workload: `examples/qfw_job_stream.sh --service-mode site --backend fake-iqm
+--jobs 300 --interval 0 --qubits 3 --circuits ghz --shots 100`, one worker:
+300 identical three-qubit GHZ jobs back to back. The fake IQM executes a
+job in about a millisecond, which makes this the fastest job the framework
+can run and the relative overhead a worst case. Three telemetry states,
+three repetitions each, interleaved, the QPM restarted into each state.
+Latency and client CPU come from the stream's own summary, the QPM's CPU
+from `/proc`. Medians of the three repetitions:
+
+| State | p50 per job | p95 per job | Client CPU per job | QPM CPU per job |
+| --- | --- | --- | --- | --- |
+| Off (`QFW_TELEMETRY` unset): every call site a boolean test | 10.84 ms | 12.02 ms | 7.42 ms | 7.20 ms |
+| Metrics on, traces sampled off: the production default | 11.11 ms (+0.27) | 12.59 ms | 7.89 ms (+0.47) | 7.57 ms (+0.37) |
+| Metrics and traces on: a benchmark or a demonstration | 11.17 ms (+0.33) | 12.91 ms | 7.97 ms (+0.54) | 7.70 ms (+0.50) |
+
+On the fastest job the framework can run, the production default adds
+about 0.3 ms of latency (2.5%) and about 0.85 ms of CPU across the two
+processes (6%); full tracing adds about 0.35 ms and 1.05 ms. Against a job
+on a real device, one to four seconds, that is 0.01% to 0.03% of the job:
+the order of magnitude the table above predicted, at three to five times its
+55 to 123 µs, which is what the attributes, the phase spans written after
+the fact and the export work on a busy service cost over the bare call
+sites. Two things the microbenchmarks could not show: bringing the providers
+up costs a client process about 85 ms once, the SDK and exporter imports,
+and nothing with telemetry off; and metrics-only and full tracing differ by
+little (0.06 ms of latency, 0.13 ms of QPM CPU per job), because a sampled-out
+span still runs its call site, so turning traces off buys little on the job
+path and the metrics tier is the one to keep on.
+
+**The budget.** On this workload, the production default may cost up to
+0.5 ms of p50 latency and 1.5 ms of combined CPU per job over telemetry off,
+and full tracing up to 0.6 ms and 1.8 ms. A change to the instrumentation
+that goes past that needs a reason rather than a re-argument. The harness is
+`telemetry/overhead-budget.sh` in the QFw-SLURM-Cluster repository; it
+prints this table for the tree it is run against.
+
+Means are not in the table because each run's first job carries the
+backend's construction and connection, five to six seconds, and dominates
+them. p50 and CPU per job are the statistics to compare.
+
+#### Measured in the target environment, October 2026: the footprint
+
+What this design, the DEFw v2 RPC path on Margo, and the rest of the
+autumn's work added to the size of QFw and to what it needs to run, measured
+on the same reference deployment on 2026-10-08 (the image of 2026-10-07,
+13.4 GB; the image before it was 13.06 GB). The question comes up whenever
+a site asks what it is taking on. The answer is that the framework itself is
+small, and the weight is in the toolchains and SDKs it is built against.
+
+On disk, inside the cluster image:
+
+| Component | Size | Note |
+| --- | --- | --- |
+| LLVM/MLIR 23 | 3.5 GB | Builds MQT Core's compiler |
+| Rust toolchain | 1.8 GB | Builds QRMI |
+| The Python venv: Qiskit, PySCF, SciPy, PennyLane, SymPy and the rest | 1.2 GB | The quantum SDKs, not QFw |
+| MQT venv, TNQVM, QRMI | 0.8 GB | |
+| Mochi stack: Margo, Mercury, Argobots | 11 MB | The DEFw v2 RPC path |
+| libfabric | 6 MB | |
+| QFw, installed | 8 MB | |
+| OpenTelemetry SDK and OTLP exporter | 5 MB | The one Python dependency this design added |
+
+The collector, Prometheus, Tempo and Grafana images are another 2.1 GB,
+pulled separately and only where the dashboards run.
+
+In code, QFw is 52,000 lines without DEFw. Since `v0.1.0-rc.1` (2026-09-10)
+it gained 12,000 lines in 80 commits, but 45% of that is mock tests; the
+production growth is about 5,000 lines, in the drivers, the instrumentation
+layer and the QPM hooks. DEFw is 16,000 lines, 7,400 of them C, and gained
+2,600 lines in 24 commits for the Margo path.
+
+Running:
+
+| What | Measured |
+| --- | --- |
+| The 24 cluster containers together | 1.65 GB resident |
+| The four telemetry containers together | 0.44 GB resident: Grafana 264 MB, Tempo 67 MB, Prometheus 62 MB, the collector 50 MB; under 4% of one core between jobs |
+| A v1 QPM process (`defwp`) | 125 to 250 MB resident, 11 threads |
+| A v2 Margo QPM process | 120 to 140 MB resident, 20 threads |
+| The SDK in a client process, `otlp` profile on | +29 MB resident and +0.3 s at start: 6 MB and 0.06 s for the imports, 23 MB and 0.25 s for `configure()`, on a bind-mounted venv |
+
+Margo costs threads, its progress and handler pools, not memory. Telemetry
+costs an instrumented process about 29 MB once, plus the per-job overhead in
+the budget above; with the profile off the SDK is never imported and the
+cost is zero.
+
+In storage, after 1,830 jobs in twelve hours with full tracing, Prometheus
+held 45 MB and Tempo 5 MB, so a day of demonstration stays under 100 MB.
+Grafana's volume is 442 MB, of which 424 MB is the plugin directory it
+unpacks on first start.
+
+What it means for a site: QFw with the Margo path and the exporter is under
+20 MB over what the site already had, and the dashboards are four optional
+containers, half a gigabyte of memory and well under one core. The weight of
+the image is the build toolchains for MQT and QRMI, which a packaged release
+would not carry.
 
 ### Sampling and Signal Tiers
 
@@ -524,10 +641,10 @@ because revision 2 got both wrong:
 | `qfw.app.job` | front end (`qfw_qiskit`) | One circuit/job end to end, submission to result delivery |
 | `qfw.app.prepare` | `qfw_qiskit` | Getting the circuit into canonical submittable form: conversion to OpenQASM 3 and encoding. Payload size attribute |
 | `qfw.qpm.receive` | QPM service | Job arrival and admission at the QPM |
-| `qfw.qpm.transpile` | QPM service | QFw-side transpilation; pre/post circuit-statistics attributes |
+| `qfw.qpm.transpile` | QPM service, from inside its driver | QFw-side transpilation or transcoding into the provider's program; pre/post circuit-statistics attributes |
 | `qfw.qpm.queue` | QPM service | Time queued inside QFw before dispatch |
 | `qfw.qpm.dispatch` | QPM service (QRC) | In-process hand-off from the QPM's resource controller to the back-end driver |
-| `qfw.backend.execute` | back-end driver | Full back-end interaction; attribute `qfw.stack.api_path` = `native` \| `qrmi` \| `qdmi` \| `simulator` |
+| `qfw.backend.execute` | back-end driver | Full back-end interaction; attributes `qfw.stack.api_path` = `native` \| `qrmi` \| `qdmi` \| `simulator`, `qfw.device.name`, `qfw.backend.kind`, `qfw.outcome` = `completed` \| `failed` \| `cancelled` |
 | `qfw.backend.acquire` | back-end driver | Resource/session acquisition (QRMI `acquire`, QDMI session open, vendor connect) |
 | `qfw.backend.submit` | back-end driver | The submission call to the vendor/simulator |
 | `qfw.backend.collect` | back-end driver | Result retrieval, the complement of `qfw.backend.submit`. One span per job. Attributes `qfw.backend.poll_count` and `qfw.backend.poll_interval_s`; each poll is a span event |
@@ -562,7 +679,18 @@ implement it.
 
 | Span | Emitted by | Measures |
 | --- | --- | --- |
-| `qfw.transport.rpc` | DEFw | One RPC round-trip. Attributes: byte counts, and `qfw.transport.kind` = `tcp` \| `ofi` |
+| `qfw.transport.rpc` | the job path, `qfw.transport.op` = `submit` \| `event` | One RPC round-trip as its caller sees it: `submit` is the client's run request, around the QPM's receive; `event` is the QPM's push of the completion event to the client |
+| `qfw.transport.return` | front end (`qfw_qiskit`), written after the fact | From the provider's completion of the circuit, the `completion_time` on its result, to the client picking the completion event up: the QRC's result assembly, the QPM's publish, the event RPC and the client's wake-up. Two clocks; a negative window is dropped |
+| `qfw.transport.rpc` | DEFw, reserved | One transport-level round-trip, when DEFw itself emits. Attributes: byte counts, and `qfw.transport.kind` = `tcp` \| `ofi` |
+
+The first two rows are implemented (October 2026), at three call sites:
+the client's run RPC and its receipt of the result in `qfw_qiskit`, and
+the completion-event push in the QPM's controller. They sit on the job
+path, one of each per circuit, so they are bounded-rate; they are still
+flag-guarded, with `QFW_TELEMETRY_TRANSPORT=1`, because they measure the
+framework rather than the job and a Type A comparison must not carry them.
+The third row is where DEFw's own transport work plugs in, and stays
+reserved until it does.
 
 Rationale for keeping it out of the core set. It is the only span in the
 vocabulary that describes a QFw implementation detail rather than a stage of
@@ -622,8 +750,8 @@ Initial classification:
 
 | Class | Attributes |
 | --- | --- |
-| Dimensional | `qfw.stack.api_path` (`native`/`qrmi`/`qdmi`/`simulator`), `qfw.device.name`, `qfw.backend.kind`, `qfw.qpm.op`, `qfw.backend.op`, `qfw.transport.kind`, `qfw.suite.name`, `qfw.circuit.num_qubits`, `service.name`, `service.version`, status/outcome |
-| Descriptive | trace and span IDs, `qfw.job.id`, vendor job IDs, SLURM job ID, `qfw.device.calibration_set_id`, calibration snapshots, coupling maps, `target()` payload digests, circuit hashes, OpenQASM payloads, package-version maps, container image digests |
+| Dimensional | `qfw.stack.api_path` (`native`/`qrmi`/`qdmi`/`simulator`), `qfw.device.name`, `qfw.backend.kind`, `qfw.qpm.op`, `qfw.qpm.request`, `qfw.backend.op`, `qfw.outcome`, `qfw.transport.kind`, `qfw.suite.name`, `qfw.circuit.num_qubits`, `service.name`, `service.version` |
+| Descriptive | trace and span IDs, `qfw.job.id`, `qfw.qpm.cid`, `qfw.qpm.qtask_id`, `qfw.reservation.id`, vendor job IDs and queue positions (`qfw.vendor.*`), poll counts, SLURM job ID, `qfw.circuit.shots`, `qfw.circuit.payload_bytes`, `qfw.device.calibration_set_id`, calibration snapshots, coupling maps, `target()` payload digests, circuit hashes, OpenQASM payloads, package-version maps, container image digests |
 
 Two judgment calls worth community scrutiny (see open questions):
 `qfw.circuit.num_qubits` is dimensional in practice because sweeps use a
@@ -647,9 +775,10 @@ the **dimensional** class above:
 | `qfw.bench.iter.duration` | histogram | run label, api path | Per-iteration latency distribution for hybrid loops |
 | `qfw.app.job.duration` | histogram | api path, device, backend kind | End-to-end job latency distribution under load |
 | `qfw.app.job.count` | counter | outcome, api path, device | Throughput and reliability under load |
-| `qfw.qpm.duration` | histogram | `qfw.qpm.op` = `receive` \| `transpile` \| `queue` \| `dispatch` | Framework overhead attribution per QPM stage, without depending on trace sampling |
-| `qfw.backend.duration` | histogram | `qfw.backend.op` = `acquire` \| `submit` \| `collect`, plus api path and device | Back-end cost per stage. Carries the Type A API-path comparison when traces are sampled off |
-| `qfw.transport.rpc.duration`, `qfw.transport.rpc.bytes` | histogram | `qfw.transport.kind` | Transport characterization (libfabric work). Optional extension, off by default |
+| `qfw.qpm.duration` | histogram | `qfw.qpm.op` = `receive` \| `transpile` \| `queue` \| `dispatch`; `receive` also carries `qfw.qpm.request` = `async_run` \| `sync_run`, because a synchronous request spans the whole run | Framework overhead attribution per QPM stage, without depending on trace sampling |
+| `qfw.backend.duration` | histogram | `qfw.backend.op` = `execute` \| `acquire` \| `submit` \| `collect`, plus api path, device, backend kind and outcome | Back-end cost per stage, and `execute` for the whole interaction so a dashboard needs no sum. Carries the Type A API-path comparison when traces are sampled off |
+| `qfw.transport.duration` | histogram | `qfw.transport.op` = `submit` \| `event` \| `return` | The two legs between the processes and the way back, so a dashboard's per-hop view adds up to the client's end to end. Optional extension, off by default |
+| `qfw.transport.rpc.bytes` | histogram | `qfw.transport.kind` | Transport characterization (libfabric work). Reserved for DEFw's own emission |
 
 Two conventions hold for this set. Metric names mirror the span they
 aggregate, so moving between a trace view and a dashboard needs no
@@ -910,6 +1039,20 @@ Phases 2 to 5 stay on the roadmap and none of them gates production. They
 are sequenced after remediation rather than alongside it, so that the
 benchmarking surface does not grow while the overhead it would measure is
 still there.
+
+**Status, October 2026.** The Phase 1 instrumentation is in the tree:
+`qfw.app.job` and `qfw.app.prepare` in the Qiskit client, `qfw.qpm.receive`,
+`qfw.qpm.queue` and `qfw.qpm.dispatch` in the QPM, `qfw.backend.execute` in
+every run queue, and `qfw.qpm.transpile` with the `acquire`, `submit` and
+`collect` phases in the QRMI, QDMI and native IQM drivers, each with the
+histogram the tables above name. The conventions layer the call sites use is
+`services/util/instrumentation.py`; `backends/qfw_telemetry/` stays the
+provider bootstrap. One sequencing change: the collector-profile reference
+deployment from Phase 4 comes next, ahead of `qfw_bench_extract`, because a
+live dashboard of a running deployment is wanted before an archival report
+is. The overhead budget was measured on 2026-10-08 and is recorded under
+[Instrumentation Cost](#instrumentation-cost), so Phase 1's exit criteria
+are met.
 
 ## Open Questions and Community Input
 

@@ -30,6 +30,7 @@ Environment overrides:
   QFW_RUN_ALL_SHOTS=<n>               Shots for SupermarQ
   QFW_RUN_ALL_VQE_ITERS=<n>           Optimizer iterations for VQE
   QFW_RUN_ALL_SHIM_LIB=<qrmi|qdmi>    Shim library for shim smoke test
+  QFW_RUN_ALL_STREAM_JOBS=<n>         Jobs for the job stream (default: 3)
   QFW_RUN_ALL_CHEM_APP=<script.py>    Optional chemistry app script
 EOF
 }
@@ -111,7 +112,7 @@ if [[ "${selected_tests}" != "all" ]]; then
 	for requested_case in "${requested_cases[@]}"; do
 		case "${requested_case}" in
 			init-test|shim-smoke|qiskit-simple|ghz-qiskit|ghz-pennylane|\
-			pennylane|qaoa|qiskit-vqe|supermarq|chemistry) ;;
+			pennylane|qaoa|qiskit-vqe|supermarq|job-stream|chemistry) ;;
 			*)
 				echo "ERROR: unknown --tests case: ${requested_case:-<empty>}" >&2
 				exit 2
@@ -133,6 +134,7 @@ iterations="${QFW_RUN_ALL_ITERS:-1}"
 shots="${QFW_RUN_ALL_SHOTS:-128}"
 vqe_iterations="${QFW_RUN_ALL_VQE_ITERS:-1}"
 shim_lib="${QFW_RUN_ALL_SHIM_LIB:-qrmi}"
+stream_jobs="${QFW_RUN_ALL_STREAM_JOBS:-3}"
 timestamp="$(date +%Y%m%d-%H%M%S-%N)"
 if [[ "${timestamp}" == *%N ]]; then
 	timestamp="$(date +%Y%m%d-%H%M%S)-$$"
@@ -254,6 +256,8 @@ else
 fi
 run_case supermarq ./qfw_supermarq.sh "${common_args[@]}" \
 	sync 1 "${qubits}" "${shots}" false ghz "${backend}"
+run_case job-stream ./qfw_job_stream.sh "${common_args[@]}" \
+	--jobs "${stream_jobs}" --interval 0 --qubits "2-${qubits}" --shots "${shots}"
 
 if [[ -n "${QFW_RUN_ALL_CHEM_APP:-}" ]]; then
 	run_case chemistry ./qfw_chem_app.sh \

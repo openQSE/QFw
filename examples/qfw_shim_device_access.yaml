@@ -4,6 +4,24 @@ qpus:
     provider-device-id: default
     url: https://qccsw.ccs.ornl.gov/
     credential-provider: shim-no-secret
+  # Amazon Braket's SV1 simulator through QDMI. The device ARN is the
+  # provider-device-id, the stable QDMI id names the device library's
+  # catalogue entry, and the AWS identity comes from the service process's
+  # AWS SDK credential chain (AWS_PROFILE and friends), not from QFw, so
+  # the no-secret provider is right for this smoke. The library ignores
+  # url; select_qpu requires one.
+  aws-sv1:
+    provider: aws
+    provider-device-id: arn:aws:braket:::device/quantum-simulator/amazon/sv1
+    qdmi-device-id: amazon.braket.sv1
+    aws-region: us-east-1
+    url: https://braket.us-east-1.amazonaws.com
+    num-qubits: 34
+    credential-provider: shim-no-secret
+    libraries:
+      - qdmi
+    preference: qdmi
+    execution-owner: qdmi
 
 credential-providers:
   shim-no-secret:

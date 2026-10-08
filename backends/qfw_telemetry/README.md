@@ -20,7 +20,7 @@ qfw_telemetry.configure("qfw-qpm", service_version="0.1", role="qpm")
 Then instrument:
 
 ```python
-from qfw_telemetry import tracer, duration_histogram
+from qfw_telemetry import tracer, duration_histogram, counter
 
 with tracer().start_as_current_span("qfw.qpm.receive") as span:
 	span.set_attribute("qfw.stack.api_path", "qrmi")
@@ -28,10 +28,29 @@ with tracer().start_as_current_span("qfw.qpm.receive") as span:
 
 duration_histogram("qfw.qpm.duration").record(
 	elapsed_s, {"qfw.qpm.op": "receive"})
+counter("qfw.app.job.count").add(1, {"qfw.outcome": "completed"})
 ```
+
+`configure()` also takes `attributes`, extra resource attributes recorded
+once per process rather than on every span, such as the device a QPM serves.
+Keep them dimensional: a resource attribute may become a metric label in a
+store downstream.
 
 Nothing here is required. With no OpenTelemetry SDK installed, or with the
 profile off, every accessor degrades to a no-op and QFw runs unchanged.
+
+## Where QFw's own call sites are
+
+QFw's job path does not use these accessors directly. The conventions layer
+in [`services/util/instrumentation.py`](../../services/util/instrumentation.py)
+does, and the call sites use that: it knows the span and metric names from
+the design, which attributes are safe as labels, how a circuit's trace
+context crosses from the QPM's RPC handler to the thread that runs the
+circuit, and how the queue and dispatch phases are written after the fact
+from the circuit's own timestamps. Its module docstring draws the trace one
+job produces. Every QPM process and every Qiskit client process calls
+`instrumentation.configure_process()` at start-up, which calls `configure()`
+here under QFw's service names.
 
 ## Configuration
 
@@ -44,7 +63,8 @@ change and never a code change.
 | `QFW_TELEMETRY_SAMPLE` | `off`, `always`, ratio | `off` | Trace sampling |
 | `QFW_TELEMETRY_DIR` | path | node-local tmp | Export directory, file profile |
 | `QFW_TELEMETRY_TRANSPORT` | `0`, `1` | `0` | DEFw RPC spans |
-| `QFW_TELEMETRY_ENDPOINT` | URL | SDK default | Collector, otlp profile |
+| `QFW_TELEMETRY_ENDPOINT` | URL | SDK default | The collector's OTLP/HTTP base URL for the otlp profile, such as `http://otel-collector:4318`; the signal paths are appended. Unset, the exporters read the standard `OTEL_EXPORTER_OTLP_*` variables |
+| `OTEL_METRIC_EXPORT_INTERVAL` | milliseconds | `10000` | How often metrics export. The SDK's own default is a minute; ten seconds suits a dashboard and bounds what a killed service loses |
 
 Two behaviours are deliberate:
 
@@ -164,16 +184,38 @@ A DEFw build without that seam is handled rather than required. The import is
 optional, and when it is missing `configure()` logs that traces will not
 stitch across RPC boundaries and carries on, leaving per-process traces.
 
+## Adopting providers built elsewhere
+
+`use_providers(tracer_provider, meter_provider)` installs providers the
+caller built instead of building them from the environment, registers the
+DEFw propagation hooks for them, and leaves the global OpenTelemetry providers
+alone. Two uses: a host process that already owns an OpenTelemetry setup and
+wants QFw's signals in it, and tests, which need a fresh recording provider
+per test where `configure()` can install only one per process. The mock test
+`tests/mock/test_instrumentation.py` builds an in-memory exporter and reader
+this way. `shutdown()` shuts adopted providers down like any other.
+
 ## Caveats
 
 **Configure once per process.** OpenTelemetry refuses to replace a global
 provider that is already set, so calling `shutdown()` and then `configure()`
 again does not rebuild a working provider. `shutdown()` is for flushing on the
 way out, not for cycling telemetry back up. The same constraint means only one
-test per process can install a real provider.
+test per process can install a real provider; `use_providers()` is the way
+around it.
 
 **Export to node-local storage, never a shared filesystem.** Export contention
 would perturb what is being measured.
+
+**Stop services, do not kill them.** Spans are batched and metrics export on
+an interval, and a process that dies on a signal runs no shutdown. The QPM
+flushes through `shutdown()` on its own clean stop; anything it had not
+exported when it was killed is gone, bounded by the export interval above.
+
+**Duration histograms use second-scale buckets.** `duration_histogram()`
+asks for `DURATION_BUCKETS`, from a tenth of a millisecond to ten minutes,
+because the SDK's defaults are sized for milliseconds and would put every
+sub-second hop in one bucket.
 
 **Span rates must stay bounded per job.** The per-job budget above only holds
 if no span is emitted per unit of waiting. This is why `qfw.backend.collect`

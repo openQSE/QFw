@@ -23,6 +23,13 @@ Optional:
                        get_device_info, get_coupling_graph,
                        get_calibration_snapshot, async_run, and
                        get_task_metadata.
+  --device-id <id>      the device in qfw_shim_device_access.yaml to bind the
+                       shim QPM to (default ornl-iqm-20q; aws-sv1 is Amazon
+                       Braket's SV1 simulator, which needs AWS credentials in
+                       the environment).
+  --circuit <name>      x (default) or asymmetric, a 3-qubit circuit whose
+                       measurements land in permuted classical bits, which
+                       catches a result keyed by qubit instead of bit.
 
 The server validates whether the selected library supports each requested API.
 EOF
@@ -32,6 +39,7 @@ lib=""
 libs=""
 shots=100
 device_id="ornl-iqm-20q"
+circuit="x"
 capture=""
 for arg in "$@"; do
 	case "${capture}" in
@@ -39,14 +47,34 @@ for arg in "$@"; do
 		libs) libs="${arg}"; capture=""; continue ;;
 		shots) shots="${arg}"; capture=""; continue ;;
 		device_id) device_id="${arg}"; capture=""; continue ;;
+		circuit) circuit="${arg}"; capture=""; continue ;;
 	esac
 	case "${arg}" in
 		--lib)  capture="lib" ;;
 		--libs) capture="libs" ;;
 		--shots) capture="shots" ;;
 		--device-id) capture="device_id" ;;
+		--circuit) capture="circuit" ;;
 	esac
 done
+qubits=1
+if [[ "${circuit}" == "asymmetric" ]]; then
+	qubits=3
+fi
+
+shim_manifest_for_device() {
+	# The service manifest names the device the shim QPM binds. Write a copy
+	# with the one asked for, so --device-id aws-sv1 starts a shim bound to
+	# the Braket simulator rather than to the IQM default the manifest ships
+	# with. The copy lands beside the generated site config.
+	local device="$1" source runtime_dir target
+	source="$(qfw_example_path qfw_shim_smoke_services.yaml)"
+	runtime_dir="${QFW_RUN_BASE_DIR:-${TMPDIR:-/tmp}/qfw-runs}/example-runtime"
+	mkdir -p "${runtime_dir}"
+	target="$(mktemp "${runtime_dir}/shim-smoke-services.XXXXXX.yaml")"
+	sed -E "s|^([[:space:]]*device-id:).*|\1 ${device}|" "${source}" > "${target}"
+	printf "%s\n" "${target}"
+}
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 	usage
@@ -68,14 +96,15 @@ qfw_example_begin "shim-smoke" "$@"
 QFW_EXAMPLE_SITE_CONFIG="$(qfw_example_make_site_config \
 	"$(qfw_example_path qfw_shim_device_access.yaml)")"
 QFW_SITE_CONFIG="${QFW_EXAMPLE_SITE_CONFIG}" \
-	qfw_example_setup_local_services qfw_shim_smoke_services.yaml \
+	qfw_example_setup_local_services \
+		"$(shim_manifest_for_device "${device_id}")" \
 		shim-ornl-20q
 DEFW_ONLY_LOAD_MODULE=api_qpm_execution,api_qpm_telemetry,api_qpm_control \
 	QFW_SHIM_SMOKE_SHUTDOWN_QPM=no \
 	qfw_example_slurm_driver \
 		--backend shim \
 		--example qfw_shim_smoke \
-		--qubits 1 \
+		--qubits "${qubits}" \
 		--shots "${shots}" \
 		--count 1 \
 		--operation async_run \

@@ -38,7 +38,7 @@ QFW_TELEMETRY            off | file | otlp        (default: off)
 QFW_TELEMETRY_DIR        export directory for the file profile
 QFW_TELEMETRY_SAMPLE     off | always | <ratio>   (default: off)
 QFW_TELEMETRY_TRANSPORT  0 | 1                    (default: 0)
-QFW_TELEMETRY_ENDPOINT   collector endpoint for the otlp profile
+QFW_TELEMETRY_ENDPOINT   the collector's OTLP/HTTP base URL, otlp profile
 """
 
 import logging
@@ -65,6 +65,23 @@ CONVENTIONS_VERSION = 1
 
 DEFAULT_TELEMETRY_DIRNAME = "qfw-telemetry"
 
+# How often the always-on metrics tier exports, unless the standard
+# OTEL_METRIC_EXPORT_INTERVAL says otherwise. The SDK's own default is a
+# minute, which is a long time for a dashboard to wait and the whole window
+# of metrics lost when a service is killed rather than stopped. One export
+# every ten seconds costs nothing measurable.
+DEFAULT_METRIC_EXPORT_INTERVAL_MS = 10_000
+METRIC_EXPORT_INTERVAL_ENV = "OTEL_METRIC_EXPORT_INTERVAL"
+
+# Bucket boundaries for the duration histograms, in seconds. The SDK's
+# default boundaries (5, 10, 25, ... 10000) are sized for milliseconds, so
+# every sub-second hop of a job would land in the first bucket and a quantile
+# over them would say nothing. These run from a tenth of a millisecond, the
+# cost of an RPC, to ten minutes, a long provider queue.
+DURATION_BUCKETS = (
+	0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1,
+	0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 60.0, 120.0, 300.0, 600.0)
+
 try:
 	from opentelemetry import trace as _trace
 	from opentelemetry import metrics as _metrics
@@ -86,6 +103,7 @@ class _State(object):
 		self.tracer = None
 		self.meter = None
 		self.histograms = {}
+		self.counters = {}
 		self.streams = []
 		self.transport_spans = False
 		self.defw_hooks = False
@@ -216,21 +234,25 @@ def _build_sampler():
 	return ParentBased(root=TraceIdRatioBased(ratio))
 
 
-def _build_resource(service_name, service_version, role):
+def _build_resource(service_name, service_version, role, attributes=None):
 	from opentelemetry.sdk.resources import Resource
 
-	attributes = {
-		"service.name": service_name,
-		"qfw.conventions.version": CONVENTIONS_VERSION,
-	}
+	values = {}
+	# Caller-supplied facts about this process, such as the device a QPM
+	# serves. The fixed keys below win where they collide.
+	for key, value in (attributes or {}).items():
+		if value is not None:
+			values[str(key)] = value
+	values["service.name"] = service_name
+	values["qfw.conventions.version"] = CONVENTIONS_VERSION
 	if service_version:
-		attributes["service.version"] = service_version
+		values["service.version"] = service_version
 	if role:
-		attributes["qfw.component.role"] = role
+		values["qfw.component.role"] = role
 	slurm_job = _env("SLURM_JOB_ID")
 	if slurm_job:
-		attributes["qfw.slurm.job_id"] = slurm_job
-	return Resource.create(attributes)
+		values["qfw.slurm.job_id"] = slurm_job
+	return Resource.create(values)
 
 
 def _open_export_stream(service_name, kind):
@@ -255,17 +277,49 @@ def _file_span_processor(service_name):
 	return BatchSpanProcessor(OtlpJsonFileSpanExporter(stream))
 
 
+def _otlp_endpoint(signal_path):
+	"""
+	The OTLP/HTTP URL for one signal, from QFW_TELEMETRY_ENDPOINT, or None
+	to let the exporter read the standard OTEL_EXPORTER_OTLP_* variables.
+
+	The variable names the collector, http://host:4318, the way
+	OTEL_EXPORTER_OTLP_ENDPOINT does, and the signal's path is appended
+	here. An explicit endpoint handed to the exporter is used verbatim, so
+	without this step the collector would answer 404 to every export. A
+	value that already ends in the signal's path is used as given.
+	"""
+	endpoint = _env(TELEMETRY_ENDPOINT_ENV)
+	if not endpoint:
+		return None
+	base = endpoint.rstrip("/")
+	if base.endswith("/" + signal_path):
+		return base
+	return f"{base}/{signal_path}"
+
+
 def _otlp_span_processor():
 	from opentelemetry.sdk.trace.export import BatchSpanProcessor
 	from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
 		OTLPSpanExporter)
 
-	endpoint = _env(TELEMETRY_ENDPOINT_ENV)
-	if endpoint:
-		exporter = OTLPSpanExporter(endpoint=endpoint)
-	else:
-		exporter = OTLPSpanExporter()
+	# endpoint=None hands the choice to the exporter's own environment.
+	exporter = OTLPSpanExporter(endpoint=_otlp_endpoint("v1/traces"))
 	return BatchSpanProcessor(exporter)
+
+
+def _metric_export_interval_ms():
+	value = _env(METRIC_EXPORT_INTERVAL_ENV)
+	if not value:
+		return DEFAULT_METRIC_EXPORT_INTERVAL_MS
+	try:
+		interval = float(value)
+	except ValueError:
+		interval = -1.0
+	if interval <= 0:
+		raise ValueError(
+			f"{METRIC_EXPORT_INTERVAL_ENV}={value!r} is not a positive number "
+			"of milliseconds")
+	return interval
 
 
 def _build_metric_reader(service_name, profile):
@@ -275,18 +329,16 @@ def _build_metric_reader(service_name, profile):
 		from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
 			OTLPMetricExporter)
 
-		endpoint = _env(TELEMETRY_ENDPOINT_ENV)
-		if endpoint:
-			exporter = OTLPMetricExporter(endpoint=endpoint)
-		else:
-			exporter = OTLPMetricExporter()
+		exporter = OTLPMetricExporter(
+			endpoint=_otlp_endpoint("v1/metrics"))
 	else:
 		from ._otlp_json import OtlpJsonFileMetricExporter
 
 		stream = _open_export_stream(service_name, "metrics")
 		_STATE.streams.append(stream)
 		exporter = OtlpJsonFileMetricExporter(stream)
-	return PeriodicExportingMetricReader(exporter)
+	return PeriodicExportingMetricReader(
+		exporter, export_interval_millis=_metric_export_interval_ms())
 
 
 def _register_defw_trace_hooks():
@@ -323,10 +375,15 @@ def _clear_defw_trace_hooks():
 	defw_trace.clear_hooks()
 
 
-def configure(service_name, service_version=None, role=None):
+def configure(service_name, service_version=None, role=None, attributes=None):
 	"""
 	Bring telemetry up for this process. Safe to call more than once and safe
 	to call from more than one thread. Returns the active profile.
+
+	attributes are extra resource attributes, per-process facts such as the
+	device a QPM serves, recorded once on the resource rather than on every
+	span. Keep them dimensional: a resource attribute may end up a metric
+	label downstream.
 
 	Configure once per process, at startup. OpenTelemetry refuses to replace
 	a global provider that is already set, so calling shutdown() and then
@@ -366,7 +423,8 @@ def configure(service_name, service_version=None, role=None):
 		from opentelemetry.sdk.trace import TracerProvider
 		from opentelemetry.sdk.metrics import MeterProvider
 
-		resource = _build_resource(service_name, service_version, role)
+		resource = _build_resource(
+			service_name, service_version, role, attributes)
 
 		tracer_provider = TracerProvider(
 			resource=resource, sampler=_build_sampler())
@@ -448,10 +506,66 @@ def duration_histogram(name):
 	with _LOCK:
 		instrument = _STATE.histograms.get(name)
 		if instrument is None:
-			instrument = _STATE.meter.create_histogram(
-				name, unit="s", description=f"{name} duration in seconds")
+			description = f"{name} duration in seconds"
+			try:
+				instrument = _STATE.meter.create_histogram(
+					name, unit="s", description=description,
+					explicit_bucket_boundaries_advisory=list(DURATION_BUCKETS))
+			except TypeError:
+				# An API older than 1.23 has no advisory parameter and keeps
+				# the SDK's default boundaries.
+				instrument = _STATE.meter.create_histogram(
+					name, unit="s", description=description)
 			_STATE.histograms[name] = instrument
 		return instrument
+
+
+def counter(name):
+	"""
+	Return a cached monotonic counter.
+
+	Counters carry throughput and reliability, the "how many, and how many
+	failed" that a latency histogram alone cannot answer.
+	"""
+	if _STATE.meter is None:
+		return _NOOP_INSTRUMENT
+	with _LOCK:
+		instrument = _STATE.counters.get(name)
+		if instrument is None:
+			instrument = _STATE.meter.create_counter(
+				name, unit="1", description=f"{name} count")
+			_STATE.counters[name] = instrument
+		return instrument
+
+
+def use_providers(tracer_provider, meter_provider=None, profile=PROFILE_FILE):
+	"""
+	Adopt providers built elsewhere instead of building them from the
+	environment, and register the DEFw propagation hooks for them.
+
+	For a host process that already owns an OpenTelemetry setup, and for
+	tests, which need a fresh recording provider per test where configure()
+	can install only one per process. The global providers are left alone,
+	so this neither conflicts with an earlier configure() nor requires the
+	global slot to be free. shutdown() then shuts these providers down like
+	any other.
+	"""
+	with _LOCK:
+		_STATE.transport_spans = _env(
+			TELEMETRY_TRANSPORT_ENV, "0").lower() in ("1", "yes", "true", "on")
+		_STATE.profile = profile
+		_STATE.tracer_provider = tracer_provider
+		_STATE.meter_provider = meter_provider
+		_STATE.tracer = tracer_provider.get_tracer(
+			"qfw", str(CONVENTIONS_VERSION))
+		_STATE.meter = (
+			meter_provider.get_meter("qfw", str(CONVENTIONS_VERSION))
+			if meter_provider is not None else None)
+		_STATE.histograms = {}
+		_STATE.counters = {}
+		_STATE.defw_hooks = _register_defw_trace_hooks()
+		_STATE.configured = True
+		return _STATE.profile
 
 
 def shutdown():
@@ -480,6 +594,7 @@ def shutdown():
 				pass
 		_STATE.streams = []
 		_STATE.histograms = {}
+		_STATE.counters = {}
 		_STATE.tracer = None
 		_STATE.meter = None
 		_STATE.tracer_provider = None

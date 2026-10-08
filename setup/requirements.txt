@@ -34,3 +34,6 @@ opentelemetry-sdk>=1.44.0
 # Supplies the OTLP encoders. The SDK ships no file exporter, so the file
 # profile encodes with these and writes OTLP/JSON itself.
 opentelemetry-exporter-otlp-proto-common>=1.44.0
+# The otlp profile (QFW_TELEMETRY=otlp) ships spans and metrics to a
+# collector over OTLP/HTTP with this exporter.
+opentelemetry-exporter-otlp-proto-http>=1.44.0

@@ -10,6 +10,7 @@ from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError
 from util.circuit_payload import encode_qiskit_circuit
+from util import instrumentation
 from util.qpm.statevector import (
 	decode_statevector_payload,
 	statevector_payload_size_summary,
@@ -61,6 +62,9 @@ class QFwJob(Job):
 		self._result_time = 0
 		self._submission_time = 0
 		self._status = JobStatus.INITIALIZING
+		# The job's qfw.app.job trace, opened by submit() and closed by
+		# result(). None when telemetry is off.
+		self._telemetry = None
 
 	def _run_experiment_async(self, circuit):
 		self.start_time = time.time()
@@ -74,7 +78,10 @@ class QFwJob(Job):
 		}
 		# Serialize in the best format this QPM says it reads. A QPM that
 		# declares nothing gets OpenQASM 2 in info["qasm"], exactly as before.
-		info.update(encode_qiskit_circuit(circuit, self._declared_properties()))
+		with instrumentation.app_prepare(circuit) as prepare:
+			info.update(
+				encode_qiskit_circuit(circuit, self._declared_properties()))
+			instrumentation.describe_payload(prepare, info)
 		qubit_mapping = get_qubit_mapping(circuit)
 		if qubit_mapping:
 			info["qubit_mapping"] = qubit_mapping
@@ -83,13 +90,20 @@ class QFwJob(Job):
 
 		try:
 			context = self._execution_context()
-			response = self._qpm.async_run(info, **context)
+			with instrumentation.transport_rpc(
+					instrumentation.TRANSPORT_OP_SUBMIT,
+					labels=self._job_labels()):
+				response = self._qpm.async_run(info, **context)
 			cid = _async_response_cid(response)
 			return cid
 		except Exception as e:
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
+
+	def _job_labels(self):
+		# The device and backend kind the job's own metrics carry.
+		return dict(getattr(self._telemetry, "labels", None) or {})
 
 	def _declared_properties(self):
 		# What the QPM published about itself in the directory. The resolver
@@ -115,13 +129,21 @@ class QFwJob(Job):
 		else:
 			circuits = self._qobj
 
+		# One trace per job. The RPCs inside the scope carry its context to
+		# the QPM, so the QPM's own spans join this trace.
+		self._telemetry = instrumentation.start_job(
+			self._job_id, len(circuits), self.options().get("shots"),
+			self._declared_properties())
 		start = time.time()
 		try:
-			for circuit in circuits:
-				cid = self._run_experiment_async(circuit)
-				self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
-		except Exception:
+			with instrumentation.job_scope(self._telemetry):
+				for circuit in circuits:
+					cid = self._run_experiment_async(circuit)
+					self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
+		except Exception as e:
 			self._status = JobStatus.ERROR
+			instrumentation.end_job(
+				self._telemetry, instrumentation.OUTCOME_FAILED, error=e)
 			raise
 		self._submission_time = time.time() - start
 		self._status = JobStatus.RUNNING
@@ -150,6 +172,8 @@ class QFwJob(Job):
 					if cid not in expected_cids or cid in completed_cids:
 						continue
 					results.append(event)
+					instrumentation.record_transport_return(
+						payload, labels=self._job_labels())
 					completed_cids.add(cid)
 					total_circuits_completed += 1
 
@@ -274,6 +298,18 @@ class QFwJob(Job):
 		return Statevector(amplitudes)
 
 	def result(self):
+		try:
+			with instrumentation.job_scope(self._telemetry):
+				qiskit_result = self._collect_result()
+		except BaseException as e:
+			instrumentation.end_job(
+				self._telemetry, instrumentation.OUTCOME_FAILED, error=e)
+			raise
+		instrumentation.end_job(
+			self._telemetry, instrumentation.OUTCOME_COMPLETED)
+		return qiskit_result
+
+	def _collect_result(self):
 		result_list = []
 
 		res_wait_start = time.time()

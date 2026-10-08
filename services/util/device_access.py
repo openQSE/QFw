@@ -91,6 +91,12 @@ FILE_PROVIDER_TYPES = ("file", "json", "file-backed", "development-file")
 NO_SECRET_PROVIDER = "no-secret"
 NO_SECRET_PROVIDER_TYPES = (NO_SECRET_PROVIDER, "none")
 PLUGIN_PROVIDER_TYPES = ("python", "plugin", "module")
+# An entitlement provider checks the credential DB's enabled flags for the
+# user and the device and binds no secret. It is for a device whose library
+# authenticates on its own, as the AWS SDK's credential chain does for
+# Braket, so QFw holds no key for it but still decides who may use it. It
+# is a required-credential provider, unlike no-secret, which skips the check.
+ENTITLEMENT_PROVIDER_TYPES = ("entitlement",)
 
 
 def resolve_relative_path(path, base_path):
@@ -270,7 +276,9 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 	for key in ("libraries", "preference", "caps", "resource-type",
 			"resource_type", "service-crn", "iam-endpoint",
 			"s3-endpoint", "s3-endpoint-for-qsapi", "s3-bucket",
-			"s3-region", "job-timeout-seconds"):
+			"s3-region", "job-timeout-seconds",
+			"qdmi-device-id", "aws-region", "s3-results-uri",
+			"reservation-arn", "num-qubits", "max-shots"):
 		if key in device:
 			selected[key] = device[key]
 	if "execution-owner" in device:
@@ -323,6 +331,27 @@ def select_user_record(
 	raise DEFwExecutionError(
 		f"QPU credential DB does not contain an enabled entitlement and "
 		f"API key for user {user!r} and device {device_id!r}")
+
+
+def select_entitled_record(
+		credential_db, user, device_id=None, provider_device_id=None,
+		credential_hint=None, credential_handle=None):
+	# Like select_user_record, but the entitlement is the whole requirement:
+	# the user's entry for this device exists and both enabled flags are
+	# true. No API key is looked for, because an entitlement credential
+	# provider has none to bind (see ENTITLEMENT_PROVIDER_TYPES).
+	users = get_user_records(credential_db)
+	for record_key in _credential_record_candidates(
+			users, user, credential_hint, credential_handle):
+		record = users.get(record_key)
+		if record is None:
+			continue
+		if _entitled_device_record(
+				record, device_id, provider_device_id) is not None:
+			return record_key, record
+	raise DEFwExecutionError(
+		f"QPU credential DB does not contain an enabled entitlement for "
+		f"user {user!r} and device {device_id!r}")
 
 
 def _credential_record_candidates(
@@ -437,6 +466,10 @@ def resolve_qpu_credentials(device, user=None, credential_hint=None,
 			    credential_handle=None):
 	user = user or resolve_qpu_user()
 	credential_db_path = device.get("credential_db")
+	if device.get("credential_provider_type") in ENTITLEMENT_PROVIDER_TYPES:
+		return _entitlement_credentials(
+			device, user, credential_db_path, credential_hint,
+			credential_handle)
 	if not credential_db_path:
 		return _credentials_without_a_database(device, user)
 	credential_db = load_json_config(credential_db_path)
@@ -464,6 +497,27 @@ def resolve_qpu_credentials(device, user=None, credential_hint=None,
 	resolved.update(get_object_storage_from_user_record(
 		record, device["device_id"], device.get("provider_device_id")))
 	return resolved
+
+
+def _entitlement_credentials(device, user, credential_db_path,
+			     credential_hint, credential_handle):
+	# An entitlement provider has no key to return, but the entitlement is
+	# still checked, so a lookup for a user who is not entitled fails here
+	# the way a missing key does, rather than opening a session for them.
+	if not credential_db_path:
+		raise DEFwExecutionError(
+			f"QPU device {device.get('device_id')!r} names entitlement "
+			f"credential provider {device.get('credential_provider')!r}, "
+			"which needs a credential-db to read entitlements from")
+	credential_db = load_json_config(credential_db_path)
+	user, _record = select_entitled_record(
+		credential_db,
+		user,
+		device_id=device["device_id"],
+		provider_device_id=device.get("provider_device_id"),
+		credential_hint=credential_hint,
+		credential_handle=credential_handle)
+	return {"user": user, "api_key": None, "service_crn": None}
 
 
 def _credentials_without_a_database(device, user):

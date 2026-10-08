@@ -26,9 +26,11 @@
 from .base_driver import BaseDriver
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
+from util import instrumentation
 import json
 import logging
 import os
+import sys
 import threading
 import time
 
@@ -977,8 +979,10 @@ class QrmiDriver(BaseDriver):
 				" format fields in the info[circuit] provided accordingly to a"
 				f" QPY format: {QPY_FORMATS}")
 
-		target, target_config_json = self._build_backend_target(source)
-		payload = self._build_ibm_payload(source, target)
+		with instrumentation.backend_phase("acquire"):
+			target, target_config_json = self._build_backend_target(source)
+		with instrumentation.qpm_transpile():
+			payload = self._build_ibm_payload(source, target)
 		result_json, job = self._run_sampler_payload(payload, source)
 
 		# Update last_job with IBM measurements.
@@ -1033,18 +1037,32 @@ class QrmiDriver(BaseDriver):
 
 		timing = {}
 		start = time.monotonic()
-		try:
-			job_id = self._qpu(credential=credential).task_start(payload)
-		except Exception as exc:
-			raise self._qrmi_error(exc, "QRMI task_start failed") from exc
+		with instrumentation.backend_phase("acquire"):
+			qpu = self._qpu(credential=credential)
+		with instrumentation.backend_phase("submit"):
+			try:
+				job_id = qpu.task_start(payload)
+			except Exception as exc:
+				raise self._qrmi_error(exc, "QRMI task_start failed") from exc
 		timing["submit_seconds"] = time.monotonic() - start
+		instrumentation.set_attribute(
+			instrumentation.ATTR_VENDOR_JOB_ID, str(job_id))
 
-		status = self._poll_task(
-			job_id, timeout, poll, credential=credential,
-			cancel_event=cancel_event)
+		collect = instrumentation.backend_phase("collect")
+		collect.__enter__()
+		instrumentation.set_attribute(
+			instrumentation.ATTR_POLL_INTERVAL, float(poll))
+		try:
+			status = self._poll_task(
+				job_id, timeout, poll, credential=credential,
+				cancel_event=cancel_event)
+		except BaseException:
+			collect.__exit__(*sys.exc_info())
+			raise
 		timing["wait_seconds"] = (
 			time.monotonic() - start - timing["submit_seconds"])
 		if status != "completed":
+			collect.__exit__(None, None, None)
 			# task_status reports the state, not the cause. The provider's own log
 			# is the only place the reason exists, so it goes to the operator in
 			# full and to the caller as one line.
@@ -1070,7 +1088,9 @@ class QrmiDriver(BaseDriver):
 			result_json = json.loads(
 				self._qpu(credential=credential).task_result(job_id).value)
 		except Exception as exc:
+			collect.__exit__(*sys.exc_info())
 			raise self._qrmi_error(exc, "QRMI task_result failed") from exc
+		collect.__exit__(None, None, None)
 		timing["result_fetch_seconds"] = time.monotonic() - result_started
 		timing["total_wall_seconds"] = time.monotonic() - start
 
@@ -1152,7 +1172,9 @@ class QrmiDriver(BaseDriver):
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
 		use_timeslot = bool(info.get("use_timeslot", False))
 
-		target = self._target(credential=getattr(source, "provider_credential", None))
+		with instrumentation.backend_phase("acquire"):
+			target = self._target(
+				credential=getattr(source, "provider_credential", None))
 		dynamic = target.get("dynamic_quantum_architecture") or {}
 		calibration_set_id = (
 			info.get("calibration_set_id")
@@ -1161,10 +1183,11 @@ class QrmiDriver(BaseDriver):
 
 		from util.circuit_payload import qiskit_input
 		from util.iqm_transcode import build_iqm_circuit
-		circuit = qiskit_input(info)
-		iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
-		iqmjson, run_request = self._build_iqmjson(
-				iqm_circuit, shots, calibration_set_id)
+		with instrumentation.qpm_transpile():
+			circuit = qiskit_input(info)
+			iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
+			iqmjson, run_request = self._build_iqmjson(
+					iqm_circuit, shots, calibration_set_id)
 
 		payload = qrmi.Payload.IQMServer(
 			iqmjson=iqmjson, job_type="circuit",
@@ -1232,6 +1255,7 @@ class QrmiDriver(BaseDriver):
 		# running after QFw has given up on it. The wait between polls ends as
 		# soon as a cancel arrives.
 		deadline = time.monotonic() + max(timeout, 0.0)
+		polls = 0
 		while True:
 			if cancel_event is not None and cancel_event.is_set():
 				self._stop_task(job_id, credential=credential)
@@ -1242,6 +1266,9 @@ class QrmiDriver(BaseDriver):
 				raise self._qrmi_error(
 					exc, "QRMI task_status failed") from exc
 			state = _status_str(raw)
+			polls += 1
+			instrumentation.add_event("poll", {"qfw.vendor.status": state})
+			instrumentation.set_attribute(instrumentation.ATTR_POLL_COUNT, polls)
 			if "complet" in state:
 				return "completed"
 			if "fail" in state or "error" in state:
