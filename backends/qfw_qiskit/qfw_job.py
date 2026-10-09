@@ -25,6 +25,9 @@ EXECUTION_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
+# The libraries a shim QPM can run a circuit through (svc_lib_qpm).
+SHIM_LIBRARIES = ("qrmi", "qdmi")
+
 
 def normalize_reservation_id(value):
 	if value is None:
@@ -42,6 +45,28 @@ def normalize_reservation_id(value):
 		raise DEFwError(
 			f"reservation_id must fit in uint64_t: {value!r}")
 	return value
+
+
+def normalize_shim_library(value, properties=None):
+	# The library a shim QPM runs the circuit through. "default" or nothing
+	# leaves the choice to the shim, which uses the device's execution owner.
+	# Only the shim reads the choice (svc_lib_qpm routes on info["lib"]), so
+	# naming one for any other QPM is an error here rather than a request that
+	# QPM would quietly ignore.
+	if value is None:
+		return None
+	lib = str(value).strip().lower()
+	if not lib or lib == "default":
+		return None
+	if lib not in SHIM_LIBRARIES:
+		raise DEFwError(
+			f"lib must be one of {', '.join(SHIM_LIBRARIES)}: {value!r}")
+	provider = (properties or {}).get("provider")
+	if provider is not None and provider != "shim":
+		raise DEFwError(
+			f"lib={lib!r} picks a shim library, but this QPM is "
+			f"{provider!r}, not the shim")
+	return lib
 
 
 class QFwJob(Job):
@@ -87,6 +112,8 @@ class QFwJob(Job):
 			info["qubit_mapping"] = qubit_mapping
 		if self._backend.returns_statevector():
 			info["return_statevector"] = True
+		if self._options.get("lib"):
+			info["lib"] = self._options["lib"]
 
 		try:
 			context = self._execution_context()
