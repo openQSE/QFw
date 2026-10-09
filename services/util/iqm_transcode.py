@@ -174,7 +174,16 @@ def architecture_backend(dynamic_architecture):
 			raise DEFwExecutionError(
 				"this IQM backend transpiles only, it cannot submit")
 
-	return _TranspileOnlyBackend(architecture)
+	try:
+		return _TranspileOnlyBackend(architecture)
+	except Exception as exc:
+		# IQMBackendBase reads the architecture as it builds its target, and
+		# raises whatever that hits: a KeyError for an architecture with no
+		# measure gate, for one. build_iqm_circuit falls back only on a
+		# DEFwExecutionError, so anything else would end the run instead.
+		raise DEFwExecutionError(
+			"IQM could not build a transpile target from this "
+			f"architecture: {exc!r}") from exc
 
 
 def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
@@ -198,7 +207,16 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 			raise DEFwExecutionError(
 				"iqm.qiskit_iqm is required to transpile qiskit circuits "
 				f"for IQM execution: {exc}") from exc
-		backend = IQMBackend(client, calibration_set_id=calibration_set_id)
+		try:
+			backend = IQMBackend(
+				client, calibration_set_id=calibration_set_id)
+		except Exception as exc:
+			# Building the backend asks the client for the architecture. A
+			# failure there is one build_iqm_circuit falls back on, as for
+			# any other step of transpiling.
+			raise DEFwExecutionError(
+				"IQM could not build a backend from the client: "
+				f"{exc!r}") from exc
 	else:
 		backend = architecture_backend(dynamic_architecture)
 

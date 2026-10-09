@@ -285,3 +285,62 @@ def test_a_mapping_holds_on_the_architecture_qdmi_rebuilds(monkeypatch):
 	iqm_circuit = build_iqm_circuit(_ghz(), arch, ["QB3", "QB4", "QB5"])
 
 	assert _loci(iqm_circuit) == ["QB3", "QB4", "QB5"]
+
+
+def _architecture_without_measure():
+	# IQMBackendBase keeps only the qubits a measure gate covers, and reads
+	# gates["measure"] to find them, so without one it raises a KeyError
+	# while it builds its target.
+	arch = _architecture()
+	del arch["gates"]["measure"]
+	return arch
+
+
+def test_architecture_backend_reports_an_unusable_architecture():
+	_iqm()
+	from defw_exception import DEFwExecutionError
+	from util.iqm_transcode import architecture_backend
+
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		architecture_backend(_architecture_without_measure())
+	assert "measure" in str(excinfo.value)
+
+
+def test_a_backend_that_cannot_be_built_falls_back():
+	# The KeyError used to escape build_iqm_circuit, which falls back only on
+	# a DEFwExecutionError. The GHZ now reaches the manual translator and
+	# gets its error, which names the gates it can take.
+	_iqm()
+	from defw_exception import DEFwExecutionError
+	from util.iqm_transcode import build_iqm_circuit
+
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		build_iqm_circuit(_ghz(), _architecture_without_measure(), None)
+	assert "x, rx, ry, cz" in str(excinfo.value)
+
+
+def test_a_client_that_cannot_build_a_backend_falls_back():
+	# Building IQMBackend asks the client for the architecture. A failure
+	# there falls back to serializing an already-native circuit, as it did
+	# before the client-free path was added, rather than ending the run.
+	_iqm()
+	from util.iqm_transcode import build_iqm_circuit
+	import math
+
+	class UnreachableClient:
+		def __getattr__(self, name):
+			def call(*args, **kwargs):
+				raise RuntimeError(f"{name}: server unreachable")
+			return call
+
+	circuit = QuantumCircuit(2, 2, name="native")
+	circuit.r(math.pi / 2, math.pi / 2, 0)
+	circuit.cz(0, 1)
+	circuit.measure([0, 1], [0, 1])
+
+	iqm_circuit = build_iqm_circuit(
+		circuit, {"qubits": ["QB1", "QB2"]}, None,
+		client=UnreachableClient())
+
+	assert [op.name for op in iqm_circuit.instructions][:2] == ["prx", "cz"]
+	assert "qfw_transpiled_to_iqm" not in (iqm_circuit.metadata or {})
