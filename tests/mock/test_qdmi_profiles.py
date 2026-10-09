@@ -125,12 +125,100 @@ def test_the_iqm_profile_names_the_missing_credential(monkeypatch):
 	import util.device_access as device_access
 	monkeypatch.setattr(
 		device_access, "resolve_device_access",
-		lambda provider=None: {
+		lambda **kwargs: {
 			"url": "https://qc.example.org/", "api_key": None,
 			"device_id": "ornl-iqm-20q", "provider_device_id": "default"})
 
 	with pytest.raises(DEFwExecutionError, match="API token"):
 		QdmiDriver({"provider": "iqm"})._access()
+
+
+# --- the reservation's credential, not the service's ------------------------
+
+def _bound_credential(user="shehataa", api_key="user-secret"):
+	# What FileCredentialProvider binds for a reservation and UTIL_QPM
+	# attaches to the circuit as provider_credential.
+	return {
+		"url": "https://qc.example.org/",
+		"api_key": api_key,
+		"token": api_key,
+		"device_id": "ornl-iqm-20q",
+		"provider_device_id": "default",
+		"quantum_computer": "default",
+		"user": user,
+		"reservation_id": 7,
+	}
+
+
+def test_the_session_opens_with_the_reservation_credential(monkeypatch):
+	# The service's own settings are there too, and must not win: the QPM
+	# runs as one account for every user.
+	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
+	monkeypatch.setenv("QFW_API_KEY", "service-secret")
+	opened = []
+	_install_mqt_driver(monkeypatch, opened)
+	_install_iqm_qdmi(monkeypatch)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+
+	driver._device(credential=_bound_credential())
+
+	assert opened == [("iqm.default", {
+		"base_url": "https://qc.example.org",
+		"token": "user-secret",
+		"custom2": "default",
+	})]
+
+
+def test_device_access_is_resolved_for_the_reservation_user(monkeypatch):
+	# A credential with no token falls back to device-access config, and
+	# that has to look up the reservation's user, not the account the
+	# service runs as (resolve_qpu_user would answer root).
+	monkeypatch.delenv("QFW_QC_URL", raising=False)
+	monkeypatch.delenv("QFW_API_KEY", raising=False)
+	import util.device_access as device_access
+	calls = []
+
+	def resolve_device_access(**kwargs):
+		calls.append(kwargs)
+		return {
+			"url": "https://qc.example.org/", "api_key": "user-secret",
+			"device_id": "ornl-iqm-20q", "provider_device_id": "default"}
+
+	monkeypatch.setattr(
+		device_access, "resolve_device_access", resolve_device_access)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+
+	access = driver._access({"user": "shehataa", "credential_hint": "hint"})
+
+	assert access["token"] == "user-secret"
+	assert calls == [{
+		"provider": "iqm",
+		"device_id": "ornl-iqm-20q",
+		"user": "shehataa",
+		"credential_hint": "hint",
+		"credential_handle": None,
+	}]
+
+
+def test_each_credential_gets_its_own_session(monkeypatch):
+	# A session carries the token it opened with, so one user's circuit
+	# must never run on a session opened for another.
+	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
+	monkeypatch.setenv("QFW_API_KEY", "service-secret")
+	opened = []
+	_install_mqt_driver(monkeypatch, opened)
+	_install_iqm_qdmi(monkeypatch)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+	alice = _bound_credential("alice", "alice-secret")
+	bob = _bound_credential("bob", "bob-secret")
+
+	driver._device(credential=alice)
+	driver._device(credential=bob)
+	driver._device(credential=dict(alice, reservation_id=8))
+	driver._device()
+
+	assert [kwargs["token"] for _, kwargs in opened] == [
+		"alice-secret", "bob-secret", "service-secret"]
 
 
 def test_a_missing_device_library_names_its_package(monkeypatch):
@@ -228,7 +316,7 @@ def _running_driver(monkeypatch, counts, records, submitted):
 		return _Job(counts)
 
 	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
-	driver._device = lambda: types.SimpleNamespace(submit_job=submit_job)
+	driver._device = lambda credential=None: types.SimpleNamespace(submit_job=submit_job)
 	driver._serialize_program = lambda iqm_circuit: "{}"
 	return driver
 
@@ -237,6 +325,25 @@ def _circuit(cid="cid-9"):
 	return types.SimpleNamespace(
 		info={"qasm": "OPENQASM 2.0;", "num_shots": 10, "poll_interval": 0.0},
 		get_cid=lambda: cid)
+
+
+def test_run_circuit_opens_the_session_with_the_circuit_credential(
+		monkeypatch):
+	driver = _running_driver(monkeypatch, {"1": 10}, [], [])
+	device = driver._device()
+	seen = []
+
+	def _device(credential=None):
+		seen.append(credential)
+		return device
+
+	driver._device = _device
+	circuit = _circuit()
+	circuit.provider_credential = _bound_credential()
+
+	driver.run_circuit(circuit)
+
+	assert seen == [_bound_credential()]
 
 
 def test_run_circuit_submits_what_the_profile_encodes(monkeypatch):

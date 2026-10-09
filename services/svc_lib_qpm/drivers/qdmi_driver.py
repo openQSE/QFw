@@ -33,6 +33,7 @@ from util import instrumentation
 import json
 import logging
 import sys
+import threading
 import time
 
 
@@ -64,20 +65,41 @@ class QdmiDriver(BaseDriver):
 		# unknown provider fails here, when the service starts, rather than
 		# at the first call.
 		self._profile = profile_for(self._descriptor)
-		self._device_obj = None
+		# Open device sessions, one per credential (_credential_cache_key).
+		# A session carries the token it opened with, so a circuit must never
+		# run on one opened for another user.
+		self._devices = {}
+		self._devices_lock = threading.Lock()
 		self._last_job = None
 
 	# --- QDMI session / device binding -------------------------------
 
-	def _access(self):
+	def _access(self, credential=None):
 		# The settings this resource's session opens with. What they are and
 		# where they come from is the provider's business (qdmi_profiles):
 		# IQM takes a server URL, an API token and a quantum computer alias,
 		# Braket a device ARN and a Region.
-		return self._profile.access()
+		return self._profile.access(credential)
 
-	def _device(self):
-		# Lazy: open the QDMI device through MQT Core's QDMI driver once. Import
+	@staticmethod
+	def _credential_cache_key(credential=None):
+		# The same identity QrmiDriver._credential_cache_key keys its
+		# resources by. A call outside a reservation has no credential and
+		# shares the service's own session.
+		credential = dict(credential or {})
+		if not credential:
+			return ("default",)
+		return (
+			credential.get("url"),
+			credential.get("provider_device_id"),
+			credential.get("device_id"),
+			credential.get("user"),
+			credential.get("api_key") or credential.get("token"),
+		)
+
+	def _device(self, credential=None):
+		# Lazy: open the QDMI device through MQT Core's QDMI driver once per
+		# credential (see the note on credential below). Import
 		# and construction are deferred so the service/Frontend build and route
 		# even where the libraries are absent or credentials are unset; only a
 		# real introspection call needs a live device. The profile names the
@@ -85,8 +107,10 @@ class QdmiDriver(BaseDriver):
 		# maps this resource's settings onto the session parameters, because
 		# QDMI's BASEURL, TOKEN and CUSTOM slots carry different things for
 		# different vendors.
-		if self._device_obj is not None:
-			return self._device_obj
+		cache_key = self._credential_cache_key(credential)
+		device = self._devices.get(cache_key)
+		if device is not None:
+			return device
 		try:
 			from mqt.core.qdmi.driver import (open_device,
 					register_device_if_absent)
@@ -95,7 +119,7 @@ class QdmiDriver(BaseDriver):
 				"failed to import the QDMI driver API (mqt.core.qdmi.driver). "
 				"Install mqt-core >= 3.9 before using the QDMI driver: "
 				f"{exc}") from exc
-		access = self._access()
+		access = self._access(credential)
 		try:
 			definition = self._profile.definition(access)
 		except DEFwExecutionError:
@@ -113,18 +137,29 @@ class QdmiDriver(BaseDriver):
 		# device/calibration data during init). A query before a session is
 		# initialized returns a bad-session-state error, so surface an init
 		# failure here as exactly that: the session could not be opened.
-		try:
-			register_device_if_absent(definition)
-			self._device_obj = open_device(
-				definition.device_id, **self._profile.open_kwargs(access))
-		except Exception as exc:
-			raise DEFwExecutionError(
-				"failed to open the QDMI device session (MQT Core could not "
-				"initialize it; device introspection requires an initialized "
-				f"session): {exc}") from exc
+		#
+		# credential is the reservation's bound provider credential (the
+		# circuit's provider_credential), so the session opens as the user
+		# who reserved the device, not as the account the service runs under.
+		# The lock keeps two circuits for one credential from each opening a
+		# session.
+		with self._devices_lock:
+			device = self._devices.get(cache_key)
+			if device is not None:
+				return device
+			try:
+				register_device_if_absent(definition)
+				device = open_device(
+					definition.device_id, **self._profile.open_kwargs(access))
+			except Exception as exc:
+				raise DEFwExecutionError(
+					"failed to open the QDMI device session (MQT Core could "
+					"not initialize it; device introspection requires an "
+					f"initialized session): {exc}") from exc
+			self._devices[cache_key] = device
 		logging.debug("shim: QDMI device opened (%s)",
 				self._profile.describe(access))
-		return self._device_obj
+		return device
 
 	def _ids(self):
 		return (self._descriptor.get("provider", "iqm"),
@@ -165,8 +200,11 @@ class QdmiDriver(BaseDriver):
 		# Braket), then it is submitted through QDMI's FoMaC job interface,
 		# polled to completion, and the counts are normalized to
 		# qhw-result-v1 (the same record the QRMI path produces).
+		# The reservation's credential, bound by the QPM controller
+		# (UTIL_QPM attaches it before the circuit reaches the provider).
+		credential = getattr(circuit, "provider_credential", None)
 		with instrumentation.backend_phase("acquire"):
-			device = self._device()
+			device = self._device(credential=credential)
 		info = getattr(circuit, "info", None) or {}
 		cid = circuit.get_cid() if hasattr(circuit, "get_cid") else info.get("cid")
 		from util.circuit_payload import qiskit_input

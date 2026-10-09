@@ -46,8 +46,12 @@ class QdmiProfile:
 	def __init__(self, descriptor=None):
 		self._descriptor = dict(descriptor or {})
 
-	def access(self):
-		"""The settings this resource's session opens with (a dict)."""
+	def access(self, credential=None):
+		"""The settings this resource's session opens with (a dict).
+
+		credential is the reservation's bound provider credential, the
+		circuit's provider_credential, or None for a call made outside a
+		reservation."""
 		raise NotImplementedError
 
 	def definition(self, access):
@@ -103,21 +107,35 @@ class IqmQdmiProfile(QdmiProfile):
 	# on the same q20.
 	calibration_set_slot = "CUSTOM1"
 
-	def access(self):
-		# Resolve connection settings for the QDMI device. Honor the same env
-		# vars the native svc_iqm_qpm uses, then fall back to the shared
-		# device-access config (util.device_access).
+	def access(self, credential=None):
+		# Resolve connection settings for the QDMI device, in the order the
+		# QRMI driver uses (QrmiDriver._access). The reservation's credential
+		# comes first: the service runs as one account for every user, so
+		# anything else would open the session as the service's account.
+		# Then the env vars the native svc_iqm_qpm honors, then the shared
+		# device-access config, resolved for the credential's user.
+		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", DEFAULT_PROVIDER)
-		device_id = self._descriptor.get("id")
+		device_id = credential.get("device_id") or self._descriptor.get("id")
 		provider_device_id = (
-			self._descriptor.get("provider_device_id")
+			credential.get("provider_device_id")
+			or credential.get("quantum_computer")
+			or self._descriptor.get("provider_device_id")
 			or self._descriptor.get("provider-device-id"))
-		base_url = os.environ.get("QFW_QC_URL")
-		token = os.environ.get("QFW_API_KEY")
+		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
+		token = (
+			credential.get("api_key")
+			or credential.get("token")
+			or os.environ.get("QFW_API_KEY"))
 		if not (base_url and token):
 			try:
 				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(provider=provider)
+				cfg = resolve_device_access(
+					provider=provider,
+					device_id=device_id,
+					user=credential.get("user"),
+					credential_hint=credential.get("credential_hint"),
+					credential_handle=credential.get("credential_handle"))
 			except Exception as exc:
 				raise DEFwExecutionError(
 					"QDMI driver could not resolve device access for "
@@ -202,12 +220,13 @@ class BraketQdmiProfile(QdmiProfile):
 	DEFAULT_QDMI_DEVICE_ID = "amazon.braket.default"
 	ARN_PREFIX = "arn:aws:braket:"
 
-	def access(self):
+	def access(self, credential=None):
 		# Everything comes from the descriptor, so from device-access config,
 		# and none of it is a secret. There is no token: the library
 		# authenticates through the AWS SDK's default credential chain, and
 		# QFw's entitlement credential provider decides who may use the
-		# device without holding a key (util.qpm.credentials).
+		# device without holding a key (util.qpm.credentials). So the
+		# reservation's credential holds nothing a session opens with.
 		arn = (
 			self._descriptor.get("provider_device_id")
 			or self._descriptor.get("provider-device-id"))
