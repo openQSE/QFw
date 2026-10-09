@@ -62,6 +62,7 @@ class QRC:
 		drivers = [_DRIVER_FACTORY[name](descriptor)
 				for name in descriptor.get("libraries", [])
 				if name in _DRIVER_FACTORY]
+		self._drivers = drivers
 		self.frontend = Frontend(drivers, descriptor)
 		self._descriptor = descriptor
 
@@ -183,6 +184,16 @@ class QRC:
 			return "not-found"
 		cancel_event.set()
 		return "cancelled"
+
+	def evict_reservation_client(self, reservation_id):
+		# The QPM controller's provider credential evictor: UTIL_QPM wires in
+		# this method, and the controller calls it once a reservation is
+		# released, cancelled or expires, outside its lock. Each driver drops
+		# the session it opened with the reservation's credential.
+		evicted = False
+		for driver in self._drivers:
+			evicted = driver.evict_reservation(reservation_id) or evicted
+		return evicted
 
 	def read_cq(self, cid=None):
 		with self.circuit_results_lock:
