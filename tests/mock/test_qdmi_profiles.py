@@ -169,6 +169,102 @@ def test_the_iqm_profile_encodes_an_iqm_json_program(monkeypatch):
 		("OPENQASM 2.0;", {"qubits": ["QB1", "QB2"]}, {"q0": "QB2"})]
 
 
+# --- the IQM architecture rebuilt from FoMaC ----------------------------------
+
+def _fomac_topology():
+	# Shaped like extract_topology's output for the q20, cut to three qubits.
+	return {
+		"num_qubits": 3,
+		"qubits": ["QB1", "QB2", "QB3"],
+		"edges": [["QB1", "QB2"], ["QB2", "QB3"]],
+		"operations": {
+			"prx": [["QB1"], ["QB2"], ["QB3"]],
+			"cz": [["QB1", "QB2"], ["QB2", "QB3"]],
+			"measure": [["QB1"], ["QB2"], ["QB3"]],
+		},
+	}
+
+
+def test_the_iqm_architecture_is_rebuilt_from_fomac_topology():
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	arch = iqm_architecture(_fomac_topology(), "cal-set-1")
+
+	assert arch["calibration_set_id"] == "cal-set-1"
+	assert arch["qubits"] == ["QB1", "QB2", "QB3"]
+	assert arch["computational_resonators"] == []
+	assert sorted(arch["gates"]) == ["cz", "measure", "prx"]
+	assert arch["gates"]["cz"] == {
+		"implementations": {"qdmi": {"loci": [["QB1", "QB2"], ["QB2", "QB3"]]}},
+		"default_implementation": "qdmi",
+		"override_default_implementation": {},
+	}
+
+
+def test_without_a_calibration_set_only_the_qubits_are_passed():
+	# The architecture requires one, so there is nothing to transpile against
+	# and build_iqm_circuit serializes an already-native circuit, as before.
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	assert iqm_architecture(_fomac_topology(), None) == {
+		"qubits": ["QB1", "QB2", "QB3"]}
+
+
+def test_without_a_measure_gate_only_the_qubits_are_passed():
+	# IQMBackendBase reads the measure gate's loci and raises a KeyError,
+	# which build_iqm_circuit would not fall back on, when there is none.
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	topology = _fomac_topology()
+	del topology["operations"]["measure"]
+
+	assert iqm_architecture(topology, "cal-set-1") == {
+		"qubits": ["QB1", "QB2", "QB3"]}
+
+
+def test_a_locus_outside_the_qubits_means_only_the_qubits_are_passed():
+	# A computational resonator. FoMaC does not say which sites are
+	# resonators, so a device with them is not rebuilt.
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	topology = _fomac_topology()
+	topology["operations"]["move"] = [["QB1", "CR1"]]
+
+	assert iqm_architecture(topology, "cal-set-1") == {
+		"qubits": ["QB1", "QB2", "QB3"]}
+
+
+def test_the_iqm_profile_transcodes_against_the_rebuilt_architecture(
+		monkeypatch):
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+	calls = []
+	slots = []
+
+	def build_iqm_circuit(source, dynamic, mapping):
+		calls.append(dynamic)
+		return "iqm-circuit"
+
+	def calibration_set_id(device, slot):
+		slots.append(slot)
+		return "cal-set-1"
+
+	monkeypatch.setattr(iqm_transcode, "build_iqm_circuit", build_iqm_circuit)
+	monkeypatch.setattr(
+		qdmi_driver.fomac_normalize, "extract_topology",
+		lambda device: _fomac_topology())
+	monkeypatch.setattr(
+		qdmi_driver.fomac_normalize, "_calibration_set_id",
+		calibration_set_id)
+	driver = QdmiDriver({"provider": "iqm"})
+	driver._serialize_program = lambda iqm_circuit: f"json:{iqm_circuit}"
+
+	driver._profile.encode(driver, "OPENQASM 2.0;", {}, object())
+
+	assert slots == ["CUSTOM1"]
+	assert calls == [iqm_architecture(_fomac_topology(), "cal-set-1")]
+
+
 def test_the_iqm_profile_defaults():
 	profile = profile_for({"provider": "iqm"})
 
