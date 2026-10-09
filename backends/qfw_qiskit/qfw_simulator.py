@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 import threading
@@ -7,7 +8,7 @@ from collections import deque
 
 from qiskit.providers import BackendV2, Options
 
-from .qfw_job import QFwJob, normalize_reservation_id
+from .qfw_job import QFwJob, normalize_reservation_id, normalize_shim_library
 from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
 from .qfw_target import QFW_NUM_QUBITS, build_qfw_target, qfw_basis_gates
 from defw_exception import DEFwDumper
@@ -25,6 +26,11 @@ QFW_RUN_CONTEXT_OPTIONS = (
 	"timeout",
 	"cancel_on_timeout",
 )
+
+# The shim library (qrmi or qdmi) a job runs through when neither run() nor
+# the backend's options name one, so a batch script can choose it for a Qiskit
+# program it does not edit.
+SHIM_LIB_ENV = "QFW_SHIM_LIB"
 
 
 class CircuitMetrics:
@@ -203,6 +209,7 @@ class QFwBackend(BackendV2):
 			token=None,
 			timeout=None,
 			cancel_on_timeout=False,
+			lib=None,
 		)
 
 	def run(self, circuits, **kwargs):
@@ -226,6 +233,13 @@ class QFwBackend(BackendV2):
 		if "reservation_id" in options:
 			options["reservation_id"] = normalize_reservation_id(
 				options["reservation_id"])
+		lib = kwargs.get("lib", self.options.lib)
+		if lib is None:
+			lib = os.environ.get(SHIM_LIB_ENV)
+		lib = normalize_shim_library(
+			lib, getattr(self.qpm, "qpm_properties", None))
+		if lib is not None:
+			options["lib"] = lib
 		self._qfw_job = QFwJob(self, self.qpm, self.event_api, circuits, options)
 		self._qfw_job.submit()
 		return self._qfw_job

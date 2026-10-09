@@ -426,3 +426,109 @@ def test_qfw_job_requires_reservation_id():
 		assert "reservation_id is required" in str(exc)
 	else:
 		raise AssertionError("expected missing reservation_id to fail")
+
+
+def _backend_with_qpm_properties(monkeypatch, properties):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	if properties is not None:
+		fake_qpm.qpm_properties = properties
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(
+		qfw_simulator, "BaseEventAPI",
+		lambda: FakeEventAPI(class_id="event-api-lib"))
+	monkeypatch.setattr(
+		qfw_simulator, "me", FakeRuntime(endpoint="endpoint-lib"))
+	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
+	monkeypatch.delenv(qfw_simulator.SHIM_LIB_ENV, raising=False)
+	return qfw_simulator.QFwBackend()
+
+
+def test_backend_run_names_the_shim_library(monkeypatch):
+	backend = _backend_with_qpm_properties(monkeypatch, {"provider": "shim"})
+
+	job = backend.run(FakeCircuit(2, name="lib"), lib="QDMI")
+
+	assert job.options["lib"] == "qdmi"
+
+
+def test_backend_lib_option_and_env_default(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	backend = _backend_with_qpm_properties(monkeypatch, {"provider": "shim"})
+	monkeypatch.setenv(qfw_simulator.SHIM_LIB_ENV, "qdmi")
+	circuit = FakeCircuit(2, name="lib-env")
+
+	assert backend.run(circuit).options["lib"] == "qdmi"
+	# The backend's option and an explicit run() argument both win over
+	# the environment, and "default" hands the choice back to the shim.
+	backend.options.lib = "qrmi"
+	assert backend.run(circuit).options["lib"] == "qrmi"
+	assert "lib" not in backend.run(circuit, lib="default").options
+
+
+def test_backend_run_without_lib_sends_none(monkeypatch):
+	backend = _backend_with_qpm_properties(monkeypatch, {"provider": "shim"})
+
+	job = backend.run(FakeCircuit(2, name="no-lib"))
+
+	assert "lib" not in job.options
+
+
+def test_backend_rejects_an_unknown_shim_library(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	backend = _backend_with_qpm_properties(monkeypatch, {"provider": "shim"})
+
+	try:
+		backend.run(FakeCircuit(2, name="bad-lib"), lib="qiskit")
+	except qfw_job.DEFwError as exc:
+		assert "lib must be one of qrmi, qdmi" in str(exc)
+	else:
+		raise AssertionError("expected an unknown library to fail")
+
+
+def test_backend_rejects_lib_for_a_qpm_that_is_not_the_shim(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	backend = _backend_with_qpm_properties(
+		monkeypatch, {"provider": "nwqsim"})
+
+	try:
+		backend.run(FakeCircuit(2, name="lib-nwqsim"), lib="qdmi")
+	except qfw_job.DEFwError as exc:
+		assert "'nwqsim', not the shim" in str(exc)
+	else:
+		raise AssertionError("expected lib on a non-shim QPM to fail")
+
+
+def test_qfw_job_forwards_shim_library_to_qpm():
+	from qfw_qiskit.qfw_job import QFwJob
+
+	class FakeBackend:
+		COMPLETION_TIMEOUT_SEC = 1
+
+		def returns_statevector(self):
+			return False
+
+	fake_qpm = FakeQPM(cids=["cid-lib"])
+	circuit = FakeCircuit(1, name="lib")
+	job = QFwJob(
+		FakeBackend(),
+		fake_qpm,
+		FakeEventAPI(),
+		circuit,
+		{
+			"seed_simulator": 34,
+			"shots": 12,
+			"seed": 21,
+			"reservation_id": 1,
+			"lib": "qdmi",
+		},
+	)
+
+	assert job._run_experiment_async(circuit) == "cid-lib"
+	assert fake_qpm.submitted_payloads[0]["lib"] == "qdmi"
