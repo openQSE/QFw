@@ -215,8 +215,11 @@ Three things to know before turning it on:
 
 Under the file profile the records go to `<service>-<rank>-<pid>.logs.jsonl`
 beside the spans and metrics files, one OTLP/JSON export per line. DEFw's
-`set_logging_level_helper` removes every handler on the root logger, so a
-process that changes its DEFw log level after `configure()` loses the tier.
+`set_logging_level_helper` removes every handler on the root logger, and a
+service does set its level after `configure()`, so `logs_enabled()` puts the
+tier's handler back whenever it finds it gone; QFw's own call sites ask it
+before they write a line, and the first line of the next job restores the
+tier for everything that follows.
 
 ## Trace context across DEFw RPC
 

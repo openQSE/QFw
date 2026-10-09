@@ -625,8 +625,22 @@ def transport_spans_enabled():
 
 
 def logs_enabled():
-	"""True when the logs tier is exporting the root logger's records."""
-	return _STATE.log_handler is not None
+	"""
+	True when the logs tier is exporting the root logger's records.
+
+	DEFw's set_logging_level_helper removes every handler from the root
+	logger whenever a process sets or changes its DEFw log level, which a
+	service does after QFw has configured telemetry. So this does not only
+	answer; it puts the tier's handler back if it has gone, and QFw's own
+	call sites ask before they write a line.
+	"""
+	handler = _STATE.log_handler
+	if handler is None:
+		return False
+	root = logging.getLogger()
+	if handler not in root.handlers:
+		root.addHandler(handler)
+	return True
 
 
 def tracer():

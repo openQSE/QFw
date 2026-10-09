@@ -309,6 +309,43 @@ def test_debug_tier_keeps_defw_internals_out():
     assert [r.log_record.body for r in finished] == ["set_max_qubits_pp(20)"]
 
 
+def test_logs_tier_reattaches_after_defw_strips_the_root_handlers():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    root = logging.getLogger()
+    telemetry.use_providers(
+        TracerProvider(), logger_provider=logger_provider,
+        logs_level=logging.WARNING)
+    handler = telemetry._STATE.log_handler
+    try:
+        # What DEFw's set_logging_level_helper does in a service process
+        # after QFw has configured telemetry.
+        for installed in root.handlers[:]:
+            root.removeHandler(installed)
+        logging.getLogger("qfw.qpm").warning("lost while the handler was gone")
+        assert telemetry.logs_enabled() is True
+        assert handler in root.handlers
+        logging.getLogger("qfw.qpm").warning("back on the next ask")
+    finally:
+        telemetry.shutdown()
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    assert [r.log_record.body for r in finished] == ["back on the next ask"]
+    assert handler not in root.handlers
+
+
 def _attr_value(value):
     """Unwrap one OTLP AnyValue into a plain Python value."""
     for key in ("stringValue", "boolValue", "arrayValue"):
