@@ -135,7 +135,8 @@ def test_the_iqm_profile_names_the_missing_credential(monkeypatch):
 
 # --- the reservation's credential, not the service's ------------------------
 
-def _bound_credential(user="shehataa", api_key="user-secret"):
+def _bound_credential(user="shehataa", api_key="user-secret",
+		reservation_id=7):
 	# What FileCredentialProvider binds for a reservation and UTIL_QPM
 	# attaches to the circuit as provider_credential.
 	return {
@@ -146,7 +147,7 @@ def _bound_credential(user="shehataa", api_key="user-secret"):
 		"provider_device_id": "default",
 		"quantum_computer": "default",
 		"user": user,
-		"reservation_id": 7,
+		"reservation_id": reservation_id,
 	}
 
 
@@ -200,25 +201,50 @@ def test_device_access_is_resolved_for_the_reservation_user(monkeypatch):
 	}]
 
 
-def test_each_credential_gets_its_own_session(monkeypatch):
+def test_each_reservation_gets_its_own_session(monkeypatch):
 	# A session carries the token it opened with, so one user's circuit
-	# must never run on a session opened for another.
+	# must never run on a session opened for another. Keyed by reservation,
+	# as the native IQM QPM keys its clients, so it can be dropped when the
+	# reservation ends.
 	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
 	monkeypatch.setenv("QFW_API_KEY", "service-secret")
 	opened = []
 	_install_mqt_driver(monkeypatch, opened)
 	_install_iqm_qdmi(monkeypatch)
 	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
-	alice = _bound_credential("alice", "alice-secret")
-	bob = _bound_credential("bob", "bob-secret")
+	alice = _bound_credential("alice", "alice-secret", reservation_id=7)
+	bob = _bound_credential("bob", "bob-secret", reservation_id=8)
 
 	driver._device(credential=alice)
 	driver._device(credential=bob)
-	driver._device(credential=dict(alice, reservation_id=8))
+	driver._device(credential=alice)
+	# The same user's next reservation is a session of its own.
+	driver._device(credential=dict(alice, reservation_id=9))
 	driver._device()
 
 	assert [kwargs["token"] for _, kwargs in opened] == [
-		"alice-secret", "bob-secret", "service-secret"]
+		"alice-secret", "bob-secret", "alice-secret", "service-secret"]
+
+
+def test_an_ended_reservation_loses_its_session(monkeypatch):
+	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
+	monkeypatch.setenv("QFW_API_KEY", "service-secret")
+	opened = []
+	_install_mqt_driver(monkeypatch, opened)
+	_install_iqm_qdmi(monkeypatch)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+	alice = _bound_credential("alice", "alice-secret", reservation_id=7)
+	driver._device(credential=alice)
+	driver._device()
+
+	assert driver.evict_reservation(7) is True
+	# Nothing left for it, and the service's own session is untouched.
+	assert driver.evict_reservation(7) is False
+	assert list(driver._devices) == [("default",)]
+	# A circuit that still names the reservation opens a fresh session
+	# rather than finding the old one.
+	driver._device(credential=alice)
+	assert len(opened) == 3
 
 
 def test_a_missing_device_library_names_its_package(monkeypatch):
@@ -421,6 +447,23 @@ def _circuit(cid="cid-9"):
 	return types.SimpleNamespace(
 		info={"qasm": "OPENQASM 2.0;", "num_shots": 10, "poll_interval": 0.0},
 		get_cid=lambda: cid)
+
+
+def test_task_lookups_find_each_cid_and_need_one(monkeypatch):
+	# The driver used to keep only the last job, so a lookup without a cid
+	# returned whoever ran last, and a lookup for an earlier cid failed
+	# with an error naming the later one.
+	driver = _running_driver(monkeypatch, {"1": 10}, [], [])
+	driver.run_circuit(_circuit("cid-1"))
+	driver.run_circuit(_circuit("cid-2"))
+
+	assert driver.get_task_metadata("cid-1")["cid"] == "cid-1"
+	assert driver.get_task_timing("cid-2")["cid"] == "cid-2"
+	with pytest.raises(DEFwExecutionError, match="need the task's cid"):
+		driver.get_task_metadata(None)
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		driver.get_task_timing("cid-3")
+	assert "cid-2" not in str(excinfo.value)
 
 
 def test_run_circuit_opens_the_session_with_the_circuit_credential(

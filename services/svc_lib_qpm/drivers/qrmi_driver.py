@@ -23,7 +23,7 @@
 # composite with an embedded qhw device). Circuit execution uses QRMI's task
 # lifecycle and returns normalized qhw results.
 
-from .base_driver import BaseDriver
+from .base_driver import BaseDriver, JobRecords, reservation_cache_key
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
 from util import instrumentation
@@ -243,7 +243,7 @@ class QrmiDriver(BaseDriver):
 		self._resource_locks = {}
 		self._resource_locks_guard = threading.Lock()
 		self._target_cache = {}
-		self._last_job = None
+		self._jobs = JobRecords("QRMI")
 
 	def _resource(self):
 		# Lazy import so the service/Frontend construct and route even where
@@ -702,8 +702,9 @@ class QrmiDriver(BaseDriver):
 		# One construction lock per credential. Two reservations have nothing
 		# to serialize once the process environment is out of the picture, but
 		# two threads sharing a credential must still open one resource
-		# between them: a discarded duplicate would leak the tokio runtime
-		# QRMI keeps in a ManuallyDrop.
+		# between them rather than each building its own: a QRMI resource
+		# holds its own runtime threads (four each on qrmi 0.26.0) until it
+		# is dropped.
 		with self._resource_locks_guard:
 			return self._resource_locks.setdefault(
 				cache_key, threading.Lock())
@@ -777,9 +778,15 @@ class QrmiDriver(BaseDriver):
 		return resource_obj
 
 	def _credential_cache_key(self, credential=None):
+		# A reservation's resource is its own, as the native IQM QPM keys its
+		# clients, so evict_reservation can drop it when the reservation
+		# ends. A credential from outside a reservation is keyed by identity.
 		credential = dict(credential or {})
 		if not credential:
 			return ("default",)
+		reservation_id = credential.get("reservation_id")
+		if reservation_id is not None:
+			return reservation_cache_key(reservation_id)
 		return (
 			credential.get("url"),
 			credential.get("provider_device_id"),
@@ -789,6 +796,22 @@ class QrmiDriver(BaseDriver):
 			credential.get("service_crn"),
 			credential.get("aws_access_key_id"),
 		)
+
+	def evict_reservation(self, reservation_id):
+		# The reservation has ended: drop its resource and target, so the
+		# token it opened with goes too, and so do the resource's runtime
+		# threads.
+		cache_key = reservation_cache_key(reservation_id)
+		with self._resource_lock(cache_key):
+			resource = self._resource_objs.pop(cache_key, None)
+			target = self._target_cache.pop(cache_key, None)
+		with self._resource_locks_guard:
+			self._resource_locks.pop(cache_key, None)
+		if resource is not None:
+			logging.debug(
+				"shim: QRMI resource for reservation %s dropped",
+				reservation_id)
+		return resource is not None or target is not None
 
 	def _target(self, credential=None):
 		# QRMI target() is a remote call returning raw IQM JSON (dynamic
@@ -990,7 +1013,7 @@ class QrmiDriver(BaseDriver):
 			results = result_json.get("results") or []
 			data = results[0].get("data") or {}
 			job["measurements"] = data
-			self._last_job = job
+			self._jobs.put(job)
 
 		# The JSON returned by qrmi.task_start is a Qiskit runtime SamplerV2, which is
 		# focused on the measured samples and does not include device and job information.
@@ -1076,7 +1099,7 @@ class QrmiDriver(BaseDriver):
 			job = {
 				"id": str(job_id), "status": status, "cid": cid,
 				"timing": timing, "shots": shots, "logs": logs}
-			self._last_job = job
+			self._jobs.put(job)
 			message = f"QRMI job {job_id} finished with status {status!r}"
 			reason = _first_error_line(logs)
 			if reason:
@@ -1100,7 +1123,7 @@ class QrmiDriver(BaseDriver):
 
 		job = {"id": str(job_id), "status": "completed", "cid": cid,
 			   "timing": timing, "shots": shots}
-		self._last_job = job
+		self._jobs.put(job)
 
 		return result_json, job
 
@@ -1164,7 +1187,7 @@ class QrmiDriver(BaseDriver):
 	def _run_iqm_circuit(self, source):
 		# Build IQM run request -> wrap as Payload.IQMServer -> delegate
 		# submit/poll/fetch to _run_sampler_payload -> normalize to
-		# qhw-result-v1 and patch measurements into _last_job.
+		# qhw-result-v1 and patch measurements into the job record.
 		qrmi = self._resource()
 
 		info = getattr(source, "info", None) or {}
@@ -1198,7 +1221,7 @@ class QrmiDriver(BaseDriver):
 		# Update last_job with IQM measurements
 		if job is not None:
 			job["measurements"] = result_json.get("measurements") or {}
-			self._last_job = job
+			self._jobs.put(job)
 
 		measurement_counts = result_json.get("measurement_counts")
 		circuits = run_request.get("circuits") if isinstance(
@@ -1299,20 +1322,10 @@ class QrmiDriver(BaseDriver):
 			return str(exc)
 		return None
 
-	# --- last-job timing / metadata (from the cached run_circuit job) ----
-
-	def _last_job_for(self, cid):
-		job = self._last_job
-		if not job:
-			raise DEFwExecutionError("QRMI has not run a circuit yet")
-		if cid is not None and str(job.get("cid")) != str(cid):
-			raise DEFwExecutionError(
-				f"QRMI has no job for cid {cid!r} (last job cid "
-				f"{job.get('cid')!r})")
-		return job
+	# --- task timing / metadata (from run_circuit's job records) ----------
 
 	def get_task_timing(self, cid=None):
-		job = self._last_job_for(cid)
+		job = self._jobs.get(cid)
 		return {
 			"cid": job.get("cid"),
 			"job_id": job.get("id"),
@@ -1320,7 +1333,7 @@ class QrmiDriver(BaseDriver):
 			"timing": job.get("timing") or {}}
 
 	def get_task_metadata(self, cid=None):
-		job = self._last_job_for(cid)
+		job = self._jobs.get(cid)
 		return {
 			"cid": job.get("cid"),
 			"job_id": job.get("id"),

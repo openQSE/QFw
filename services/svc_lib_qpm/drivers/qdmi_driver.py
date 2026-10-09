@@ -25,7 +25,7 @@
 # lifecycle (open, submit, poll, cancel, results) in one place and asks the
 # profile for the rest.
 
-from .base_driver import BaseDriver
+from .base_driver import BaseDriver, JobRecords, reservation_cache_key
 from .qdmi_profiles import profile_for
 from . import fomac_normalize
 from defw_exception import DEFwExecutionError
@@ -65,12 +65,13 @@ class QdmiDriver(BaseDriver):
 		# unknown provider fails here, when the service starts, rather than
 		# at the first call.
 		self._profile = profile_for(self._descriptor)
-		# Open device sessions, one per credential (_credential_cache_key).
+		# Open device sessions, one per reservation (_credential_cache_key).
 		# A session carries the token it opened with, so a circuit must never
-		# run on one opened for another user.
+		# run on one opened for another user, and it is dropped when its
+		# reservation ends (evict_reservation).
 		self._devices = {}
 		self._devices_lock = threading.Lock()
-		self._last_job = None
+		self._jobs = JobRecords("QDMI")
 
 	# --- QDMI session / device binding -------------------------------
 
@@ -83,12 +84,16 @@ class QdmiDriver(BaseDriver):
 
 	@staticmethod
 	def _credential_cache_key(credential=None):
-		# The same identity QrmiDriver._credential_cache_key keys its
-		# resources by. A call outside a reservation has no credential and
+		# Keyed as QrmiDriver._credential_cache_key keys its resources: a
+		# reservation's session is its own, a credential from outside a
+		# reservation is keyed by identity, and a call with no credential
 		# shares the service's own session.
 		credential = dict(credential or {})
 		if not credential:
 			return ("default",)
+		reservation_id = credential.get("reservation_id")
+		if reservation_id is not None:
+			return reservation_cache_key(reservation_id)
 		return (
 			credential.get("url"),
 			credential.get("provider_device_id"),
@@ -96,6 +101,22 @@ class QdmiDriver(BaseDriver):
 			credential.get("user"),
 			credential.get("api_key") or credential.get("token"),
 		)
+
+	def evict_reservation(self, reservation_id):
+		# The reservation has ended: drop its session, and the token it
+		# opened with goes too. A FoMaC Device has no close(), and its
+		# session ends when the last reference goes.
+		with self._devices_lock:
+			device = self._devices.pop(
+				reservation_cache_key(reservation_id), None)
+		if device is None:
+			return False
+		close = getattr(device, "close", None)
+		if callable(close):
+			close()
+		logging.debug(
+			"shim: QDMI session for reservation %s dropped", reservation_id)
+		return True
 
 	def _device(self, credential=None):
 		# Lazy: open the QDMI device through MQT Core's QDMI driver once per
@@ -283,10 +304,10 @@ class QdmiDriver(BaseDriver):
 			None if job_id is None else str(job_id))
 		if status != "completed":
 			collect.__exit__(None, None, None)
-			self._last_job = {
+			self._jobs.put({
 				"id": job_id, "status": status, "cid": cid,
 				"timing": timing, "shots": shots,
-				"queue_position": queue_position}
+				"queue_position": queue_position})
 			raise DEFwExecutionError(
 				f"QDMI job {job_id} finished with status {status!r}")
 
@@ -307,10 +328,10 @@ class QdmiDriver(BaseDriver):
 		record = fomac_normalize.to_result_record(
 			counts, shots, provider, device_id, job_id=job_id,
 			status="completed", queue_position=queue_position)
-		self._last_job = {
+		self._jobs.put({
 			"id": job_id, "status": "completed", "cid": cid,
 			"timing": timing, "shots": shots,
-			"queue_position": queue_position}
+			"queue_position": queue_position})
 		return record
 
 	def _serialize_program(self, iqm_circuit):
@@ -413,20 +434,10 @@ class QdmiDriver(BaseDriver):
 			return str(exc)
 		return None
 
-	# --- task timing / metadata (from the cached run_circuit job) -------
-
-	def _last_job_for(self, cid):
-		job = self._last_job
-		if not job:
-			raise DEFwExecutionError("QDMI has not run a circuit yet")
-		if cid is not None and str(job.get("cid")) != str(cid):
-			raise DEFwExecutionError(
-				f"QDMI has no job for cid {cid!r} (last job cid "
-				f"{job.get('cid')!r})")
-		return job
+	# --- task timing / metadata (from run_circuit's job records) ---------
 
 	def get_task_timing(self, cid=None):
-		job = self._last_job_for(cid)
+		job = self._jobs.get(cid)
 		return {
 			"cid": job.get("cid"),
 			"job_id": job.get("id"),
@@ -435,7 +446,7 @@ class QdmiDriver(BaseDriver):
 			"timing": job.get("timing") or {}}
 
 	def get_task_metadata(self, cid=None):
-		job = self._last_job_for(cid)
+		job = self._jobs.get(cid)
 		return {
 			"cid": job.get("cid"),
 			"job_id": job.get("id"),

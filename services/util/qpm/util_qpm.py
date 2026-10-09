@@ -670,6 +670,12 @@ class UTIL_QPM:
 		return metadata
 
 	def _provider_task_details(self, method_name, cid):
+		# A task the controller has no record of comes back without a cid,
+		# and without a reservation check, since there is nothing to check
+		# it against. Asking the provider with no cid would hand back
+		# whatever job it ran last, which may be another user's.
+		if cid is None:
+			return {"available": False, "reason": "no-provider-task"}
 		method = getattr(self.qrc, method_name, None)
 		if method is None:
 			return {"available": False, "reason": "provider-unsupported"}
