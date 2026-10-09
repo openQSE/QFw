@@ -310,7 +310,7 @@ def test_the_qdmi_driver_transcodes_the_declared_circuit(monkeypatch):
 		qdmi_driver.fomac_normalize, "extract_topology",
 		lambda device: {"qubits": ["QB1"]})
 	driver = qdmi_driver.QdmiDriver({"provider": "iqm"})
-	driver._device = lambda: object()
+	driver._device = lambda credential=None: object()
 	driver._ids = lambda: ("iqm", "device-a")
 
 	for info in (_qpy_info(b"\x08"), {"qasm": "OPENQASM 2.0;"}):
