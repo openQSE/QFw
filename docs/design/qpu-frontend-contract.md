@@ -486,7 +486,9 @@ QRMI submits the whole run request — a genuine interface difference), polls
 `Job.check()`, reads `Job.get_counts()`, and normalizes to the same
 `qhw-result-v1` via `fomac_normalize.to_result_record`. In the descriptor
 `run_circuit` and the job calls list `[qrmi, qdmi]`; the execution owner (QRMI)
-serves the default, and `--lib qdmi` runs the QDMI path. Still to come: the
+serves the default, and `--lib qdmi` runs the QDMI path. A task's timing and
+metadata are read from the library that ran it, unless the call names another.
+Still to come: the
 richer job lifecycle. The comparison of OpenQASM 3 and QIR as circuit forms is
 in the `openQSE/development-analysis` repository.
 

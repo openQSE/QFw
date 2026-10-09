@@ -9,6 +9,7 @@ from .frontend import Frontend
 from .drivers.qrmi_driver import QrmiDriver
 from .drivers.qdmi_driver import QdmiDriver
 from util import instrumentation
+import collections
 import logging
 import threading
 import time
@@ -16,6 +17,9 @@ import time
 _DRIVER_FACTORY = {"qrmi": QrmiDriver, "qdmi": QdmiDriver}
 
 QHW_RESULT_SCHEMA = "qhw-result-v1"
+
+# How many circuits' libraries the QRC remembers for task lookups.
+TASK_LIBRARY_LIMIT = 1024
 
 
 def _cancel_requested(circ):
@@ -55,6 +59,11 @@ class QRC:
 		# QPM controller cancels a running circuit through cancel() below.
 		self._cancel_events = {}
 		self._cancel_lock = threading.Lock()
+		# The library each circuit ran through, by cid, so its timing and
+		# metadata are read from that library (_task_library). Bounded,
+		# oldest out first.
+		self._task_libraries = collections.OrderedDict()
+		self._task_libraries_lock = threading.Lock()
 		# Per-resource descriptor drives the bifurcation: only the libraries
 		# wired for this resource get a driver, and the Frontend routes each
 		# call per the descriptor's caps (QFW_QPU_IFACE_PREF breaks ties).
@@ -66,14 +75,36 @@ class QRC:
 		self.frontend = Frontend(drivers, descriptor)
 		self._descriptor = descriptor
 
-	def _api_path(self, lib):
-		# The library the Frontend will route this run to, which is the
-		# qfw.stack.api_path of its telemetry. The routing error itself, if
-		# any, is the run's to raise.
+	def _route_run(self, circ, lib):
+		# The library the Frontend will route this run to. It is the
+		# qfw.stack.api_path of the run's telemetry, and where the run's
+		# timing and metadata are read from later. The routing error itself,
+		# if any, is the run's to raise.
 		try:
-			return self.frontend.route("run_circuit", lib=lib).name
+			name = self.frontend.route("run_circuit", lib=lib).name
 		except Exception:
 			return "shim"
+		self._remember_task_library(circ.get_cid(), name)
+		return name
+
+	def _remember_task_library(self, cid, name):
+		if cid is None:
+			return
+		with self._task_libraries_lock:
+			self._task_libraries[str(cid)] = name
+			self._task_libraries.move_to_end(str(cid))
+			while len(self._task_libraries) > TASK_LIBRARY_LIMIT:
+				self._task_libraries.popitem(last=False)
+
+	def _task_library(self, cid, lib):
+		# A task lookup goes to the library that ran the circuit. Left to the
+		# Frontend, an execution call goes to the execution owner, which never
+		# saw a circuit that ran through the other library. An explicit lib
+		# still wins, and a cid this QRC did not run keeps the old routing.
+		if lib is not None or cid is None:
+			return lib
+		with self._task_libraries_lock:
+			return self._task_libraries.get(str(cid))
 
 	def _result_dict(self, circ, output, rc):
 		return {
@@ -109,7 +140,7 @@ class QRC:
 		try:
 			lib = circ.info.get("lib")
 			with instrumentation.backend_execution(
-					circ, api_path=self._api_path(lib),
+					circ, api_path=self._route_run(circ, lib),
 					device=self._descriptor.get("id"),
 					backend_kind=self._descriptor.get("provider")):
 				circ.set_launching()
@@ -235,10 +266,12 @@ class QRC:
 		return self.frontend.get_coupling_graph(calibration_set_id, lib=lib)
 
 	def get_task_timing(self, cid=None, lib=None):
-		return self.frontend.get_task_timing(cid, lib=lib)
+		return self.frontend.get_task_timing(
+			cid, lib=self._task_library(cid, lib))
 
 	def get_task_metadata(self, cid=None, lib=None):
-		return self.frontend.get_task_metadata(cid, lib=lib)
+		return self.frontend.get_task_metadata(
+			cid, lib=self._task_library(cid, lib))
 
 	def shutdown(self):
 		self.shutdown_workers = True
