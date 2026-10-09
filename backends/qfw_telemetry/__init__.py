@@ -38,16 +38,16 @@ QFW_TELEMETRY            off | file | otlp        (default: off)
 QFW_TELEMETRY_DIR        export directory for the file profile
 QFW_TELEMETRY_SAMPLE     off | always | <ratio>   (default: off)
 QFW_TELEMETRY_TRANSPORT  0 | 1                    (default: 0)
-QFW_TELEMETRY_LOGS       off | error | warning | info | debug (default: off)
+QFW_TELEMETRY_LOGS       off | error | warning | info | debug | all (default: off)
 QFW_TELEMETRY_ENDPOINT   the collector's OTLP/HTTP base URL, otlp profile
 
 The logs tier is the optional third signal. With a level set, the SDK's
 logging handler joins the root logger, so every record Python's logging
 carries at that level or above is exported with the trace and span ids of
 whatever span is current when it is written. That is how a log line is
-stitched to its job without a change to any call site. DEFw's service and
-application lines count as warnings; its transport internals leave only
-at debug.
+stitched to its job without a change to any call site. QFw's own lines
+are mostly debug, so debug is the tier that shows a job's story; DEFw's
+transport internals leave only with all.
 """
 
 import logging
@@ -66,7 +66,9 @@ LOG_LEVELS = {
 	"warning": logging.WARNING,
 	"info": logging.INFO,
 	"debug": logging.DEBUG,
+	"all": logging.DEBUG,
 }
+LOGS_ALL = "all"
 
 # Loggers whose records never leave through the logs tier: the SDK and the
 # HTTP stack it exports with. A failed export logs a warning; exporting that
@@ -77,9 +79,11 @@ _LOG_SOURCES_KEPT_LOCAL = ("opentelemetry", "urllib3", "requests")
 # DEFw's levels 30 to 35 are categories, not severities: CORE, WORKER,
 # SERVICE, APP, RPC and STACKTRACE, registered by name. Four of them are the
 # transport's own internals, hundreds of lines per job about work requests
-# and RPC handling, with routine stack dumps. Those leave only at debug.
-# SERVICE and APP are what QFw's services and applications write, and go
-# out at warning and above like a warning would.
+# and RPC handling, with routine stack dumps. Those leave only with "all".
+# SERVICE and APP are what QFw's services and applications write through
+# DEFw, and go out at warning and above like a warning would. QFw's own
+# code mostly logs at debug, so "debug" is the tier that tells a job's
+# story without the transport's.
 _DEFW_INTERNAL_CATEGORIES = (
 	"DEFW_CORE", "DEFW_WORKER", "DEFW_RPC", "DEFW_STACKTRACE")
 
@@ -241,6 +245,11 @@ def _logs_level():
 		f"{', '.join(repr(name) for name in LOG_LEVELS)}: got {value!r}")
 
 
+def _logs_keep_internals():
+	"""True only for the "all" tier, which carries DEFw's transport chatter."""
+	return _env(TELEMETRY_LOGS_ENV, "off").lower() == LOGS_ALL
+
+
 def _export_dir():
 	configured = _env(TELEMETRY_DIR_ENV)
 	if configured:
@@ -376,12 +385,12 @@ def _file_log_processor(service_name):
 class _LogSourceFilter(logging.Filter):
 	"""
 	Keeps the exporter's own loggers out of the export, and DEFw's transport
-	internals out of every tier but debug.
+	internals out of every tier but "all".
 	"""
 
-	def __init__(self, level):
+	def __init__(self, keep_internals):
 		super().__init__()
-		self._keep_internals = level <= logging.DEBUG
+		self._keep_internals = keep_internals
 
 	def filter(self, record):
 		name = record.name or ""
@@ -393,7 +402,7 @@ class _LogSourceFilter(logging.Filter):
 		return record.levelname not in _DEFW_INTERNAL_CATEGORIES
 
 
-def _install_log_handler(logger_provider, level):
+def _install_log_handler(logger_provider, level, keep_internals=False):
 	"""
 	Put the SDK's handler on the root logger at the given level.
 
@@ -411,7 +420,7 @@ def _install_log_handler(logger_provider, level):
 		from opentelemetry.sdk._logs import LoggingHandler
 
 		handler = LoggingHandler(level=level, logger_provider=logger_provider)
-	handler.addFilter(_LogSourceFilter(level))
+	handler.addFilter(_LogSourceFilter(keep_internals))
 	logging.getLogger().addHandler(handler)
 	return handler
 
@@ -570,7 +579,7 @@ def configure(service_name, service_version=None, role=None, attributes=None):
 			_STATE.logger_provider = logger_provider
 			_STATE.logs_level = logs_level
 			_STATE.log_handler = _install_log_handler(
-				logger_provider, logs_level)
+				logger_provider, logs_level, _logs_keep_internals())
 
 		_STATE.profile = profile
 		_STATE.tracer_provider = tracer_provider
@@ -676,7 +685,7 @@ def counter(name):
 
 
 def use_providers(tracer_provider, meter_provider=None, profile=PROFILE_FILE,
-		  logger_provider=None, logs_level=None):
+		  logger_provider=None, logs_level=None, logs_internals=False):
 	"""
 	Adopt providers built elsewhere instead of building them from the
 	environment, and register the DEFw propagation hooks for them.
@@ -708,7 +717,7 @@ def use_providers(tracer_provider, meter_provider=None, profile=PROFILE_FILE,
 			else logs_level if logs_level is not None else logging.INFO)
 		if logger_provider is not None:
 			_STATE.log_handler = _install_log_handler(
-				logger_provider, _STATE.logs_level)
+				logger_provider, _STATE.logs_level, logs_internals)
 		_STATE.defw_hooks = _register_defw_trace_hooks()
 		_STATE.configured = True
 		return _STATE.profile

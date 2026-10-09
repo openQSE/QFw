@@ -180,9 +180,11 @@ def test_logs_level_defaults_off_and_fails_closed(monkeypatch):
         monkeypatch.setenv(telemetry.TELEMETRY_LOGS_ENV, value)
         assert telemetry._logs_level() is None
     for value, level in (("error", logging.ERROR), ("Warning", logging.WARNING),
-                         ("info", logging.INFO), ("debug", logging.DEBUG)):
+                         ("info", logging.INFO), ("debug", logging.DEBUG),
+                         ("all", logging.DEBUG)):
         monkeypatch.setenv(telemetry.TELEMETRY_LOGS_ENV, value)
         assert telemetry._logs_level() == level
+        assert telemetry._logs_keep_internals() is (value == "all")
     monkeypatch.setenv(telemetry.TELEMETRY_LOGS_ENV, "loud")
     with pytest.raises(ValueError, match=telemetry.TELEMETRY_LOGS_ENV):
         telemetry._logs_level()
@@ -238,7 +240,41 @@ def test_adopted_logger_provider_exports_root_logger_records_with_the_span():
     ]
 
 
-def test_debug_tier_carries_defw_internals_too():
+def test_all_tier_carries_defw_internals_too():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    logging.addLevelName(34, "DEFW_RPC")
+    root = logging.getLogger()
+    level_before = root.level
+    telemetry.use_providers(
+        TracerProvider(), logger_provider=logger_provider,
+        logs_level=logging.DEBUG, logs_internals=True)
+    try:
+        root.setLevel(logging.DEBUG)
+        logging.getLogger("defw.workers").log(34, "handling request")
+        logging.getLogger("qfw.client").debug("every detail")
+    finally:
+        root.setLevel(level_before)
+        telemetry.shutdown()
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    assert [r.log_record.body for r in finished] == [
+        "handling request", "every detail"]
+
+
+def test_debug_tier_keeps_defw_internals_out():
     import logging
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk._logs import LoggerProvider
@@ -261,15 +297,16 @@ def test_debug_tier_carries_defw_internals_too():
         logs_level=logging.DEBUG)
     try:
         root.setLevel(logging.DEBUG)
+        # What a QPM writes about a job, at debug like most of QFw's code...
+        logging.getLogger("qfw.qpm").debug("set_max_qubits_pp(20)")
+        # ...and the transport's chatter, which the debug tier still drops.
         logging.getLogger("defw.workers").log(34, "handling request")
-        logging.getLogger("qfw.client").debug("every detail")
     finally:
         root.setLevel(level_before)
         telemetry.shutdown()
     finished = getattr(exporter, "get_finished_log_records",
                        getattr(exporter, "get_finished_logs", None))()
-    assert [r.log_record.body for r in finished] == [
-        "handling request", "every detail"]
+    assert [r.log_record.body for r in finished] == ["set_max_qubits_pp(20)"]
 
 
 def _attr_value(value):

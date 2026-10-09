@@ -222,9 +222,10 @@ and SDKs for all benchmarking/profiling telemetry, using all three signals:
   timeline. Implemented (October 2026) as an optional logs tier,
   `QFW_TELEMETRY_LOGS`, off by default: the SDK's logging handler on the
   root logger exports each record with the current span's trace and span
-  ids, so the stitching costs no call-site change. DEFw's levels are
-  categories: its service and application lines go out at `warning`, its
-  transport internals only at `debug`, and `error` carries real errors only.
+  ids, so the stitching costs no call-site change. QFw's own lines are
+  mostly `debug`, so that tier shows a job's story; DEFw's levels are
+  categories, its service and application lines go out at `warning`, its
+  transport internals only with `all`, and `error` carries real errors only.
 
 Adopting the standard has consequences the bespoke format could not offer:
 

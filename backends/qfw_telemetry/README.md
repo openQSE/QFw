@@ -63,7 +63,7 @@ change and never a code change.
 | `QFW_TELEMETRY_SAMPLE` | `off`, `always`, ratio | `off` | Trace sampling |
 | `QFW_TELEMETRY_DIR` | path | node-local tmp | Export directory, file profile |
 | `QFW_TELEMETRY_TRANSPORT` | `0`, `1` | `0` | DEFw RPC spans |
-| `QFW_TELEMETRY_LOGS` | `off`, `error`, `warning`, `info`, `debug` | `off` | The logs tier: the root logger's records at that level or above, exported with the current span's ids. See below |
+| `QFW_TELEMETRY_LOGS` | `off`, `error`, `warning`, `info`, `debug`, `all` | `off` | The logs tier: the root logger's records at that level or above, exported with the current span's ids; `all` adds DEFw's transport internals. See below |
 | `QFW_TELEMETRY_ENDPOINT` | URL | SDK default | The collector's OTLP/HTTP base URL for the otlp profile, such as `http://otel-collector:4318`; the signal paths are appended. Unset, the exporters read the standard `OTEL_EXPORTER_OTLP_*` variables |
 | `OTEL_METRIC_EXPORT_INTERVAL` | milliseconds | `10000` | How often metrics export. The SDK's own default is a minute; ten seconds suits a dashboard and bounds what a killed service loses |
 
@@ -186,12 +186,16 @@ the collector profile can show them under the job's waterfall.
 
 Three things to know before turning it on:
 
+- QFw's own code writes a job's story at `debug`: a QPM's device query,
+  the circuit's qubit cap, the driver's progress. `debug` is therefore the
+  tier that shows a job's lines under its trace, and `error` carries real
+  errors only.
 - DEFw's levels 30 to 35 are categories, not severities: CORE, WORKER,
   SERVICE, APP, RPC and STACKTRACE. Its service and application lines
-  (SERVICE, APP) go out at `warning` and `info`, like a warning would.
-  Its transport internals (CORE, WORKER, RPC, STACKTRACE), hundreds of
-  lines per job about work requests and RPC handling with routine stack
-  dumps, leave only at `debug`. `error` carries real errors only. The root
+  (SERVICE, APP) go out at `warning` and above, like a warning would. Its
+  transport internals (CORE, WORKER, RPC, STACKTRACE), hundreds of lines
+  per job about work requests and RPC handling with routine stack dumps,
+  leave only with `all`, whatever tier they would otherwise pass. The root
   logger's own level, which DEFw sets from `DEFW_LOG_LEVEL`, applies first;
   the handler only narrows, and a process whose DEFw level selects nothing
   exports nothing.
