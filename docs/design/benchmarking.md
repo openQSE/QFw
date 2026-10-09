@@ -219,7 +219,12 @@ and SDKs for all benchmarking/profiling telemetry, using all three signals:
   [Clocks and Precision](#clocks-and-precision)).
 - **Logs** remain ordinary DEFw logs; where useful, structured log entries
   are linked to the active trace ID so they can be stitched into the same
-  timeline.
+  timeline. Implemented (October 2026) as an optional logs tier,
+  `QFW_TELEMETRY_LOGS`, off by default: the SDK's logging handler on the
+  root logger exports each record with the current span's trace and span
+  ids, so the stitching costs no call-site change. DEFw's levels are
+  categories: its service and application lines go out at `warning`, its
+  transport internals only at `debug`, and `error` carries real errors only.
 
 Adopting the standard has consequences the bespoke format could not offer:
 

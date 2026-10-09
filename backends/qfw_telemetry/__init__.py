@@ -38,7 +38,16 @@ QFW_TELEMETRY            off | file | otlp        (default: off)
 QFW_TELEMETRY_DIR        export directory for the file profile
 QFW_TELEMETRY_SAMPLE     off | always | <ratio>   (default: off)
 QFW_TELEMETRY_TRANSPORT  0 | 1                    (default: 0)
+QFW_TELEMETRY_LOGS       off | error | warning | info | debug (default: off)
 QFW_TELEMETRY_ENDPOINT   the collector's OTLP/HTTP base URL, otlp profile
+
+The logs tier is the optional third signal. With a level set, the SDK's
+logging handler joins the root logger, so every record Python's logging
+carries at that level or above is exported with the trace and span ids of
+whatever span is current when it is written. That is how a log line is
+stitched to its job without a change to any call site. DEFw's service and
+application lines count as warnings; its transport internals leave only
+at debug.
 """
 
 import logging
@@ -50,6 +59,29 @@ TELEMETRY_DIR_ENV = "QFW_TELEMETRY_DIR"
 TELEMETRY_SAMPLE_ENV = "QFW_TELEMETRY_SAMPLE"
 TELEMETRY_TRANSPORT_ENV = "QFW_TELEMETRY_TRANSPORT"
 TELEMETRY_ENDPOINT_ENV = "QFW_TELEMETRY_ENDPOINT"
+TELEMETRY_LOGS_ENV = "QFW_TELEMETRY_LOGS"
+
+LOG_LEVELS = {
+	"error": logging.ERROR,
+	"warning": logging.WARNING,
+	"info": logging.INFO,
+	"debug": logging.DEBUG,
+}
+
+# Loggers whose records never leave through the logs tier: the SDK and the
+# HTTP stack it exports with. A failed export logs a warning; exporting that
+# warning would fail the same way, and a debug level would turn every HTTP
+# connection into a record that opens another connection.
+_LOG_SOURCES_KEPT_LOCAL = ("opentelemetry", "urllib3", "requests")
+
+# DEFw's levels 30 to 35 are categories, not severities: CORE, WORKER,
+# SERVICE, APP, RPC and STACKTRACE, registered by name. Four of them are the
+# transport's own internals, hundreds of lines per job about work requests
+# and RPC handling, with routine stack dumps. Those leave only at debug.
+# SERVICE and APP are what QFw's services and applications write, and go
+# out at warning and above like a warning would.
+_DEFW_INTERNAL_CATEGORIES = (
+	"DEFW_CORE", "DEFW_WORKER", "DEFW_RPC", "DEFW_STACKTRACE")
 
 PROFILE_OFF = "off"
 PROFILE_FILE = "file"
@@ -107,6 +139,9 @@ class _State(object):
 		self.streams = []
 		self.transport_spans = False
 		self.defw_hooks = False
+		self.logger_provider = None
+		self.log_handler = None
+		self.logs_level = None
 
 
 _STATE = _State()
@@ -192,6 +227,18 @@ def _profile():
 	raise ValueError(
 		f"{TELEMETRY_ENV} must be one of "
 		f"'{PROFILE_OFF}', '{PROFILE_FILE}', '{PROFILE_OTLP}': got {value!r}")
+
+
+def _logs_level():
+	"""The logs tier's level as a logging constant, or None when off."""
+	value = _env(TELEMETRY_LOGS_ENV, "off").lower()
+	if value in ("", "0", "no", "false", "off"):
+		return None
+	if value in LOG_LEVELS:
+		return LOG_LEVELS[value]
+	raise ValueError(
+		f"{TELEMETRY_LOGS_ENV} must be 'off' or one of "
+		f"{', '.join(repr(name) for name in LOG_LEVELS)}: got {value!r}")
 
 
 def _export_dir():
@@ -305,6 +352,78 @@ def _otlp_span_processor():
 	# endpoint=None hands the choice to the exporter's own environment.
 	exporter = OTLPSpanExporter(endpoint=_otlp_endpoint("v1/traces"))
 	return BatchSpanProcessor(exporter)
+
+
+def _otlp_log_processor():
+	from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+	from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+		OTLPLogExporter)
+
+	exporter = OTLPLogExporter(endpoint=_otlp_endpoint("v1/logs"))
+	return BatchLogRecordProcessor(exporter)
+
+
+def _file_log_processor(service_name):
+	from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+	from ._otlp_json import OtlpJsonFileLogExporter
+
+	stream = _open_export_stream(service_name, "logs")
+	_STATE.streams.append(stream)
+	return BatchLogRecordProcessor(OtlpJsonFileLogExporter(stream))
+
+
+class _LogSourceFilter(logging.Filter):
+	"""
+	Keeps the exporter's own loggers out of the export, and DEFw's transport
+	internals out of every tier but debug.
+	"""
+
+	def __init__(self, level):
+		super().__init__()
+		self._keep_internals = level <= logging.DEBUG
+
+	def filter(self, record):
+		name = record.name or ""
+		if any(name == source or name.startswith(source + ".")
+				for source in _LOG_SOURCES_KEPT_LOCAL):
+			return False
+		if self._keep_internals:
+			return True
+		return record.levelname not in _DEFW_INTERNAL_CATEGORIES
+
+
+def _install_log_handler(logger_provider, level):
+	"""
+	Put the SDK's handler on the root logger at the given level.
+
+	The root logger's own level still applies first: a record below it never
+	reaches any handler, this one included. The handler only narrows further.
+	"""
+	# The SDK marks this handler deprecated in favour of the one in
+	# opentelemetry-instrumentation-logging, a package QFw does not carry.
+	# It still works and needs nothing else; revisit when the logs signal
+	# is declared stable.
+	import warnings
+
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore", DeprecationWarning)
+		from opentelemetry.sdk._logs import LoggingHandler
+
+		handler = LoggingHandler(level=level, logger_provider=logger_provider)
+	handler.addFilter(_LogSourceFilter(level))
+	logging.getLogger().addHandler(handler)
+	return handler
+
+
+def _remove_log_handler():
+	handler = _STATE.log_handler
+	if handler is not None:
+		try:
+			logging.getLogger().removeHandler(handler)
+		except Exception:
+			pass
+	_STATE.log_handler = None
 
 
 def _metric_export_interval_ms():
@@ -440,6 +559,19 @@ def configure(service_name, service_version=None, role=None, attributes=None):
 			metric_readers=[_build_metric_reader(service_name, profile)])
 		_metrics.set_meter_provider(meter_provider)
 
+		logs_level = _logs_level()
+		if logs_level is not None:
+			from opentelemetry.sdk._logs import LoggerProvider
+
+			logger_provider = LoggerProvider(resource=resource)
+			logger_provider.add_log_record_processor(
+				_otlp_log_processor() if profile == PROFILE_OTLP
+				else _file_log_processor(service_name))
+			_STATE.logger_provider = logger_provider
+			_STATE.logs_level = logs_level
+			_STATE.log_handler = _install_log_handler(
+				logger_provider, logs_level)
+
 		_STATE.profile = profile
 		_STATE.tracer_provider = tracer_provider
 		_STATE.meter_provider = meter_provider
@@ -481,6 +613,11 @@ def transport_spans_enabled():
 	the subject of the run.
 	"""
 	return _STATE.transport_spans
+
+
+def logs_enabled():
+	"""True when the logs tier is exporting the root logger's records."""
+	return _STATE.log_handler is not None
 
 
 def tracer():
@@ -538,7 +675,8 @@ def counter(name):
 		return instrument
 
 
-def use_providers(tracer_provider, meter_provider=None, profile=PROFILE_FILE):
+def use_providers(tracer_provider, meter_provider=None, profile=PROFILE_FILE,
+		  logger_provider=None, logs_level=None):
 	"""
 	Adopt providers built elsewhere instead of building them from the
 	environment, and register the DEFw propagation hooks for them.
@@ -563,6 +701,14 @@ def use_providers(tracer_provider, meter_provider=None, profile=PROFILE_FILE):
 			if meter_provider is not None else None)
 		_STATE.histograms = {}
 		_STATE.counters = {}
+		_remove_log_handler()
+		_STATE.logger_provider = logger_provider
+		_STATE.logs_level = (
+			None if logger_provider is None
+			else logs_level if logs_level is not None else logging.INFO)
+		if logger_provider is not None:
+			_STATE.log_handler = _install_log_handler(
+				logger_provider, _STATE.logs_level)
 		_STATE.defw_hooks = _register_defw_trace_hooks()
 		_STATE.configured = True
 		return _STATE.profile
@@ -587,6 +733,14 @@ def shutdown():
 				_STATE.meter_provider.shutdown()
 			except Exception:
 				pass
+		_remove_log_handler()
+		if _STATE.logger_provider is not None:
+			try:
+				_STATE.logger_provider.shutdown()
+			except Exception:
+				pass
+		_STATE.logger_provider = None
+		_STATE.logs_level = None
 		for stream in _STATE.streams:
 			try:
 				stream.close()

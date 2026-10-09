@@ -4,7 +4,7 @@ OTLP/JSON file exporters.
 The OpenTelemetry Python SDK can send OTLP over HTTP and can print spans to a
 console, but it has no exporter that writes OTLP to a file. The file profile
 in docs/design/benchmarking.md needs exactly that, so this module supplies
-it for traces and for metrics.
+it for traces, for metrics and for logs.
 
 Output is one JSON object per line. Each line is a complete OTLP export
 request, so a line holds a whole batch, and the resource block is written
@@ -29,9 +29,15 @@ import json
 import threading
 
 from google.protobuf.json_format import MessageToDict
+from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
 from opentelemetry.exporter.otlp.proto.common.metrics_encoder import (
 	encode_metrics)
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+try:  # the SDK renamed these while the logs signal settles
+	from opentelemetry.sdk._logs.export import (
+		LogRecordExporter as LogExporter, LogRecordExportResult as LogExportResult)
+except ImportError:
+	from opentelemetry.sdk._logs.export import LogExporter, LogExportResult
 from opentelemetry.sdk.metrics.export import (
 	AggregationTemporality, MetricExporter, MetricExportResult)
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
@@ -119,8 +125,32 @@ class OtlpJsonFileMetricExporter(MetricExporter):
 		pass
 
 
+class OtlpJsonFileLogExporter(LogExporter):
+	"""Writes each exported batch of log records as one OTLP/JSON line."""
+
+	def __init__(self, stream):
+		self._stream = stream
+		self._lock = threading.Lock()
+
+	def export(self, batch):
+		if not batch:
+			return LogExportResult.SUCCESS
+		try:
+			_write(self._stream, self._lock, encode_logs(batch))
+		except Exception:
+			return LogExportResult.FAILURE
+		return LogExportResult.SUCCESS
+
+	def force_flush(self, timeout_millis=30000):
+		return True
+
+	def shutdown(self):
+		pass
+
+
 __all__ = [
 	"AggregationTemporality",
+	"OtlpJsonFileLogExporter",
 	"OtlpJsonFileMetricExporter",
 	"OtlpJsonFileSpanExporter",
 ]
