@@ -226,6 +226,9 @@ and SDKs for all benchmarking/profiling telemetry, using all three signals:
   mostly `debug`, so that tier shows a job's story; DEFw's levels are
   categories, its service and application lines go out at `warning`, its
   transport internals only with `all`, and `error` carries real errors only.
+  The instrumentation layer writes the story's five milestone lines itself
+  (submitted, received, executing, done, job done), while the job's span is
+  current, so every backend has lines under its waterfall.
 
 Adopting the standard has consequences the bespoke format could not offer:
 
