@@ -149,9 +149,10 @@ def architecture_backend(dynamic_architecture):
 		architecture = DynamicQuantumArchitecture.model_validate(
 			to_jsonable(dynamic_architecture))
 	except Exception as exc:
-		# A caller that only knows the qubit list (the QDMI profile builds
-		# one from FoMaC topology) cannot transpile, and the caller falls
-		# back to serializing a circuit that is already native.
+		# A caller that only knows the qubit list (the QDMI profile, when
+		# it cannot rebuild the architecture from FoMaC) cannot transpile,
+		# and the caller falls back to serializing a circuit that is already
+		# native.
 		raise DEFwExecutionError(
 			"IQM transpilation needs the device's full dynamic quantum "
 			"architecture, including its gate loci, and this one does not "
