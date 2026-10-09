@@ -184,6 +184,14 @@ call site changes: DEFw's own logging goes through the root logger, so the
 lines a QPM writes while it executes a circuit carry that job's trace, and
 the collector profile can show them under the job's waterfall.
 
+With the tier on, QFw's instrumentation layer also writes a job's story
+itself, five debug lines stitched to the job's trace whatever the backend:
+`submitted job ...` and `job ... completed after ... ms` on the client,
+`received circuit ...`, `executing circuit ... on <device> via <api path>` and
+`circuit ... completed on <device> after ... ms` on the QPM. A backend that
+logs nothing of its own, the fake IQM for instance, still shows those under
+its waterfall. With the tier off they cost a boolean test and write nothing.
+
 Three things to know before turning it on:
 
 - QFw's own code writes a job's story at `debug`: a QPM's device query,
