@@ -228,7 +228,10 @@ and SDKs for all benchmarking/profiling telemetry, using all three signals:
   transport internals only with `all`, and `error` carries real errors only.
   The instrumentation layer writes the story's five milestone lines itself
   (submitted, received, executing, done, job done), while the job's span is
-  current, so every backend has lines under its waterfall.
+  current, so every backend has lines under its waterfall. The tier opens
+  QFw's own `qfw.*` loggers to its level, so a Qiskit client whose root
+  logger sits at Python's default `WARNING` still sends its lines;
+  everything else in a process answers to the root logger's level.
 
 Adopting the standard has consequences the bespoke format could not offer:
 
