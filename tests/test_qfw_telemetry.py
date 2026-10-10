@@ -346,6 +346,85 @@ def test_logs_tier_reattaches_after_defw_strips_the_root_handlers():
     assert handler not in root.handlers
 
 
+def test_logs_tier_carries_qfw_lines_past_a_quiet_root_logger():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    root = logging.getLogger()
+    namespace = logging.getLogger("qfw")
+    client = logging.getLogger("qfw.client")
+    root_level, namespace_level = root.level, namespace.level
+    # A Qiskit client out of the box: nothing has configured logging, the
+    # root logger sits at Python's default and the story lines are debug.
+    root.setLevel(logging.WARNING)
+    namespace.setLevel(logging.NOTSET)
+    assert not client.isEnabledFor(logging.DEBUG)
+    try:
+        telemetry.use_providers(
+            TracerProvider(), logger_provider=logger_provider,
+            logs_level=logging.DEBUG)
+        assert client.isEnabledFor(logging.DEBUG)
+        assert root.level == logging.WARNING
+        with telemetry.tracer().start_as_current_span("qfw.app.job") as job:
+            client.debug("submitted job %s: 1 circuit(s), 1024 shots", "j-1")
+            # The root's level still governs everyone else.
+            logging.getLogger("qiskit.transpiler").debug("stays local")
+            logging.debug("so does the root logger's own debug line")
+        # DEFw raising the root logger later must not close QFw's loggers.
+        root.setLevel(logging.CRITICAL)
+        namespace.setLevel(logging.NOTSET)
+        assert telemetry.logs_enabled() is True
+        assert client.isEnabledFor(logging.DEBUG)
+        telemetry.shutdown()
+        # The tier gives the namespace back as it found it.
+        assert namespace.level == logging.NOTSET
+        assert not client.isEnabledFor(logging.DEBUG)
+    finally:
+        telemetry.shutdown()
+        root.setLevel(root_level)
+        namespace.setLevel(namespace_level)
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    assert [(r.log_record.body, r.log_record.trace_id) for r in finished] == [
+        ("submitted job j-1: 1 circuit(s), 1024 shots",
+         job.get_span_context().trace_id)]
+
+
+def test_logs_tier_leaves_an_open_root_logger_alone():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk.trace import TracerProvider
+
+    root = logging.getLogger()
+    namespace = logging.getLogger("qfw")
+    root_level, namespace_level = root.level, namespace.level
+    root.setLevel(logging.DEBUG)
+    namespace.setLevel(logging.NOTSET)
+    try:
+        telemetry.use_providers(
+            TracerProvider(), logger_provider=LoggerProvider(),
+            logs_level=logging.DEBUG)
+        # Already open through the root: the namespace gets no level of its
+        # own, so a process that manages its logging sees no change.
+        assert namespace.level == logging.NOTSET
+    finally:
+        telemetry.shutdown()
+        root.setLevel(root_level)
+        namespace.setLevel(namespace_level)
+
+
 def _attr_value(value):
     """Unwrap one OTLP AnyValue into a plain Python value."""
     for key in ("stringValue", "boolValue", "arrayValue"):

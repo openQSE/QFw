@@ -102,11 +102,10 @@ def recording():
 		logger_provider=logger_provider, logs_level=logging.DEBUG)
 	assert instrumentation.enabled()
 	assert qfw_telemetry.logs_enabled()
-	# The story lines are debug; the root logger must let them through.
-	root_level = logging.getLogger().level
-	logging.getLogger().setLevel(logging.DEBUG)
+	# The story lines are debug and the root logger may be quieter than
+	# that: the tier opens QFw's own loggers itself, as it must for a
+	# real client, so the fixture leaves the root alone.
 	yield _Recording(exporter, reader, log_exporter)
-	logging.getLogger().setLevel(root_level)
 	qfw_telemetry.shutdown()
 	assert not instrumentation.enabled()
 

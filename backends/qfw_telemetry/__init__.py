@@ -69,6 +69,9 @@ LOG_LEVELS = {
 	"all": logging.DEBUG,
 }
 LOGS_ALL = "all"
+# QFw's own loggers. The tier opens this namespace to its level so a
+# process whose root logger is quieter still sends QFw's lines.
+LOG_NAMESPACE = "qfw"
 
 # Loggers whose records never leave through the logs tier: the SDK and the
 # HTTP stack it exports with. A failed export logs a warning; exporting that
@@ -146,6 +149,7 @@ class _State(object):
 		self.logger_provider = None
 		self.log_handler = None
 		self.logs_level = None
+		self.log_namespace_level = None
 
 
 _STATE = _State()
@@ -408,6 +412,8 @@ def _install_log_handler(logger_provider, level, keep_internals=False):
 
 	The root logger's own level still applies first: a record below it never
 	reaches any handler, this one included. The handler only narrows further.
+	The one exception is QFw's own namespace, which the tier opens to its
+	level, see _open_log_namespace.
 	"""
 	# The SDK marks this handler deprecated in favour of the one in
 	# opentelemetry-instrumentation-logging, a package QFw does not carry.
@@ -422,6 +428,7 @@ def _install_log_handler(logger_provider, level, keep_internals=False):
 		handler = LoggingHandler(level=level, logger_provider=logger_provider)
 	handler.addFilter(_LogSourceFilter(keep_internals))
 	logging.getLogger().addHandler(handler)
+	_open_log_namespace(level)
 	return handler
 
 
@@ -433,6 +440,37 @@ def _remove_log_handler():
 		except Exception:
 			pass
 	_STATE.log_handler = None
+	_close_log_namespace()
+
+
+def _open_log_namespace(level):
+	"""
+	Let QFw's own loggers, the "qfw" namespace, pass records at the tier's
+	level when the root logger would not.
+
+	A record is dropped at its logger when it is below that logger's
+	effective level, before any handler sees it, and a logger with no level
+	of its own takes the root's. A DEFw service opens its root logger, but a
+	Qiskit client out of the box has it at Python's default, WARNING, and
+	the story lines are debug: without this the client's half of a job's
+	story never left the process. Only the namespace is opened; everything
+	else in the process still answers to the root logger's level. The level
+	the namespace had is kept, and given back when the tier goes.
+	"""
+	if level is None:
+		return
+	logger = logging.getLogger(LOG_NAMESPACE)
+	if logger.getEffectiveLevel() <= level:
+		return
+	if _STATE.log_namespace_level is None:
+		_STATE.log_namespace_level = logger.level
+	logger.setLevel(level)
+
+
+def _close_log_namespace():
+	if _STATE.log_namespace_level is not None:
+		logging.getLogger(LOG_NAMESPACE).setLevel(_STATE.log_namespace_level)
+		_STATE.log_namespace_level = None
 
 
 def _metric_export_interval_ms():
@@ -631,8 +669,9 @@ def logs_enabled():
 	DEFw's set_logging_level_helper removes every handler from the root
 	logger whenever a process sets or changes its DEFw log level, which a
 	service does after QFw has configured telemetry. So this does not only
-	answer; it puts the tier's handler back if it has gone, and QFw's own
-	call sites ask before they write a line.
+	answer; it puts the tier's handler back if it has gone, keeps QFw's own
+	loggers open to the tier, and QFw's own call sites ask before they write
+	a line.
 	"""
 	handler = _STATE.log_handler
 	if handler is None:
@@ -640,6 +679,9 @@ def logs_enabled():
 	root = logging.getLogger()
 	if handler not in root.handlers:
 		root.addHandler(handler)
+	# The same DEFw call can raise the root logger above the tier, which
+	# closes the namespace again when it has no level of its own.
+	_open_log_namespace(_STATE.logs_level)
 	return True
 
 
