@@ -8,6 +8,7 @@ way CI does. The QPM side is driven through the fake IQM QPM, whose run queue
 is the simplest real one, and the client side through QFwJob with the mock
 QPM the job tests already use.
 """
+import logging
 import time
 import types
 
@@ -32,9 +33,17 @@ from util import instrumentation
 
 
 class _Recording:
-	def __init__(self, exporter, reader):
+	def __init__(self, exporter, reader, log_exporter=None):
 		self.exporter = exporter
 		self.reader = reader
+		self.log_exporter = log_exporter
+
+	def logs(self):
+		"""(body, trace_id) of every record the logs tier exported."""
+		finished = getattr(
+			self.log_exporter, "get_finished_log_records",
+			getattr(self.log_exporter, "get_finished_logs", None))()
+		return [(r.log_record.body, r.log_record.trace_id) for r in finished]
 
 	def spans_by_name(self):
 		groups = {}
@@ -70,14 +79,33 @@ def recording():
 		InMemorySpanExporter)
 	from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
+	from opentelemetry.sdk._logs import LoggerProvider
+	from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+	try:
+		from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+	except ImportError:  # older SDKs
+		from opentelemetry.sdk._logs.export import (
+			InMemoryLogExporter as InMemoryLogRecordExporter)
+
 	exporter = InMemorySpanExporter()
 	tracer_provider = TracerProvider(sampler=ALWAYS_ON)
 	tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
 	reader = InMemoryMetricReader()
 	meter_provider = MeterProvider(metric_readers=[reader])
-	qfw_telemetry.use_providers(tracer_provider, meter_provider)
+	# The logs tier too, at the level that carries every DEFw line.
+	log_exporter = InMemoryLogRecordExporter()
+	logger_provider = LoggerProvider()
+	logger_provider.add_log_record_processor(
+		SimpleLogRecordProcessor(log_exporter))
+	qfw_telemetry.use_providers(
+		tracer_provider, meter_provider,
+		logger_provider=logger_provider, logs_level=logging.DEBUG)
 	assert instrumentation.enabled()
-	yield _Recording(exporter, reader)
+	assert qfw_telemetry.logs_enabled()
+	# The story lines are debug and the root logger may be quieter than
+	# that: the tier opens QFw's own loggers itself, as it must for a
+	# real client, so the fixture leaves the root alone.
+	yield _Recording(exporter, reader, log_exporter)
 	qfw_telemetry.shutdown()
 	assert not instrumentation.enabled()
 
@@ -131,9 +159,24 @@ def test_qpm_run_is_one_trace_with_every_hop(monkeypatch, tmp_path, recording):
 	with qfw_telemetry.tracer().start_as_current_span("qfw.app.job") as job:
 		response = qpm.async_run(
 			dict(_CIRCUIT), reservation_id=decision["reservation_id"])
+		# A line written while the job's span is current, the way DEFw's
+		# own logging does inside the receive handler, carries its trace.
+		logging.getLogger("qfw.test").log(33, "job %s submitted", "job-trace")
 	completion = _wait_for_completion(
 		qpm, response["cid"], decision["reservation_id"])
 	assert completion["outcome"] == "COMPLETED"
+	assert ("job job-trace submitted", job.get_span_context().trace_id) in \
+		recording.logs()
+	# The QPM's own story of the circuit, each line stitched to the trace:
+	# received while the receive handler ran, then executing and done.
+	trace_id = job.get_span_context().trace_id
+	story = [body for body, tid in recording.logs() if tid == trace_id
+		and body.startswith(("received circuit", "executing circuit", "circuit "))]
+	cid = response["cid"]
+	assert story[0] == f"received circuit {cid} (qtask 1): 4 qubits, 64 shots"
+	assert story[1] == f"executing circuit {cid} on {FAKE_IQM_TARGET_ID} via simulator"
+	assert story[2].startswith(f"circuit {cid} completed on {FAKE_IQM_TARGET_ID} after ")
+	assert len(story) == 3
 
 	spans = recording.spans_by_name()
 	assert set(spans) == {
@@ -283,6 +326,12 @@ def test_qiskit_job_is_the_trace_root_and_counts_itself(monkeypatch, recording):
 	assert fake_qpm.contexts == [root.context]
 
 	assert root.attributes["qfw.job.id"] == job._job_id
+	# The client's two lines of the story, under the job's trace.
+	assert [body for body, tid in recording.logs()
+		if tid == root.context.trace_id and body.startswith(("submitted job", "job "))] == [
+		f"submitted job {job._job_id}: 1 circuit(s), 3 shots",
+		next(body for body, _ in recording.logs()
+			if body.startswith(f"job {job._job_id} completed after"))]
 	assert root.attributes["qfw.app.circuits"] == 1
 	assert root.attributes["qfw.circuit.shots"] == 3
 	assert root.attributes["qfw.device.name"] == FAKE_IQM_TARGET_ID

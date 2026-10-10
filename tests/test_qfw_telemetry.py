@@ -173,6 +173,258 @@ def test_transport_spans_stay_off_without_a_provider(monkeypatch):
     assert telemetry.transport_spans_enabled() is False
 
 
+def test_logs_level_defaults_off_and_fails_closed(monkeypatch):
+    import logging
+    assert telemetry._logs_level() is None
+    for value in ("off", "0", "no", "false", ""):
+        monkeypatch.setenv(telemetry.TELEMETRY_LOGS_ENV, value)
+        assert telemetry._logs_level() is None
+    for value, level in (("error", logging.ERROR), ("Warning", logging.WARNING),
+                         ("info", logging.INFO), ("debug", logging.DEBUG),
+                         ("all", logging.DEBUG)):
+        monkeypatch.setenv(telemetry.TELEMETRY_LOGS_ENV, value)
+        assert telemetry._logs_level() == level
+        assert telemetry._logs_keep_internals() is (value == "all")
+    monkeypatch.setenv(telemetry.TELEMETRY_LOGS_ENV, "loud")
+    with pytest.raises(ValueError, match=telemetry.TELEMETRY_LOGS_ENV):
+        telemetry._logs_level()
+
+
+def test_adopted_logger_provider_exports_root_logger_records_with_the_span():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    root = logging.getLogger()
+    before = list(root.handlers)
+    telemetry.use_providers(
+        TracerProvider(), logger_provider=logger_provider,
+        logs_level=logging.WARNING)
+    assert telemetry.logs_enabled() is True
+    handler = telemetry._STATE.log_handler
+    assert handler in root.handlers
+    # DEFw registers its categories as level names 30 to 35.
+    logging.addLevelName(33, "DEFW_APP")
+    logging.addLevelName(34, "DEFW_RPC")
+    try:
+        with telemetry.tracer().start_as_current_span("qfw.app.job") as job:
+            # What a service writes about the job goes out at warning...
+            logging.getLogger("defw.qpm").log(33, "circuit %s queued", "c-1")
+            # ...the transport's own chatter does not, whatever its level.
+            logging.getLogger("defw.workers").log(34, "handling request")
+            logging.getLogger("qfw.client").info("too quiet for this tier")
+            logging.getLogger("opentelemetry.sdk.trace").warning(
+                "the exporter's own noise stays local")
+        logging.getLogger("defw.qpm").warning("after the job, no span")
+    finally:
+        telemetry.shutdown()
+
+    assert handler not in root.handlers
+    assert root.handlers == before
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    bodies = [(r.log_record.body, r.log_record.trace_id) for r in finished]
+    assert bodies == [
+        ("circuit c-1 queued", job.get_span_context().trace_id),
+        ("after the job, no span", 0),
+    ]
+
+
+def test_all_tier_carries_defw_internals_too():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    logging.addLevelName(34, "DEFW_RPC")
+    root = logging.getLogger()
+    level_before = root.level
+    telemetry.use_providers(
+        TracerProvider(), logger_provider=logger_provider,
+        logs_level=logging.DEBUG, logs_internals=True)
+    try:
+        root.setLevel(logging.DEBUG)
+        logging.getLogger("defw.workers").log(34, "handling request")
+        logging.getLogger("qfw.client").debug("every detail")
+    finally:
+        root.setLevel(level_before)
+        telemetry.shutdown()
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    assert [r.log_record.body for r in finished] == [
+        "handling request", "every detail"]
+
+
+def test_debug_tier_keeps_defw_internals_out():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    logging.addLevelName(34, "DEFW_RPC")
+    root = logging.getLogger()
+    level_before = root.level
+    telemetry.use_providers(
+        TracerProvider(), logger_provider=logger_provider,
+        logs_level=logging.DEBUG)
+    try:
+        root.setLevel(logging.DEBUG)
+        # What a QPM writes about a job, at debug like most of QFw's code...
+        logging.getLogger("qfw.qpm").debug("set_max_qubits_pp(20)")
+        # ...and the transport's chatter, which the debug tier still drops.
+        logging.getLogger("defw.workers").log(34, "handling request")
+    finally:
+        root.setLevel(level_before)
+        telemetry.shutdown()
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    assert [r.log_record.body for r in finished] == ["set_max_qubits_pp(20)"]
+
+
+def test_logs_tier_reattaches_after_defw_strips_the_root_handlers():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    root = logging.getLogger()
+    telemetry.use_providers(
+        TracerProvider(), logger_provider=logger_provider,
+        logs_level=logging.WARNING)
+    handler = telemetry._STATE.log_handler
+    try:
+        # What DEFw's set_logging_level_helper does in a service process
+        # after QFw has configured telemetry.
+        for installed in root.handlers[:]:
+            root.removeHandler(installed)
+        logging.getLogger("qfw.qpm").warning("lost while the handler was gone")
+        assert telemetry.logs_enabled() is True
+        assert handler in root.handlers
+        logging.getLogger("qfw.qpm").warning("back on the next ask")
+    finally:
+        telemetry.shutdown()
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    assert [r.log_record.body for r in finished] == ["back on the next ask"]
+    assert handler not in root.handlers
+
+
+def test_logs_tier_carries_qfw_lines_past_a_quiet_root_logger():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+    from opentelemetry.sdk.trace import TracerProvider
+    try:
+        from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    except ImportError:  # older SDKs
+        from opentelemetry.sdk._logs.export import (
+            InMemoryLogExporter as InMemoryLogRecordExporter)
+
+    exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    root = logging.getLogger()
+    namespace = logging.getLogger("qfw")
+    client = logging.getLogger("qfw.client")
+    root_level, namespace_level = root.level, namespace.level
+    # A Qiskit client out of the box: nothing has configured logging, the
+    # root logger sits at Python's default and the story lines are debug.
+    root.setLevel(logging.WARNING)
+    namespace.setLevel(logging.NOTSET)
+    assert not client.isEnabledFor(logging.DEBUG)
+    try:
+        telemetry.use_providers(
+            TracerProvider(), logger_provider=logger_provider,
+            logs_level=logging.DEBUG)
+        assert client.isEnabledFor(logging.DEBUG)
+        assert root.level == logging.WARNING
+        with telemetry.tracer().start_as_current_span("qfw.app.job") as job:
+            client.debug("submitted job %s: 1 circuit(s), 1024 shots", "j-1")
+            # The root's level still governs everyone else.
+            logging.getLogger("qiskit.transpiler").debug("stays local")
+            logging.debug("so does the root logger's own debug line")
+        # DEFw raising the root logger later must not close QFw's loggers.
+        root.setLevel(logging.CRITICAL)
+        namespace.setLevel(logging.NOTSET)
+        assert telemetry.logs_enabled() is True
+        assert client.isEnabledFor(logging.DEBUG)
+        telemetry.shutdown()
+        # The tier gives the namespace back as it found it.
+        assert namespace.level == logging.NOTSET
+        assert not client.isEnabledFor(logging.DEBUG)
+    finally:
+        telemetry.shutdown()
+        root.setLevel(root_level)
+        namespace.setLevel(namespace_level)
+    finished = getattr(exporter, "get_finished_log_records",
+                       getattr(exporter, "get_finished_logs", None))()
+    assert [(r.log_record.body, r.log_record.trace_id) for r in finished] == [
+        ("submitted job j-1: 1 circuit(s), 1024 shots",
+         job.get_span_context().trace_id)]
+
+
+def test_logs_tier_leaves_an_open_root_logger_alone():
+    import logging
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk.trace import TracerProvider
+
+    root = logging.getLogger()
+    namespace = logging.getLogger("qfw")
+    root_level, namespace_level = root.level, namespace.level
+    root.setLevel(logging.DEBUG)
+    namespace.setLevel(logging.NOTSET)
+    try:
+        telemetry.use_providers(
+            TracerProvider(), logger_provider=LoggerProvider(),
+            logs_level=logging.DEBUG)
+        # Already open through the root: the namespace gets no level of its
+        # own, so a process that manages its logging sees no change.
+        assert namespace.level == logging.NOTSET
+    finally:
+        telemetry.shutdown()
+        root.setLevel(root_level)
+        namespace.setLevel(namespace_level)
+
+
 def _attr_value(value):
     """Unwrap one OTLP AnyValue into a plain Python value."""
     for key in ("stringValue", "boolValue", "arrayValue"):
@@ -187,6 +439,20 @@ def _attr_value(value):
 
 def _attrs(attribute_list):
     return {a["key"]: _attr_value(a["value"]) for a in attribute_list}
+
+
+def _read_otlp_logs(path):
+    """Flatten OTLP/JSON log export lines into (records, resource_attributes)."""
+    records = []
+    resource = {}
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        for resource_logs in json.loads(line)["resourceLogs"]:
+            resource = _attrs(resource_logs["resource"]["attributes"])
+            for scope_logs in resource_logs["scopeLogs"]:
+                records.extend(scope_logs["logRecords"])
+    return records, resource
 
 
 def _read_otlp_spans(path):
@@ -210,6 +476,7 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
     monkeypatch.setenv(telemetry.TELEMETRY_ENV, telemetry.PROFILE_FILE)
     monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(telemetry.TELEMETRY_SAMPLE_ENV, telemetry.SAMPLE_ALWAYS)
+    monkeypatch.setenv(telemetry.TELEMETRY_LOGS_ENV, "warning")
 
     assert telemetry.configure(
         "qfw-qpm", "0.1", role="qpm",
@@ -224,6 +491,8 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
     with telemetry.tracer().start_as_current_span("qfw.app.job") as job:
         assert job.is_recording() is True
         carrier = defw_trace.inject()
+        import logging
+        logging.getLogger("defw.client").log(33, "submitting %d circuit", 1)
     assert carrier["traceparent"].startswith("00-")
 
     # Remote side, as handle_rpc_req does it: attach the received context so
@@ -245,6 +514,16 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
     exports = sorted(tmp_path.glob("*.spans.jsonl"))
     assert len(exports) == 1
     spans, resource = _read_otlp_spans(exports[0])
+
+    # The logs tier wrote the DEFw-level line, stitched to the job's trace
+    # and on the same resource, in its own file.
+    log_exports = sorted(tmp_path.glob("*.logs.jsonl"))
+    assert len(log_exports) == 1
+    records, log_resource = _read_otlp_logs(log_exports[0])
+    assert [r["body"]["stringValue"] for r in records] == ["submitting 1 circuit"]
+    assert records[0]["traceId"] == next(
+        s["traceId"] for s in spans if s["name"] == "qfw.app.job")
+    assert log_resource["service.name"] == "qfw-qpm"
 
     by_name = {span["name"]: span for span in spans}
     assert set(by_name) == {"qfw.app.job", "qfw.qpm.receive"}

@@ -25,6 +25,9 @@ EXECUTION_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
+# The libraries a shim QPM can run a circuit through (svc_lib_qpm).
+SHIM_LIBRARIES = ("qrmi", "qdmi")
+
 
 def normalize_reservation_id(value):
 	if value is None:
@@ -42,6 +45,43 @@ def normalize_reservation_id(value):
 		raise DEFwError(
 			f"reservation_id must fit in uint64_t: {value!r}")
 	return value
+
+
+def normalize_shim_library(value, properties=None):
+	# The library a shim QPM runs the circuit through. "default" or nothing
+	# leaves the choice to the shim, which uses the device's execution owner.
+	# Only the shim reads the choice (svc_lib_qpm routes on info["lib"]), so
+	# naming one for any other QPM is an error here rather than a request that
+	# QPM would quietly ignore.
+	if value is None:
+		return None
+	lib = str(value).strip().lower()
+	if not lib or lib == "default":
+		return None
+	if lib not in SHIM_LIBRARIES:
+		raise DEFwError(
+			f"lib must be one of {', '.join(SHIM_LIBRARIES)}: {value!r}")
+	provider = (properties or {}).get("provider")
+	if provider is not None and provider != "shim":
+		raise DEFwError(
+			f"lib={lib!r} picks a shim library, but this QPM is "
+			f"{provider!r}, not the shim")
+	return lib
+
+
+def _runner_output_message(output):
+	# A simulator QPM reports a circuit runner that exited non-zero as the
+	# runner's stdout and stderr, wrapped as "{result: ...}" (UTIL_QRC). Its
+	# first meaningful line is the cause, for an MPI launch that could not be
+	# placed: "PMIx_Spawn failed (-179): PMIX_ERR_JOB_FAILED_TO_MAP".
+	text = output.strip()
+	if text.startswith("{result:") and text.endswith("}"):
+		text = text[len("{result:"):-1]
+	for line in text.splitlines():
+		line = line.strip()
+		if line.strip("-=*"):
+			return line[:300]
+	return None
 
 
 class QFwJob(Job):
@@ -87,6 +127,8 @@ class QFwJob(Job):
 			info["qubit_mapping"] = qubit_mapping
 		if self._backend.returns_statevector():
 			info["return_statevector"] = True
+		if self._options.get("lib"):
+			info["lib"] = self._options["lib"]
 
 		try:
 			context = self._execution_context()
@@ -253,6 +295,8 @@ class QFwJob(Job):
 				break
 			if message is None:
 				message = output.get("error") or output.get("Error")
+		elif isinstance(output, str):
+			message = _runner_output_message(output)
 
 		details = [f"QFw circuit {cid} failed (rc={rc}"]
 		if provider:

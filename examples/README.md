@@ -167,6 +167,20 @@ serve a call is skipped), so you can see QDMI and QRMI results back-to-back:
 ./qfw_shim_smoke.sh --libs qdmi,qrmi --call get_device_info
 ```
 
+A Qiskit program running on the shim QPM picks the library the same way, per
+job. In code, pass `lib="qdmi"` to `QFwBackend.run()`, set
+`backend.options.lib`, or put `"lib"` in the Sampler's or Estimator's
+`run_options`. For a program you do not edit, set `QFW_SHIM_LIB` in the batch
+script instead:
+
+```bash
+QFW_SHIM_LIB=qdmi ./qfw_qiskit_simple.sh --service-mode site --backend shim 3
+```
+
+With no choice the shim runs the circuit through the device's execution owner,
+which is QRMI unless its device-access entry says otherwise. Naming a library
+for a QPM that is not the shim is an error.
+
 ### `measure_shim_introspection.py`
 
 Measures what device introspection costs through each shim library, cold and

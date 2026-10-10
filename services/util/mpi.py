@@ -1,3 +1,4 @@
+import logging
 import os
 import shlex
 
@@ -94,6 +95,50 @@ def _should_allow_run_as_root(value):
 	return value in ('1', 'yes', 'true', 'on')
 
 
+CPU_CACHE_DIR = "/sys/devices/system/cpu/cpu0/cache"
+
+
+def cache_levels(cache_dir=CPU_CACHE_DIR):
+	# The cache levels the kernel reports for CPU 0, or None when it reports
+	# none, on a host without this sysfs tree for one.
+	try:
+		entries = os.listdir(cache_dir)
+	except OSError:
+		return None
+	levels = set()
+	for entry in entries:
+		if not entry.startswith("index"):
+			continue
+		try:
+			with open(os.path.join(cache_dir, entry, "level"),
+					encoding="utf-8") as stream:
+				levels.add(int(stream.read().strip()))
+		except (OSError, ValueError):
+			continue
+	return levels or None
+
+
+def effective_map_by(map_by, levels=None):
+	# ppr:N:l3cache asks for N processes per L3 cache. A host with no L3
+	# cache, Docker Desktop's VM on Apple Silicon for one, gives that no
+	# slots, and Open MPI refuses the job with PMIX_ERR_JOB_FAILED_TO_MAP. L3
+	# placement means one process per last-level cache, so map by the highest
+	# level the host does have. This host stands in for the nodes it launches
+	# on, which an allocation keeps alike. When the kernel reports no cache
+	# levels, the setting is left as written.
+	map_by = str(map_by)
+	if "l3cache" not in map_by:
+		return map_by
+	if levels is None:
+		levels = cache_levels()
+	if not levels or 3 in levels:
+		return map_by
+	fallback = map_by.replace("l3cache", f"l{max(levels)}cache")
+	logging.debug(
+		f"this host has no L3 cache: --map-by {map_by} becomes {fallback}")
+	return fallback
+
+
 def build_mpi_command(executable, executable_args=None, np=1, hosts=None,
 					  dvm_uri=None, config=None, launcher=None,
 					  extra_mpi_args=None):
@@ -118,7 +163,7 @@ def build_mpi_command(executable, executable_args=None, np=1, hosts=None,
 
 	map_by = mpi_config.get('map-by', None)
 	if map_by:
-		cmd.extend(['--map-by', str(map_by)])
+		cmd.extend(['--map-by', effective_map_by(map_by)])
 
 	bind_to = mpi_config.get('bind-to', None)
 	if bind_to:

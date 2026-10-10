@@ -278,7 +278,7 @@ def test_run_circuit_submits_qasm3_and_remaps_the_counts(monkeypatch):
 
 	driver = QdmiDriver(_descriptor(
 		s3_results_uri="s3://results/qfw/sv1", max_shots="1000"))
-	driver._device = lambda: types.SimpleNamespace(submit_job=submit_job)
+	driver._device = lambda credential=None: types.SimpleNamespace(submit_job=submit_job)
 	circuit = types.SimpleNamespace(
 		info={"qasm": "OPENQASM 2.0;", "num_shots": 10, "poll_interval": 0.0},
 		get_cid=lambda: "cid-3")
@@ -299,7 +299,7 @@ def test_run_circuit_refuses_shots_over_the_cap_before_submitting(monkeypatch):
 	monkeypatch.setattr(iqm_transcode, "load_qiskit_circuit", lambda s: s)
 	submitted = []
 	driver = QdmiDriver(_descriptor(max_shots="100"))
-	driver._device = lambda: types.SimpleNamespace(
+	driver._device = lambda credential=None: types.SimpleNamespace(
 		submit_job=lambda *a, **k: submitted.append(a))
 	circuit = types.SimpleNamespace(
 		info={"qasm": "OPENQASM 2.0;", "num_shots": 101}, get_cid=lambda: "c")

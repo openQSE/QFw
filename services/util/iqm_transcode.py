@@ -3,6 +3,9 @@
 # Extracted from svc_iqm_qpm/util_iqm.py so both the native IQM service and the
 # QRMI/QDMI shim (svc_lib_qpm) build IQM circuits the same way.
 # build_iqm_circuit(circuit, dynamic_architecture, mapping) is the entry point.
+# A circuit that is already native is serialized as it is. One that is not
+# gets transpiled, with a client if the caller has one and from the dynamic
+# architecture alone otherwise.
 # circuit is OpenQASM 2 text, or a QuantumCircuit that arrived as QPY (see
 # util.circuit_payload). It serializes via iqm.qiskit_iqm when possible and
 # falls back to a manual translation of native OpenQASM gates.
@@ -116,19 +119,110 @@ def _iqm_backend_calibration_set_id(backend):
 	return str(calibration_set_id) if calibration_set_id is not None else None
 
 
-def transpile_qiskit_to_iqm(circuit, client, calibration_set_id=None,
-		mapping=None):
+def _architecture_calibration_set_id(backend):
+	# A backend built from the architecture has no client to ask, but the
+	# architecture itself names the calibration set it describes.
+	architecture = getattr(backend, "architecture", None)
+	calibration_set_id = getattr(architecture, "calibration_set_id", None)
+	return str(calibration_set_id) if calibration_set_id is not None else None
+
+
+def architecture_backend(dynamic_architecture):
+	# An IQM backend built from the device's architecture alone, with no
+	# connection to it.
+	#
+	# Transpiling needs the device's qubits and gate loci, not a session.
+	# IQMBackendBase takes the architecture, and IQMBackend is only the
+	# subclass that adds a client. So a path that has the architecture but no
+	# client can still transpile, which is what the QRMI driver needs: QRMI
+	# owns the connection and hands QFw the architecture through target().
+	try:
+		from iqm.iqm_client import DynamicQuantumArchitecture
+		from iqm.qiskit_iqm.iqm_backend import IQMBackendBase
+		from qiskit.providers import Options
+	except Exception as exc:
+		raise DEFwExecutionError(
+			"iqm.qiskit_iqm and iqm.iqm_client are required to transpile "
+			f"qiskit circuits for IQM execution: {exc}") from exc
+
+	try:
+		architecture = DynamicQuantumArchitecture.model_validate(
+			to_jsonable(dynamic_architecture))
+	except Exception as exc:
+		# A caller that only knows the qubit list (the QDMI profile, when
+		# it cannot rebuild the architecture from FoMaC) cannot transpile,
+		# and the caller falls back to serializing a circuit that is already
+		# native.
+		raise DEFwExecutionError(
+			"IQM transpilation needs the device's full dynamic quantum "
+			"architecture, including its gate loci, and this one does not "
+			f"parse as one: {exc}") from exc
+
+	class _TranspileOnlyBackend(IQMBackendBase):
+		# run() and _default_options are abstract on IQMBackendBase but are
+		# never reached. This backend exists to carry the architecture
+		# through the transpiler; submitting is QRMI's job.
+		@classmethod
+		def _default_options(cls):
+			return Options()
+
+		@property
+		def max_circuits(self):
+			return None
+
+		def run(self, run_input, **options):
+			raise DEFwExecutionError(
+				"this IQM backend transpiles only, it cannot submit")
+
+	try:
+		return _TranspileOnlyBackend(architecture)
+	except Exception as exc:
+		# IQMBackendBase reads the architecture as it builds its target, and
+		# raises whatever that hits: a KeyError for an architecture with no
+		# measure gate, for one. build_iqm_circuit falls back only on a
+		# DEFwExecutionError, so anything else would end the run instead.
+		raise DEFwExecutionError(
+			"IQM could not build a transpile target from this "
+			f"architecture: {exc!r}") from exc
+
+
+def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
+		mapping=None, dynamic_architecture=None):
+	# Transpile to IQM native operations and serialize. The backend comes
+	# either from a client (the native IQM QPM, which holds one) or from the
+	# architecture alone (the QRMI driver, which does not).
 	Circuit, _ = load_iqm_pulse_module()
 	try:
-		from iqm.qiskit_iqm import IQMBackend, transpile_to_IQM
+		from iqm.qiskit_iqm import transpile_to_IQM
+		from iqm.qiskit_iqm.qiskit_to_iqm import serialize_instructions
 	except Exception as exc:
 		raise DEFwExecutionError(
 			"iqm.qiskit_iqm is required to transpile qiskit circuits "
 			f"for IQM execution: {exc}") from exc
 
+	if client is not None:
+		try:
+			from iqm.qiskit_iqm import IQMBackend
+		except Exception as exc:
+			raise DEFwExecutionError(
+				"iqm.qiskit_iqm is required to transpile qiskit circuits "
+				f"for IQM execution: {exc}") from exc
+		try:
+			backend = IQMBackend(
+				client, calibration_set_id=calibration_set_id)
+		except Exception as exc:
+			# Building the backend asks the client for the architecture. A
+			# failure there is one build_iqm_circuit falls back on, as for
+			# any other step of transpiling.
+			raise DEFwExecutionError(
+				"IQM could not build a backend from the client: "
+				f"{exc!r}") from exc
+	else:
+		backend = architecture_backend(dynamic_architecture)
+
 	qiskit_circuit = load_qiskit_circuit(circuit)
 	try:
-		backend = IQMBackend(client, calibration_set_id=calibration_set_id)
+		index_to_name = None
 		restrict_to_qubits = None
 		if mapping:
 			index_to_name = logical_to_physical_qubits(
@@ -139,21 +233,37 @@ def transpile_qiskit_to_iqm(circuit, client, calibration_set_id=None,
 			backend,
 			restrict_to_qubits=restrict_to_qubits,
 		)
-		iqm_circuit = backend.serialize_circuit(transpiled)
+		# Naming the qubits is the part that goes wrong quietly. A restricted
+		# transpile renumbers the circuit onto the restricted set, so index 0
+		# is the first RESTRICTED qubit, not the device's first. iqm documents
+		# this on transpile_to_IQM: pass the matching qubit_index_to_name.
+		# logical_to_physical_qubits already built that map, so use it, and
+		# only fall back to the device's full index map when nothing was
+		# restricted.
+		if index_to_name is None:
+			index_to_name = {
+				index: backend.index_to_qubit_name(index)
+				for index in range(backend.num_qubits)
+			}
+		instructions = tuple(serialize_instructions(
+			transpiled, qubit_index_to_name=index_to_name))
 	except Exception as exc:
 		raise DEFwExecutionError(
 			"IQM could not transpile the circuit to native operations. "
 			f"Error: {exc}") from exc
 
-	metadata = dict(getattr(iqm_circuit, "metadata", None) or {})
+	metadata = dict(getattr(transpiled, "metadata", None) or {})
 	metadata["qfw_transpiled_to_iqm"] = True
-	effective_calibration_set_id = _iqm_backend_calibration_set_id(backend)
+	metadata["logical_to_physical"] = index_to_name
+	effective_calibration_set_id = (
+		_iqm_backend_calibration_set_id(backend)
+		or _architecture_calibration_set_id(backend))
 	if effective_calibration_set_id is not None:
 		metadata["iqm_calibration_set_id"] = effective_calibration_set_id
 	return Circuit(
-		name=iqm_circuit.name or qiskit_circuit.name or "qfw_iqm_circuit",
-		instructions=tuple(iqm_circuit.instructions),
-		metadata=metadata,
+		name=transpiled.name or qiskit_circuit.name or "qfw_iqm_circuit",
+		instructions=instructions,
+		metadata=to_jsonable(metadata),
 	)
 
 
@@ -325,6 +435,23 @@ def openqasm2_for_manual_translation(circuit):
 
 def build_iqm_circuit(circuit, dynamic_architecture, mapping,
 		      client=None, calibration_set_id=None):
+	# Four tiers. A caller with a client transpiles first, as it always has.
+	# Otherwise a circuit that is already native is serialized as it is, and
+	# only a circuit that cannot be serialized is transpiled.
+	#
+	# Serializing before transpiling is deliberate. The serializer takes the
+	# circuit verbatim, so a caller that laid its own circuit out on chosen
+	# qubits keeps that layout, while the transpiler is free to re-route and
+	# re-lay-out. Trying it first means every input that works today takes
+	# the path it takes today, and the transpile tier below only catches what
+	# currently has nowhere to go.
+	#
+	# That tier is the one that matters for QRMI. Transpiling needs the
+	# device's qubits and gate loci, not a session, so a caller holding the
+	# architecture and no client can still do it (see architecture_backend).
+	# Without it a plain h or cx fails the whole chain, because the
+	# serializer accepts native operations only and the manual translator
+	# below knows just x, rx, ry, cz, barrier and measure.
 	if client is not None:
 		try:
 			return transpile_qiskit_to_iqm(
@@ -339,7 +466,19 @@ def build_iqm_circuit(circuit, dynamic_architecture, mapping,
 	try:
 		return serialize_qiskit_to_iqm(circuit, dynamic_architecture, mapping)
 	except DEFwExecutionError as exc:
-		logging.debug(f"falling back to manual IQM QASM translation: {exc}")
-		return build_manual_iqm_circuit(
-			openqasm2_for_manual_translation(circuit),
-			dynamic_architecture, mapping)
+		logging.debug(f"falling back to IQM transpilation: {exc}")
+	if client is None:
+		try:
+			return transpile_qiskit_to_iqm(
+				circuit,
+				None,
+				calibration_set_id=calibration_set_id,
+				mapping=mapping,
+				dynamic_architecture=dynamic_architecture,
+			)
+		except DEFwExecutionError as exc:
+			logging.debug(
+				f"falling back to manual IQM QASM translation: {exc}")
+	return build_manual_iqm_circuit(
+		openqasm2_for_manual_translation(circuit),
+		dynamic_architecture, mapping)

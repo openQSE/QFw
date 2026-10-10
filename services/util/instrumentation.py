@@ -115,6 +115,27 @@ _LOG = logging.getLogger(__name__)
 _EXECUTION_LABELS = contextvars.ContextVar(
 	"qfw_execution_labels", default=None)
 
+# A job's story in a few log lines, for the logs tier. Each line is written
+# while the job's span is current, so the tier stamps it with the trace and
+# the logs panel under a waterfall has something to show for every backend,
+# the fake IQM included. Debug, like the rest of what QFw logs about a job,
+# and only when the tier is on: with it off these cost a boolean test.
+_QPM_LOG = logging.getLogger("qfw.qpm")
+_CLIENT_LOG = logging.getLogger("qfw.client")
+
+
+def _story(span, logger, message, *args):
+	logs_enabled = getattr(_telemetry, "logs_enabled", None)
+	if logs_enabled is None or not logs_enabled():
+		return
+	try:
+		with _trace_api().use_span(
+				span, end_on_exit=False, record_exception=False,
+				set_status_on_exception=False):
+			logger.debug(message, *args)
+	except Exception as exc:
+		_LOG.debug("story line not written: %s", exc)
+
 
 def configure_process(role, device=None, attributes=None):
 	"""
@@ -248,6 +269,12 @@ def bind_circuit(circuit, qtask_id=None):
 		from opentelemetry import context
 		circuit.otel_context = context.get_current()
 		info = getattr(circuit, "info", None) or {}
+		_story(
+			_trace_api().get_current_span(), _QPM_LOG,
+			"received circuit %s (qtask %s): %s qubits, %s shots",
+			circuit.get_cid(), _text(info.get("qtask_id")),
+			_int(info.get("num_qubits")),
+			_int(info.get("num_shots", info.get("shots"))))
 		_set(_trace_api().get_current_span(), {
 			ATTR_CID: circuit.get_cid(),
 			ATTR_QTASK_ID: _text(qtask_id),
@@ -384,6 +411,9 @@ def begin_backend_execution(circuit, api_path, device=None, backend_kind=None):
 			ATTR_NUM_QUBITS: _int(info.get("num_qubits")),
 		})
 		_set(span, values)
+		_story(
+			span, _QPM_LOG, "executing circuit %s on %s via %s",
+			circuit.get_cid(), device or "?", api_path)
 		return _Execution(span, labels, time.monotonic())
 	except Exception as exc:
 		_LOG.debug("qfw.backend.execute not opened: %s", exc)
@@ -416,6 +446,11 @@ def finish_backend_execution(execution, circuit, error=None, cancel_event=None):
 		if error is not None:
 			_mark_error(execution.span, error)
 		_set(execution.span, {ATTR_OUTCOME: outcome})
+		_story(
+			execution.span, _QPM_LOG, "circuit %s %s on %s after %.1f ms",
+			circuit.get_cid(), outcome,
+			execution.labels.get(ATTR_DEVICE, "?"),
+			(time.monotonic() - execution.started) * 1000.0)
 		execution.span.end()
 	except Exception as exc:
 		_LOG.debug("qfw.backend.execute not closed: %s", exc)
@@ -546,6 +581,9 @@ def start_job(job_id, circuits, shots, properties=None):
 			ATTR_SHOTS: _int(shots),
 		})
 		_set(span, values)
+		_story(
+			span, _CLIENT_LOG, "submitted job %s: %s circuit(s), %s shots",
+			job_id, _int(circuits), _int(shots))
 		return _JobTrace(span, labels, time.monotonic())
 	except Exception as exc:
 		_LOG.debug("qfw.app.job not opened: %s", exc)
@@ -576,6 +614,10 @@ def end_job(job, outcome, error=None):
 		if error is not None:
 			_mark_error(job.span, error)
 		_set(job.span, {ATTR_OUTCOME: outcome})
+		_story(
+			job.span, _CLIENT_LOG, "job %s %s after %.1f ms",
+			job.span.attributes.get(ATTR_JOB_ID) if getattr(job.span, "attributes", None) else "?",
+			outcome, (time.monotonic() - job.started) * 1000.0)
 		job.span.end()
 	except Exception as exc:
 		_LOG.debug("qfw.app.job not closed: %s", exc)

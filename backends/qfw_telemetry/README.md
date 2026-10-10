@@ -63,6 +63,7 @@ change and never a code change.
 | `QFW_TELEMETRY_SAMPLE` | `off`, `always`, ratio | `off` | Trace sampling |
 | `QFW_TELEMETRY_DIR` | path | node-local tmp | Export directory, file profile |
 | `QFW_TELEMETRY_TRANSPORT` | `0`, `1` | `0` | DEFw RPC spans |
+| `QFW_TELEMETRY_LOGS` | `off`, `error`, `warning`, `info`, `debug`, `all` | `off` | The logs tier: the root logger's records at that level or above, exported with the current span's ids; `all` adds DEFw's transport internals. See below |
 | `QFW_TELEMETRY_ENDPOINT` | URL | SDK default | The collector's OTLP/HTTP base URL for the otlp profile, such as `http://otel-collector:4318`; the signal paths are appended. Unset, the exporters read the standard `OTEL_EXPORTER_OTLP_*` variables |
 | `OTEL_METRIC_EXPORT_INTERVAL` | milliseconds | `10000` | How often metrics export. The SDK's own default is a minute; ten seconds suits a dashboard and bounds what a killed service loses |
 
@@ -172,6 +173,53 @@ identifiers, where protobuf encodes those bytes fields as base64.
 out. Without that step the output is protobuf JSON of an OTLP message rather
 than OTLP/JSON, and a collector reading it back would reject the identifiers.
 A test asserts 32 and 16 character hex so this cannot regress silently.
+
+## The logs tier
+
+`QFW_TELEMETRY_LOGS=<level>` puts the SDK's logging handler on the root
+logger. Every record Python's logging carries at that level or above is
+exported as an OTLP log record on the same resource as the spans, stamped
+with the trace and span ids of the span current when it was written. No
+call site changes: DEFw's own logging goes through the root logger, so the
+lines a QPM writes while it executes a circuit carry that job's trace, and
+the collector profile can show them under the job's waterfall.
+
+With the tier on, QFw's instrumentation layer also writes a job's story
+itself, five debug lines stitched to the job's trace whatever the backend:
+`submitted job ...` and `job ... completed after ... ms` on the client,
+`received circuit ...`, `executing circuit ... on <device> via <api path>` and
+`circuit ... completed on <device> after ... ms` on the QPM. A backend that
+logs nothing of its own, the fake IQM for instance, still shows those under
+its waterfall. With the tier off they cost a boolean test and write nothing.
+
+Three things to know before turning it on:
+
+- QFw's own code writes a job's story at `debug`: a QPM's device query,
+  the circuit's qubit cap, the driver's progress. `debug` is therefore the
+  tier that shows a job's lines under its trace, and `error` carries real
+  errors only.
+- DEFw's levels 30 to 35 are categories, not severities: CORE, WORKER,
+  SERVICE, APP, RPC and STACKTRACE. Its service and application lines
+  (SERVICE, APP) go out at `warning` and above, like a warning would. Its
+  transport internals (CORE, WORKER, RPC, STACKTRACE), hundreds of lines
+  per job about work requests and RPC handling with routine stack dumps,
+  leave only with `all`, whatever tier they would otherwise pass. The root
+  logger's own level, which DEFw sets from `DEFW_LOG_LEVEL`, applies first;
+  the handler only narrows, and a process whose DEFw level selects nothing
+  exports nothing.
+- Whatever a process logs leaves it. Review what the service writes at the
+  chosen level before pointing the tier at a shared collector, and keep
+  `error` as the production setting.
+- The exporter's own loggers (`opentelemetry`, `urllib3`, `requests`) stay
+  local, so a failed export cannot feed itself.
+
+Under the file profile the records go to `<service>-<rank>-<pid>.logs.jsonl`
+beside the spans and metrics files, one OTLP/JSON export per line. DEFw's
+`set_logging_level_helper` removes every handler on the root logger, and a
+service does set its level after `configure()`, so `logs_enabled()` puts the
+tier's handler back whenever it finds it gone; QFw's own call sites ask it
+before they write a line, and the first line of the next job restores the
+tier for everything that follows.
 
 ## Trace context across DEFw RPC
 
