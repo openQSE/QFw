@@ -69,6 +69,21 @@ def normalize_shim_library(value, properties=None):
 	return lib
 
 
+def _runner_output_message(output):
+	# A simulator QPM reports a circuit runner that exited non-zero as the
+	# runner's stdout and stderr, wrapped as "{result: ...}" (UTIL_QRC). Its
+	# first meaningful line is the cause, for an MPI launch that could not be
+	# placed: "PMIx_Spawn failed (-179): PMIX_ERR_JOB_FAILED_TO_MAP".
+	text = output.strip()
+	if text.startswith("{result:") and text.endswith("}"):
+		text = text[len("{result:"):-1]
+	for line in text.splitlines():
+		line = line.strip()
+		if line.strip("-=*"):
+			return line[:300]
+	return None
+
+
 class QFwJob(Job):
 	def __init__(self, backend, qpm, event_api, qobj, options):
 		self._job_id = str(uuid.uuid4())
@@ -280,6 +295,8 @@ class QFwJob(Job):
 				break
 			if message is None:
 				message = output.get("error") or output.get("Error")
+		elif isinstance(output, str):
+			message = _runner_output_message(output)
 
 		details = [f"QFw circuit {cid} failed (rc={rc}"]
 		if provider:
