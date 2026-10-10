@@ -473,8 +473,10 @@ it to an IQM circuit with the shared
 submits it through QRMI's task lifecycle (`Payload.IQMServer` → `task_start` →
 poll `task_status` → `task_result`), and normalizes the counts to
 `qhw-result-v1` via `qhw-iqm`. QRMI-for-IQM has no `acquire`/`release`, so this
-first cut runs without the reservation/SPANK machinery. `get_last_job_timing`
-and `get_last_job_metadata` report the cached last job.
+first cut runs without the reservation/SPANK machinery. `get_task_timing`
+and `get_task_metadata` report the job the named cid ran. Each driver opens
+its session with the reservation's bound credential and drops it when the
+reservation ends.
 
 Execution is **composable** for the QRMI-vs-QDMI comparison. QDMI runs the same
 circuit through the same `util/iqm_transcode.py`, but submits the
@@ -484,7 +486,9 @@ QRMI submits the whole run request — a genuine interface difference), polls
 `Job.check()`, reads `Job.get_counts()`, and normalizes to the same
 `qhw-result-v1` via `fomac_normalize.to_result_record`. In the descriptor
 `run_circuit` and the job calls list `[qrmi, qdmi]`; the execution owner (QRMI)
-serves the default, and `--lib qdmi` runs the QDMI path. Still to come: the
+serves the default, and `--lib qdmi` runs the QDMI path. A task's timing and
+metadata are read from the library that ran it, unless the call names another.
+Still to come: the
 richer job lifecycle. The comparison of OpenQASM 3 and QIR as circuit forms is
 in the `openQSE/development-analysis` repository.
 

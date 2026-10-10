@@ -39,7 +39,9 @@ CONTRACT_CALLS = (
 )
 
 # Execution-family calls share backend state and must stay within one library
-# — the reservation/execution owner — never split by per-call preference.
+# — the reservation/execution owner — never split by per-call preference. A
+# task lookup has to reach the library that ran the task, so the shim QRC
+# names it (svc_qrc.QRC._task_library) when the caller does not.
 EXECUTION_CALLS = frozenset({
 	"run_circuit",
 	"get_task_timing",

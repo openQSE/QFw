@@ -31,6 +31,54 @@ import os
 DEFAULT_PROVIDER = "iqm"
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
+# The one implementation name iqm_architecture gives every gate. QDMI does not
+# report IQM's implementation names, and only metrics lookups use them.
+IQM_IMPLEMENTATION = "qdmi"
+
+
+def iqm_architecture(topology, calibration_set_id):
+	# The IQM dynamic quantum architecture rebuilt from FoMaC topology, for
+	# util.iqm_transcode to transpile against. QDMI-on-IQM builds its
+	# operations from IQM's own architecture, so each operation's name and
+	# loci are IQM's gate name and loci. Each gate gets a single
+	# implementation holding all its loci, and the server runs its default.
+	#
+	# What cannot be rebuilt gets the bare qubit list instead, which
+	# build_iqm_circuit can only serialize from, so only an already-native
+	# circuit runs:
+	#   - no calibration set id, which the architecture requires;
+	#   - no measure gate, without which IQMBackendBase raises a KeyError
+	#     rather than a DEFwExecutionError the caller would fall back on;
+	#   - a locus naming a component that is not a qubit. That is a
+	#     computational resonator, and FoMaC does not say which sites are
+	#     resonators, so a device with them is not modeled here.
+	qubits = [str(qubit) for qubit in topology.get("qubits") or []]
+	bare = {"qubits": qubits}
+	operations = topology.get("operations") or {}
+	if not calibration_set_id or not operations.get("measure"):
+		return bare
+	known = set(qubits)
+	gates = {}
+	for name, loci in operations.items():
+		loci = [[str(component) for component in locus]
+			for locus in loci or [] if locus]
+		if not loci:
+			continue
+		if any(component not in known
+		       for locus in loci for component in locus):
+			return bare
+		gates[name] = {
+			"implementations": {IQM_IMPLEMENTATION: {"loci": loci}},
+			"default_implementation": IQM_IMPLEMENTATION,
+			"override_default_implementation": {},
+		}
+	return {
+		"calibration_set_id": str(calibration_set_id),
+		"qubits": qubits,
+		"computational_resonators": [],
+		"gates": gates,
+	}
+
 
 class QdmiProfile:
 	# The descriptor provider this profile serves.
@@ -46,8 +94,12 @@ class QdmiProfile:
 	def __init__(self, descriptor=None):
 		self._descriptor = dict(descriptor or {})
 
-	def access(self):
-		"""The settings this resource's session opens with (a dict)."""
+	def access(self, credential=None):
+		"""The settings this resource's session opens with (a dict).
+
+		credential is the reservation's bound provider credential, the
+		circuit's provider_credential, or None for a call made outside a
+		reservation."""
 		raise NotImplementedError
 
 	def definition(self, access):
@@ -103,21 +155,35 @@ class IqmQdmiProfile(QdmiProfile):
 	# on the same q20.
 	calibration_set_slot = "CUSTOM1"
 
-	def access(self):
-		# Resolve connection settings for the QDMI device. Honor the same env
-		# vars the native svc_iqm_qpm uses, then fall back to the shared
-		# device-access config (util.device_access).
+	def access(self, credential=None):
+		# Resolve connection settings for the QDMI device, in the order the
+		# QRMI driver uses (QrmiDriver._access). The reservation's credential
+		# comes first: the service runs as one account for every user, so
+		# anything else would open the session as the service's account.
+		# Then the env vars the native svc_iqm_qpm honors, then the shared
+		# device-access config, resolved for the credential's user.
+		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", DEFAULT_PROVIDER)
-		device_id = self._descriptor.get("id")
+		device_id = credential.get("device_id") or self._descriptor.get("id")
 		provider_device_id = (
-			self._descriptor.get("provider_device_id")
+			credential.get("provider_device_id")
+			or credential.get("quantum_computer")
+			or self._descriptor.get("provider_device_id")
 			or self._descriptor.get("provider-device-id"))
-		base_url = os.environ.get("QFW_QC_URL")
-		token = os.environ.get("QFW_API_KEY")
+		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
+		token = (
+			credential.get("api_key")
+			or credential.get("token")
+			or os.environ.get("QFW_API_KEY"))
 		if not (base_url and token):
 			try:
 				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(provider=provider)
+				cfg = resolve_device_access(
+					provider=provider,
+					device_id=device_id,
+					user=credential.get("user"),
+					credential_hint=credential.get("credential_hint"),
+					credential_handle=credential.get("credential_handle"))
 			except Exception as exc:
 				raise DEFwExecutionError(
 					"QDMI driver could not resolve device access for "
@@ -178,14 +244,16 @@ class IqmQdmiProfile(QdmiProfile):
 		# QRMI/QDMI difference: QDMI's IQM_JSON program is a SINGLE circuit,
 		# and QDMI-on-IQM wraps it into the run request (circuits, shots,
 		# calibration set) itself, whereas QRMI submits the whole run request.
-		# The transcode needs the device's active qubits, and FoMaC sites
-		# supply them (QDMI has no raw dynamic-architecture dict like QRMI's
-		# target()). Serialization stays a driver method, so a test can stand
-		# in for it.
+		# The transcode needs the device's architecture to transpile a circuit
+		# that is not already native, h and cx for instance. QDMI has no raw
+		# dynamic-architecture dict like QRMI's target(), so it is rebuilt
+		# from FoMaC topology and the calibration set id (iqm_architecture).
+		# Serialization stays a driver method, so a test can stand in for it.
 		from util.iqm_transcode import build_iqm_circuit
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
 		topo = fomac_normalize.extract_topology(device)
-		dynamic = {"qubits": topo.get("qubits") or []}
+		dynamic = iqm_architecture(topo, fomac_normalize._calibration_set_id(
+			device, self.calibration_set_slot))
 		iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
 		return driver._serialize_program(iqm_circuit), "IQM_JSON", None
 
@@ -202,12 +270,13 @@ class BraketQdmiProfile(QdmiProfile):
 	DEFAULT_QDMI_DEVICE_ID = "amazon.braket.default"
 	ARN_PREFIX = "arn:aws:braket:"
 
-	def access(self):
+	def access(self, credential=None):
 		# Everything comes from the descriptor, so from device-access config,
 		# and none of it is a secret. There is no token: the library
 		# authenticates through the AWS SDK's default credential chain, and
 		# QFw's entitlement credential provider decides who may use the
-		# device without holding a key (util.qpm.credentials).
+		# device without holding a key (util.qpm.credentials). So the
+		# reservation's credential holds nothing a session opens with.
 		arn = (
 			self._descriptor.get("provider_device_id")
 			or self._descriptor.get("provider-device-id"))

@@ -211,7 +211,7 @@ def test_a_cancel_before_submission_submits_no_qdmi_job(monkeypatch):
 	device = types.SimpleNamespace(
 		submit_job=lambda *args: submitted.append(args))
 	driver = _qdmi_driver()
-	driver._device = lambda: device
+	driver._device = lambda credential=None: device
 	driver._ids = lambda: ("iqm", "device-a")
 	driver._serialize_program = lambda iqm_circuit: "{}"
 	circuit = types.SimpleNamespace(

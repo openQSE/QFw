@@ -1061,6 +1061,83 @@ def test_foreground_run_stops_on_sigterm(tmp_path):
     assert state["state"] == "stopped"
 
 
+# Runs the foreground manager with one of its module functions wrapped to send
+# SIGTERM to the manager itself as it returns. The window the test above hits
+# only by chance is then hit every time.
+_SIGNAL_AFTER = """
+import os
+import signal
+import sys
+
+from qfw_runtime import service_plane
+
+
+def _signal_after(function):
+    def wrapper(*args, **kwargs):
+        result = function(*args, **kwargs)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return result
+    return wrapper
+
+
+name = sys.argv.pop(1)
+setattr(service_plane, name, _signal_after(getattr(service_plane, name)))
+raise SystemExit(service_plane.directory_service_main(sys.argv[1:]))
+"""
+
+
+def _run_manager_signalled_after(tmp_path, function_name):
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text(
+        "resolver:\n  scope-order:\n    - site\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    environment = os.environ.copy()
+    source_setup = str(Path(__file__).resolve().parents[1] / "setup")
+    environment["PYTHONPATH"] = source_setup + os.pathsep + environment.get(
+        "PYTHONPATH", "")
+    completed = subprocess.run(
+        [
+            sys.executable, "-c", _SIGNAL_AFTER, function_name,
+            "run",
+            "--run-dir", str(run_dir),
+            "--site-config", str(site),
+            "--runtime-config", str(runtime),
+            "--dry-run",
+            "--poll-interval", "0.05",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    state_path = run_dir / "state" / "service-plane.json"
+    return completed, json.loads(state_path.read_text(encoding="utf-8"))
+
+
+def test_a_sigterm_just_after_ready_still_stops_the_plane(tmp_path):
+    # The race behind test_foreground_run_stops_on_sigterm's CI failures: the
+    # manager recorded manager_pid before it installed its handler, so a
+    # signal just after it reported ready killed it with rc -15.
+    completed, state = _run_manager_signalled_after(tmp_path, "_print_state")
+
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert state["state"] == "stopped"
+
+
+def test_a_sigterm_during_start_stops_the_plane_once_it_is_up(tmp_path):
+    # A signal while the plane starts is honoured once start() returns, so
+    # the components it started are stopped, not left behind.
+    completed, state = _run_manager_signalled_after(tmp_path, "start")
+
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert state["state"] == "stopped"
+
+
 def unreachable_probe(pid, node, _allocation):
     raise service_plane.ServicePlaneError(
         f"cannot determine whether process {pid} on {node} is still running: "

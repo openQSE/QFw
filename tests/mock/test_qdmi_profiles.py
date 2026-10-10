@@ -125,12 +125,126 @@ def test_the_iqm_profile_names_the_missing_credential(monkeypatch):
 	import util.device_access as device_access
 	monkeypatch.setattr(
 		device_access, "resolve_device_access",
-		lambda provider=None: {
+		lambda **kwargs: {
 			"url": "https://qc.example.org/", "api_key": None,
 			"device_id": "ornl-iqm-20q", "provider_device_id": "default"})
 
 	with pytest.raises(DEFwExecutionError, match="API token"):
 		QdmiDriver({"provider": "iqm"})._access()
+
+
+# --- the reservation's credential, not the service's ------------------------
+
+def _bound_credential(user="shehataa", api_key="user-secret",
+		reservation_id=7):
+	# What FileCredentialProvider binds for a reservation and UTIL_QPM
+	# attaches to the circuit as provider_credential.
+	return {
+		"url": "https://qc.example.org/",
+		"api_key": api_key,
+		"token": api_key,
+		"device_id": "ornl-iqm-20q",
+		"provider_device_id": "default",
+		"quantum_computer": "default",
+		"user": user,
+		"reservation_id": reservation_id,
+	}
+
+
+def test_the_session_opens_with_the_reservation_credential(monkeypatch):
+	# The service's own settings are there too, and must not win: the QPM
+	# runs as one account for every user.
+	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
+	monkeypatch.setenv("QFW_API_KEY", "service-secret")
+	opened = []
+	_install_mqt_driver(monkeypatch, opened)
+	_install_iqm_qdmi(monkeypatch)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+
+	driver._device(credential=_bound_credential())
+
+	assert opened == [("iqm.default", {
+		"base_url": "https://qc.example.org",
+		"token": "user-secret",
+		"custom2": "default",
+	})]
+
+
+def test_device_access_is_resolved_for_the_reservation_user(monkeypatch):
+	# A credential with no token falls back to device-access config, and
+	# that has to look up the reservation's user, not the account the
+	# service runs as (resolve_qpu_user would answer root).
+	monkeypatch.delenv("QFW_QC_URL", raising=False)
+	monkeypatch.delenv("QFW_API_KEY", raising=False)
+	import util.device_access as device_access
+	calls = []
+
+	def resolve_device_access(**kwargs):
+		calls.append(kwargs)
+		return {
+			"url": "https://qc.example.org/", "api_key": "user-secret",
+			"device_id": "ornl-iqm-20q", "provider_device_id": "default"}
+
+	monkeypatch.setattr(
+		device_access, "resolve_device_access", resolve_device_access)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+
+	access = driver._access({"user": "shehataa", "credential_hint": "hint"})
+
+	assert access["token"] == "user-secret"
+	assert calls == [{
+		"provider": "iqm",
+		"device_id": "ornl-iqm-20q",
+		"user": "shehataa",
+		"credential_hint": "hint",
+		"credential_handle": None,
+	}]
+
+
+def test_each_reservation_gets_its_own_session(monkeypatch):
+	# A session carries the token it opened with, so one user's circuit
+	# must never run on a session opened for another. Keyed by reservation,
+	# as the native IQM QPM keys its clients, so it can be dropped when the
+	# reservation ends.
+	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
+	monkeypatch.setenv("QFW_API_KEY", "service-secret")
+	opened = []
+	_install_mqt_driver(monkeypatch, opened)
+	_install_iqm_qdmi(monkeypatch)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+	alice = _bound_credential("alice", "alice-secret", reservation_id=7)
+	bob = _bound_credential("bob", "bob-secret", reservation_id=8)
+
+	driver._device(credential=alice)
+	driver._device(credential=bob)
+	driver._device(credential=alice)
+	# The same user's next reservation is a session of its own.
+	driver._device(credential=dict(alice, reservation_id=9))
+	driver._device()
+
+	assert [kwargs["token"] for _, kwargs in opened] == [
+		"alice-secret", "bob-secret", "alice-secret", "service-secret"]
+
+
+def test_an_ended_reservation_loses_its_session(monkeypatch):
+	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
+	monkeypatch.setenv("QFW_API_KEY", "service-secret")
+	opened = []
+	_install_mqt_driver(monkeypatch, opened)
+	_install_iqm_qdmi(monkeypatch)
+	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
+	alice = _bound_credential("alice", "alice-secret", reservation_id=7)
+	driver._device(credential=alice)
+	driver._device()
+
+	assert driver.evict_reservation(7) is True
+	# Nothing left for it, and the service's own session is untouched.
+	assert driver.evict_reservation(7) is False
+	assert list(driver._devices) == [("default",)]
+	# A circuit that still names the reservation opens a fresh session
+	# rather than finding the old one.
+	driver._device(credential=alice)
+	assert len(opened) == 3
 
 
 def test_a_missing_device_library_names_its_package(monkeypatch):
@@ -167,6 +281,102 @@ def test_the_iqm_profile_encodes_an_iqm_json_program(monkeypatch):
 	assert encoded == ("json:iqm-circuit", "IQM_JSON", None)
 	assert calls == [
 		("OPENQASM 2.0;", {"qubits": ["QB1", "QB2"]}, {"q0": "QB2"})]
+
+
+# --- the IQM architecture rebuilt from FoMaC ----------------------------------
+
+def _fomac_topology():
+	# Shaped like extract_topology's output for the q20, cut to three qubits.
+	return {
+		"num_qubits": 3,
+		"qubits": ["QB1", "QB2", "QB3"],
+		"edges": [["QB1", "QB2"], ["QB2", "QB3"]],
+		"operations": {
+			"prx": [["QB1"], ["QB2"], ["QB3"]],
+			"cz": [["QB1", "QB2"], ["QB2", "QB3"]],
+			"measure": [["QB1"], ["QB2"], ["QB3"]],
+		},
+	}
+
+
+def test_the_iqm_architecture_is_rebuilt_from_fomac_topology():
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	arch = iqm_architecture(_fomac_topology(), "cal-set-1")
+
+	assert arch["calibration_set_id"] == "cal-set-1"
+	assert arch["qubits"] == ["QB1", "QB2", "QB3"]
+	assert arch["computational_resonators"] == []
+	assert sorted(arch["gates"]) == ["cz", "measure", "prx"]
+	assert arch["gates"]["cz"] == {
+		"implementations": {"qdmi": {"loci": [["QB1", "QB2"], ["QB2", "QB3"]]}},
+		"default_implementation": "qdmi",
+		"override_default_implementation": {},
+	}
+
+
+def test_without_a_calibration_set_only_the_qubits_are_passed():
+	# The architecture requires one, so there is nothing to transpile against
+	# and build_iqm_circuit serializes an already-native circuit, as before.
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	assert iqm_architecture(_fomac_topology(), None) == {
+		"qubits": ["QB1", "QB2", "QB3"]}
+
+
+def test_without_a_measure_gate_only_the_qubits_are_passed():
+	# IQMBackendBase reads the measure gate's loci and raises a KeyError,
+	# which build_iqm_circuit would not fall back on, when there is none.
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	topology = _fomac_topology()
+	del topology["operations"]["measure"]
+
+	assert iqm_architecture(topology, "cal-set-1") == {
+		"qubits": ["QB1", "QB2", "QB3"]}
+
+
+def test_a_locus_outside_the_qubits_means_only_the_qubits_are_passed():
+	# A computational resonator. FoMaC does not say which sites are
+	# resonators, so a device with them is not rebuilt.
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+
+	topology = _fomac_topology()
+	topology["operations"]["move"] = [["QB1", "CR1"]]
+
+	assert iqm_architecture(topology, "cal-set-1") == {
+		"qubits": ["QB1", "QB2", "QB3"]}
+
+
+def test_the_iqm_profile_transcodes_against_the_rebuilt_architecture(
+		monkeypatch):
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
+	calls = []
+	slots = []
+
+	def build_iqm_circuit(source, dynamic, mapping):
+		calls.append(dynamic)
+		return "iqm-circuit"
+
+	def calibration_set_id(device, slot):
+		slots.append(slot)
+		return "cal-set-1"
+
+	monkeypatch.setattr(iqm_transcode, "build_iqm_circuit", build_iqm_circuit)
+	monkeypatch.setattr(
+		qdmi_driver.fomac_normalize, "extract_topology",
+		lambda device: _fomac_topology())
+	monkeypatch.setattr(
+		qdmi_driver.fomac_normalize, "_calibration_set_id",
+		calibration_set_id)
+	driver = QdmiDriver({"provider": "iqm"})
+	driver._serialize_program = lambda iqm_circuit: f"json:{iqm_circuit}"
+
+	driver._profile.encode(driver, "OPENQASM 2.0;", {}, object())
+
+	assert slots == ["CUSTOM1"]
+	assert calls == [iqm_architecture(_fomac_topology(), "cal-set-1")]
 
 
 def test_the_iqm_profile_defaults():
@@ -228,7 +438,7 @@ def _running_driver(monkeypatch, counts, records, submitted):
 		return _Job(counts)
 
 	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
-	driver._device = lambda: types.SimpleNamespace(submit_job=submit_job)
+	driver._device = lambda credential=None: types.SimpleNamespace(submit_job=submit_job)
 	driver._serialize_program = lambda iqm_circuit: "{}"
 	return driver
 
@@ -237,6 +447,42 @@ def _circuit(cid="cid-9"):
 	return types.SimpleNamespace(
 		info={"qasm": "OPENQASM 2.0;", "num_shots": 10, "poll_interval": 0.0},
 		get_cid=lambda: cid)
+
+
+def test_task_lookups_find_each_cid_and_need_one(monkeypatch):
+	# The driver used to keep only the last job, so a lookup without a cid
+	# returned whoever ran last, and a lookup for an earlier cid failed
+	# with an error naming the later one.
+	driver = _running_driver(monkeypatch, {"1": 10}, [], [])
+	driver.run_circuit(_circuit("cid-1"))
+	driver.run_circuit(_circuit("cid-2"))
+
+	assert driver.get_task_metadata("cid-1")["cid"] == "cid-1"
+	assert driver.get_task_timing("cid-2")["cid"] == "cid-2"
+	with pytest.raises(DEFwExecutionError, match="need the task's cid"):
+		driver.get_task_metadata(None)
+	with pytest.raises(DEFwExecutionError) as excinfo:
+		driver.get_task_timing("cid-3")
+	assert "cid-2" not in str(excinfo.value)
+
+
+def test_run_circuit_opens_the_session_with_the_circuit_credential(
+		monkeypatch):
+	driver = _running_driver(monkeypatch, {"1": 10}, [], [])
+	device = driver._device()
+	seen = []
+
+	def _device(credential=None):
+		seen.append(credential)
+		return device
+
+	driver._device = _device
+	circuit = _circuit()
+	circuit.provider_credential = _bound_credential()
+
+	driver.run_circuit(circuit)
+
+	assert seen == [_bound_credential()]
 
 
 def test_run_circuit_submits_what_the_profile_encodes(monkeypatch):

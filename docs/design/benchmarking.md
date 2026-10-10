@@ -219,7 +219,19 @@ and SDKs for all benchmarking/profiling telemetry, using all three signals:
   [Clocks and Precision](#clocks-and-precision)).
 - **Logs** remain ordinary DEFw logs; where useful, structured log entries
   are linked to the active trace ID so they can be stitched into the same
-  timeline.
+  timeline. Implemented (October 2026) as an optional logs tier,
+  `QFW_TELEMETRY_LOGS`, off by default: the SDK's logging handler on the
+  root logger exports each record with the current span's trace and span
+  ids, so the stitching costs no call-site change. QFw's own lines are
+  mostly `debug`, so that tier shows a job's story; DEFw's levels are
+  categories, its service and application lines go out at `warning`, its
+  transport internals only with `all`, and `error` carries real errors only.
+  The instrumentation layer writes the story's five milestone lines itself
+  (submitted, received, executing, done, job done), while the job's span is
+  current, so every backend has lines under its waterfall. The tier opens
+  QFw's own `qfw.*` loggers to its level, so a Qiskit client whose root
+  logger sits at Python's default `WARNING` still sends its lines;
+  everything else in a process answers to the root logger's level.
 
 Adopting the standard has consequences the bespoke format could not offer:
 

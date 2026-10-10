@@ -264,15 +264,12 @@ def stop(run_dir):
 
 
 def run(args):
-    state = start(args)
-    with _state_lock(args.run_dir):
-        state = _read_state(args.run_dir)
-        state["manager_pid"] = os.getpid()
-        state["manager_mode"] = "foreground"
-        state["updated_at_ns"] = time.time_ns()
-        _write_state(state)
-    _print_state(state)
-
+    # The handlers go in first. manager_pid in the state file is how a caller
+    # knows the manager is up, and a signal between that write and the
+    # handlers took the default action: the manager died and nothing stopped
+    # its components. A signal during start() is honoured once start()
+    # returns, which its own timeouts bound. The handlers only set a flag, so
+    # the plane is always stopped here rather than cut off partway.
     stopping = {"requested": False}
 
     def request_stop(_signum, _frame):
@@ -281,6 +278,15 @@ def run(args):
     old_term = signal.signal(signal.SIGTERM, request_stop)
     old_int = signal.signal(signal.SIGINT, request_stop)
     try:
+        state = start(args)
+        with _state_lock(args.run_dir):
+            state = _read_state(args.run_dir)
+            state["manager_pid"] = os.getpid()
+            state["manager_mode"] = "foreground"
+            state["updated_at_ns"] = time.time_ns()
+            _write_state(state)
+        _print_state(state)
+
         while not stopping["requested"]:
             time.sleep(max(0.1, args.poll_interval))
             current = status(args.run_dir)

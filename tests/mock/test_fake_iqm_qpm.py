@@ -217,6 +217,14 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 		"two_q_gate_count": 6,
 		"measurement_count": 4,
 	}, reservation_id=decision["reservation_id"])
+	# Ask for the timing while the controller still knows the task. Reading
+	# the completion retires it, and a task it no longer knows has no cid to
+	# ask the provider with.
+	_wait_for_task_outcome(
+		qpm, response["qtask_id"], decision["reservation_id"], "COMPLETED")
+	timing = qpm.get_task_timing(
+		reservation_id=decision["reservation_id"],
+		task_id=response["qtask_id"])["timing"]
 	completion = _wait_for_completion(
 		qpm, response["cid"], decision["reservation_id"])
 
@@ -245,9 +253,6 @@ def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):
 	assert admission.actual[-1][1]["actual_baseline_units"] == 4
 	assert qpm.controller.scheduler_context.completed == [response["qtask_id"]]
 	assert qpm.get_scheduler_queue_state()["provider_inflight_qtask_ids"] == []
-	timing = qpm.get_task_timing(
-		reservation_id=decision["reservation_id"],
-		task_id=response["qtask_id"])["timing"]
 	assert timing["creation_time"] == completion["creation_time"]
 	assert timing["launch_time"] == completion["launch_time"]
 	assert timing["exec_time"] == completion["exec_time"]
@@ -320,6 +325,18 @@ def test_fake_iqm_qpm_uses_reservation_provider_credential(
 	assert release["status"] == "accepted"
 	assert decision["reservation_id"] not in (
 		qpm.controller.reservation_credentials_by_id)
+
+
+def _wait_for_task_outcome(qpm, qtask_id, reservation_id, outcome,
+		timeout=1.0):
+	deadline = time.monotonic() + timeout
+	while time.monotonic() < deadline:
+		status = qpm.task_status(
+			qtask_id=qtask_id, reservation_id=reservation_id)
+		if status.get("outcome") == outcome:
+			return status
+		time.sleep(0.01)
+	raise AssertionError(f"task {qtask_id} never reached {outcome}")
 
 
 def _wait_for_completion(qpm, cid, reservation_id, timeout=1.0):
