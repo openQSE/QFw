@@ -251,6 +251,45 @@ def test_qfw_job_result_raises_job_error_for_provider_failure(monkeypatch):
 	assert len(backend.logged_results) == 1
 
 
+def test_qfw_job_result_names_the_circuit_runner_failure(monkeypatch):
+	# A simulator QPM reports a runner that exited non-zero as its output in
+	# a "{result: ...}" string. The client used to show only the rc, and an
+	# MPI launch that could not be placed read as "failed (rc=77)".
+	import qfw_qiskit.qfw_job as qfw_job
+
+	fake_qpm = FakeQPM(cids=["cid-runner"])
+	circuit = qfw_job.QuantumCircuit(1, name="runner-failure")
+	backend = FakeBackend()
+	event_api = FakeEventAPI(events=[make_result_event(
+		"cid-runner",
+		rc=77,
+		result=(
+			"{result: \n"
+			"[slurmctld:06339] PMIx_Spawn failed (-179): "
+			"PMIX_ERR_JOB_FAILED_TO_MAP\n"
+			"------------------------------------------------\n"
+			"Your job has requested more processes than the ppr for\n"
+			"}"),
+	)], fd=46)
+	options = _driver_options(shots=2, seed=7, seed_simulator=13)
+
+	monkeypatch.setattr(
+		qfw_job.select, "select", lambda readable, *_: (readable, [], []))
+	_stub_qasm(monkeypatch)
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
+	job.submit()
+
+	with pytest.raises(qfw_job.JobError) as exc_info:
+		job.result()
+
+	message = str(exc_info.value)
+	assert "rc=77" in message
+	assert message.endswith(
+		"[slurmctld:06339] PMIx_Spawn failed (-179): "
+		"PMIX_ERR_JOB_FAILED_TO_MAP")
+
+
 def test_qfw_job_result_reports_every_failed_circuit(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 
