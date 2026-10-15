@@ -62,12 +62,16 @@ def _driver(tracker):
 	resource_type = types.SimpleNamespace(
 		IBMQiskitRuntimeService="IBMQiskitRuntimeService")
 
-	def quantum_resource(alias, resource_type_value):
-		tracker.leave(threading.current_thread().name)
-		return types.SimpleNamespace(alias=alias)
+	class QuantumResource:
+		def __init__(self, alias, resource_type_value):
+			tracker.leave(threading.current_thread().name)
+			self.alias = alias
+
+		def is_accessible(self):
+			return True
 
 	driver._qrmi = types.SimpleNamespace(
-		ResourceType=resource_type, QuantumResource=quantum_resource)
+		ResourceType=resource_type, QuantumResource=QuantumResource)
 	driver._access = lambda credential=None: {
 		"base_url": "https://example.org", "token": "tok"}
 	driver._ensure_resource_env = (

@@ -24,7 +24,7 @@
 # lifecycle and returns normalized qhw results.
 
 from .base_driver import BaseDriver, JobRecords, reservation_cache_key
-from defw_exception import (DEFwExecutionError, DEFwNotFound,
+from defw_exception import (DEFwError, DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
 from util import instrumentation
 import json
@@ -718,6 +718,28 @@ class QrmiDriver(BaseDriver):
 				f"failed to open QRMI {type_name} resource "
 				f"{alias!r}") from exc
 
+	def _is_resource_online(self, qpu):
+		qrmi = self._resource()
+		if not isinstance(qpu, qrmi.QuantumResource):
+			return False
+		# QRMI provides different APIs to check if a resource is online.
+		# version >= 0.25.0 --> resource.status()
+		# version <  0.25.0 --> resource.is_accessible()
+		if hasattr(qrmi.QuantumResource, "status"):
+			try:
+				resource_status = qpu.status()
+			except Exception as exc:
+				raise self._qrmi_error(
+					exc,
+					"failed to read QPU status",
+				) from exc
+			if resource_status.status == qrmi.ResourceStatusCode.Online:
+				return True
+		else:
+			if qpu.is_accessible():
+				return True
+		return False
+
 	def _qpu(self, credential=None):
 		# Lazy: open the QRMI QuantumResource this descriptor names. target()
 		# is not reservation-bound, so introspection works without acquire() as
@@ -761,7 +783,10 @@ class QrmiDriver(BaseDriver):
 					lambda: qrmi.QuantumResource.from_config(
 						alias, resource_type, config),
 					type_name, alias)
-				self._resource_objs[cache_key] = resource_obj
+				if self._is_resource_online(resource_obj):
+					self._resource_objs[cache_key] = resource_obj
+				else:
+					raise DEFwExecutionError("QPU is not online")
 		else:
 			with RESOURCE_ENV_LOCK:
 				cached = self._resource_objs.get(cache_key)
@@ -772,7 +797,10 @@ class QrmiDriver(BaseDriver):
 				resource_obj = self._open_resource(
 					lambda: qrmi.QuantumResource(alias, resource_type),
 					type_name, alias)
-				self._resource_objs[cache_key] = resource_obj
+				if self._is_resource_online(resource_obj):
+					self._resource_objs[cache_key] = resource_obj
+				else:
+					raise DEFwExecutionError("QPU is not online")
 		logging.debug(
 			"shim: QRMI resource opened (%s, %s)", type_name, alias)
 		return resource_obj
@@ -823,6 +851,10 @@ class QrmiDriver(BaseDriver):
 			try:
 				target_data = json.loads(
 					self._qpu(credential=credential).target().value)
+			except DEFwError:
+				# Already a DEFw error (e.g. from _qpu): re-wrapping would
+				# nest its message and stacktrace once per layer.
+				raise
 			except Exception as exc:
 				raise self._qrmi_error(
 					exc, "failed to read QRMI target()") from exc
@@ -1110,6 +1142,9 @@ class QrmiDriver(BaseDriver):
 		try:
 			result_json = json.loads(
 				self._qpu(credential=credential).task_result(job_id).value)
+		except DEFwError:
+			collect.__exit__(*sys.exc_info())
+			raise
 		except Exception as exc:
 			collect.__exit__(*sys.exc_info())
 			raise self._qrmi_error(exc, "QRMI task_result failed") from exc
@@ -1285,6 +1320,8 @@ class QrmiDriver(BaseDriver):
 				return "cancelled"
 			try:
 				raw = self._qpu(credential=credential).task_status(job_id)
+			except DEFwError:
+				raise
 			except Exception as exc:
 				raise self._qrmi_error(
 					exc, "QRMI task_status failed") from exc

@@ -293,6 +293,9 @@ class _EnvOnlyResource:
 			if name.startswith(f"{alias.split(',')[0]}_QRMI_")
 		}
 
+	def is_accessible(self):
+		return True
+
 
 class _Resource(_EnvOnlyResource):
 	# And one that carries from_config(), which the driver should prefer.
@@ -373,16 +376,15 @@ def test_each_reservation_opens_with_its_own_settings():
 def test_threads_sharing_a_credential_open_one_resource():
 	# Per-credential locking still has to hold, because a discarded duplicate
 	# would leak the tokio runtime QRMI keeps in a ManuallyDrop.
-	driver = _wired(_Resource)
 	built = []
-	real = _Resource.from_config
 
-	def counting_from_config(alias, resource_type, config):
-		built.append(alias)
-		return real(alias, resource_type, config)
+	class _Counting(_Resource):
+		@staticmethod
+		def from_config(alias, resource_type, config):
+			built.append(alias)
+			return _Counting(alias, resource_type, config=dict(config))
 
-	driver._qrmi.QuantumResource = types.SimpleNamespace(
-		from_config=counting_from_config)
+	driver = _wired(_Counting)
 
 	credential = {"user": "alice"}
 	threads = [

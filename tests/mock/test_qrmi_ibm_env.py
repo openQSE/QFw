@@ -308,10 +308,12 @@ def test_each_reservation_opens_its_resource_with_its_own_key(monkeypatch):
 		class ResourceType:
 			IBMQiskitRuntimeService = "IBMQiskitRuntimeService"
 
-		@staticmethod
-		def QuantumResource(alias, resource_type):
-			opened.append(os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"])
-			return object()
+		class QuantumResource:
+			def __init__(self, alias, resource_type):
+				opened.append(os.environ["ibm_torino_QRMI_IBM_QRS_IAM_APIKEY"])
+
+			def is_accessible(self):
+				return True
 
 	driver._qrmi = _Qrmi
 
@@ -409,11 +411,13 @@ def test_site_service_opens_the_resource_with_the_configured_crn(
 		class ResourceType:
 			IBMQiskitRuntimeService = "IBMQiskitRuntimeService"
 
-		@staticmethod
-		def QuantumResource(alias, resource_type):
-			opened.append(
-				(alias, os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"]))
-			return object()
+		class QuantumResource:
+			def __init__(self, alias, resource_type):
+				opened.append(
+					(alias, os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"]))
+
+			def is_accessible(self):
+				return True
 
 	driver._qrmi = _Qrmi
 	driver._qpu()
@@ -527,10 +531,13 @@ def test_each_instance_opens_its_own_resource():
 		class ResourceType:
 			IBMQiskitRuntimeService = "IBMQiskitRuntimeService"
 
-		@staticmethod
-		def QuantumResource(alias, resource_type):
-			opened.append(os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"])
-			return object()
+		class QuantumResource:
+			def __init__(self, alias, resource_type):
+				opened.append(
+					os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"])
+
+			def is_accessible(self):
+				return True
 
 	driver._qrmi = _Qrmi
 	driver._qpu(credential={"user": "alice", "service_crn": "crn:project-a"})
