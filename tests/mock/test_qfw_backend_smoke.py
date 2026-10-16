@@ -218,6 +218,56 @@ def test_backend_registers_completion_event_once(monkeypatch):
 	]
 
 
+def test_backend_shutdown_unregisters_completion_events(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-unregister")
+	fake_runtime = FakeRuntime(endpoint="endpoint-unregister")
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator.g_circ_metrics, "dump", lambda: None)
+
+	backend = qfw_simulator.QFwBackend()
+	backend.shutdown()
+
+	assert fake_qpm.unregistrations == [1]
+	assert backend._completion_event_registration is None
+	assert backend._completion_event_registered is False
+
+	backend.shutdown()
+	assert fake_qpm.unregistrations == [1]
+
+
+def test_backend_shutdown_tolerates_unregister_failure(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	class BrokenUnregisterQPM(FakeQPM):
+		def unregister_event_notification(self, registration_id, **kwargs):
+			raise RuntimeError("connection already gone")
+
+	fake_qpm = BrokenUnregisterQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-unregister-broken")
+	fake_runtime = FakeRuntime(endpoint="endpoint-unregister-broken")
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator.g_circ_metrics, "dump", lambda: None)
+
+	backend = qfw_simulator.QFwBackend()
+
+	backend.shutdown()
+
+	assert fake_runtime.exit_called is True
+
+
 def test_backend_restores_completion_event_after_same_qpm_reconnect(
 		monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator

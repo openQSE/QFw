@@ -7,8 +7,11 @@ class FakeQPM:
 		self.async_error = async_error
 		self.test_error = test_error
 		self.registrations = []
+		self.unregistrations = []
 		self.submitted_payloads = []
 		self.shutdown_called = False
+		self._registration_id_next = 1
+		self._live_registration_ids = set()
 
 	def register_event_notification(self, endpoint, event_type, class_id,
 					**kwargs):
@@ -19,6 +22,17 @@ class FakeQPM:
 		}
 		registration.update(kwargs)
 		self.registrations.append(registration)
+		registration_id = self._registration_id_next
+		self._registration_id_next += 1
+		self._live_registration_ids.add(registration_id)
+		return {"status": "accepted", "registration_id": registration_id}
+
+	def unregister_event_notification(self, registration_id, **kwargs):
+		self.unregistrations.append(registration_id)
+		if registration_id in self._live_registration_ids:
+			self._live_registration_ids.remove(registration_id)
+			return True
+		return False
 
 	def async_run(self, info, **kwargs):
 		payload = dict(info)

@@ -955,6 +955,9 @@ class UTIL_QPM:
 		self._ensure_qrc_event_dispatcher(evtype)
 		return result
 
+	def unregister_event_notification(self, registration_id, token=None):
+		return self.controller.unregister_event_endpoint(registration_id)
+
 	def _ensure_qrc_event_dispatcher(self, evtype):
 		if self.qrc is None:
 			return

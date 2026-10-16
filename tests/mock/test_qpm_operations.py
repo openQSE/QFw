@@ -26,14 +26,17 @@ class CapturingEventAPI:
 		self.class_id = class_id
 		self.target = target
 		self.events = []
+		self.put_calls = 0
 
 	def put(self, event):
+		self.put_calls += 1
 		self.events.append(event.get_event())
 		return True
 
 
 class FailingEventAPI(CapturingEventAPI):
 	def put(self, event):
+		self.put_calls += 1
 		del event
 		raise RuntimeError("event endpoint is no longer reachable")
 
@@ -504,8 +507,52 @@ def test_stale_event_endpoint_does_not_block_live_delivery(monkeypatch):
 
 	assert delivered is True
 	assert sinks["class-live"].events == [payload]
+	assert sinks["class-stale"].put_calls == 1
 	assert "class-stale" not in qpm.controller.event_endpoints
 	assert len(qpm.controller.event_endpoints["class-live"]) == 1
+
+
+def test_unregistered_endpoint_is_never_pushed_to(monkeypatch):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM(target_id="ops-unregister-events")
+	sinks = {}
+
+	def event_api_factory(class_id=None, target=None):
+		if class_id == "class-gone":
+			sink = FailingEventAPI(class_id=class_id, target=target)
+		else:
+			sink = CapturingEventAPI(class_id=class_id, target=target)
+		sinks[class_id] = sink
+		return sink
+
+	monkeypatch.setattr(util_qpm, "BaseEventAPI", event_api_factory)
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	gone = qpm.register_event_notification(
+		"endpoint-gone", "circ-result", "class-gone",
+		reservation_id=reservation_id)
+	qpm.register_event_notification(
+		"endpoint-live", "circ-result", "class-live",
+		reservation_id=reservation_id)
+
+	removed = qpm.unregister_event_notification(gone["registration_id"])
+	payload = {
+		"cid": response["cid"],
+		"qtask_id": response["qtask_id"],
+	}
+	delivered = qpm.controller.dispatch_completion_event(
+		CompletionEvent("circ-result", payload))
+
+	assert removed is True
+	assert delivered is True
+	assert sinks["class-live"].events == [payload]
+	assert sinks["class-gone"].put_calls == 0
+	assert "class-gone" not in qpm.controller.event_endpoints
+	assert qpm.unregister_event_notification(gone["registration_id"]) is False
 
 
 def test_completion_events_keep_reservation_scope_after_cleanup(monkeypatch):

@@ -262,6 +262,7 @@ class QPMTargetController:
 		self.oor_drain_requested = False
 		self.worker_state = {}
 		self.event_endpoints = {}
+		self.event_registration_id_next = 1
 		self.callback_endpoints = {}
 		self.provider_canceller = None
 		self.provider_credential_evictor = None
@@ -943,15 +944,43 @@ class QPMTargetController:
 		registration["reservation_id"] = reservation_id
 		class_id = registration.get("class_id")
 		with self.lock:
+			registration_id = self.event_registration_id_next
+			self.event_registration_id_next += 1
+			registration["registration_id"] = registration_id
 			self.event_endpoints.setdefault(class_id, []).append(
 				registration)
 			return {
 				"status": "accepted",
 				"class_id": class_id,
+				"registration_id": registration_id,
 				"registration_count": sum(
 					len(items)
 					for items in self.event_endpoints.values()),
 			}
+
+	def unregister_event_endpoint(self, registration_id):
+		if registration_id is None:
+			return False
+		with self.lock:
+			return self._prune_event_registrations_locked(
+				lambda registration:
+					registration.get("registration_id") == registration_id)
+
+	def _prune_event_registrations_locked(self, matches):
+		removed = False
+		for class_id in list(self.event_endpoints):
+			registrations = [
+				registration
+				for registration in self.event_endpoints[class_id]
+				if not matches(registration)
+			]
+			if len(registrations) != len(self.event_endpoints[class_id]):
+				removed = True
+			if registrations:
+				self.event_endpoints[class_id] = registrations
+			else:
+				self.event_endpoints.pop(class_id, None)
+		return removed
 
 	def dispatch_completion_event(self, event):
 		return self.publish_completion_event(event)
@@ -2124,16 +2153,9 @@ class QPMTargetController:
 				delivered = True
 		if stale_registration_ids:
 			with self.lock:
-				for class_id in list(self.event_endpoints):
-					registrations = [
-						registration
-						for registration in self.event_endpoints[class_id]
-						if id(registration) not in stale_registration_ids
-					]
-					if registrations:
-						self.event_endpoints[class_id] = registrations
-					else:
-						self.event_endpoints.pop(class_id, None)
+				self._prune_event_registrations_locked(
+					lambda registration:
+						id(registration) in stale_registration_ids)
 		return delivered
 
 	def _enqueue_completion_record_locked(self, queue, record):

@@ -159,8 +159,25 @@ class QFwBackend(BackendV2):
 		if self._qpm_lifecycle_binding is not None:
 			self._qpm_lifecycle_binding.remove_reconnect_listener(
 				self._handle_qpm_reconnect)
+		self._unregister_completion_events()
+		if self._qpm_lifecycle_binding is not None:
 			self._qpm_lifecycle_binding.close()
 		me.exit()
+
+	def _unregister_completion_events(self):
+		with self._event_registration_lock:
+			registration = self._completion_event_registration
+			self._completion_event_registered = False
+			self._completion_event_registration = None
+		registration_id = (
+			registration.get("registration_id")
+			if isinstance(registration, dict) else None)
+		if registration_id is None:
+			return
+		try:
+			self.qpm.unregister_event_notification(registration_id)
+		except Exception:
+			pass
 
 	def configuration(self):
 		# LEGACY (BackendV1): Return configuration dict for backward compatibility
