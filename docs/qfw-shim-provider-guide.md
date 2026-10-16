@@ -186,6 +186,14 @@ database. The logical contract should stay the same: QPM resolves a
 reservation-bound credential for the selected user and machine, and the provider
 adapter receives only the credential material it needs.
 
+### IQM
+
+For IQM, store each user's API token in the `api_key` field shown above.
+The native IQM service and the shim's QRMI and QDMI paths use the same
+device-access settings and per-user credentials.
+
+### Amazon Braket
+
 Amazon Braket devices are the exception to the per-user key. The Braket QDMI
 device library authenticates through the AWS SDK's own credential chain in the
 service process, so QFw holds no AWS secret, and none belongs in the
@@ -194,6 +202,41 @@ for a smoke, or a provider of type `entitlement` on a site plane, which checks
 that the user and the device are enabled without binding a key. The
 [Amazon Braket recipe](recipes/run-against-aws-braket.md) covers the account,
 the credential files, and the environment the service needs.
+
+### IBM
+
+IBM QDMI 1.0 supports IBM Cloud Qiskit Runtime and requires Python 3.11 or
+newer. Install the provider packages from `setup/qdmi-requirements.txt`, then
+configure an IBM backend:
+
+```yaml
+qpus:
+  ibm-torino:
+    provider: ibm
+    provider-device-id: ibm_torino
+    url: https://quantum.cloud.ibm.com/api/v1
+    credential-db: /etc/openqse/qfw/device/qpu-users.json
+    libraries: [qdmi]
+    preference: qdmi
+    execution-owner: qdmi
+```
+
+Under each user's `devices.ibm-torino` entry in the credential database, set:
+
+```json
+{
+  "enabled": true,
+  "api_key": "REDACTED",
+  "service_crn": "REDACTED"
+}
+```
+
+The API key and service-instance CRN are bound to the reservation. A device's
+`service-crn` can provide a default CRN when the user record omits it. Set
+`iam-endpoint` only when using a custom IAM endpoint. QFw uses the packaged
+`IBMBackend` to open the session and accepts circuits in QPY format through
+the existing shim service. Bind all parameters and use classical registers
+that cover each classical bit once, in bit order.
 
 ## Step 4. Add a QPM Shim Service
 

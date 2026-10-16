@@ -11,7 +11,7 @@
 #
 # The device library, mqt.core and the Qiskit transcode are stood in for, so
 # no qiskit, amazon-braket-qdmi or mqt-core install is needed. The real
-# OpenQASM 3 output is covered by tests/qiskit/test_braket_qasm3.py.
+# OpenQASM 3 output is covered by tests/qiskit/test_braket_qdmi.py.
 
 import pathlib
 import sys

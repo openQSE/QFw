@@ -59,7 +59,7 @@ class QdmiDriver(BaseDriver):
 		# The settings this resource's session opens with. What they are and
 		# where they come from is the provider's business (qdmi_profiles):
 		# IQM takes a server URL, an API token and a quantum computer alias,
-		# Braket a device ARN and a Region.
+		# Amazon Braket a device ARN and Region, IBM a backend and instance CRN.
 		return self._profile.access(credential)
 
 	@staticmethod
@@ -80,6 +80,7 @@ class QdmiDriver(BaseDriver):
 			credential.get("device_id"),
 			credential.get("user"),
 			credential.get("api_key") or credential.get("token"),
+			credential.get("service_crn"),
 		)
 
 	def evict_reservation(self, reservation_id):
@@ -165,9 +166,9 @@ class QdmiDriver(BaseDriver):
 	def run_circuit(self, circuit):
 		# The circuit arrives in a format this QPM declares, QPY or OpenQASM 2
 		# (see util.circuit_payload). The profile encodes it as the program
-		# its device library takes (IQM_JSON for QDMI-on-IQM, OpenQASM 3 for
-		# Braket), then it is submitted through MQT Core's QDMI job interface,
-		# polled to completion, and the counts are normalized to
+		# its device library takes (IQM_JSON for IQM, OpenQASM 3 for
+		# Amazon Braket and IBM), then it is submitted through MQT Core's
+		# QDMI job interface, polled to completion, and the counts are normalized to
 		# qhw-result-v1 (the same record the QRMI path produces).
 		# The reservation's credential, bound by the QPM controller
 		# (UTIL_QPM attaches it before the circuit reaches the provider).

@@ -329,9 +329,123 @@ class BraketQdmiProfile(QdmiProfile):
 			or self._descriptor.get("provider-device-id"))
 
 
+class IbmQdmiProfile(QdmiProfile):
+	provider = "ibm"
+	requires = "ibm-qdmi"
+	DEFAULT_QDMI_DEVICE_ID = "ibm.default"
+
+	def access(self, credential=None):
+		credential = dict(credential or {})
+		device_id = credential.get("device_id") or self._descriptor.get("id")
+		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
+		api_key = (credential.get("api_key") or credential.get("token")
+			or os.environ.get("QFW_API_KEY"))
+		backend_name = (credential.get("provider_device_id")
+			or credential.get("quantum_computer")
+			or self._descriptor.get("provider_device_id")
+			or self._descriptor.get("provider-device-id"))
+		instance_crn = (credential.get("service_crn")
+			or os.environ.get("QFW_IBM_SERVICE_CRN"))
+		if not (base_url and api_key and backend_name
+			and (instance_crn or self._descriptor.get("service_crn"))):
+			try:
+				from util.device_access import resolve_device_access
+				cfg = resolve_device_access(
+					provider=self.provider, device_id=device_id,
+					user=credential.get("user"),
+					credential_hint=credential.get("credential_hint"),
+					credential_handle=credential.get("credential_handle"))
+			except Exception as exc:
+				raise DEFwExecutionError(
+					"QDMI driver could not resolve IBM device access: "
+					f"configure device access or QFW_QC_URL/QFW_API_KEY: {exc}") from exc
+			base_url = base_url or cfg.get("url")
+			api_key = api_key or cfg.get("api_key")
+			backend_name = (backend_name or cfg.get("provider_device_id")
+				or cfg.get("quantum_computer"))
+			instance_crn = instance_crn or cfg.get("service_crn")
+		instance_crn = instance_crn or self._descriptor.get("service_crn")
+		missing = [name for name, value in (
+			("base URL", base_url), ("API key", api_key),
+			("provider-device-id", backend_name),
+			("service-crn", instance_crn)) if not value]
+		if missing:
+			raise DEFwExecutionError(
+				"IBM QDMI requires " + ", ".join(missing))
+		# Existing QRMI configurations include /v1; IBM QDMI adds it itself.
+		base_url = base_url.rstrip("/")
+		if base_url.endswith("/v1"):
+			base_url = base_url[:-3]
+		auth_url = (os.environ.get("QFW_IBM_IAM_ENDPOINT")
+			or self._descriptor.get("iam_endpoint"))
+		if auth_url:
+			auth_url = auth_url.rstrip("/")
+			if not auth_url.endswith("/identity/token"):
+				auth_url += "/identity/token"
+		return {
+			"qdmi_device_id": (self._descriptor.get("qdmi_device_id")
+				or self.DEFAULT_QDMI_DEVICE_ID),
+			"base_url": base_url, "api_key": api_key,
+			"backend_name": backend_name, "instance_crn": instance_crn,
+			"auth_url": auth_url,
+		}
+
+	def open_backend(self, access):
+		from ibm.qdmi.qiskit import IBMBackend
+		return IBMBackend(
+			device_id=access["qdmi_device_id"],
+			base_url=access["base_url"], api_key=access["api_key"],
+			backend_name=access["backend_name"],
+			instance_crn=access["instance_crn"], auth_url=access["auth_url"])
+
+	def describe(self, access):
+		return access.get("backend_name")
+
+	def encode(self, driver, source, info, backend):
+		from mqt.core.plugins.qiskit.exceptions import UnsupportedOperationError
+		from mqt.core.qdmi import ProgramFormat
+		from qiskit import transpile
+		from util.iqm_transcode import load_qiskit_circuit
+		circuit = load_qiskit_circuit(source)
+		if circuit.parameters:
+			raise DEFwExecutionError("IBM circuits must have bound parameters")
+		# Core's serializer rebuilds registers in declaration order.
+		if [bit for register in circuit.cregs for bit in register] != circuit.clbits:
+			raise DEFwExecutionError(
+				"IBM circuits require classical registers that partition "
+				"the classical bits in order")
+		try:
+			circuit = backend._preprocess_circuit(circuit)
+		except UnsupportedOperationError:
+			circuit = transpile(circuit, backend=backend, optimization_level=1)
+			circuit = backend._preprocess_circuit(circuit)
+		backend._validate_circuit(circuit)
+		program, fmt = backend._serialize_circuit(circuit, [ProgramFormat.QASM3])
+		return program, fmt.name, None
+
+	def check_shots(self, shots):
+		if shots <= 0:
+			raise DEFwExecutionError("IBM shots must be positive")
+		cap = self._descriptor.get("max_shots")
+		if cap not in (None, "") and shots > int(cap):
+			raise DEFwExecutionError(
+				f"{shots} shots is over the {cap}-shot cap for IBM device "
+				f"{self._descriptor.get('id')!r} (max-shots in device-access config)")
+
+	def timeout_seconds(self, info):
+		default = self._descriptor.get("job_timeout_seconds")
+		if default in (None, ""):
+			default = DEFAULT_TIMEOUT_SECONDS
+		return float(info.get("timeout", default))
+
+	def technology(self):
+		return "superconducting"
+
+
 PROFILES = {
 	IqmQdmiProfile.provider: IqmQdmiProfile,
 	BraketQdmiProfile.provider: BraketQdmiProfile,
+	IbmQdmiProfile.provider: IbmQdmiProfile,
 }
 
 

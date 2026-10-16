@@ -44,10 +44,15 @@ jobs:
         python-version: '3.12'
     - name: Install released QDMI adapters
       run: python -m pip install -r setup/qdmi-requirements.txt -c setup/requirements.txt pytest
-    - name: Require both provider adapters
-      run: python -c 'from iqm.qdmi.qiskit import IQMBackend; from amazon.braket.qdmi.qiskit import AmazonBraketBackend'
+    - name: Require provider adapters
+      run: |
+        python - <<'PY'
+        from iqm.qdmi.qiskit import IQMBackend
+        from amazon.braket.qdmi.qiskit import AmazonBraketBackend
+        from ibm.qdmi.qiskit import IBMBackend
+        PY
     - name: Test adapters and serialization without provider submission
-      run: python -m pytest -q tests/qiskit/test_qdmi_adapters.py tests/qiskit/test_braket_qasm3.py
+      run: python -m pytest -q tests/qiskit/test_qdmi_adapters.py tests/qiskit/test_braket_qdmi.py tests/qiskit/test_ibm_qdmi.py
 
   ci-syntax:
     name: ci-syntax (Python ${{ matrix.python-version }})

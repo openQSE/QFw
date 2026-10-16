@@ -1,3 +1,4 @@
 mqt-core[qiskit]==4.1.1
 amazon-braket-qdmi[qiskit]==1.3.0
 iqm-qdmi[qiskit]==1.5.0
+ibm-qdmi[qiskit]==1.0.0
