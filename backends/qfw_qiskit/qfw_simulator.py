@@ -34,6 +34,11 @@ QFW_RUN_CONTEXT_OPTIONS = (
 	"cancel_on_timeout",
 )
 
+QFW_INFO_PASSTHROUGH_OPTIONS = (
+	"param_values",
+	"compilation_options",
+)
+
 
 class CircuitMetrics:
 	def __init__(self, window_size=4096):
@@ -291,7 +296,8 @@ class QFwBackend(BackendV2):
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:
 			if (not hasattr(self.options, kwarg) and
-				kwarg not in QFW_RUN_CONTEXT_OPTIONS):
+				kwarg not in QFW_RUN_CONTEXT_OPTIONS and
+				kwarg not in QFW_INFO_PASSTHROUGH_OPTIONS):
 				print("Option ", kwarg, " is not used by this backend")
 		options = {
 			"seed_simulator": kwargs.get("seed_simulator", self.options.seed_simulator),
@@ -312,6 +318,9 @@ class QFwBackend(BackendV2):
 		lib = self._shim_library(kwargs.get("lib"))
 		if lib is not None:
 			options["lib"] = lib
+		for key in QFW_INFO_PASSTHROUGH_OPTIONS:
+			if key in kwargs:
+				options[key] = kwargs[key]
 		self._qfw_job = QFwJob(self, self.qpm, self.event_api, circuits, options)
 		self._qfw_job.submit()
 		return self._qfw_job
