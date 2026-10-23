@@ -106,11 +106,20 @@ PASQAL_DEVICE = {
 	"project-id": "proj-device",
 }
 
+# A device whose provider rate-limits caps how many of its circuits are at the
+# provider at once, and can poll their status less often. The shim reads both
+# off the descriptor, so they have to pass both fixed key sets like the keys
+# above.
+RATE_LIMITED_DEVICE = dict(BARE_DEVICE, **{
+	"max-concurrent-jobs": 2,
+	"poll-interval-seconds": 3,
+})
+
 DESCRIPTOR_KEYS = (
 	"libraries", "preference", "caps", "execution_owner",
 	"service-crn", "iam-endpoint", "qdmi-device-id", "aws-region",
 	"s3-results-uri", "reservation-arn", "num-qubits", "max-shots",
-	"project-id")
+	"max-concurrent-jobs", "poll-interval-seconds", "project-id")
 
 
 def _config(device, device_id="dev"):
@@ -451,6 +460,32 @@ def test_resolve_descriptor_carries_the_pasqal_fields(monkeypatch):
 	assert resolved["provider_device_id"] == "EMU_FREE"
 	assert resolved["resource_type"] == "PasqalCloud"
 	assert resolved["project_id"] == "proj-device"
+
+
+def test_select_qpu_passes_through_the_rate_limit_fields(monkeypatch):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	selected = device_access.select_qpu(
+		_config(RATE_LIMITED_DEVICE), "cfg.yaml", provider="iqm")
+	assert selected["max-concurrent-jobs"] == 2
+	assert selected["poll-interval-seconds"] == 3
+
+
+@pytest.mark.parametrize("device,expected", [
+	(RATE_LIMITED_DEVICE, (2, 3)),
+	(BARE_DEVICE, (None, None)),
+])
+def test_resolve_descriptor_carries_the_rate_limit_fields(
+		monkeypatch, device, expected):
+	descriptor = _load_descriptor()
+	monkeypatch.setattr(
+		device_access, "device_access_config_path", lambda: "cfg.yaml")
+	monkeypatch.setattr(
+		device_access, "load_yaml_config", lambda path: _config(device))
+	monkeypatch.setenv(device_access.QPU_DEVICE_ENV, "dev")
+
+	resolved = descriptor.resolve_descriptor()
+	assert (resolved["max_concurrent_jobs"],
+		resolved["poll_interval_seconds"]) == expected
 
 
 def test_resolve_descriptor_leaves_the_braket_fields_unset_when_unconfigured(

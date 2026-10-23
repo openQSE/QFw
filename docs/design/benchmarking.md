@@ -700,8 +700,8 @@ because revision 2 got both wrong:
 | `qfw.qpm.dispatch` | QPM service (QRC) | In-process hand-off from the QPM's resource controller to the back-end driver |
 | `qfw.backend.execute` | back-end driver | Full back-end interaction; attributes `qfw.stack.api_path` = `native` \| `qrmi` \| `qdmi` \| `simulator`, `qfw.device.name`, `qfw.backend.kind`, `qfw.outcome` = `completed` \| `failed` \| `cancelled` |
 | `qfw.backend.acquire` | back-end driver | Resource/session acquisition (QRMI `acquire`, QDMI session open, vendor connect) |
-| `qfw.backend.submit` | back-end driver | The submission call to the vendor/simulator |
-| `qfw.backend.collect` | back-end driver | Result retrieval, the complement of `qfw.backend.submit`. One span per job. Attributes `qfw.backend.poll_count` and `qfw.backend.poll_interval_s`; each poll is a span event |
+| `qfw.backend.submit` | back-end driver | The submission call to the vendor/simulator. Each wait out of a rate limit (HTTP 429) is a `rate-limited` span event with `qfw.backend.wait_s` |
+| `qfw.backend.collect` | back-end driver | Result retrieval, the complement of `qfw.backend.submit`. One span per job. Attributes `qfw.backend.poll_count` and `qfw.backend.poll_interval_s`, the first wait between polls, which doubles while the job runs unless the client named it; each poll is a span event, and so is each `rate-limited` wait |
 
 `qfw.app.job` sits under `app` because the front end is what emits it and
 what its duration is measured against. It is the application's view of the

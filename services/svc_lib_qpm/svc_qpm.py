@@ -1,5 +1,6 @@
 import logging
 import os
+from defw_exception import DEFwExecutionError
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
@@ -36,13 +37,18 @@ def _capability(provider):
 
 
 class QPM(UTIL_QPM):
-	def __init__(self, start=True):
-		super().__init__(QRC(start=start), max_ppn=1, start=start)
+	def __init__(self, start=True, admission_context_factory=None,
+		     scheduler_context_factory=None):
+		super().__init__(
+			QRC(start=start), max_ppn=1, start=start,
+			admission_context_factory=admission_context_factory,
+			scheduler_context_factory=scheduler_context_factory)
 		set_max_qubits_pp(MAX_SHIM_QUBITS)
 		self.configure_device_profile(
 			max_qubits=MAX_SHIM_QUBITS,
 			max_shots=self._max_shots(),
-			time_span_ns=60_000_000_000)
+			time_span_ns=60_000_000_000,
+			max_provider_queue_depth=self._max_concurrent_jobs())
 
 	def _max_shots(self):
 		# A device-access max-shots is what this service admits and what the
@@ -50,6 +56,28 @@ class QPM(UTIL_QPM):
 		from .descriptor import resolve_descriptor
 		value = resolve_descriptor().get("max_shots")
 		return int(value) if value not in (None, "") else MAX_SHIM_SHOTS
+
+	def _max_concurrent_jobs(self):
+		# A device-access max-concurrent-jobs is how many of this device's
+		# circuits may be at the provider at once, from submission to result,
+		# for a provider that answers a burst with HTTP 429. It is the device
+		# profile's max_provider_queue_depth, so the controller holds the
+		# rest in its queue and dispatches the next as one finishes. The
+		# controller also applies the operator's max_inflight, 1 unless an
+		# operator raises it, and the smaller of the two wins. Unset, the
+		# device adds no limit of its own (0).
+		from .descriptor import resolve_descriptor
+		descriptor = resolve_descriptor()
+		value = descriptor.get("max_concurrent_jobs")
+		if value in (None, ""):
+			return 0
+		text = str(value).strip()
+		if isinstance(value, bool) or not text.isdigit() or int(text) < 1:
+			raise DEFwExecutionError(
+				f"max-concurrent-jobs for device {descriptor.get('id')!r} "
+				f"must be a whole number of jobs, at least 1, not {value!r}. "
+				"Leave it out for no device limit")
+		return int(text)
 
 	def query(self):
 		from . import SERVICE_NAME, SERVICE_DESC, svc_info

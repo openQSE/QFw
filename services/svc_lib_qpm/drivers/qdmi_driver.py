@@ -6,7 +6,8 @@
 # The dynamic backend info, raw IQM architecture data, stays with QRMI; the
 # backend-info composite is served here from the device topology.
 
-from .base_driver import BaseDriver, JobRecords, reservation_cache_key
+from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
+		poll_schedule, reservation_cache_key)
 from .qdmi_profiles import profile_for
 from . import fomac_normalize
 from defw_exception import DEFwExecutionError
@@ -211,7 +212,7 @@ class QdmiDriver(BaseDriver):
 		shots = int(info.get("num_shots", info.get("shots", 1024)))
 		self._profile.check_shots(shots)
 		timeout = self._profile.timeout_seconds(info)
-		poll = float(info.get("poll_interval", 1.0))
+		poll, backoff = poll_schedule(info, self._descriptor)
 		provider, device_id = self._ids()
 
 		with instrumentation.qpm_transpile():
@@ -261,7 +262,7 @@ class QdmiDriver(BaseDriver):
 			instrumentation.ATTR_POLL_INTERVAL, float(poll))
 		try:
 			status = self._poll_job(
-				job, timeout, poll, cancel_event=cancel_event)
+				job, timeout, poll, cancel_event=cancel_event, backoff=backoff)
 		except BaseException:
 			collect.__exit__(*sys.exc_info())
 			raise
@@ -359,15 +360,23 @@ class QdmiDriver(BaseDriver):
 			return None
 		return int(position) if position is not None else None
 
-	def _poll_job(self, job, timeout, poll, cancel_event=None):
+	def _poll_job(self, job, timeout, poll, cancel_event=None, backoff=False):
 		# Poll QDMI job.check() until a terminal state, and return
 		# completed, failed or cancelled.
 		#
 		# A cancel from the QPM (cancel_event, set by the shim QRC) or the
 		# timeout cancels the provider job, so it does not keep running after
 		# QFw has given up on it. The wait between polls ends as soon as a
-		# cancel arrives.
+		# cancel arrives. poll is the first wait, and with backoff each poll
+		# that finds the job unfinished doubles it (poll_schedule). No wait
+		# runs past the deadline.
+		#
+		# A failed check ends the job at once. The device library has already
+		# retried a rate-limited request by then (QDMI-on-IQM honors IQM's
+		# Retry-After), and QDMI reports the failure without its HTTP status,
+		# so a 429 cannot be told from any other failure here.
 		deadline = time.monotonic() + max(timeout, 0.0)
+		wait = poll
 		polls = 0
 		while True:
 			if cancel_event is not None and cancel_event.is_set():
@@ -395,10 +404,12 @@ class QdmiDriver(BaseDriver):
 				raise DEFwExecutionError(
 					f"QDMI job timed out after {timeout}s (status {state!r}), "
 					f"and {cancelled}")
+			pause = min(max(wait, 0.0), max(deadline - time.monotonic(), 0.0))
 			if cancel_event is not None:
-				cancel_event.wait(max(poll, 0.0))
+				cancel_event.wait(pause)
 			else:
-				time.sleep(max(poll, 0.0))
+				time.sleep(pause)
+			wait = next_poll_wait(wait, backoff)
 
 	def _cancel_job(self, job):
 		# Best effort, since the job may already have ended at the provider.

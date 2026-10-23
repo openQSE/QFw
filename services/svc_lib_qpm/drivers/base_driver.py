@@ -15,6 +15,44 @@ def reservation_cache_key(reservation_id):
 	return ("reservation", str(reservation_id))
 
 
+# How long a driver waits between status polls of a provider job. A circuit
+# that names a poll_interval is polled at that fixed interval, as before.
+# Otherwise the first wait is the device's poll-interval-seconds, else
+# DEFAULT_POLL_INTERVAL, and each poll that finds the job unfinished doubles
+# it, up to MAX_POLL_INTERVAL, which is how IQM's own QDMI library waits for a
+# job. A provider that limits its request rate counts every poll, and a job
+# that queues for minutes would otherwise be polled every second throughout.
+DEFAULT_POLL_INTERVAL = 1.0
+MAX_POLL_INTERVAL = 60.0
+
+
+def poll_schedule(info, descriptor):
+	# The first wait between polls, and whether later waits double. Read
+	# before anything is submitted, so a bad value fails with nothing at the
+	# provider.
+	value = info.get("poll_interval")
+	backoff = value is None
+	if backoff:
+		value = descriptor.get("poll_interval_seconds")
+	if value in (None, ""):
+		value = DEFAULT_POLL_INTERVAL
+	try:
+		wait = float(value)
+	except (TypeError, ValueError):
+		raise DEFwExecutionError(
+			f"the poll interval must be a number of seconds, not {value!r} "
+			"(poll-interval-seconds or the client's poll_interval)") from None
+	return max(wait, 0.0), backoff
+
+
+def next_poll_wait(wait, backoff):
+	# The wait after the next poll that finds the job unfinished. A first
+	# wait above the cap stays where it is.
+	if not backoff:
+		return wait
+	return max(wait, min(MAX_POLL_INTERVAL, wait * 2))
+
+
 def pasqal_backend_info(device_type, entries):
 	# get_backend_info for a Pasqal device: the Pulser devices it runs, by
 	# name, in Pulser's abstract representation. entries are Pasqal Cloud's

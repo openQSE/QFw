@@ -142,6 +142,58 @@ Amazon Braket devices are QDMI-backed machines with their own keys
 The [Amazon Braket recipe](recipes/run-against-aws-braket.md) lists them with
 a complete entry.
 
+### Providers that rate-limit
+
+A provider can refuse requests with HTTP 429 Too Many Requests. IQM blocks
+an account that runs over its request quota for 30 seconds, so a status poll
+can be refused as well as a submission.
+
+On the QRMI path the shim waits a 429 out. A refused submission, status poll
+or result fetch is tried again after a wait that doubles from 2 to 60
+seconds, with jitter. It gives up once the job's timeout runs out. That is
+the circuit's own `timeout`, else the device's `job-timeout-seconds`, else
+300 seconds. The timeout covers the whole job, so time spent waiting out a
+rate limit comes off it. A Pasqal device without `job-timeout-seconds` keeps
+trying until the job goes through or is cancelled. QRMI passes on no
+`Retry-After`, so the shim cannot honor one. IBM Quantum System resources
+retry a 429 inside QRMI, without a limit, so the job timeout does not bound
+that wait.
+
+On the QDMI path the device libraries handle a 429 themselves. QDMI-on-IQM
+waits out IQM's `Retry-After` and slows down before the quota runs out, and
+the Braket library retries throttling through the AWS SDK. IBM QDMI does not
+retry a refused job submission. QDMI reports that failure without its HTTP
+status, so the shim cannot tell it from any other.
+
+Status polls count against a provider's request limit too. Unless a circuit
+names its own `poll_interval`, the shim waits `poll-interval-seconds` before
+the first poll of a job, 1 second when unset. Each poll that finds the job
+unfinished doubles the wait, up to 60 seconds, which is how IQM's own QDMI
+library polls. Both libraries poll this way. Raise `poll-interval-seconds`
+for a device whose limit is tight. The cost is that a job is noticed to have
+finished later, by up to the wait then in force.
+
+`max-concurrent-jobs` caps how many of the device's circuits are at the
+provider at once:
+
+```yaml
+qpus:
+  xyz-qpu:
+    provider: xyz
+    # ...
+    max-concurrent-jobs: 1
+```
+
+The QPM holds the other circuits in its queue and sends the next as one
+finishes. It also applies its operator limit, `max_inflight`, and the smaller
+of the two wins. That limit is 1 unless an operator raises it with
+`configure_dispatch_limits` ([QPM APIs](qpmd-supported-apis.md)), so by
+default a QPM already sends a device one job at a time. Set
+`max-concurrent-jobs` on a rate-limited device to keep it to its own limit
+once an operator raises the QPM's. Unset, the device adds no limit of its
+own. The value must be a whole number, at least 1, or the service fails to
+start.
+
 ## Step 3. Add Provider Credentials
 
 Credentials should be resolved per user and per device. Secrets belong in the

@@ -510,6 +510,33 @@ def test_run_circuit_opens_the_session_with_the_circuit_credential(
 	assert seen == [_bound_credential()]
 
 
+@pytest.mark.parametrize("info,device,expected", [
+	# What QFwBackend sends: the device's first wait, doubling from there.
+	({}, {"poll_interval_seconds": 4}, (4.0, True)),
+	({}, {}, (1.0, True)),
+	# A client that names its interval gets that, fixed.
+	({"poll_interval": 0.5}, {"poll_interval_seconds": 4}, (0.5, False)),
+])
+def test_run_circuit_polls_on_the_poll_schedule(
+		monkeypatch, info, device, expected):
+	driver = _running_driver(monkeypatch, {"1": 10}, [], [])
+	driver._descriptor.update(device)
+	seen = []
+
+	def _poll_job(job, timeout, poll, cancel_event=None, backoff=False):
+		seen.append((poll, backoff))
+		return "completed"
+
+	driver._poll_job = _poll_job
+	circuit = _circuit()
+	del circuit.info["poll_interval"]
+	circuit.info.update(info)
+
+	driver.run_circuit(circuit)
+
+	assert seen == [expected]
+
+
 def test_run_circuit_submits_what_the_profile_encodes(monkeypatch):
 	records, submitted = [], []
 	driver = _running_driver(monkeypatch, {"1": 10}, records, submitted)

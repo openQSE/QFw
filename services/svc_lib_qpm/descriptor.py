@@ -87,6 +87,9 @@ def resolve_descriptor(device_id=None):
 		"s3_region": device.get("s3-region"),
 		# QRMI IBM job timeout and all QDMI profiles' wait before cancellation.
 		"job_timeout_seconds": device.get("job-timeout-seconds"),
+		# The first wait between a job's status polls, which then doubles
+		# (drivers/base_driver.py poll_schedule). None is 1 second.
+		"poll_interval_seconds": device.get("poll-interval-seconds"),
 		# QDMI catalogue entry, with a provider-specific default when omitted.
 		"qdmi_device_id": device.get("qdmi-device-id"),
 		# Optional Amazon Braket settings. The ARN is the provider-device-id.
@@ -100,4 +103,8 @@ def resolve_descriptor(device_id=None):
 		# refuses above, before anything is billed.
 		"num_qubits": device.get("num-qubits"),
 		"max_shots": device.get("max-shots"),
+		# How many of the device's circuits may be at the provider at once,
+		# for a provider that rate-limits. The QPM holds the rest in its
+		# queue (svc_qpm.py). None adds no limit of the device's own.
+		"max_concurrent_jobs": device.get("max-concurrent-jobs"),
 	}

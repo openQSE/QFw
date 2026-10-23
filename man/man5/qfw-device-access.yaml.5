@@ -1,4 +1,4 @@
-.TH QFW-DEVICE-ACCESS.YAML 5 "August 2026" "QFw 0.1.0" "QFw File Formats"
+.TH QFW-DEVICE-ACCESS.YAML 5 "October 2026" "QFw 0.1.0" "QFw File Formats"
 .SH NAME
 qfw-device-access.yaml \- bind logical QFw devices to providers and credentials
 .SH DESCRIPTION
@@ -140,6 +140,38 @@ unset; on a
 .B pasqal
 device a job without it waits as long as Pasqal Cloud queues it, or until
 its reservation closes. The value is a number of seconds.
+.IP
+The wait covers the whole job, including time spent waiting out a provider
+rate limit. A QRMI submission, status poll or result fetch that the provider
+refuses with HTTP 429 is tried again after a wait that doubles from 2 to 60
+seconds, with jitter, until it goes through or this timeout runs out. QRMI
+passes on no
+.BR Retry-After .
+.TP
+.B poll-interval-seconds
+Seconds the shim waits before it first polls a job's status, through QRMI or
+QDMI. Optional, 1 when unset. Each poll that finds the job unfinished
+doubles the wait, up to 60 seconds, which is how IQM's own QDMI library
+polls. A provider that limits its request rate counts every poll, so raise
+this for a device whose limit is tight. A circuit that names its own poll
+interval is polled at that fixed interval instead. The value is a number of
+seconds.
+.TP
+.B max-concurrent-jobs
+How many of the device's circuits the QPM lets be at the provider at once,
+from submission to result. Optional. It is a whole number, at least 1, and a
+service whose device sets anything else fails to start. The QPM holds the
+other circuits in its queue and sends the next as one finishes. Set it for a
+provider that rate-limits.
+.IP
+The QPM also applies its operator limit,
+.BR max_inflight ,
+and the smaller of the two wins. That limit is 1 unless an operator raises
+it with the QPM's
+.B configure_dispatch_limits
+call, so by default a QPM already sends a device one job at a time. This key
+keeps the device to its own limit once an operator raises the QPM's. Unset,
+the device adds no limit of its own.
 .TP
 .B project-id
 Pasqal Cloud project that jobs on a
