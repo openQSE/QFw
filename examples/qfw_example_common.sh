@@ -264,6 +264,15 @@ qfw_example_service_for_backend() {
 		""|"tnqvm") printf "%s\n" "tnqvm" ;;
 		"nwqsim")  printf "%s\n" "nwqsim" ;;
 		"fake-iqm"|"fake-iqm-20q") printf "%s\n" "fake-iqm" ;;
+		# "shim" is the directory provider every svc_lib_qpm-backed service
+		# advertises (see svc_lib_qpm/svc_qpm.py's query()). shim-garnet-mock
+		# is the only such service wired for --service-mode local today.
+		# It is credential-mode: required, so the invoking user must be able
+		# to read the device-access file: the site's root-only
+		# /etc/openqse/qfw/device/device-access.yaml, or a file of your own
+		# named by QFW_EXAMPLE_DEVICE_ACCESS_CONFIG.
+		"shim"|"garnet-mock"|"iqm-garnet-mock")
+			printf "%s\n" "shim-garnet-mock" ;;
 		*)
 			echo "ERROR: no local QPM service mapping for backend '${backend}'" >&2
 			return 1
@@ -280,9 +289,17 @@ qfw_example_setup_backend_service() {
 		local)
 			local service_name
 			service_name="$(qfw_example_service_for_backend "$1")"
-			qfw_example_setup \
-				--profile local \
-				--service-id "${service_name}"
+			local setup_args=(--profile local --service-id "${service_name}")
+			# A credential-mode: required service reads the site's
+			# root-only device-access file. QFW_EXAMPLE_DEVICE_ACCESS_CONFIG
+			# names a file you own to read instead, so no root is needed.
+			if [[ -n "${QFW_EXAMPLE_DEVICE_ACCESS_CONFIG:-}" ]]; then
+				local site_config
+				site_config="$(qfw_example_make_site_config \
+					"${QFW_EXAMPLE_DEVICE_ACCESS_CONFIG}")" || return $?
+				setup_args+=(--site-config "${site_config}")
+			fi
+			qfw_example_setup "${setup_args[@]}"
 			;;
 		site)
 			qfw_example_setup_site_services

@@ -72,3 +72,15 @@ services:
     device-id: backline-local
     provider-launch:
       type: internal
+
+  - name: shim-garnet-mock
+    credential-mode: required
+    module: svc_lib_qpm
+    load-modules: svc_lib_qpm,api_launcher
+    agent-prefix: qpm_shim_garnet_mock
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: iqm-garnet-mock
+    provider-launch:
+      type: qrmi-qdmi
