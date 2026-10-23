@@ -55,7 +55,7 @@ def compile_circuit(circuit, target, compilation_options=None):
 		raise DEFwExecutionError(
 			f"failed to import qiskit transpiler: {exc}") from exc
 	import inspect
-
+	logging.info(f"Compilation options provided to qiskit: {compilation_options}")
 	# Build a clean options dict so we never mutate the caller's object.
 	# target is always forced to the one resolved from the QFw descriptor;
 	# backend is cleared so Qiskit doesn't try to re-derive a target from it.
@@ -102,17 +102,11 @@ def qiskit_sampler_input_json(isa_circuit, param_values=None, shots=None):
 					"Parameters optimised away (removed) by the transpiler: %s",
 					sorted(getattr(k, 'name', str(k)) for k in removed))
 			pub = SamplerPub.coerce((isa_circuit, filtered), shots)
+			logging.info(f"Circuit param_values used: {filtered}")
 		else:
 			pub = SamplerPub.coerce(isa_circuit, shots)
 	except Exception as exc:
 		raise DEFwExecutionError(f"Invalid parameters: {exc}") from exc
-
-	# parameter_values.shape reports (num_bindings,): one binding means a single
-	# parameter set will be sampled `shots` times; more than one means multiple
-	# distinct circuits are submitted, each run `shots` times independently.
-	# Logging both here lets callers catch accidental multi-binding inputs early
-	# (e.g. passing a list of scalars instead of a dict keyed by Parameter objects).
-	logging.info(f"Circuit: parameter_values.shape={pub.parameter_values.shape} shots={pub.shots}")
 
 	qasm3_str = qasm3.dumps(
 		pub.circuit,

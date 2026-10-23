@@ -175,6 +175,10 @@ class QFwJob(Job):
 			info["return_statevector"] = True
 		if self._options.get("lib"):
 			info["lib"] = self._options["lib"]
+		if self._options.get("param_values") is not None:
+			info["param_values"] = self._options["param_values"]
+		if self._options.get("compilation_options") is not None:
+			info["compilation_options"] = self._options["compilation_options"]
 
 		try:
 			context = self._execution_context()
