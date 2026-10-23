@@ -1,0 +1,9 @@
+# Dependency overrides, passed as `uv pip install --override` alongside the
+# requirements files. An override replaces a package's declared constraint
+# everywhere in the resolution, so keep this list short and justified.
+
+# pennylane-qiskit 0.45.0 declares qiskit<=2.3.0 but runs on 2.5. Without
+# this the resolver satisfies the cap by downgrading pennylane-qiskit to 0.39
+# and qiskit-ibm-runtime to 0.29. Drop the override once pennylane-qiskit
+# publishes a release that allows Qiskit 2.5.
+qiskit==2.5.2

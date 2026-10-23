@@ -1,10 +1,14 @@
-qiskit==2.2.3
+# mqt.core.mlir binds Qiskit's C API per minor release and accepts only the
+# 2.5 series, so this pin tracks the Qiskit the MQT compiler was built for.
+qiskit==2.5.2
 qiskit_aer==0.17.2
 qiskit-algorithms
 qiskit-optimization
 supermarq
 pennylane
-pennylane-qiskit
+# Declares qiskit<=2.3.0 while working with 2.5; setup/overrides.txt lifts
+# that cap. Pinned so the override is only ever applied to a tested release.
+pennylane-qiskit==0.45.0
 qiskit-ibm-runtime
 # qiskit-ibm-runtime asks for ibm-platform-services>=0.22.6, and iqm-client
 # below pins requests==2.32.3 exactly. ibm-platform-services 0.77.0 moved to
