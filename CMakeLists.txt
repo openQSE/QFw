@@ -258,6 +258,9 @@ install(PROGRAMS
 	examples/qfw_example_common.sh
 	examples/qfw_fake_iqm_stress.sh
 	examples/qfw_ghz.sh
+	examples/qfw_ibm_frontend.sh
+	examples/qfw_ibm_qpm_local.sh
+	examples/qfw_ibm_qpm_site.sh
 	examples/qfw_init_test.sh
 	examples/qfw_iqm_chem_driver.sh
 	examples/qfw_job_stream.sh
