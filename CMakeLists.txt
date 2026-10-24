@@ -266,6 +266,7 @@ install(PROGRAMS
 	examples/qfw_pulser.sh
 	examples/qfw_qaoa.sh
 	examples/qfw_qiskit_simple.sh
+	examples/qfw_qiskit_simple_w_mqt.sh
 	examples/qfw_qiskit_vqe.sh
 	examples/qfw_run_all.sh
 	examples/qfw_shim_smoke.sh

@@ -19,6 +19,7 @@ from .qfw_target import (
 	target_from_telemetry,
 )
 from .qfw_telemetry import QFwTelemetry
+from .mqt_compile import mqt_compile
 from defw_exception import DEFwDumper
 from defw import me
 from .qfw_lookup_service import get_qpm, get_qpm_telemetry
@@ -309,6 +310,16 @@ class QFwBackend(BackendV2):
 			cancel_on_timeout=False,
 			lib=None,
 		)
+
+	def compile(self, circuits, compiler='qiskit', **kwargs):
+		if compiler == 'qiskit':
+			from qiskit import transpile
+			return transpile(circuits, target=self.target, **kwargs)
+		elif compiler == 'mqt':
+			return mqt_compile(circuits, self.target, **kwargs)
+		else:
+			raise ValueError(
+				f"unknown compiler '{compiler}'; expected 'qiskit' or 'mqt'")
 
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:
