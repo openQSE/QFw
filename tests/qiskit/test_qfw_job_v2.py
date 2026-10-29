@@ -72,7 +72,8 @@ def _backend(context):
 	return SimpleNamespace(
 		_context=context,
 		_route=object(),
-		options=SimpleNamespace(shots=128, timeout=None),
+		options=SimpleNamespace(
+			shots=128, timeout=None, memory=True, seed_simulator=None),
 	)
 
 

@@ -169,14 +169,26 @@ def _normalize_circuits(circuits):
 
 
 def _execution_options(backend, run_options):
-	unknown = set(run_options).difference({"shots", "timeout"})
+	unknown = set(run_options).difference({
+		"shots", "timeout", "memory", "seed_simulator",
+	})
 	if unknown:
 		raise ValueError(
 			f"unsupported QFwBackendV2 run options: {', '.join(sorted(unknown))}")
 	shots = run_options.get("shots", backend.options.shots)
 	timeout = run_options.get("timeout", backend.options.timeout)
+	memory = run_options.get("memory", backend.options.memory)
+	if not isinstance(memory, bool):
+		raise ValueError("memory must be a boolean")
+	seed = run_options.get("seed_simulator", backend.options.seed_simulator)
+	if seed is not None:
+		raise ValueError("seed_simulator is not supported by this QPM route")
 	import libquantum as lq
-	return lq.ExecutionOptions(shots=shots, timeout=timeout)
+	return lq.ExecutionOptions(
+		shots=shots,
+		timeout=timeout,
+		values={"memory": memory},
+	)
 
 
 def _status_state(status):

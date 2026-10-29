@@ -59,7 +59,8 @@ def _backend(context):
 	return SimpleNamespace(
 		_context=context,
 		_route=object(),
-		options=SimpleNamespace(shots=2, timeout=None),
+		options=SimpleNamespace(
+			shots=2, timeout=None, memory=True, seed_simulator=None),
 		name="qfw_v2",
 		backend_version="0.1",
 	)

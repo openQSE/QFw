@@ -88,7 +88,12 @@ class QFwBackendV2(BackendV2):
 
 	@classmethod
 	def _default_options(cls):
-		return Options(shots=1024, timeout=None)
+		return Options(
+			shots=1024,
+			timeout=None,
+			memory=True,
+			seed_simulator=None,
+		)
 
 	def run(self, circuits, **run_options):
 		from .qfw_job_v2 import QFwJobV2
