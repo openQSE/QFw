@@ -2,13 +2,17 @@ from qiskit import QuantumCircuit
 
 import sys
 
-from qfw_qiskit import QFwBackend
-from qfw_example_context import qfw_reservation_options
+from qfw_example_backend import (
+	backend_api_from_argv,
+	create_qfw_backend,
+	qfw_run_options,
+)
 from qfw_example_report import emit_result
 
+backend_api = backend_api_from_argv()
 nq = int(sys.argv[1])
 backend_name = sys.argv[2] if len(sys.argv) > 2 else "nwqsim"
-qfw_backend = QFwBackend(provider=backend_name)
+qfw_backend = create_qfw_backend(backend_name, backend_api)
 
 qc = QuantumCircuit(nq)
 qc.h(0)
@@ -17,7 +21,7 @@ for i in range(nq - 1):
 qc.measure_all()
 
 print("Default number of shots: 1024")
-run_options = qfw_reservation_options()
+run_options = qfw_run_options(backend_api)
 job = qfw_backend.run(qc, **run_options)
 result = job.result()
 counts = result.get_counts(qc)

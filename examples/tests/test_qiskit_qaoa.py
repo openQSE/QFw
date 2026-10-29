@@ -11,16 +11,20 @@ from qiskit_optimization.applications.max_cut import Maxcut
 # ------------------ QFW simulator ------------------ #
 try:
     from qfw_qiskit import (
-        QFwBackend,
         QFwSamplerV2,
     )
 except ImportError as exc:
     raise RuntimeError("test_qiskit_qaoa.py only runs against Qiskit V2 primitives") from exc
-from qfw_example_context import qfw_reservation_options
+from qfw_example_backend import (
+    backend_api_from_argv,
+    create_qfw_backend,
+    qfw_run_options,
+)
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
 import sys
+backend_api = backend_api_from_argv()
 sim_type = sys.argv[1]
 
 # Define problem graph
@@ -52,14 +56,16 @@ plt.savefig(graph_path)
 # simulator_obj = AerSimulator(method="statevector")
 # --------------------------------------------------- #
 # ------------------ QFW simulator ------------------ #
-simulator_obj = QFwBackend(provider=sim_type.lower())
+if sim_type.lower() not in ("nwqsim", "tnqvm"):
+    raise ValueError(f"Unsupported simulator type: {sim_type}")
+simulator_obj = create_qfw_backend(sim_type.lower(), backend_api)
 # --------------------------------------------------- #
 
 backend_sampler = QFwSamplerV2(
     backend=simulator_obj,
     options={
         "default_shots": 1024,
-        "run_options": qfw_reservation_options(),
+        "run_options": qfw_run_options(backend_api),
     }
 )
 

@@ -5,17 +5,21 @@ import sys
 import time
 
 # ------------------ QFW backend--------------------- #
-from qfw_qiskit import QFwBackend
-from qfw_example_context import qfw_reservation_options
+from qfw_example_backend import (
+	backend_api_from_argv,
+	create_qfw_backend,
+	qfw_run_options,
+)
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
 
+backend_api = backend_api_from_argv()
 nq = int(sys.argv[1])
 sim_type = sys.argv[2]
 itrs = int(sys.argv[3])
 records = []
-qfw_run_options = (
-	qfw_reservation_options()
+run_options = (
+	qfw_run_options(backend_api)
 	if sim_type != "qiskit-aer" else {}
 )
 
@@ -32,9 +36,9 @@ if sim_type != "qiskit-aer":
 	# ghz_nwqsim_times = []
 	for i in range(itrs):
 		start_time = time.time()
-		simulator_obj = QFwBackend(provider=sim_type)
+		simulator_obj = create_qfw_backend(sim_type, backend_api)
 		# counts_nwqsim = qfw.execute(qc, shots=1024, backend="nwqsim") # sync
-		qfw_job = simulator_obj.run(qc, shots=1024, **qfw_run_options)  # async job, but will poll and get result
+		qfw_job = simulator_obj.run(qc, shots=1024, **run_options)  # async job, but will poll and get result
 		res_obj = qfw_job.result()
 		counts_nwqsim = res_obj.get_counts()
 		end_time = time.time()

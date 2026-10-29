@@ -2,22 +2,21 @@ import argparse
 import sys
 
 from defw import me
-from qfw_qiskit import QFwBackend
+from qfw_example_backend import add_backend_api_argument, create_qfw_backend
 from qfw_example_report import emit_result
 
 
 def parse_args():
 	parser = argparse.ArgumentParser(description="QFw backend init smoke test")
+	add_backend_api_argument(parser)
 	parser.add_argument("backend")
 	return parser.parse_args()
-
-
 def main():
 	args = parse_args()
 	backend = None
 	error = None
 	try:
-		backend = QFwBackend(provider=args.backend)
+		backend = create_qfw_backend(args.backend, args.backend_api)
 	except Exception as exc:
 		error = str(exc)
 		print(f"Got an Exception {exc}")

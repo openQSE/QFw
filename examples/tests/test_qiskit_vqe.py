@@ -13,13 +13,17 @@ from scipy.optimize import minimize
 import numpy as np
 
 # ------------------ QFW Backend -------------------- #
-from qfw_qiskit import QFwBackend
-from qfw_example_context import qfw_reservation_options
+from qfw_example_backend import (
+	backend_api_from_argv,
+	create_qfw_backend,
+	qfw_run_options,
+)
 from qfw_example_report import emit_result
 # --------------------------------------------------- #
+backend_api = backend_api_from_argv()
 backend_name = sys.argv[2] if len(sys.argv) > 2 else "nwqsim"
-backend = QFwBackend(provider=backend_name)
-run_options = qfw_reservation_options()
+backend = create_qfw_backend(backend_name, backend_api)
+run_options = qfw_run_options(backend_api)
 #backend = Aer.get_backend('statevector_simulator')
 
 # Initialize MPI
