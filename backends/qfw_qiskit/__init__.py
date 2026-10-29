@@ -13,6 +13,7 @@ _EXPORTS = {
 	"QFwTelemetry": ("qfw_telemetry", "QFwTelemetry"),
 	"get_qubit_mapping": ("qfw_metadata", "get_qubit_mapping"),
 	"set_qubit_mapping": ("qfw_metadata", "set_qubit_mapping"),
+	"qhw_to_qiskit_target": ("qhw_target", "qhw_to_qiskit_target"),
 }
 
 __all__ = tuple(_EXPORTS)

@@ -218,6 +218,8 @@ install(DIRECTORY backends/qfw_qiskit
 	FILES_MATCHING
 		PATTERN "*.py"
 		PATTERN "__pycache__" EXCLUDE)
+install(FILES backends/qfw_target_data.py
+	DESTINATION "${QFW_PYTHON_INSTALL_DIR}")
 install(DIRECTORY backends/qfw_pulser
 	DESTINATION "${QFW_PYTHON_INSTALL_DIR}"
 	FILES_MATCHING
