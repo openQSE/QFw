@@ -41,9 +41,16 @@ def create_qfw_backend(provider, backend_api):
 		"backend_api": backend_api,
 		"backend_class": f"{type(backend).__module__}.{type(backend).__name__}",
 		"qiskit_version": metadata.version("qiskit"),
-		"qfw_qiskit_version": metadata.version("qfw-qiskit"),
+		"qfw_qiskit_version": _distribution_version("qfw-qiskit"),
 	})
 	return backend
+
+
+def _distribution_version(name):
+	try:
+		return metadata.version(name)
+	except metadata.PackageNotFoundError:
+		return "source-install"
 
 
 def qfw_run_options(backend_api):

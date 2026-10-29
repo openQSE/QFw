@@ -34,8 +34,11 @@ class QFwBackendV2(BackendV2):
 		except Exception as exc:
 			if context is not None:
 				_try_finalize(context, finalize_timeout)
+			detail = getattr(exc, "detail", None)
+			code = getattr(detail, "code", None)
+			diagnostic = f" [{code}]" if code else ""
 			raise QiskitBackendNotFoundError(
-				f"QFwBackendV2 initialization failed: {exc}") from exc
+				f"QFwBackendV2 initialization failed{diagnostic}: {exc}") from exc
 
 	@classmethod
 	def _from_context(cls, context, *, route_policy=None, finalize_timeout=300):
