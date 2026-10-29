@@ -11,8 +11,11 @@ qfw_example_begin "qiskit-simple" "$@"
 backend="$(qfw_example_backend nwqsim)"
 qfw_example_setup_backend_service "${backend}"
 
-# Takes number of qubits
-#  ex: test_qiskit_simple.py 10
+# Takes number of qubits followed by optional Python example arguments.
+#  ex: qfw_qiskit_simple.sh 10 --backend-api v2
+qubits="$1"
+shift
 qfw_example_srun_with_backend_reservation \
-	"${backend}" qiskit-simple "$1" 1024 1 async_run \
-	"$(qfw_example_path tests/test_qiskit_simple.py)" "$1" "${backend}"
+	"${backend}" qiskit-simple "${qubits}" 1024 1 async_run \
+	"$(qfw_example_path tests/test_qiskit_simple.py)" \
+	"${qubits}" "${backend}" "$@"
