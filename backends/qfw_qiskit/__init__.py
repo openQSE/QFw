@@ -1,30 +1,28 @@
-from .qfw_simulator import QFwBackend
-from .qfw_sampler import QFwSamplerV2
-from .qfw_estimator import QFwEstimatorV2
-from .qfw_job import QFwJob
-from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
-from .qfw_telemetry import QFwTelemetry
+"""QFw Qiskit integrations with lazy optional-runtime imports."""
 
-__all__ = [
-	'QFwBackend',
-	'QFwBackendV2',
-	'QFwSamplerV2',
-	'QFwEstimatorV2',
-	'QFwJob',
-	'QFwJobV2',
-	'QFwTelemetry',
-	'get_qubit_mapping',
-	'set_qubit_mapping',
-]
+from importlib import import_module
+
+
+_EXPORTS = {
+	"QFwBackend": ("qfw_simulator", "QFwBackend"),
+	"QFwBackendV2": ("qfw_backend_v2", "QFwBackendV2"),
+	"QFwSamplerV2": ("qfw_sampler", "QFwSamplerV2"),
+	"QFwEstimatorV2": ("qfw_estimator", "QFwEstimatorV2"),
+	"QFwJob": ("qfw_job", "QFwJob"),
+	"QFwJobV2": ("qfw_job_v2", "QFwJobV2"),
+	"QFwTelemetry": ("qfw_telemetry", "QFwTelemetry"),
+	"get_qubit_mapping": ("qfw_metadata", "get_qubit_mapping"),
+	"set_qubit_mapping": ("qfw_metadata", "set_qubit_mapping"),
+}
+
+__all__ = tuple(_EXPORTS)
 
 
 def __getattr__(name):
-	if name == 'QFwBackendV2':
-		from .qfw_backend_v2 import QFwBackendV2
-
-		return QFwBackendV2
-	if name == 'QFwJobV2':
-		from .qfw_job_v2 import QFwJobV2
-
-		return QFwJobV2
-	raise AttributeError(name)
+	try:
+		module_name, attribute = _EXPORTS[name]
+	except KeyError as exc:
+		raise AttributeError(name) from exc
+	value = getattr(import_module(f"{__name__}.{module_name}"), attribute)
+	globals()[name] = value
+	return value
