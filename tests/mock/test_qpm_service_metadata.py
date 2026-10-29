@@ -122,7 +122,7 @@ def _query_without_runtime(qpm_class):
 	(
 		("svc_fake_iqm_qpm.svc_qpm", "fake-iqm", "fake-iqm-20q", False),
 		("svc_iqm_qpm.svc_qpm", "iqm", "iqm-test", False),
-		("svc_lib_qpm.svc_qpm", "shim", "iqm-test", False),
+		("svc_lib_qpm.svc_qpm", "shim", "fake-iqm-20q", False),
 		("svc_nwqsim_qpm.svc_qpm", "nwqsim", "nwqsim", True),
 		("svc_qb_qpm.svc_qpm", "qb", "qb", True),
 		("svc_tnqvm_qpm.svc_qpm", "tnqvm", "tnqvm", True),
@@ -130,7 +130,7 @@ def _query_without_runtime(qpm_class):
 )
 def test_supported_qpm_queries_publish_exact_execution_contract(
 		monkeypatch, module_name, provider, device_id, native):
-	monkeypatch.setenv("QFW_QPU_DEVICE_ID", "iqm-test")
+	monkeypatch.setenv("QFW_QPU_DEVICE_ID", device_id)
 	module = __import__(module_name, fromlist=["QPM"])
 	properties = _query_without_runtime(module.QPM)
 
@@ -145,6 +145,25 @@ def test_supported_qpm_queries_publish_exact_execution_contract(
 	}]
 	assert "credentials" not in properties
 	assert "telemetry_methods" not in properties
+
+
+def test_nwqsim_publishes_authoritative_qhw_topology_and_operations():
+	from svc_nwqsim_qpm.svc_qpm import QPM
+
+	qpm = QPM.__new__(QPM)
+	device = qpm.get_device_info()
+	coupling = qpm.get_coupling_graph()
+
+	assert device["schema"] == "qhw-device-v1"
+	assert device["device"] == {
+		"id": "nwqsim", "num_qubits": 32}
+	assert len(device["qubits"]) == 32
+	assert coupling["schema"] == "qhw-coupling-v1"
+	assert coupling["coupling"]["directed"] is True
+	assert len(coupling["coupling"]["edges"]) == 32 * 31
+	assert [item["name"] for item in coupling["operations"]] == [
+		"rz", "sx", "x", "cx", "measure", "reset"]
+	assert qpm.get_calibration_snapshot() is None
 
 
 @pytest.mark.parametrize(

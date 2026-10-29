@@ -7,6 +7,56 @@ MAX_NWQSIM_QUBITS = 32
 MAX_NWQSIM_SHOTS = 1_000_000
 
 
+def _nodes():
+	return [str(index) for index in range(MAX_NWQSIM_QUBITS)]
+
+
+def _single_qubit_loci(nodes):
+	return [[node] for node in nodes]
+
+
+def _two_qubit_loci(nodes):
+	return [[left, right] for left in nodes for right in nodes if left != right]
+
+
+def _qhw_device():
+	nodes = _nodes()
+	return {
+		"schema": "qhw-device-v1",
+		"provider": "nwqsim",
+		"device": {"id": "nwqsim", "num_qubits": len(nodes)},
+		"qubits": [
+			{"id": node, "index": index}
+			for index, node in enumerate(nodes)
+		],
+	}
+
+
+def _qhw_coupling():
+	nodes = _nodes()
+	single = _single_qubit_loci(nodes)
+	pairs = _two_qubit_loci(nodes)
+	return {
+		"schema": "qhw-coupling-v1",
+		"provider": "nwqsim",
+		"device": {"id": "nwqsim"},
+		"coupling": {
+			"directed": True,
+			"nodes": nodes,
+			"edges": pairs,
+		},
+		"operations": [
+			{"name": "rz", "arity": 1, "supported_loci": single},
+			{"name": "sx", "arity": 1, "supported_loci": single},
+			{"name": "x", "arity": 1, "supported_loci": single},
+			{"name": "cx", "arity": 2, "supported_loci": pairs},
+			{"name": "measure", "arity": 1,
+			 "supported_loci": single},
+			{"name": "reset", "arity": 1, "supported_loci": single},
+		],
+	}
+
+
 class QPM(UTIL_QPM):
 	PROGRAM_INPUTS = tuple(openqasm_2_program_inputs(native=True))
 
@@ -40,14 +90,11 @@ class QPM(UTIL_QPM):
 	def get_backend_info(self, lib=None, token=None, reservation_id=None):
 		return {
 			'backend': 'nwqsim',
-			'metadata_supported': False,
+			'metadata_supported': True,
 		}
 
 	def get_device_info(self, lib=None, token=None):
-		return {
-			'backend': 'nwqsim',
-			'metadata_supported': False,
-		}
+		return _qhw_device()
 
 	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
 				     token=None):
@@ -59,16 +106,8 @@ class QPM(UTIL_QPM):
 
 	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,
 				     token=None):
-		return {
-			'backend': 'nwqsim',
-			'calibration_set_id': calibration_set_id,
-			'metadata_supported': False,
-		}
+		return None
 
 	def get_coupling_graph(self, calibration_set_id=None, lib=None,
 			       token=None):
-		return {
-			'backend': 'nwqsim',
-			'calibration_set_id': calibration_set_id,
-			'metadata_supported': False,
-		}
+		return _qhw_coupling()
