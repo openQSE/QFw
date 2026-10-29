@@ -1,6 +1,7 @@
 """Phase 19 isolated QFwBackendV2 and Qiskit primitive gate."""
 
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
@@ -15,10 +16,10 @@ from qfw_qiskit import QFwBackendV2
 
 
 def _dummy_qri():
-	path = (
-		Path(__file__).resolve().parents[2].parent
-		/ "libquantum" / "tests" / "fixtures" / "dummy_qri.py"
-	)
+	qfw_root = Path(__file__).resolve().parents[2]
+	libquantum_source = Path(os.environ.get(
+		"LIBQUANTUM_SOURCE", qfw_root.parent / "libquantum"))
+	path = libquantum_source / "tests" / "fixtures" / "dummy_qri.py"
 	spec = importlib.util.spec_from_file_location(
 		"libquantum_phase_19_dummy_qri", path)
 	module = importlib.util.module_from_spec(spec)

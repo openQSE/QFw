@@ -30,6 +30,7 @@ wheels.
 
 ```bash
 cd /tmp
+LIBQUANTUM_SOURCE=/path/to/libquantum \
 PYTHONPATH="$TARGET" python3.12 -m pytest -q \
   /path/to/QFw/tests/qiskit/test_qfw_backend_v2.py \
   /path/to/QFw/tests/qiskit/test_qfw_job_v2.py \
