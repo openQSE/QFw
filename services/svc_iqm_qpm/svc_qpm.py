@@ -1,7 +1,7 @@
 import logging
 import os
 from .svc_qrc import QRC
-from util.qpm.util_qpm import UTIL_QPM
+from util.qpm.util_qpm import UTIL_QPM, openqasm_2_program_inputs
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.circuit_payload import qiskit_circuit_formats
 
@@ -24,6 +24,8 @@ IQM_DEVICE_PROFILE = {
 
 
 class QPM(UTIL_QPM):
+	PROGRAM_INPUTS = tuple(openqasm_2_program_inputs(native=False))
+
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), max_ppn=1, start=start)
 		set_max_qubits_pp(MAX_IQM_QUBITS)
@@ -36,6 +38,9 @@ class QPM(UTIL_QPM):
 		device_id = os.environ.get('QFW_QPU_DEVICE_ID')
 		if device_id:
 			properties['device_id'] = device_id
+		else:
+			properties['qualification_status'] = 'unsupported'
+			properties['unsupported_reason'] = 'device-id-unconfigured'
 		# Circuits are read through Qiskit, so QPY as well as OpenQASM 2,
 		# unless the service's own configuration says otherwise.
 		for key, value in qiskit_circuit_formats().items():

@@ -1,12 +1,14 @@
 import logging
 from .svc_qrc import QRC
-from util.qpm.util_qpm import UTIL_QPM
+from util.qpm.util_qpm import UTIL_QPM, openqasm_2_program_inputs
 
 MAX_TNQVM_QUBITS = 32
 MAX_TNQVM_SHOTS = 1_000_000
 
 
 class QPM(UTIL_QPM):
+	PROGRAM_INPUTS = tuple(openqasm_2_program_inputs(native=True))
+
 	def __init__(self, start=True):
 		super().__init__(QRC(start=start), start=start)
 		self.configure_device_profile(
@@ -22,6 +24,7 @@ class QPM(UTIL_QPM):
 			SERVICE_NAME, SERVICE_DESC,
 			properties={
 				"provider": "tnqvm",
+				"device_id": "tnqvm",
 				"num_qubits": MAX_TNQVM_QUBITS,
 				"max_shots": MAX_TNQVM_SHOTS,
 			})

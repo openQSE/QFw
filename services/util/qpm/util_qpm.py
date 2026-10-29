@@ -34,6 +34,8 @@ from .request import parse_execution_request
 from util import instrumentation
 
 QPM_SERVICE_TYPE = "qfw.qpm"
+OPENQASM_2_REPRESENTATION = "openqasm"
+OPENQASM_2_VERSION = "2.0"
 MANAGED_SUBMISSION_FAILURE_REASONS = (
 	"credential-binding-failed",
 	"scheduler-submission-failed",
@@ -55,6 +57,50 @@ qpm_directory_registered = False
 
 class QTaskNotActive(DEFwExecutionError):
 	"""Another thread has already finished, failed or retired the task."""
+
+
+def openqasm_2_program_inputs(native):
+	return [{
+		"representation": OPENQASM_2_REPRESENTATION,
+		"versions": [OPENQASM_2_VERSION],
+		"preference": 0,
+		"native": bool(native),
+	}]
+
+
+def _validate_program_inputs(program_inputs):
+	if not isinstance(program_inputs, list):
+		raise TypeError("program_inputs must be a list")
+	seen = set()
+	preferences = set()
+	for entry in program_inputs:
+		if not isinstance(entry, dict):
+			raise TypeError("program input entry must be a mapping")
+		representation = entry.get("representation")
+		versions = entry.get("versions")
+		preference = entry.get("preference")
+		native = entry.get("native")
+		if not isinstance(representation, str) or not representation:
+			raise ValueError("program input representation must be non-empty")
+		if not isinstance(versions, list) or not versions:
+			raise ValueError("program input versions must be a non-empty list")
+		if any(not isinstance(version, str) or not version for version in versions):
+			raise ValueError("program input versions must be exact strings")
+		if not isinstance(preference, int) or preference < 0:
+			raise ValueError("program input preference must be nonnegative")
+		if not isinstance(native, bool):
+			raise TypeError("program input native flag must be boolean")
+		if preference in preferences:
+			raise ValueError("program input preferences must be unique")
+		preferences.add(preference)
+		for version in versions:
+			key = (representation, version)
+			if key in seen:
+				raise ValueError(
+					"program input representation/version is duplicated")
+			seen.add(key)
+	return [dict(entry, versions=list(entry["versions"]))
+		for entry in program_inputs]
 
 
 class QPMEventDispatcher:
@@ -145,6 +191,11 @@ def _add_qpm_qubit_resource(resources, provider, num_qubits):
 
 
 class UTIL_QPM:
+	PROGRAM_INPUTS = ()
+	EXECUTION_PROGRAM_INPUTS = frozenset({
+		(OPENQASM_2_REPRESENTATION, OPENQASM_2_VERSION),
+	})
+
 	def __init__(self, qrc, max_ppn=MAX_PPN, start=True, target_id=None,
 		     admission_threading_mode=None, scheduler_threading_mode=None,
 		     controller_serialization_mode=None,
@@ -203,6 +254,7 @@ class UTIL_QPM:
 
 		cid = str(uuid.uuid4())
 		prepared_info = dict(request.payload if request is not None else info)
+		self.validate_program_input(prepared_info)
 		hook_info = self.prepare_circuit(prepared_info)
 		if hook_info is not None:
 			prepared_info = hook_info
@@ -226,6 +278,30 @@ class UTIL_QPM:
 			f"{cid} qtask {runtime.qtask_id} added to circuit database "
 			f"in {time.time() - start}")
 		return cid
+
+	def validate_program_input(self, info):
+		program_inputs = _validate_program_inputs(
+			[dict(entry) for entry in self.PROGRAM_INPUTS])
+		if not program_inputs:
+			return
+		qasm = info.get("qasm")
+		if not isinstance(qasm, str) or not qasm.lstrip().startswith(
+				"OPENQASM 2.0;"):
+			raise DEFwExecutionError(
+				"QPM accepts only exact OpenQASM 2.0 input")
+		representation = info.get(
+			"program_representation", OPENQASM_2_REPRESENTATION)
+		version = info.get("program_version", OPENQASM_2_VERSION)
+		if (representation, version) not in self.EXECUTION_PROGRAM_INPUTS:
+			raise DEFwExecutionError(
+				"program representation/version has no QPM execution path")
+		if not any(
+			entry["representation"] == representation
+			and version in entry["versions"]
+			for entry in program_inputs
+		):
+			raise DEFwExecutionError(
+				"program representation/version is not advertised by this QPM")
 
 	def prepare_circuit(self, info):
 		return info
@@ -994,8 +1070,11 @@ class UTIL_QPM:
 		service_class = self.__class__.__name__
 		provider = properties.get("provider")
 		service_type = QPM_SERVICE_TYPE
-		service_id = _qpm_service_id(
-			svc_name, service_module, provider, properties)
+		service_id = (
+			os.environ.get("QFW_QPM_SERVICE_ID")
+			or _qpm_service_id(
+				svc_name, service_module, provider, properties)
+		)
 		properties.pop("selector", None)
 		# The circuit formats this QPM reads, preferred first, so a client can
 		# choose one before it submits. A QPM that reads more than OpenQASM 2
@@ -1010,6 +1089,17 @@ class UTIL_QPM:
 		properties.setdefault(
 			"hardware",
 			_qpm_type_bit_enabled(type_bits, QPMType.QPM_TYPE_HARDWARE))
+		properties.setdefault(
+			"program_inputs",
+			[dict(entry) for entry in self.PROGRAM_INPUTS])
+		properties["program_inputs"] = _validate_program_inputs(
+			properties["program_inputs"])
+		for entry in properties["program_inputs"]:
+			for version in entry["versions"]:
+				if (entry["representation"], version) not in \
+						self.EXECUTION_PROGRAM_INPUTS:
+					raise ValueError(
+						"advertised program input has no execution path")
 		selector = _qpm_selector(properties, svc_name, provider)
 		api_bindings = _qpm_api_bindings(service_module, service_class)
 		controller_target_id = self.controller_telemetry().get("target_id")

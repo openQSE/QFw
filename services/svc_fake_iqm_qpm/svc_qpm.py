@@ -2,7 +2,7 @@ import logging
 
 from .svc_qrc import QRC
 from util.qpm.util_circuit import set_max_qubits_pp
-from util.qpm.util_qpm import UTIL_QPM
+from util.qpm.util_qpm import UTIL_QPM, openqasm_2_program_inputs
 
 FAKE_IQM_PROVIDER = "fake-iqm"
 FAKE_IQM_TARGET_ID = "fake-iqm-20q"
@@ -43,6 +43,8 @@ def fake_iqm_20q_profile(device_id):
 
 
 class QPM(UTIL_QPM):
+	PROGRAM_INPUTS = tuple(openqasm_2_program_inputs(native=False))
+
 	def __init__(self, start=True, admission_context_factory=None,
 		     scheduler_context_factory=None):
 		qrc = QRC(start=start, target_id=FAKE_IQM_TARGET_ID)

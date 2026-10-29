@@ -1,3 +1,4 @@
+import pytest
 def _register_directory_qpm(directory, service_id, type_bits, caps_bits, *,
 			    provider="iqm", resource="IQM-20q",
 			    runtime_id=None, peer_handle=None):
@@ -108,6 +109,156 @@ def test_qpm_metadata_resolves_through_defw_directory_shape():
 	assert resolved.api_binding.binding_name == "execution"
 	assert resolved.api_binding.client_module == "api_qpm_execution"
 	assert resolved.api_binding.client_class == "QPMExecution"
+
+
+def _query_without_runtime(qpm_class):
+	qpm = qpm_class.__new__(qpm_class)
+	qpm.controller_telemetry = lambda: {"state": "test"}
+	return qpm.query()["properties"]
+
+
+@pytest.mark.parametrize(
+	("module_name", "provider", "device_id", "native"),
+	(
+		("svc_fake_iqm_qpm.svc_qpm", "fake-iqm", "fake-iqm-20q", False),
+		("svc_iqm_qpm.svc_qpm", "iqm", "iqm-test", False),
+		("svc_lib_qpm.svc_qpm", "shim", "iqm-test", False),
+		("svc_nwqsim_qpm.svc_qpm", "nwqsim", "nwqsim", True),
+		("svc_qb_qpm.svc_qpm", "qb", "qb", True),
+		("svc_tnqvm_qpm.svc_qpm", "tnqvm", "tnqvm", True),
+	),
+)
+def test_supported_qpm_queries_publish_exact_execution_contract(
+		monkeypatch, module_name, provider, device_id, native):
+	monkeypatch.setenv("QFW_QPU_DEVICE_ID", "iqm-test")
+	module = __import__(module_name, fromlist=["QPM"])
+	properties = _query_without_runtime(module.QPM)
+
+	assert properties["provider"] == provider
+	assert properties["device_id"] == device_id
+	assert isinstance(properties["num_qubits"], int)
+	assert properties["program_inputs"] == [{
+		"representation": "openqasm",
+		"versions": ["2.0"],
+		"preference": 0,
+		"native": native,
+	}]
+	assert "credentials" not in properties
+	assert "telemetry_methods" not in properties
+
+
+@pytest.mark.parametrize(
+	"module_name",
+	("svc_iqm_qpm.svc_qpm", "svc_lib_qpm.svc_qpm"),
+)
+def test_unconfigured_physical_provider_is_explicitly_unqualified(
+		monkeypatch, module_name):
+	monkeypatch.delenv("QFW_QPU_DEVICE_ID", raising=False)
+	module = __import__(module_name, fromlist=["QPM"])
+	properties = _query_without_runtime(module.QPM)
+
+	assert "device_id" not in properties
+	assert properties["qualification_status"] == "unsupported"
+	assert properties["unsupported_reason"] == "device-id-unconfigured"
+
+
+@pytest.mark.parametrize(
+	"reservation_service_ids",
+	(
+		("qpm:iqm:single",),
+		("qpm:iqm:first", "qpm:iqm:second"),
+	),
+)
+def test_query_identity_matches_each_reserved_service(
+		monkeypatch, reservation_service_ids):
+	from api_qpm_common import QPMCapability, QPMType
+	from util.qpm.util_qpm import UTIL_QPM, openqasm_2_program_inputs
+
+	class ReservedQPM(UTIL_QPM):
+		PROGRAM_INPUTS = tuple(openqasm_2_program_inputs(native=False))
+
+		def controller_telemetry(self):
+			return {"state": "test"}
+
+	qpm = ReservedQPM.__new__(ReservedQPM)
+	observed = []
+	for service_id in reservation_service_ids:
+		monkeypatch.setenv("QFW_QPM_SERVICE_ID", service_id)
+		info = qpm.query_helper(
+			QPMType.QPM_TYPE_HARDWARE,
+			QPMCapability.QPM_CAP_SUPERCONDUCTING,
+			"QPM",
+			"Reserved QPM",
+			properties={
+				"provider": "iqm",
+				"device_id": service_id.rsplit(":", 1)[-1],
+				"num_qubits": 20,
+			},
+		)
+		observed.append(info["properties"]["service_id"])
+
+	assert tuple(observed) == reservation_service_ids
+
+
+@pytest.mark.parametrize(
+	"module_name",
+	(
+		"svc_fake_iqm_qpm.svc_qpm",
+		"svc_iqm_qpm.svc_qpm",
+		"svc_lib_qpm.svc_qpm",
+		"svc_nwqsim_qpm.svc_qpm",
+		"svc_qb_qpm.svc_qpm",
+		"svc_tnqvm_qpm.svc_qpm",
+	),
+)
+def test_each_advertised_input_has_an_exact_submission_path(module_name):
+	from defw_exception import DEFwExecutionError
+
+	module = __import__(module_name, fromlist=["QPM"])
+	qpm = module.QPM.__new__(module.QPM)
+	qpm.validate_program_input({
+		"qasm": "OPENQASM 2.0; qreg q[1];",
+		"program_representation": "openqasm",
+		"program_version": "2.0",
+	})
+	with pytest.raises(DEFwExecutionError, match="no QPM execution path"):
+		qpm.validate_program_input({
+			"qasm": "OPENQASM 2.0; qreg q[1];",
+			"program_representation": "openqasm",
+			"program_version": "3.0",
+		})
+	with pytest.raises(DEFwExecutionError, match="only exact OpenQASM 2.0"):
+		qpm.validate_program_input({"qasm": "OPENQASM 3.0; qubit q;"})
+
+
+def test_query_rejects_advertisement_without_execution_path(monkeypatch):
+	from api_qpm_common import QPMCapability, QPMType
+	from util.qpm.util_qpm import UTIL_QPM
+
+	class InvalidQPM(UTIL_QPM):
+		PROGRAM_INPUTS = ({
+			"representation": "qpy",
+			"versions": ["13"],
+			"preference": 0,
+			"native": True,
+		},)
+
+		def controller_telemetry(self):
+			return {"state": "test"}
+
+	qpm = InvalidQPM.__new__(InvalidQPM)
+	with pytest.raises(ValueError, match="no execution path"):
+		qpm.query_helper(
+			QPMType.QPM_TYPE_SIMULATOR,
+			QPMCapability.QPM_CAP_STATEVECTOR,
+			"QPM",
+			"Invalid QPM",
+			properties={
+				"provider": "invalid",
+				"device_id": "invalid",
+				"num_qubits": 1,
+			},
+		)
 
 
 def test_resolver_filters_real_directory_records_by_type_and_capability():

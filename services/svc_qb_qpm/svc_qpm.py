@@ -7,7 +7,7 @@ import svc_launcher
 import cdefw_global
 from time import sleep
 from .svc_qrc import QRC
-from util.qpm.util_qpm import UTIL_QPM
+from util.qpm.util_qpm import UTIL_QPM, openqasm_2_program_inputs
 from util.qpm.util_circuit import set_max_qubits_pp
 from defw_exception import DEFwDumper, DEFwNotFound, DEFwOutOfResources
 from defw_cmd import defw_exec_remote_cmd
@@ -45,6 +45,8 @@ def wait_for_vqpu(url, host, config):
 
 
 class QPM(UTIL_QPM):
+	PROGRAM_INPUTS = tuple(openqasm_2_program_inputs(native=True))
+
 	def __init__(self, start=True):
 		set_max_qubits_pp(MAX_VQPU_QUBITS)
 
@@ -65,6 +67,7 @@ class QPM(UTIL_QPM):
 			SERVICE_NAME, SERVICE_DESC,
 			properties={
 				"provider": "qb",
+				"device_id": "qb",
 				"num_qubits": MAX_VQPU_QUBITS,
 			})
 		logging.debug(f"QB {SERVICE_DESC}: {info}")
