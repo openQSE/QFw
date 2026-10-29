@@ -10,7 +10,7 @@ class QPMExecution(QPMRemoteBase):
 		pass
 
 	def async_run(self, info, reservation_id=None, token=None, timeout=None,
-			  cancel_on_timeout=False):
+			  cancel_on_timeout=False, shots=None):
 		pass
 
 	def read_cq(self, cid=None, reservation_id=None, token=None):

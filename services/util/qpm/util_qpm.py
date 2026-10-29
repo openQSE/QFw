@@ -843,7 +843,7 @@ class UTIL_QPM:
 			raise e
 
 	def async_run(self, info, reservation_id=None, token=None, timeout=None,
-				  cancel_on_timeout=False):
+				  cancel_on_timeout=False, shots=None):
 		if not qpm_initialized:
 			raise DEFwNotReady("QPM has not initialized properly")
 
@@ -854,6 +854,8 @@ class UTIL_QPM:
 			timeout=timeout,
 			cancel_on_timeout=cancel_on_timeout,
 		)
+		if shots is not None:
+			request.payload["num_shots"] = shots
 		self.require_managed_execution(request)
 		return self._async_run_request(request)
 

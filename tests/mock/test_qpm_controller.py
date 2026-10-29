@@ -259,10 +259,12 @@ def test_async_run_records_dict_token_metadata(monkeypatch):
 	result = qpm.async_run(
 		{"qasm": "OPENQASM 2.0;", "num_qubits": 2},
 		reservation_id="1",
-		token={"opaque": "token"})
+		token={"opaque": "token"},
+		shots=37)
 	runtime = qpm.controller.task_for_cid(result["cid"])
 
 	assert runtime.token_metadata == {"present": True, "type": "dict"}
+	assert qpm.circuits[result["cid"]].info["num_shots"] == 37
 
 
 def test_provider_hooks_run_outside_controller_lock(monkeypatch):
