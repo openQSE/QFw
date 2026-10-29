@@ -48,7 +48,8 @@ class QFwJobV2(JobV1):
 			program = self._context.import_program(circuit)
 			compiled.append(self._context.compile(self._route, program))
 		self._queue = self._context.create_completion_queue(self._route)
-		for experiment, executable in zip(self._experiments, compiled):
+		for index, (experiment, executable) in enumerate(zip(
+				self._experiments, compiled)):
 			try:
 				experiment.op_id = self._context.run(
 					self._route,
@@ -58,6 +59,9 @@ class QFwJobV2(JobV1):
 				)
 			except Exception as exc:
 				experiment.submission_error = exc
+				for pending in self._experiments[index + 1:]:
+					pending.submission_error = JobError(
+						"not submitted after an earlier submission failure")
 				break
 
 	def status(self):
@@ -210,10 +214,7 @@ def _qiskit_result(job):
 			payload = {}
 		if not isinstance(payload, dict):
 			raise JobError("unsupported QRI result payload")
-		counts = payload.get("counts", {})
-		memory = payload.get("memory")
-		if memory is None:
-			memory = _memory_from_counts(counts)
+		counts, memory, shots = _validated_payload(job, experiment, payload)
 		data = {"counts": counts, "memory": memory}
 		if "statevector" in payload:
 			data["statevector"] = payload["statevector"]
@@ -228,7 +229,7 @@ def _qiskit_result(job):
 		results.append({
 			"success": success,
 			"status": "DONE" if success else "ERROR",
-			"shots": payload.get("shots", job._execution_options.shots),
+			"shots": shots,
 			"header": {
 				"name": experiment.circuit.name or f"circuit-{experiment.index}",
 				"memory_slots": experiment.circuit.num_clbits,
@@ -257,3 +258,44 @@ def _memory_from_counts(counts):
 			raise JobError("QRI count values must be nonnegative integers")
 		memory.extend([sample] * count)
 	return memory
+
+
+def _validated_payload(job, experiment, payload):
+	identity = payload.get("experiment_id", payload.get("experiment_name"))
+	if identity is not None and identity != experiment.circuit.name:
+		raise JobError("QRI result experiment identity does not match")
+	counts = payload.get("counts", {})
+	if not isinstance(counts, dict):
+		raise JobError("QRI counts must be a mapping")
+	for sample in counts:
+		text = str(sample).replace(" ", "")
+		if text.startswith(("0x", "0X")):
+			int(text, 16)
+		elif not text or any(bit not in "01" for bit in text):
+			raise JobError("QRI count keys must be binary or hexadecimal")
+		elif len(text) > experiment.circuit.num_clbits:
+			raise JobError("QRI count key exceeds the circuit bit width")
+	memory = payload.get("memory")
+	if memory is None:
+		memory = _memory_from_counts(counts)
+	elif not isinstance(memory, (tuple, list)):
+		raise JobError("QRI memory must be a sequence")
+	else:
+		memory = list(memory)
+	shots = payload.get("shots", job._execution_options.shots)
+	if shots is not None:
+		if isinstance(shots, bool) or not isinstance(shots, int) or shots < 1:
+			raise JobError("QRI shots must be a positive integer")
+		if counts and sum(counts.values()) != shots:
+			raise JobError("QRI counts do not match the shot count")
+		if memory and len(memory) != shots:
+			raise JobError("QRI memory does not match the shot count")
+	statevector = payload.get("statevector")
+	if statevector is not None:
+		try:
+			size = len(statevector)
+		except TypeError as exc:
+			raise JobError("QRI statevector must be a sequence") from exc
+		if size != 2 ** experiment.circuit.num_qubits:
+			raise JobError("QRI statevector has the wrong dimension")
+	return counts, memory, shots
