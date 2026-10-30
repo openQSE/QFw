@@ -115,6 +115,9 @@ class QPM(UTIL_QPM):
 		technology = _technology(descriptor)
 		if technology:
 			properties["technology"] = technology
+		description_library = self._description_library()
+		if description_library:
+			properties["description_library"] = description_library
 		if descriptor.get("num_qubits") not in (None, ""):
 			properties["num_qubits"] = int(descriptor["num_qubits"])
 		info = self.query_helper(
@@ -124,6 +127,12 @@ class QPM(UTIL_QPM):
 			properties=properties)
 		logging.debug(f"shim {SERVICE_DESC}: {info}")
 		return info
+
+	def _description_library(self):
+		# Read with getattr because the mock tests build a QPM without running
+		# __init__.
+		frontend = getattr(getattr(self, "qrc", None), "frontend", None)
+		return frontend.description_library() if frontend is not None else None
 
 	def prepare_circuit(self, info):
 		# The qhw backend tag names the provider this resource belongs to, as
