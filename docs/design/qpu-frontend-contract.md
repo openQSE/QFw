@@ -363,7 +363,10 @@ implementation to evaluate the shim against.
   Among those candidates, an execution call (`run_circuit` and its job
   timing/metadata lookups) always goes to the library that holds the
   reservation; otherwise, when more than one library can serve the call, a
-  configurable preference picks one. Registered as a peer in
+  configurable preference picks one. So that a client compiles for the library
+  its circuits run on, the shim also publishes that library as
+  `description_library` when it serves the device, coupling and calibration
+  reads, and the Qiskit client reads through it unless a library was chosen. Registered as a peer in
   `share/qfw/config/services/site-services.yaml`
   (`shim-ornl-20q`), selectable instead of the native `iqm-ornl-20q`.
   - `descriptor.py` — the per-resource descriptor (Section 5) and

@@ -1103,6 +1103,14 @@ and durations:
 | A QPM with a plain description, such as the fake IQM: a qubit count and a `couplings` list | The qubit count and the coupling edges, with QFw's generic gates on them |
 | `metadata_supported: false` (NWQSim, TNQVM, QB) | The generic 400-qubit all-to-all target |
 
+With no `lib` chosen, the backend reads a shim device through the library the
+QPM publishes as `description_library`: the device's execution owner, when that
+library serves the device, coupling and calibration reads. The target then
+comes from the library the circuits run on. On a device wired for QRMI and QDMI
+with the default execution owner, an IBM target therefore comes from QRMI's raw
+records. When no library is published, the shim's routing picks one, and QDMI
+describes any device through the qhw records in the second row.
+
 The shim's QRMI driver caches what a device reports for
 `QFW_QPU_TARGET_TTL_SECONDS` (default 300) of the service's environment, and 0
 reads the device every time. A recalibration reaches new backends once that
