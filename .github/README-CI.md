@@ -18,8 +18,9 @@ All three trigger workflows call `test-reusable.yml` with identical jobs, so PR 
 - **`ci-syntax`** — Flake8 lint on `services/`, `service-apis/`, `backends/`, `examples/`, plus `python -m py_compile` on those directories
 - **`ci-mock`** — `python -m pytest tests/mock -q`
 - **`ci-qdmi`** — released IQM, Amazon Braket, and IBM adapters and circuit serialization, without provider submission
+- **`ci-qiskit`** — IQM transpilation, device targets, and circuit formats on the pinned Qiskit
 
-The syntax and mock jobs run on Python 3.10 and 3.12, selected by the shared `python_versions` input. The provider job uses Python 3.12 to match the cluster runtime.
+The syntax and mock jobs run on Python 3.10 and 3.12, selected by the shared `python_versions` input. The provider and `ci-qiskit` jobs use Python 3.12 to match the cluster runtime.
 
 **Integration tests** require a running distributed framework (PRTE, DEFw, QPM services, simulator binaries) and must be run manually or on dedicated hardware. When self-hosted runners or a containerized stack become available, add steps to `test-reusable.yml`.
 
