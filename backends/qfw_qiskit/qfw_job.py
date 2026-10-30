@@ -10,13 +10,15 @@ from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError
-from util.circuit_payload import encode_qiskit_circuit
+from util.circuit_payload import QPY_FORMATS, encode_qiskit_circuit
 from util import instrumentation
+from util.isa import STAGE_ISA
 from util.qpm.statevector import (
 	decode_statevector_payload,
 	statevector_payload_size_summary,
 )
-from .qfw_metadata import get_qubit_mapping
+from .qfw_metadata import (
+	get_isa_marker, get_qubit_mapping, normalize_qubit_mapping)
 
 
 EXECUTION_CONTEXT_KEYS = (
@@ -25,6 +27,12 @@ EXECUTION_CONTEXT_KEYS = (
 	"timeout",
 	"cancel_on_timeout",
 )
+
+# isa_policy="generic" sends a circuit marked as compiled ahead of time to a QPM
+# that does not take one, as a generic circuit, which that QPM may compile
+# again. That covers an older QPM, and a simulator asked to run a circuit
+# compiled for a device.
+ISA_POLICY_GENERIC = "generic"
 
 # Run options forwarded to the QPM through the job's info dict. param_values
 # is keyed by parameter name first (see normalize_param_values).
@@ -194,6 +202,7 @@ class QFwJob(Job):
 		param_values = self._options.get("param_values")
 		if param_values is not None:
 			param_values = normalize_param_values(param_values)
+		marker = self._isa_marker(circuit)
 		# get num_qubits from experiment
 		num_qubits = circuit.num_qubits
 		# let's form the info object to give to QFw!!
@@ -211,6 +220,8 @@ class QFwJob(Job):
 		qubit_mapping = get_qubit_mapping(circuit)
 		if qubit_mapping:
 			info["qubit_mapping"] = qubit_mapping
+		if marker is not None:
+			self._add_isa_fields(info, marker)
 		if self._backend.returns_statevector():
 			info["return_statevector"] = True
 		if self._options.get("lib"):
@@ -233,6 +244,41 @@ class QFwJob(Job):
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
+
+	def _isa_marker(self, circuit):
+		# The marker to send with a circuit, refusing before it is serialized
+		# when this QPM would not honour it.
+		marker = get_isa_marker(circuit)
+		if marker is None:
+			return None
+		policy = self._options.get("isa_policy")
+		if policy not in (None, ISA_POLICY_GENERIC):
+			raise DEFwError(
+				f"isa_policy must be {ISA_POLICY_GENERIC!r}: {policy!r}")
+		properties = self._declared_properties() or {}
+		if STAGE_ISA in (properties.get("circuit_stages") or ()):
+			return marker
+		if policy == ISA_POLICY_GENERIC:
+			logging.warning(
+				f"QFw job: this QPM does not take a circuit compiled for "
+				f"{marker.get('device_id')}; sending it as a generic circuit")
+			return None
+		raise DEFwError(
+			f"this circuit was compiled for {marker.get('device_id')}, and "
+			"this QPM does not take a circuit compiled ahead of time. Pass "
+			f"isa_policy={ISA_POLICY_GENERIC!r} to send it as a generic "
+			"circuit, which the QPM may compile again")
+
+	def _add_isa_fields(self, info, marker):
+		circuit = info.get("circuit") or {}
+		if circuit.get("format") not in QPY_FORMATS:
+			raise DEFwError(
+				"a circuit compiled ahead of time travels as QPY, and this "
+				"client and QPM could not agree on a QPY version")
+		info["isa"] = marker
+		if marker.get("qubit_labels"):
+			info["qubit_mapping"] = normalize_qubit_mapping(
+				marker["qubit_labels"])
 
 	def _job_labels(self):
 		# The device and backend kind the job's own metrics carry.

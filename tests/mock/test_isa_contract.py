@@ -396,3 +396,110 @@ def test_ibm_qdmi_refuses_when_the_device_requires_a_calibration_it_cannot_read(
 		_ibm_qdmi_encode(
 			monkeypatch, {"isa": marker}, _no_compile,
 			descriptor={"calibration_policy": isa.POLICY_REQUIRE})
+
+
+# --- the client --------------------------------------------------------------
+
+def _job(monkeypatch, properties, marker=None, **options):
+	import qfw_qiskit.qfw_job as qfw_job
+	from qfw_qiskit.qfw_metadata import set_qubit_mapping
+
+	monkeypatch.setattr(
+		qfw_job, "encode_qiskit_circuit",
+		lambda circuit, declared: properties.get("_encoded") or {
+			"circuit": {"format": "qpy", "data": "AAAA"}})
+	fake_qpm = FakeQPM(cids=["cid-isa"])
+	fake_qpm.qpm_properties = properties
+	circuit = qfw_job.QuantumCircuit(2, name="compiled")
+	# Left from before compiling, which is what a stale mapping looks like.
+	set_qubit_mapping(circuit, ["QB9", "QB8"])
+	if marker is not None:
+		metadata = dict(circuit.metadata)
+		metadata["qfw"] = dict(metadata["qfw"], isa=marker)
+		circuit.metadata = metadata
+	backend = types.SimpleNamespace(returns_statevector=lambda: False)
+	options = dict(FakeSlurmDriver().execution_options(shots=4), **options)
+	job = qfw_job.QFwJob(backend, fake_qpm, FakeEventAPI(), circuit, options)
+	return job, fake_qpm
+
+
+def test_the_client_lifts_the_marker_into_info(monkeypatch):
+	job, fake_qpm = _job(
+		monkeypatch, {"circuit_stages": STAGES}, marker=_marker())
+
+	job.submit()
+
+	payload = fake_qpm.submitted_payloads[0]
+	assert payload["isa"] == _marker()
+	# The marker's labels name the compiled circuit, whatever came before.
+	assert payload["qubit_mapping"] == {"0": "QB1", "1": "QB2"}
+
+
+def test_the_client_sends_no_marker_for_a_generic_circuit(monkeypatch):
+	job, fake_qpm = _job(monkeypatch, {"circuit_stages": STAGES})
+
+	job.submit()
+
+	assert "isa" not in fake_qpm.submitted_payloads[0]
+
+
+@pytest.mark.parametrize("properties", [
+	{},
+	{"circuit_stages": [isa.STAGE_GENERIC]},
+])
+def test_the_client_refuses_a_qpm_that_does_not_take_isa(
+		monkeypatch, properties):
+	import qfw_qiskit.qfw_job as qfw_job
+	job, fake_qpm = _job(monkeypatch, properties, marker=_marker())
+
+	with pytest.raises(qfw_job.DEFwError, match="compiled ahead of time"):
+		job.submit()
+
+	assert fake_qpm.submitted_payloads == []
+
+
+def test_the_client_can_send_a_marked_circuit_as_generic(monkeypatch, caplog):
+	job, fake_qpm = _job(
+		monkeypatch, {}, marker=_marker(), isa_policy="generic")
+
+	with caplog.at_level(logging.WARNING):
+		job.submit()
+
+	assert "isa" not in fake_qpm.submitted_payloads[0]
+	assert "generic circuit" in caplog.text
+
+
+def test_the_client_refuses_an_isa_policy_it_does_not_know(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	job, _ = _job(
+		monkeypatch, {"circuit_stages": STAGES}, marker=_marker(),
+		isa_policy="ignore")
+
+	with pytest.raises(qfw_job.DEFwError, match="isa_policy"):
+		job.submit()
+
+
+def test_the_client_refuses_to_send_a_marked_circuit_as_openqasm(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	job, fake_qpm = _job(monkeypatch, {
+		"circuit_stages": STAGES,
+		"_encoded": {"qasm": "OPENQASM 2.0;"},
+	}, marker=_marker())
+
+	with pytest.raises(qfw_job.DEFwError, match="QPY"):
+		job.submit()
+
+	assert fake_qpm.submitted_payloads == []
+
+
+def test_mark_isa_keeps_the_circuits_other_metadata():
+	from qfw_qiskit.qfw_metadata import (
+		get_isa_marker, get_qubit_mapping, mark_isa, set_qubit_mapping)
+	circuit = types.SimpleNamespace(metadata={"mine": 1})
+	set_qubit_mapping(circuit, ["QB1"])
+
+	mark_isa(circuit, "iqm", DEVICE, calibration=CALIBRATION)
+
+	assert circuit.metadata["mine"] == 1
+	assert get_qubit_mapping(circuit) == {"0": "QB1"}
+	assert get_isa_marker(circuit)["device_id"] == DEVICE

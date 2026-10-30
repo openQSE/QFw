@@ -330,6 +330,7 @@ class QFwBackend(BackendV2):
 			timeout=None,
 			cancel_on_timeout=False,
 			lib=None,
+			isa_policy=None,
 		)
 
 	def compile(self, circuits, compiler='qiskit', **kwargs):
@@ -382,6 +383,9 @@ class QFwBackend(BackendV2):
 		lib = self._shim_library(kwargs.get("lib"))
 		if lib is not None:
 			options["lib"] = lib
+		isa_policy = kwargs.get("isa_policy", self.options.isa_policy)
+		if isa_policy is not None:
+			options["isa_policy"] = isa_policy
 		for key in QFW_INFO_PASSTHROUGH_OPTIONS:
 			if key in kwargs:
 				options[key] = kwargs[key]
