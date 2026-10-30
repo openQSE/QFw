@@ -1103,6 +1103,11 @@ and durations:
 | A QPM with a plain description, such as the fake IQM: a qubit count and a `couplings` list | The qubit count and the coupling edges, with QFw's generic gates on them |
 | `metadata_supported: false` (NWQSim, TNQVM, QB) | The generic 400-qubit all-to-all target |
 
+The shim's QRMI driver caches what a device reports for
+`QFW_QPU_TARGET_TTL_SECONDS` (default 300) of the service's environment, and 0
+reads the device every time. A recalibration reaches new backends once that
+time has passed.
+
 The target is built once per backend instance, on first use. When the
 telemetry call fails, or the QPM connection carries no telemetry binding, the
 backend keeps the generic target and logs why. `backend.target_source` says

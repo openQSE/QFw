@@ -249,6 +249,55 @@ def test_target_caches_iqm_payload_regardless_of_content():
 	assert call_count[0] == 1, "IQM payload must be cached even without IBM keys"
 
 
+def _counting_target_driver(monkeypatch, ttl=None):
+	if ttl is None:
+		monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
+	else:
+		monkeypatch.setenv(qd.TARGET_TTL_ENV, ttl)
+	driver = _driver(provider="iqm")
+	call_count = [0]
+
+	def _qpu(credential=None):
+		call_count[0] += 1
+		return _qpu_returning({"dynamic_quantum_architecture": {}})
+
+	driver._qpu = _qpu
+	return driver, call_count
+
+
+def test_target_is_read_again_once_its_entry_expires(monkeypatch):
+	# The ("default",) entry is never evicted, so without an expiry a
+	# long-running service describes the calibration it first saw for good.
+	driver, call_count = _counting_target_driver(monkeypatch)
+	clock = [1000.0]
+	monkeypatch.setattr(qd.time, "monotonic", lambda: clock[0])
+
+	driver._target()
+	clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS - 1
+	driver._target()
+	assert call_count[0] == 1
+
+	clock[0] += 1
+	driver._target()
+	assert call_count[0] == 2
+
+
+def test_target_ttl_of_zero_reads_the_device_every_time(monkeypatch):
+	driver, call_count = _counting_target_driver(monkeypatch, ttl="0")
+
+	driver._target()
+	driver._target()
+
+	assert call_count[0] == 2
+
+
+def test_target_ttl_must_be_a_whole_number(monkeypatch):
+	monkeypatch.setenv(qd.TARGET_TTL_ENV, "soon")
+
+	with pytest.raises(DEFwExecutionError, match=qd.TARGET_TTL_ENV):
+		qd.target_ttl_seconds()
+
+
 # ===========================================================================
 # IBM introspection dispatch
 # ===========================================================================
