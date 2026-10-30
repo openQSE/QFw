@@ -13,7 +13,7 @@
 # transcoder with no client at all.
 #
 # They need qiskit, iqm-client's Qiskit adapter and iqm.pulse. The CI mock job
-# installs none of those, so these run in QFw's own venv.
+# installs none of those, so these run in the ci-qiskit job.
 
 import os
 import pathlib
