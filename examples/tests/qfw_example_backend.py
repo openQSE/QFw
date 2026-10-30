@@ -55,6 +55,6 @@ def _distribution_version(name):
 
 def qfw_run_options(backend_api):
 	if backend_api == "v2":
-		return {}
+		return {"return_statevector": True}
 	from qfw_example_context import qfw_reservation_options
 	return qfw_reservation_options()

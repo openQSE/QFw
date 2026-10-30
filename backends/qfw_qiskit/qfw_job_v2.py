@@ -170,7 +170,8 @@ def _normalize_circuits(circuits):
 
 def _execution_options(backend, run_options):
 	unknown = set(run_options).difference({
-		"shots", "timeout", "memory", "seed_simulator",
+		"shots", "timeout", "memory", "return_statevector",
+		"seed_simulator",
 	})
 	if unknown:
 		raise ValueError(
@@ -180,6 +181,10 @@ def _execution_options(backend, run_options):
 	memory = run_options.get("memory", backend.options.memory)
 	if not isinstance(memory, bool):
 		raise ValueError("memory must be a boolean")
+	return_statevector = run_options.get(
+		"return_statevector", backend.options.return_statevector)
+	if not isinstance(return_statevector, bool):
+		raise ValueError("return_statevector must be a boolean")
 	seed = run_options.get("seed_simulator", backend.options.seed_simulator)
 	if seed is not None:
 		raise ValueError("seed_simulator is not supported by this QPM route")
@@ -187,7 +192,10 @@ def _execution_options(backend, run_options):
 	return lq.ExecutionOptions(
 		shots=shots,
 		timeout=timeout,
-		values={"memory": memory},
+		values={
+			"memory": memory,
+			"return_statevector": return_statevector,
+		},
 	)
 
 
@@ -226,10 +234,12 @@ def _qiskit_result(job):
 			payload = {}
 		if not isinstance(payload, dict):
 			raise JobError("unsupported QRI result payload")
-		counts, memory, shots = _validated_payload(job, experiment, payload)
+		payload = _normalized_payload(payload)
+		counts, memory, shots, statevector = _validated_payload(
+			job, experiment, payload)
 		data = {"counts": counts, "memory": memory}
-		if "statevector" in payload:
-			data["statevector"] = payload["statevector"]
+		if statevector is not None:
+			data["statevector"] = statevector
 		metadata = dict(payload.get("metadata") or {})
 		if "qhw_result" in payload:
 			metadata["qhw_result"] = payload["qhw_result"]
@@ -304,10 +314,25 @@ def _validated_payload(job, experiment, payload):
 			raise JobError("QRI memory does not match the shot count")
 	statevector = payload.get("statevector")
 	if statevector is not None:
+		if isinstance(statevector, dict):
+			from qiskit.quantum_info import Statevector
+			from util.qpm.statevector import decode_statevector_payload
+
+			statevector = Statevector(decode_statevector_payload(statevector))
 		try:
 			size = len(statevector)
 		except TypeError as exc:
 			raise JobError("QRI statevector must be a sequence") from exc
 		if size != 2 ** experiment.circuit.num_qubits:
 			raise JobError("QRI statevector has the wrong dimension")
-	return counts, memory, shots
+	return counts, memory, shots, statevector
+
+
+def _normalized_payload(payload):
+	envelope_fields = {
+		"counts", "experiment_id", "experiment_name", "memory", "metadata",
+		"qhw_result", "shots", "statevector",
+	}
+	if payload and not envelope_fields.intersection(payload):
+		return {"counts": payload}
+	return payload

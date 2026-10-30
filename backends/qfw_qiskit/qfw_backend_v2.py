@@ -95,6 +95,7 @@ class QFwBackendV2(BackendV2):
 			shots=1024,
 			timeout=None,
 			memory=True,
+			return_statevector=False,
 			seed_simulator=None,
 		)
 

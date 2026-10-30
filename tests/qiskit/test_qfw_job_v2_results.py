@@ -60,7 +60,8 @@ def _backend(context):
 		_context=context,
 		_route=object(),
 		options=SimpleNamespace(
-			shots=2, timeout=None, memory=True, seed_simulator=None),
+			shots=2, timeout=None, memory=True, return_statevector=False,
+			seed_simulator=None),
 		name="qfw_v2",
 		backend_version="0.1",
 	)
@@ -122,6 +123,34 @@ def test_result_timeout_retains_live_queue_for_retry():
 		"shots": 2,
 	}),))
 	assert job.result(timeout=1).success
+
+
+def test_result_accepts_the_qpm_raw_counts_contract():
+	context = FakeContext()
+	job = QFwJobV2(_backend(context), _circuit("raw-counts"), {})
+	job.submit()
+	context.queue.batches.append((_completion(
+		"op-0", {"00": 1, "11": 1}),))
+
+	result = job.result(timeout=1)
+	assert result.success
+	assert result.get_counts() == {"00": 1, "11": 1}
+	assert sorted(result.get_memory()) == ["00", "11"]
+
+
+def test_result_decodes_the_qpm_statevector_envelope():
+	from util.qpm.statevector import encode_statevector_payload
+
+	context = FakeContext()
+	job = QFwJobV2(_backend(context), _circuit("statevector"), {})
+	job.submit()
+	context.queue.batches.append((_completion("op-0", {
+		"counts": {"00": 2},
+		"statevector": encode_statevector_payload([1, 0, 0, 0]),
+	}),))
+
+	result = job.result(timeout=1)
+	assert list(result.get_statevector()) == [1, 0, 0, 0]
 
 
 @pytest.mark.parametrize("payload,match", (
