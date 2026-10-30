@@ -160,6 +160,7 @@ class QRC:
 			"result": {} if cancelled else {state: shots},
 			"provider": "fake-iqm",
 			"target_id": self.target_id,
+			"isa": info.get("isa"),
 			"estimated_device_ns": (
 				estimate.get("total_ns") or info.get("estimated_device_ns")),
 			"baseline_units": (

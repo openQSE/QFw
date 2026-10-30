@@ -157,6 +157,15 @@ this for a device whose limit is tight. A circuit that names its own poll
 interval is polled at that fixed interval instead. The value is a number of
 seconds.
 .TP
+.B calibration-policy
+What a QPM does with a circuit compiled ahead of time for a calibration that is
+not the device's current one:
+.B require
+refuses it, and
+.B current
+runs it with a warning. Unset, a circuit that names a calibration set is
+refused, and one that names a properties time runs.
+.TP
 .B max-concurrent-jobs
 How many of the device's circuits the QPM lets be at the provider at once,
 from submission to result. Optional. It is a whole number, at least 1, and a
