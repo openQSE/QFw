@@ -1,6 +1,8 @@
 import logging
+import os
 
 from .svc_qrc import QRC
+from util import isa
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.qpm.util_qpm import UTIL_QPM
 
@@ -8,6 +10,9 @@ FAKE_IQM_PROVIDER = "fake-iqm"
 FAKE_IQM_TARGET_ID = "fake-iqm-20q"
 FAKE_IQM_MAX_QUBITS = 20
 FAKE_IQM_MAX_SHOTS = 10_000
+# Stands in for the calibration a real device would report, so a test can move
+# it between compiling a circuit and running it.
+FAKE_IQM_CALIBRATION_ENV = "QFW_FAKE_IQM_CALIBRATION_SET_ID"
 
 
 def fake_iqm_20q_profile(device_id):
@@ -79,8 +84,18 @@ class QPM(UTIL_QPM):
 		logging.debug(f"Fake IQM {SERVICE_DESC}: {info}")
 		return info
 
+	def circuit_stages(self):
+		return [isa.STAGE_GENERIC, isa.STAGE_ISA]
+
+	def isa_device_id(self):
+		return FAKE_IQM_TARGET_ID
+
 	def prepare_circuit(self, info):
 		info = dict(info)
+		marker = isa.read_marker(info)
+		if marker is not None:
+			isa.check_calibration(
+				marker, os.environ.get(FAKE_IQM_CALIBRATION_ENV))
 		info["qfw_backend"] = FAKE_IQM_PROVIDER
 		info.setdefault("target_device_id", FAKE_IQM_TARGET_ID)
 		info.setdefault("num_qubits", FAKE_IQM_MAX_QUBITS)

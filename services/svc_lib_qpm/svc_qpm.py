@@ -5,6 +5,7 @@ from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.circuit_payload import qiskit_circuit_formats, OPENQASM2, PULSER
+from util import isa
 
 MAX_SHIM_QUBITS = 1024
 MAX_SHIM_SHOTS = 10000
@@ -133,6 +134,16 @@ class QPM(UTIL_QPM):
 		# __init__.
 		frontend = getattr(getattr(self, "qrc", None), "frontend", None)
 		return frontend.description_library() if frontend is not None else None
+
+	def circuit_stages(self):
+		return isa.circuit_stages(self._provider())
+
+	def isa_device_id(self):
+		# What query() publishes as device_id. Publishing it for a device
+		# named only by config would change the service's id.
+		from .descriptor import resolve_descriptor
+		return (os.environ.get('QFW_QPU_DEVICE_ID')
+			or resolve_descriptor().get("id"))
 
 	def prepare_circuit(self, info):
 		# The qhw backend tag names the provider this resource belongs to, as
