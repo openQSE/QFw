@@ -748,6 +748,8 @@ class QPMTargetController:
 			return {
 				"target_id": self.config.target_id,
 				"device_id": device_id or self._device_id(),
+				"usable_qubits": None,
+				"capacity_source": "qpm-controller-unscoped",
 				"scope_id": scope_id,
 				"timestamp_ns": now_ns,
 				"access_class": access_class,

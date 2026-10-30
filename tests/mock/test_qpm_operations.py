@@ -218,6 +218,8 @@ def test_managed_operations_flow_reports_telemetry(monkeypatch):
 	assert access_model["methods"]["get_capacity_snapshot"][
 		"access_class"] == "manager-aggregate"
 	assert capacity_before["active_reservation_count"] == 1
+	assert capacity_before["usable_qubits"] is None
+	assert capacity_before["capacity_source"] == "qpm-controller-unscoped"
 	assert response["outcome"] == "ACCEPTED"
 	assert response["lifecycle_state"] == "submitted"
 	assert status["scheduler_state"] == "running"
