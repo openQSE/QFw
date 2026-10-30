@@ -2,7 +2,8 @@ from .qfw_simulator import QFwBackend
 from .qfw_sampler import QFwSamplerV2
 from .qfw_estimator import QFwEstimatorV2
 from .qfw_job import QFwJob
-from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
+from .qfw_metadata import (
+	get_isa_marker, get_qubit_mapping, mark_isa, set_qubit_mapping)
 from .qfw_telemetry import QFwTelemetry
 
 __all__ = [
@@ -11,6 +12,8 @@ __all__ = [
 	'QFwEstimatorV2',
 	'QFwJob',
 	'QFwTelemetry',
+	'get_isa_marker',
 	'get_qubit_mapping',
+	'mark_isa',
 	'set_qubit_mapping',
 ]

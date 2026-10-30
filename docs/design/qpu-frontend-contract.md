@@ -586,8 +586,22 @@ executables, so they declare `openqasm2` only and reject any other format by
 name. The scheduler receives the circuit bytes as the QPM read them, so a
 compressed payload reaches it decompressed.
 
-Where transpilation happens is a separate decision that is still open. A
-circuit travels the same way whether it is abstract or already transpiled.
+A QPM still compiles a generic circuit itself, after dispatch. A job that
+compiles on its own CPUs marks the circuit instead, and a QPM runs a marked
+circuit as it stands or refuses it, so compiling does not hold the device. The
+marker (`util/isa.py`) names the provider, device and calibration the circuit
+was compiled for, and the label of each circuit index. It travels in the
+circuit's metadata and so survives a QPY file passed between jobs, and the
+client lifts it into `info["isa"]`, the only place a QPM reads it.
+
+A QPM declares what it takes in `circuit_stages`: `generic`, and `isa` for one
+whose circuits reach the provider unchanged. The shim declares `isa` for IBM and
+IQM. Braket compiles non-verbatim programs itself and Pasqal runs Pulser
+sequences, so neither takes it, and the native IQM service does not, because its
+client tier transpiles first. A QPM refuses from the request alone an undeclared
+stage, another device, a format other than QPY, and `compilation_options`.
+Before submitting, the drivers refuse a gate the device does not have on those
+qubits, and apply the device's `calibration-policy`.
 
 ## 14. Strategic positioning: implementation-first to a specification
 

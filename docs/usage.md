@@ -1139,6 +1139,25 @@ isa_circuit = transpile(circuit, target=target)
 job = backend.run(isa_circuit, shots=100)
 ```
 
+A circuit transpiled this way is still a generic circuit to the QPM, which may
+compile it again. To have a QPM run it as it stands or refuse it, mark it with
+the device it was compiled for:
+
+```python
+from qfw_qiskit import mark_isa
+
+mark_isa(isa_circuit, "iqm", "q20",
+         calibration={"kind": "set-id", "value": calibration_set_id},
+         qubit_labels=["QB1", "QB2", "QB3"])
+job = backend.run(isa_circuit, shots=100)
+```
+
+`qubit_labels` names each circuit index, and an IQM device needs it. The marker
+is kept in a QPY file, so one job can compile and another run. A QPM that does
+not take a marked circuit refuses it at submission; pass
+`isa_policy="generic"` to `run` to send it as a generic circuit instead. See the
+front-end contract for what a QPM checks.
+
 `backend.telemetry` is also usable on its own. `get_backend_info()`,
 `get_device_info()`, `get_coupling_graph()`, `get_calibration_snapshot()` and
 `get_dynamic_backend_info()` return the QPM's records, with the backend's shim
