@@ -245,3 +245,154 @@ def test_fake_iqm_refuses_a_stale_calibration_before_it_runs(monkeypatch):
 
 	with pytest.raises(DEFwExecutionError, match="compile it again"):
 		_fake_iqm().prepare_circuit(_info())
+
+
+# --- the drivers -------------------------------------------------------------
+
+class _Stop(Exception):
+	pass
+
+
+def _source(**info):
+	return types.SimpleNamespace(info=info, provider_credential=None)
+
+
+def _no_compile(*args, **kwargs):
+	raise AssertionError("a circuit compiled ahead of time was compiled again")
+
+
+def test_qrmi_iqm_sends_a_marked_circuit_through_the_isa_path(monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	seen = []
+
+	def build(circuit, dynamic, marker):
+		seen.append((circuit, marker))
+		raise _Stop()
+
+	monkeypatch.setattr(iqm_transcode, "build_iqm_circuit", _no_compile)
+	monkeypatch.setattr(iqm_transcode, "build_isa_iqm_circuit", build)
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
+	driver = QrmiDriver({"provider": "iqm"})
+	driver._resource = lambda: object()
+	driver._target = lambda credential=None: {
+		"dynamic_quantum_architecture": {"calibration_set_id": "cal-1"}}
+
+	with pytest.raises(_Stop):
+		driver._run_iqm_circuit(_source(**_info()))
+
+	assert seen == [("isa", _marker())]
+
+
+def test_qrmi_iqm_refuses_a_stale_calibration(monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	monkeypatch.setattr(iqm_transcode, "build_isa_iqm_circuit", _no_compile)
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
+	driver = QrmiDriver({"provider": "iqm"})
+	driver._resource = lambda: object()
+	driver._target = lambda credential=None: {
+		"dynamic_quantum_architecture": {"calibration_set_id": "cal-2"}}
+
+	with pytest.raises(DEFwExecutionError, match="compile it again"):
+		driver._run_iqm_circuit(_source(**_info()))
+
+
+def test_qrmi_ibm_checks_a_marked_circuit_instead_of_compiling_it(monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.ibm_transcode as ibm_transcode
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	checked = []
+	monkeypatch.setattr(ibm_transcode, "compile_circuit", _no_compile)
+	monkeypatch.setattr(
+		ibm_transcode, "require_isa_circuit",
+		lambda circuit, target: checked.append((circuit, target)) or circuit)
+	monkeypatch.setattr(
+		ibm_transcode, "qiskit_sampler_input_json",
+		lambda circuit, values, shots: "input-json")
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
+	driver = QrmiDriver({"provider": "ibm"})
+	driver._target = lambda credential=None: {
+		"properties": {"last_update_date": "t1"}}
+	driver._resource = lambda: types.SimpleNamespace(
+		Payload=types.SimpleNamespace(QiskitPrimitive=dict))
+	marker = isa.make_marker("ibm", "ibm_torino", calibration={
+		"kind": "properties-time", "value": "t1"})
+
+	payload = driver._build_ibm_payload(_source(isa=marker), "target")
+
+	assert checked == [("isa", "target")]
+	assert payload == {"input": "input-json", "program_id": "sampler"}
+
+
+def test_qrmi_ibm_still_compiles_a_generic_circuit(monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.ibm_transcode as ibm_transcode
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	compiled = []
+	monkeypatch.setattr(ibm_transcode, "require_isa_circuit", _no_compile)
+	monkeypatch.setattr(
+		ibm_transcode, "compile_circuit",
+		lambda circuit, target, options: compiled.append(circuit) or circuit)
+	monkeypatch.setattr(
+		ibm_transcode, "qiskit_sampler_input_json",
+		lambda circuit, values, shots: "input-json")
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "generic")
+	driver = QrmiDriver({"provider": "ibm"})
+	driver._resource = lambda: types.SimpleNamespace(
+		Payload=types.SimpleNamespace(QiskitPrimitive=dict))
+
+	driver._build_ibm_payload(_source(), "target")
+
+	assert compiled == ["generic"]
+
+
+class _Unsupported(Exception):
+	pass
+
+
+def _ibm_qdmi_encode(monkeypatch, info, preprocess, descriptor=None):
+	# Runs the IBM profile's encode with mqt.core's error and a circuit that
+	# passes its register checks standing in for the real ones.
+	import qiskit
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qdmi_profiles import IbmQdmiProfile
+	exceptions = types.ModuleType("mqt.core.plugins.qiskit.exceptions")
+	exceptions.UnsupportedOperationError = _Unsupported
+	qdmi = types.ModuleType("mqt.core.qdmi")
+	qdmi.ProgramFormat = types.SimpleNamespace(QASM3="fmt")
+	monkeypatch.setitem(sys.modules, exceptions.__name__, exceptions)
+	monkeypatch.setitem(sys.modules, qdmi.__name__, qdmi)
+	monkeypatch.setattr(qiskit, "transpile", _no_compile, raising=False)
+	circuit = types.SimpleNamespace(parameters=[], cregs=[], clbits=[])
+	monkeypatch.setattr(
+		iqm_transcode, "load_qiskit_circuit", lambda source: circuit)
+	backend = types.SimpleNamespace(_preprocess_circuit=preprocess)
+	driver = types.SimpleNamespace(_descriptor=descriptor or {})
+	profile = IbmQdmiProfile.__new__(IbmQdmiProfile)
+	return profile.encode(driver, "source", info, backend)
+
+
+def test_ibm_qdmi_does_not_fall_back_to_transpiling_a_marked_circuit(
+		monkeypatch):
+	def preprocess(circuit):
+		raise _Unsupported("not native")
+	marker = isa.make_marker("ibm", "ibm_torino")
+
+	with pytest.raises(DEFwExecutionError, match="compile it again"):
+		_ibm_qdmi_encode(monkeypatch, {"isa": marker}, preprocess)
+
+
+def test_ibm_qdmi_refuses_when_the_device_requires_a_calibration_it_cannot_read(
+		monkeypatch):
+	# QDMI reports no calibration identity for an IBM device, so a device
+	# that requires one has nothing to compare against.
+	marker = isa.make_marker("ibm", "ibm_torino", calibration={
+		"kind": "properties-time", "value": "t1"})
+
+	with pytest.raises(DEFwExecutionError, match="compile it again"):
+		_ibm_qdmi_encode(
+			monkeypatch, {"isa": marker}, _no_compile,
+			descriptor={"calibration_policy": isa.POLICY_REQUIRE})

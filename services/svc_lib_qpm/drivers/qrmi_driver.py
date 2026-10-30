@@ -27,7 +27,7 @@ from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
 		pasqal_backend_info, poll_schedule, reservation_cache_key)
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
-from util import instrumentation
+from util import instrumentation, isa
 import json
 import logging
 import os
@@ -1516,8 +1516,19 @@ class QrmiDriver(BaseDriver):
 				  " parameter name strings) for the following circuit parameters:"
 				  f" {[p.name for p in qiskit_circuit.parameters]}")
 
-		from util.ibm_transcode import compile_circuit
-		isa_circuit = compile_circuit(qiskit_circuit, target, compilation_options)
+		marker = isa.read_marker(info)
+		if marker is not None:
+			from util.ibm_transcode import require_isa_circuit
+			properties = self._target(credential=getattr(
+				source, "provider_credential", None)).get("properties") or {}
+			isa.check_calibration(
+				marker, properties.get("last_update_date"),
+				self._descriptor.get("calibration_policy"))
+			isa_circuit = require_isa_circuit(qiskit_circuit, target)
+		else:
+			from util.ibm_transcode import compile_circuit
+			isa_circuit = compile_circuit(
+				qiskit_circuit, target, compilation_options)
 
 		from util.ibm_transcode import qiskit_sampler_input_json
 		input_json = qiskit_sampler_input_json(isa_circuit, param_values, shots)
@@ -1546,10 +1557,17 @@ class QrmiDriver(BaseDriver):
 			or dynamic.get("calibration_set_id"))
 
 		from util.circuit_payload import qiskit_input
-		from util.iqm_transcode import build_iqm_circuit
+		from util.iqm_transcode import build_iqm_circuit, build_isa_iqm_circuit
 		with instrumentation.qpm_transpile():
 			circuit = qiskit_input(info)
-			iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
+			marker = isa.read_marker(info)
+			if marker is not None:
+				isa.check_calibration(
+					marker, dynamic.get("calibration_set_id"),
+					self._descriptor.get("calibration_policy"))
+				iqm_circuit = build_isa_iqm_circuit(circuit, dynamic, marker)
+			else:
+				iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
 			iqmjson, run_request = self._build_iqmjson(
 					iqm_circuit, shots, calibration_set_id)
 

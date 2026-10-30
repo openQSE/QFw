@@ -19,6 +19,14 @@ import logging
 import math
 import re
 
+# Operations check_iqm_loci reads differently from an entry in the
+# architecture's gates. An IQM reset is calibrated as reset_wait.
+IQM_OPERATION_GATES = {"reset": "reset_wait"}
+UNCHECKED_IQM_OPERATIONS = frozenset({"barrier", "delay"})
+# Calibrated per qubit, while the operation can hold several of them.
+QUBITWISE_IQM_OPERATIONS = frozenset({"measure", "reset", "reset_wait"})
+SYMMETRIC_IQM_OPERATIONS = frozenset({"cz"})
+
 
 def to_jsonable(value):
 	if value is None or isinstance(value, (str, int, float, bool)):
@@ -433,6 +441,64 @@ def openqasm2_for_manual_translation(circuit):
 		raise DEFwExecutionError(
 			"IQM could not serialize the circuit, and it cannot be written as "
 			f"OpenQASM 2 for the manual translation either: {exc}") from exc
+
+
+def _architecture_loci(gate):
+	loci = set()
+	for implementation in (gate.get("implementations") or {}).values():
+		for locus in implementation.get("loci") or ():
+			loci.add(tuple(str(qubit) for qubit in locus))
+	return loci
+
+
+def check_iqm_loci(iqm_circuit, dynamic_architecture):
+	# The serializer takes native gates on any qubits, so a circuit compiled
+	# for one device or calibration would reach another as it stands. Compare
+	# by label: a recalibration can shift the index space, not the names.
+	gates = to_jsonable(dynamic_architecture).get("gates") or {}
+	if not gates:
+		raise DEFwExecutionError(
+			"IQM cannot check a compiled circuit against an architecture "
+			"that names no gates")
+	loci = {name: _architecture_loci(gate) for name, gate in gates.items()}
+	for operation in iqm_circuit.instructions:
+		name = operation.name
+		if name in UNCHECKED_IQM_OPERATIONS:
+			continue
+		locus = tuple(str(qubit) for qubit in operation.locus or ())
+		known = loci.get(IQM_OPERATION_GATES.get(name, name))
+		if known is None:
+			raise DEFwExecutionError(
+				f"this device has no {name} operation")
+		if name in QUBITWISE_IQM_OPERATIONS:
+			supported = {qubit for entry in known for qubit in entry}
+			unsupported = set(locus) - supported
+			if unsupported:
+				raise DEFwExecutionError(
+					f"this device has no {name} on {sorted(unsupported)}")
+			continue
+		if name in SYMMETRIC_IQM_OPERATIONS:
+			supported = locus in known or locus[::-1] in known
+		else:
+			supported = locus in known
+		if not supported:
+			raise DEFwExecutionError(
+				f"this device has no {name} on {list(locus)}")
+
+
+def build_isa_iqm_circuit(circuit, dynamic_architecture, marker):
+	# A circuit compiled ahead of time goes out as it stands or not at all.
+	# None of build_iqm_circuit's tiers below the serializer apply: each of
+	# them would change the circuit, and its qubits come from the marker
+	# because the architecture's own order is not the compiler's.
+	labels = marker.get("qubit_labels")
+	if not labels:
+		raise DEFwExecutionError(
+			"an IQM circuit compiled ahead of time needs its qubit_labels")
+	iqm_circuit = serialize_qiskit_to_iqm(
+		circuit, dynamic_architecture, labels)
+	check_iqm_loci(iqm_circuit, dynamic_architecture)
+	return iqm_circuit
 
 
 def build_iqm_circuit(circuit, dynamic_architecture, mapping,

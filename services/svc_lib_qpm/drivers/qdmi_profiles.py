@@ -3,6 +3,7 @@
 
 from . import fomac_normalize
 from defw_exception import DEFwExecutionError
+from util import isa
 import os
 
 DEFAULT_PROVIDER = "iqm"
@@ -226,13 +227,21 @@ class IqmQdmiProfile(QdmiProfile):
 		# dynamic-architecture dict like QRMI's target(), so it is rebuilt
 		# from QDMI topology and the calibration set id (iqm_architecture).
 		# Serialization stays a driver method, so a test can stand in for it.
-		from util.iqm_transcode import build_iqm_circuit
+		from util.iqm_transcode import build_iqm_circuit, build_isa_iqm_circuit
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
 		device = backend.device
 		topo = fomac_normalize.extract_topology(device)
-		dynamic = iqm_architecture(topo, fomac_normalize._calibration_set_id(
-			device, self.calibration_set_slot))
-		iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
+		calibration_set_id = fomac_normalize._calibration_set_id(
+			device, self.calibration_set_slot)
+		dynamic = iqm_architecture(topo, calibration_set_id)
+		marker = isa.read_marker(info)
+		if marker is not None:
+			isa.check_calibration(
+				marker, calibration_set_id,
+				driver._descriptor.get("calibration_policy"))
+			iqm_circuit = build_isa_iqm_circuit(source, dynamic, marker)
+		else:
+			iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
 		return driver._serialize_program(iqm_circuit), "IQM_JSON", None
 
 
@@ -408,9 +417,19 @@ class IbmQdmiProfile(QdmiProfile):
 			raise DEFwExecutionError(
 				"IBM circuits require classical registers that partition "
 				"the classical bits in order")
+		marker = isa.read_marker(info)
+		if marker is not None:
+			# QDMI reports no calibration identity for an IBM device, so a
+			# device that requires one refuses here.
+			isa.check_calibration(
+				marker, None, driver._descriptor.get("calibration_policy"))
 		try:
 			circuit = backend._preprocess_circuit(circuit)
 		except UnsupportedOperationError:
+			if marker is not None:
+				raise DEFwExecutionError(
+					"this circuit was compiled ahead of time, but its gates "
+					"are not native to this device; compile it again")
 			circuit = transpile(circuit, backend=backend, optimization_level=1)
 			circuit = backend._preprocess_circuit(circuit)
 		backend._validate_circuit(circuit)
