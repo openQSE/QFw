@@ -1102,6 +1102,7 @@ class UTIL_QPM:
 						"advertised program input has no execution path")
 		selector = _qpm_selector(properties, svc_name, provider)
 		api_bindings = _qpm_api_bindings(service_module, service_class)
+		properties.setdefault("api_bindings", list(api_bindings))
 		controller_target_id = self.controller_telemetry().get("target_id")
 		if controller_target_id:
 			properties.setdefault(

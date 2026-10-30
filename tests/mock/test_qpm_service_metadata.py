@@ -104,7 +104,7 @@ def test_qpm_metadata_resolves_through_defw_directory_shape():
 		QPMCapability.QPM_CAP_SUPERCONDUCTING)
 	assert resolved.properties["controller_target_id"] == "iqm-target"
 	assert "controller" not in resolved.properties
-	assert "api_bindings" not in resolved.properties
+	assert resolved.properties["api_bindings"] == info["api_bindings"]
 	assert resolved.selector_metadata["resources"] == ["IQM-20q"]
 	assert resolved.api_binding.binding_name == "execution"
 	assert resolved.api_binding.client_module == "api_qpm_execution"
@@ -145,6 +145,11 @@ def test_supported_qpm_queries_publish_exact_execution_contract(
 	}]
 	assert "credentials" not in properties
 	assert "telemetry_methods" not in properties
+	assert any(
+		binding["binding_name"] == "execution"
+		and binding["version"] == 1
+		for binding in properties["api_bindings"]
+	)
 
 
 def test_nwqsim_publishes_authoritative_qhw_topology_and_operations():
