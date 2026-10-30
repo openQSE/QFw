@@ -99,6 +99,24 @@ def test_a_ghz_runs_through_the_clientless_path():
 	assert len(measures) == 3
 
 
+def test_a_ghz_transpiles_for_a_star_device():
+	# A star device routes through its computational resonator, so the
+	# transpiled circuit is one wider than backend.num_qubits. Naming qubits
+	# by backend.num_qubits left the resonator out and failed the transpile
+	# tier with a KeyError.
+	_iqm()
+	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
+	from util.iqm_transcode import build_iqm_circuit
+
+	iqm_circuit = build_iqm_circuit(
+		_ghz(), IQMFakeDeneb().architecture, None)
+
+	assert iqm_circuit.metadata.get("qfw_transpiled_to_iqm") is True
+	names = {op.name for op in iqm_circuit.instructions}
+	assert "move" in names, names
+	assert "CR1" in _loci(iqm_circuit)
+
+
 def test_the_serializer_alone_cannot_take_a_ghz():
 	# Why the transpile tier is load-bearing rather than an optimisation.
 	# Without it a GHZ reaches a tier that only accepts native operations.
