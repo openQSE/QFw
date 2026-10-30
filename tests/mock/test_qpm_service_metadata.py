@@ -168,6 +168,7 @@ def test_nwqsim_publishes_authoritative_qhw_topology_and_operations():
 	assert len(coupling["coupling"]["edges"]) == 32 * 31
 	assert [item["name"] for item in coupling["operations"]] == [
 		"rz", "sx", "x", "cx", "measure", "reset"]
+	assert coupling["operations"][0]["parameters"] == [{"name": "theta"}]
 	assert qpm.get_calibration_snapshot() is None
 
 

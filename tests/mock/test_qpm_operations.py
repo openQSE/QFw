@@ -220,6 +220,10 @@ def test_managed_operations_flow_reports_telemetry(monkeypatch):
 	assert capacity_before["active_reservation_count"] == 1
 	assert capacity_before["usable_qubits"] is None
 	assert capacity_before["capacity_source"] == "qpm-controller-unscoped"
+	allocation_capacity = qpm.get_capacity_snapshot(scope_id="ops-job")
+	assert allocation_capacity["usable_qubits"] == 2
+	assert allocation_capacity["capacity_source"] == (
+		"qpm-controller-allocation")
 	assert response["outcome"] == "ACCEPTED"
 	assert response["lifecycle_state"] == "submitted"
 	assert status["scheduler_state"] == "running"

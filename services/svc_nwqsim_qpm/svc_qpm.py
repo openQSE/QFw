@@ -46,7 +46,9 @@ def _qhw_coupling():
 			"edges": pairs,
 		},
 		"operations": [
-			{"name": "rz", "arity": 1, "supported_loci": single},
+			{"name": "rz", "arity": 1,
+			 "parameters": [{"name": "theta"}],
+			 "supported_loci": single},
 			{"name": "sx", "arity": 1, "supported_loci": single},
 			{"name": "x", "arity": 1, "supported_loci": single},
 			{"name": "cx", "arity": 2, "supported_loci": pairs},

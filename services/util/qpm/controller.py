@@ -745,11 +745,15 @@ class QPMTargetController:
 			      access_class=TELEMETRY_MANAGER_AGGREGATE):
 		with self.lock:
 			now_ns = time.time_ns()
+			usable_qubits = self._usable_qubits_for_scope_locked(scope_id)
 			return {
 				"target_id": self.config.target_id,
 				"device_id": device_id or self._device_id(),
-				"usable_qubits": None,
-				"capacity_source": "qpm-controller-unscoped",
+				"usable_qubits": usable_qubits,
+				"capacity_source": (
+					"qpm-controller-allocation"
+					if usable_qubits is not None
+					else "qpm-controller-unscoped"),
 				"scope_id": scope_id,
 				"timestamp_ns": now_ns,
 				"access_class": access_class,
@@ -773,6 +777,25 @@ class QPMTargetController:
 				"telemetry": self._telemetry_object_label(
 					"capacity-snapshot", access_class),
 			}
+
+	def _usable_qubits_for_scope_locked(self, scope_id):
+		if scope_id is None:
+			return None
+		matches = []
+		for metadata in self.reservation_metadata_by_id.values():
+			allocation_ids = (
+				metadata.get("external_allocation_id"),
+				metadata.get("external_job_id"),
+			)
+			if str(scope_id) not in {
+				str(value) for value in allocation_ids if value is not None
+			}:
+				continue
+			task_class = metadata.get("task_class") or {}
+			qubits = task_class.get("qubit_count")
+			if isinstance(qubits, int) and not isinstance(qubits, bool):
+				matches.append(qubits)
+		return max(matches) if matches else None
 
 	def queue_metrics(self, device_id=None,
 			  access_class=TELEMETRY_MANAGER_AGGREGATE):
