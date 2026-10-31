@@ -60,6 +60,7 @@ class FakeContext:
 	def __init__(self, routes):
 		self.routes = tuple(routes)
 		self.opened = []
+		self.target_requests = []
 
 	def list_routes(self, explain=False):
 		assert explain
@@ -69,6 +70,15 @@ class FakeContext:
 		self.opened.append(route)
 		return route
 
+	def compiler_target(self, route):
+		from libquantum_compiler_qiskit.target import qhw_to_qiskit_target
+		self.target_requests.append(route)
+		return qhw_to_qiskit_target(
+			route.device.qhw_device,
+			route.device.qhw_coupling,
+			route.device.qhw_calibration,
+		)
+
 
 def test_v2_exports_and_builds_target_from_one_owned_route():
 	context = FakeContext((_route(),))
@@ -76,6 +86,7 @@ def test_v2_exports_and_builds_target_from_one_owned_route():
 	assert QFwBackendV2.PROVIDER_ID == "qfw.libquantum"
 	assert QFwJobV2.__name__ == "QFwJobV2"
 	assert context.opened == list(context.routes)
+	assert context.target_requests == list(context.routes)
 	assert backend.target.num_qubits == 2
 	assert backend.target.operation_names == {
 		"rz", "sx", "x", "cx", "measure"

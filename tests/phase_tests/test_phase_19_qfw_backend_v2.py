@@ -116,6 +116,7 @@ def _bell(measure=True):
 def test_backend_and_qiskit_primitives_use_only_qiskit_public_objects():
 	backend, qpm = _backend()
 	try:
+		assert backend._context.compiler_target(backend._route) is backend.target
 		direct = backend.run(_bell(), shots=8)
 		assert direct.result(timeout=1).get_counts() == {"00": 8}
 		sampler = BackendSamplerV2(backend=backend)
@@ -137,5 +138,7 @@ def test_backend_and_qiskit_primitives_use_only_qiskit_public_objects():
 		)
 		assert not hasattr(backend, "qpm")
 		assert not hasattr(direct, "op_id")
+		assert backend._context.compiler_target(backend._route) is backend.target
+		assert len(backend._context._compiler_environment._target_cache) == 1
 	finally:
 		assert backend.shutdown(timeout=0).status is lq.FinalizeStatus.FINALIZED

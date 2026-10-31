@@ -3,9 +3,6 @@
 from qiskit.providers import BackendV2, Options
 from qiskit.providers.exceptions import QiskitBackendNotFoundError
 
-from .qhw_target import qhw_to_qiskit_target
-
-
 class QFwBackendV2(BackendV2):
 	"""Managed QFw backend using libquantum for discovery and execution."""
 
@@ -72,11 +69,7 @@ class QFwBackendV2(BackendV2):
 	def _attach_context(self, context, route_policy):
 		definition = _select_qiskit_route(context, route_policy)
 		route = context.open_route(definition)
-		target = qhw_to_qiskit_target(
-			route.device.qhw_device,
-			route.device.qhw_coupling,
-			route.device.qhw_calibration,
-		)
+		target = context.compiler_target(route)
 		self._context = context
 		self._route = route
 		self._target = target
