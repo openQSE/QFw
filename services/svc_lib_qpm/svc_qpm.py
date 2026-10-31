@@ -130,8 +130,6 @@ class QPM(UTIL_QPM):
 		return info
 
 	def _description_library(self):
-		# Read with getattr because the mock tests build a QPM without running
-		# __init__.
 		frontend = getattr(getattr(self, "qrc", None), "frontend", None)
 		return frontend.description_library() if frontend is not None else None
 
@@ -139,8 +137,7 @@ class QPM(UTIL_QPM):
 		return isa.circuit_stages(self._provider())
 
 	def isa_device_id(self):
-		# What query() publishes as device_id. Publishing it for a device
-		# named only by config would change the service's id.
+		# Publishing this as device_id would change the service's id.
 		from .descriptor import resolve_descriptor
 		return (os.environ.get('QFW_QPU_DEVICE_ID')
 			or resolve_descriptor().get("id"))

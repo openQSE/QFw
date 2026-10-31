@@ -48,9 +48,7 @@ EXECUTION_CALLS = frozenset({
 	"get_task_metadata",
 })
 
-# What a client reads to describe a device and build its target from.
-# get_dynamic_backend_info is not among them: the target does not read it, and
-# by default only QRMI serves it.
+# get_dynamic_backend_info is left out: by default only QRMI serves it.
 DESCRIPTION_CALLS = (
 	"get_backend_info",
 	"get_device_info",
@@ -152,13 +150,6 @@ class Frontend:
 		return {call: self._candidates(call) for call in CONTRACT_CALLS}
 
 	def description_library(self):
-		# The library a client should describe this device through, so the
-		# target it compiles for comes from the library its circuits run on.
-		# With no library named, the preference would serve these reads, and
-		# on a device wired for both that can be a different library from
-		# the execution owner. None when the owner does not serve them all,
-		# such as a QRMI Pasqal resource: routing then decides, as it does
-		# for every other call.
 		owner = self._execution_owner
 		if all(owner in self._candidates(call) for call in DESCRIPTION_CALLS):
 			return owner

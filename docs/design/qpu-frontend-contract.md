@@ -594,6 +594,17 @@ was compiled for, and the label of each circuit index. It travels in the
 circuit's metadata and so survives a QPY file passed between jobs, and the
 client lifts it into `info["isa"]`, the only place a QPM reads it.
 
+```json
+{"v": 1, "provider": "iqm", "device_id": "q20",
+ "calibration": {"kind": "set-id", "value": "<uuid>"},
+ "qubit_labels": ["QB1", "QB2"], "compiler": "qiskit 2.5.2"}
+```
+
+`qubit_labels` names each circuit index, in order, because index order alone is
+not safe: IQM leaves qubits with no `measure` out of its index space, and a star
+device adds its resonator to it. The marker grants nothing, and the circuit it
+describes is still checked against the device.
+
 A QPM declares what it takes in `circuit_stages`: `generic`, and `isa` for one
 whose circuits reach the provider unchanged. The shim declares `isa` for IBM and
 IQM. Braket compiles non-verbatim programs itself and Pasqal runs Pulser

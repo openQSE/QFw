@@ -19,11 +19,9 @@ import logging
 import math
 import re
 
-# Operations check_iqm_loci reads differently from an entry in the
-# architecture's gates. An IQM reset is calibrated as reset_wait.
+# An IQM reset is calibrated as reset_wait.
 IQM_OPERATION_GATES = {"reset": "reset_wait"}
 UNCHECKED_IQM_OPERATIONS = frozenset({"barrier", "delay"})
-# Calibrated per qubit, while the operation can hold several of them.
 QUBITWISE_IQM_OPERATIONS = frozenset({"measure", "reset", "reset_wait"})
 SYMMETRIC_IQM_OPERATIONS = frozenset({"cz"})
 
@@ -247,9 +245,7 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 		# this on transpile_to_IQM: pass the matching qubit_index_to_name.
 		# logical_to_physical_qubits already built that map, so use it, and
 		# only fall back to the device's full index map when nothing was
-		# restricted. That map follows the transpiled circuit, not
-		# backend.num_qubits: on a star device the circuit also holds the
-		# computational resonator, which backend.num_qubits does not count.
+		# restricted. A star device's circuit is wider than backend.num_qubits.
 		if index_to_name is None:
 			index_to_name = {
 				index: backend.index_to_qubit_name(index)
@@ -452,9 +448,7 @@ def _architecture_loci(gate):
 
 
 def check_iqm_loci(iqm_circuit, dynamic_architecture):
-	# The serializer takes native gates on any qubits, so a circuit compiled
-	# for one device or calibration would reach another as it stands. Compare
-	# by label: a recalibration can shift the index space, not the names.
+	# By label: a recalibration can shift the index space, not the names.
 	gates = to_jsonable(dynamic_architecture).get("gates") or {}
 	if not gates:
 		raise DEFwExecutionError(
@@ -487,10 +481,6 @@ def check_iqm_loci(iqm_circuit, dynamic_architecture):
 
 
 def build_isa_iqm_circuit(circuit, dynamic_architecture, marker):
-	# A circuit compiled ahead of time goes out as it stands or not at all.
-	# None of build_iqm_circuit's tiers below the serializer apply: each of
-	# them would change the circuit, and its qubits come from the marker
-	# because the architecture's own order is not the compiler's.
 	labels = marker.get("qubit_labels")
 	if not labels:
 		raise DEFwExecutionError(

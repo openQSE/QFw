@@ -247,8 +247,7 @@ class QFwBackend(BackendV2):
 	def _telemetry_context(self):
 		# What every telemetry call carries: the shim library a run would
 		# use, so the device described is the one the circuits reach, and
-		# the reservation context when the run context holds one. With no
-		# library chosen, that is the one the shim says describes the device.
+		# the reservation context when the run context holds one.
 		properties = getattr(self.qpm, "qpm_properties", None) or {}
 		context = {"lib": (self._shim_library() or
 				   properties.get("description_library"))}

@@ -420,8 +420,7 @@ class IbmQdmiProfile(QdmiProfile):
 		marker = isa.read_marker(info)
 		if marker is not None:
 			isa.check_index_labels(marker)
-			# QDMI reports no calibration identity for an IBM device, so a
-			# device that requires one refuses here.
+			# QDMI reports no calibration identity for an IBM device.
 			isa.check_calibration(
 				marker, None, driver._descriptor.get("calibration_policy"))
 		try:

@@ -178,15 +178,11 @@ def test_the_capability_map_offers_get_backend_info_on_both_libraries():
 
 
 def test_a_device_is_described_through_its_execution_owner():
-	# The preference serves unnamed reads, so a client that names no library
-	# would describe the device through QDMI and run on QRMI.
 	assert _frontend(["qrmi", "qdmi"]).description_library() == "qrmi"
 	assert _frontend(["qdmi"]).description_library() == "qdmi"
 
 
 def test_no_description_library_when_the_owner_cannot_serve_the_reads():
-	# Naming the owner here would fail every read, and a client falls back to
-	# the generic target on that. Routing still has to decide.
 	class _RunsOnly(_Library):
 		CAPABILITIES = frozenset({"get_backend_info", "run_circuit"})
 

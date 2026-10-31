@@ -45,8 +45,6 @@ def test_a_marker_survives_being_read_back():
 
 
 def test_a_marker_refuses_a_qubit_named_twice():
-	# Both circuit indices would land on QB1, and the circuit would still
-	# serialize.
 	with pytest.raises(DEFwExecutionError, match="QB1"):
 		isa.make_marker("iqm", DEVICE, qubit_labels=["QB1", "QB2", "QB1"])
 
@@ -220,14 +218,11 @@ def test_a_qpm_declares_generic_circuits_only_unless_it_says_otherwise():
 
 
 def test_a_qpm_that_does_not_take_isa_refuses_it_before_registering_it():
-	# __new__ leaves it no controller, so reaching registration would fail
-	# with an AttributeError rather than this refusal.
 	with pytest.raises(DEFwExecutionError, match="compiled ahead of time"):
 		_base_qpm().create_circuit(_info())
 
 
 def test_the_native_iqm_qpm_does_not_take_isa():
-	# Its client tier transpiles first, so it would re-route the circuit.
 	from svc_iqm_qpm.svc_qpm import QPM
 	qpm = QPM.__new__(QPM)
 
@@ -403,8 +398,6 @@ class _Unsupported(Exception):
 
 
 def _ibm_qdmi_encode(monkeypatch, info, preprocess, descriptor=None):
-	# Runs the IBM profile's encode with mqt.core's error and a circuit that
-	# passes its register checks standing in for the real ones.
 	import qiskit
 	import util.iqm_transcode as iqm_transcode
 	from svc_lib_qpm.drivers.qdmi_profiles import IbmQdmiProfile
@@ -443,8 +436,6 @@ def test_ibm_qdmi_refuses_labels_that_are_not_its_indices(monkeypatch):
 
 def test_ibm_qdmi_refuses_when_the_device_requires_a_calibration_it_cannot_read(
 		monkeypatch):
-	# QDMI reports no calibration identity for an IBM device, so a device
-	# that requires one has nothing to compare against.
 	marker = isa.make_marker("ibm", "ibm_torino", calibration={
 		"kind": "properties-time", "value": "t1"})
 
@@ -467,7 +458,6 @@ def _job(monkeypatch, properties, marker=None, **options):
 	fake_qpm = FakeQPM(cids=["cid-isa"])
 	fake_qpm.qpm_properties = properties
 	circuit = qfw_job.QuantumCircuit(2, name="compiled")
-	# Left from before compiling, which is what a stale mapping looks like.
 	set_qubit_mapping(circuit, ["QB9", "QB8"])
 	if marker is not None:
 		metadata = dict(circuit.metadata)
@@ -487,7 +477,6 @@ def test_the_client_lifts_the_marker_into_info(monkeypatch):
 
 	payload = fake_qpm.submitted_payloads[0]
 	assert payload["isa"] == _marker()
-	# The marker's labels name the compiled circuit, whatever came before.
 	assert payload["qubit_mapping"] == {"0": "QB1", "1": "QB2"}
 
 

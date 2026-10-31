@@ -74,9 +74,6 @@ def compile_circuit(circuit, target, compilation_options=None):
 
 
 def require_isa_circuit(circuit, target):
-	# A circuit marked as compiled ahead of time runs as it stands or not at
-	# all. _circuit_is_isa answers False when it cannot run its check, so that
-	# refuses here too.
 	if not _circuit_is_isa(circuit, target):
 		raise DEFwExecutionError(
 			"this circuit was compiled ahead of time, but its gates are not "
