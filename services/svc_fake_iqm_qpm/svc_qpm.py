@@ -90,6 +90,9 @@ class QPM(UTIL_QPM):
 	def isa_device_id(self):
 		return FAKE_IQM_TARGET_ID
 
+	def isa_provider(self):
+		return FAKE_IQM_PROVIDER
+
 	def prepare_circuit(self, info):
 		info = dict(info)
 		marker = isa.read_marker(info)

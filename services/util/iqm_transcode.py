@@ -495,8 +495,13 @@ def build_isa_iqm_circuit(circuit, dynamic_architecture, marker):
 	if not labels:
 		raise DEFwExecutionError(
 			"an IQM circuit compiled ahead of time needs its qubit_labels")
+	qiskit_circuit = load_qiskit_circuit(circuit)
+	if qiskit_circuit.num_qubits > len(labels):
+		raise DEFwExecutionError(
+			f"this circuit has {qiskit_circuit.num_qubits} qubits, and its "
+			f"marker names {len(labels)}")
 	iqm_circuit = serialize_qiskit_to_iqm(
-		circuit, dynamic_architecture, labels)
+		qiskit_circuit, dynamic_architecture, labels)
 	check_iqm_loci(iqm_circuit, dynamic_architecture)
 	return iqm_circuit
 

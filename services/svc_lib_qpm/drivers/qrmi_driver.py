@@ -1519,6 +1519,7 @@ class QrmiDriver(BaseDriver):
 		marker = isa.read_marker(info)
 		if marker is not None:
 			from util.ibm_transcode import require_isa_circuit
+			isa.check_index_labels(marker)
 			properties = self._target(credential=getattr(
 				source, "provider_credential", None)).get("properties") or {}
 			isa.check_calibration(

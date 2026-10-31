@@ -44,6 +44,26 @@ def test_a_marker_survives_being_read_back():
 	assert isa.read_marker({"isa": marker}) == marker
 
 
+def test_a_marker_refuses_a_qubit_named_twice():
+	# Both circuit indices would land on QB1, and the circuit would still
+	# serialize.
+	with pytest.raises(DEFwExecutionError, match="QB1"):
+		isa.make_marker("iqm", DEVICE, qubit_labels=["QB1", "QB2", "QB1"])
+
+
+def test_index_labels_pass_a_device_addressed_by_index():
+	isa.check_index_labels(isa.make_marker("ibm", DEVICE))
+	isa.check_index_labels(
+		isa.make_marker("ibm", DEVICE, qubit_labels=[0, 1, 2]))
+
+
+def test_other_labels_are_refused_on_a_device_addressed_by_index():
+	marker = isa.make_marker("ibm", DEVICE, qubit_labels=[2, 0, 1])
+
+	with pytest.raises(DEFwExecutionError, match="by index"):
+		isa.check_index_labels(marker)
+
+
 def test_no_marker_is_a_generic_circuit():
 	assert isa.requested({"qasm": "OPENQASM 2.0;"}) is False
 	assert isa.read_marker({"qasm": "OPENQASM 2.0;"}) is None
@@ -86,35 +106,44 @@ def test_a_provider_that_compiles_for_itself_does_not_take_isa(provider):
 # --- check_envelope ----------------------------------------------------------
 
 def test_the_envelope_passes_a_well_formed_request():
-	assert isa.check_envelope(_info(), STAGES, DEVICE) == _marker()
+	assert isa.check_envelope(_info(), STAGES, DEVICE, "iqm") == _marker()
 
 
 def test_the_envelope_ignores_a_generic_circuit():
-	assert isa.check_envelope({"qasm": "x"}, ["generic"], None) is None
+	assert isa.check_envelope({"qasm": "x"}, ["generic"], None, None) is None
 
 
 def test_the_envelope_refuses_a_qpm_that_does_not_take_isa():
 	with pytest.raises(DEFwExecutionError, match="compiled ahead of time"):
-		isa.check_envelope(_info(), [isa.STAGE_GENERIC], DEVICE)
+		isa.check_envelope(_info(), [isa.STAGE_GENERIC], DEVICE, "iqm")
 
 
 def test_the_envelope_refuses_another_device():
 	with pytest.raises(DEFwExecutionError, match="compiled for device"):
-		isa.check_envelope(_info(), STAGES, "q54")
+		isa.check_envelope(_info(), STAGES, "q54", "iqm")
+
+
+def test_the_envelope_refuses_another_provider():
+	with pytest.raises(DEFwExecutionError, match="'iqm'.*'ibm'"):
+		isa.check_envelope(_info(), STAGES, DEVICE, "ibm")
+
+
+def test_the_envelope_reads_the_provider_in_any_case():
+	assert isa.check_envelope(_info(), STAGES, DEVICE, "IQM")
 
 
 def test_the_envelope_refuses_openqasm():
 	info = _info(circuit=None, qasm="OPENQASM 2.0;")
 
 	with pytest.raises(DEFwExecutionError, match="QPY"):
-		isa.check_envelope(info, STAGES, DEVICE)
+		isa.check_envelope(info, STAGES, DEVICE, "iqm")
 
 
 def test_the_envelope_refuses_compilation_options():
 	info = _info(compilation_options={"optimization_level": 3})
 
 	with pytest.raises(DEFwExecutionError, match="compilation_options"):
-		isa.check_envelope(info, STAGES, DEVICE)
+		isa.check_envelope(info, STAGES, DEVICE, "iqm")
 
 
 # --- check_calibration -------------------------------------------------------
@@ -222,6 +251,14 @@ def test_the_shim_compares_the_device_it_publishes(monkeypatch):
 	assert QPM.__new__(QPM).isa_device_id() == DEVICE
 
 
+def test_the_shim_compares_the_provider_of_its_device():
+	from svc_lib_qpm.svc_qpm import QPM
+	qpm = QPM.__new__(QPM)
+	qpm._descriptor_provider = "iqm"
+
+	assert qpm.isa_provider() == "iqm"
+
+
 def _fake_iqm():
 	from svc_fake_iqm_qpm.svc_qpm import QPM
 	return QPM.__new__(QPM)
@@ -229,13 +266,14 @@ def _fake_iqm():
 
 def test_fake_iqm_takes_isa_for_its_own_device(monkeypatch):
 	from svc_fake_iqm_qpm.svc_qpm import (
-		FAKE_IQM_CALIBRATION_ENV, FAKE_IQM_TARGET_ID)
+		FAKE_IQM_CALIBRATION_ENV, FAKE_IQM_PROVIDER, FAKE_IQM_TARGET_ID)
 	monkeypatch.setenv(FAKE_IQM_CALIBRATION_ENV, "cal-1")
 	qpm = _fake_iqm()
-	info = _info(isa=_marker(device_id=FAKE_IQM_TARGET_ID))
+	info = _info(isa=_marker(
+		provider=FAKE_IQM_PROVIDER, device_id=FAKE_IQM_TARGET_ID))
 
 	assert isa.check_envelope(
-		info, qpm.circuit_stages(), qpm.isa_device_id())
+		info, qpm.circuit_stages(), qpm.isa_device_id(), qpm.isa_provider())
 	assert qpm.prepare_circuit(info)["isa"] == info["isa"]
 
 
@@ -327,6 +365,17 @@ def test_qrmi_ibm_checks_a_marked_circuit_instead_of_compiling_it(monkeypatch):
 	assert payload == {"input": "input-json", "program_id": "sampler"}
 
 
+def test_qrmi_ibm_refuses_labels_that_are_not_its_indices(monkeypatch):
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	from util import circuit_payload
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "marked")
+	driver = QrmiDriver({"provider": "ibm"})
+	marker = isa.make_marker("ibm", "ibm_torino", qubit_labels=[1, 0])
+
+	with pytest.raises(DEFwExecutionError, match="by index"):
+		driver._build_ibm_payload(_source(isa=marker), "target")
+
+
 def test_qrmi_ibm_still_compiles_a_generic_circuit(monkeypatch):
 	import util.circuit_payload as circuit_payload
 	import util.ibm_transcode as ibm_transcode
@@ -383,6 +432,13 @@ def test_ibm_qdmi_does_not_fall_back_to_transpiling_a_marked_circuit(
 
 	with pytest.raises(DEFwExecutionError, match="compile it again"):
 		_ibm_qdmi_encode(monkeypatch, {"isa": marker}, preprocess)
+
+
+def test_ibm_qdmi_refuses_labels_that_are_not_its_indices(monkeypatch):
+	marker = isa.make_marker("ibm", "ibm_torino", qubit_labels=[1, 0])
+
+	with pytest.raises(DEFwExecutionError, match="by index"):
+		_ibm_qdmi_encode(monkeypatch, {"isa": marker}, _no_compile)
 
 
 def test_ibm_qdmi_refuses_when_the_device_requires_a_calibration_it_cannot_read(
