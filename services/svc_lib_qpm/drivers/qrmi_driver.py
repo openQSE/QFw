@@ -1052,34 +1052,43 @@ class QrmiDriver(BaseDriver):
 		# serve every introspection call from the cache, so the four calls
 		# don't each re-fetch the same payload. An entry lasts
 		# target_ttl_seconds: the device recalibrates under a long-running
-		# service, and nothing evicts the entry a service reads as itself.
+		# service, and nothing evicts the entry a service reads as itself. A
+		# failed refresh keeps the expired entry.
 		cache_key = self._credential_cache_key(credential)
-		if not self._target_is_fresh(cache_key):
-			try:
-				target_data = json.loads(
-					self._qpu(credential=credential).target().value)
-			except Exception as exc:
-				raise self._qrmi_error(
-					exc, "failed to read QRMI target()") from exc
+		cached = self._target_cache.get(cache_key)
+		if cached is not None and self._target_is_fresh(cache_key):
+			return cached
+		try:
+			target_data = json.loads(
+				self._qpu(credential=credential).target().value)
+		except Exception as exc:
+			if cached is not None:
+				logging.warning(
+					f"shim: keeping the cached QRMI target, refresh failed: {exc}")
+				return cached
+			raise self._qrmi_error(
+				exc, "failed to read QRMI target()") from exc
 
-			# IBM target() returns null for configuration or properties on failure.
-			# To avoid caching a failed or half-failed payload (which would stick
-			# in the cache after IBM recovers), do not cache if either is None.
-			if self._provider() == "ibm":
-				if (
-					isinstance(target_data, dict)
-					and target_data.get("configuration") is not None
-					and target_data.get("properties") is not None
-				):
-					self._cache_target(cache_key, target_data)
-			else:
-				self._cache_target(cache_key, target_data)
+		# IBM target() returns null for configuration or properties on failure.
+		# To avoid caching a failed or half-failed payload (which would stick
+		# in the cache after IBM recovers), do not cache if either is None.
+		if self._provider() == "ibm" and not (
+			isinstance(target_data, dict)
+			and target_data.get("configuration") is not None
+			and target_data.get("properties") is not None
+		):
+			if cached is not None:
+				logging.warning(
+					"shim: keeping the cached QRMI target, the refresh was "
+					"incomplete")
+				return cached
 			return target_data
-		return self._target_cache[cache_key]
+		self._cache_target(cache_key, target_data)
+		return target_data
 
 	def _target_is_fresh(self, cache_key):
 		fetched_at = self._target_fetched_at.get(cache_key)
-		return (fetched_at is not None and cache_key in self._target_cache
+		return (fetched_at is not None
 			and time.monotonic() - fetched_at < self._target_ttl_seconds)
 
 	def _cache_target(self, cache_key, target_data):
