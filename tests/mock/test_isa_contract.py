@@ -222,6 +222,27 @@ def test_a_qpm_that_does_not_take_isa_refuses_it_before_registering_it():
 		_base_qpm().create_circuit(_info())
 
 
+@pytest.mark.parametrize("device, provider, refusal", [
+	("q54", "iqm", "'q54'"),
+	(DEVICE, "ibm", "'ibm'"),
+])
+def test_a_qpm_compares_its_own_device_and_provider(device, provider, refusal):
+	from util.qpm.util_qpm import UTIL_QPM
+
+	class QPM(UTIL_QPM):
+		def circuit_stages(self):
+			return STAGES
+
+		def isa_device_id(self):
+			return device
+
+		def isa_provider(self):
+			return provider
+
+	with pytest.raises(DEFwExecutionError, match=refusal):
+		QPM.__new__(QPM).create_circuit(_info())
+
+
 def test_the_native_iqm_qpm_does_not_take_isa():
 	from svc_iqm_qpm.svc_qpm import QPM
 	qpm = QPM.__new__(QPM)
