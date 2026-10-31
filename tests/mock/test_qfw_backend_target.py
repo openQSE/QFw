@@ -221,7 +221,6 @@ def test_telemetry_reads_through_the_library_the_shim_describes_with(monkeypatch
 
 	assert backend._telemetry_context()["lib"] == "qrmi"
 
-	# A library the application chose still wins.
 	backend.options.lib = "qdmi"
 	assert backend._telemetry_context()["lib"] == "qdmi"
 

@@ -100,10 +100,6 @@ def test_a_ghz_runs_through_the_clientless_path():
 
 
 def test_a_ghz_transpiles_for_a_star_device():
-	# A star device routes through its computational resonator, so the
-	# transpiled circuit is one wider than backend.num_qubits. Naming qubits
-	# by backend.num_qubits left the resonator out and failed the transpile
-	# tier with a KeyError.
 	_iqm()
 	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
 	from util.iqm_transcode import build_iqm_circuit

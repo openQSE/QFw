@@ -115,8 +115,6 @@ PASQAL_CAPABILITIES = frozenset({
 	"get_task_metadata",
 })
 
-# How long a QRMI target() payload is served from the cache, in seconds. 0 reads
-# the device every time.
 TARGET_TTL_ENV = "QFW_QPU_TARGET_TTL_SECONDS"
 DEFAULT_TARGET_TTL_SECONDS = 300
 
@@ -1050,10 +1048,7 @@ class QrmiDriver(BaseDriver):
 		# QRMI target() is a remote call returning raw IQM JSON (dynamic
 		# architecture / calibration_set / quality_metrics). Parse it once and
 		# serve every introspection call from the cache, so the four calls
-		# don't each re-fetch the same payload. An entry lasts
-		# target_ttl_seconds: the device recalibrates under a long-running
-		# service, and nothing evicts the entry a service reads as itself. A
-		# failed refresh keeps the expired entry.
+		# don't each re-fetch the same payload.
 		cache_key = self._credential_cache_key(credential)
 		cached = self._target_cache.get(cache_key)
 		if cached is not None and self._target_is_fresh(cache_key):

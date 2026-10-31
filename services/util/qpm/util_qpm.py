@@ -235,16 +235,12 @@ class UTIL_QPM:
 		return info
 
 	def circuit_stages(self):
-		# What this QPM takes: generic circuits, which it compiles itself, and
-		# for a QPM that says so, circuits compiled ahead of time. See util.isa.
 		return list(isa.DEFAULT_CIRCUIT_STAGES)
 
 	def isa_device_id(self):
-		# The device a circuit compiled ahead of time has to name.
 		return None
 
 	def isa_provider(self):
-		# The provider a circuit compiled ahead of time has to name.
 		return None
 
 	def delete_circuit(self, cid, reservation_id=None, token=None):

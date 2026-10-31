@@ -33,7 +33,6 @@ QUBITS = ["QB1", "QB2", "QB3"]
 
 
 def _architecture():
-	# A chain: QB1-QB2-QB3, so QB1 and QB3 are not coupled.
 	single = [[qubit] for qubit in QUBITS]
 	return {
 		"calibration_set_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -92,7 +91,6 @@ def test_a_marked_circuit_keeps_the_qubits_it_was_compiled_onto():
 
 
 def test_a_marked_circuit_names_its_qubits_by_label_not_by_device_order():
-	# Device order says index 0 is QB1. The compiler said it is QB3.
 	iqm_transcode = _iqm()
 	labels = ["QB3", "QB2", "QB1"]
 
@@ -103,8 +101,6 @@ def test_a_marked_circuit_names_its_qubits_by_label_not_by_device_order():
 
 
 def test_a_marked_circuit_is_not_compiled_to_fit():
-	# A generic h would be transpiled. A marked one says it was compiled, so
-	# it is wrong, and rewriting it would hide that.
 	iqm_transcode = _iqm()
 	circuit = QuantumCircuit(3, 1)
 	circuit.h(0)
@@ -116,8 +112,6 @@ def test_a_marked_circuit_is_not_compiled_to_fit():
 
 
 def test_a_marked_circuit_on_uncoupled_qubits_is_refused():
-	# The gate is native, so the serializer takes it. Only the architecture
-	# says this pair has no coupler.
 	iqm_transcode = _iqm()
 
 	with pytest.raises(DEFwExecutionError, match="no cz"):
@@ -126,7 +120,6 @@ def test_a_marked_circuit_on_uncoupled_qubits_is_refused():
 
 
 def test_a_generic_circuit_on_uncoupled_qubits_still_serializes():
-	# What the check adds: without a marker this is the path it always was.
 	iqm_transcode = _iqm()
 
 	built = iqm_transcode.build_iqm_circuit(
@@ -171,7 +164,6 @@ def test_an_architecture_with_no_gates_cannot_vouch_for_a_circuit():
 
 
 def _star_circuit():
-	# Compiled the way a client does, resonator and all.
 	_iqm()
 	from iqm.qiskit_iqm import transpile_to_IQM
 	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
@@ -200,7 +192,6 @@ def test_a_circuit_compiled_for_a_star_device_runs_through_its_resonator():
 
 
 def test_a_move_is_directed():
-	# A cz is the same either way round. A move is not.
 	iqm_transcode = _iqm()
 	compiled, labels, architecture = _star_circuit()
 	built = iqm_transcode.build_isa_iqm_circuit(
@@ -215,8 +206,6 @@ def test_a_move_is_directed():
 
 
 def test_the_marker_survives_the_trip_to_the_qpm():
-	# A compile job writes a QPY file, a run job reads it, and the client
-	# encodes it for the QPM. The circuit the QPM loads is the compiled one.
 	circuit = _native(1, 2)
 	circuit.metadata = {"qfw": {"isa": _marker()}}
 	handed_over = io.BytesIO()

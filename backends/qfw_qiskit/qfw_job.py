@@ -28,10 +28,6 @@ EXECUTION_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
-# isa_policy="generic" sends a circuit marked as compiled ahead of time to a QPM
-# that does not take one, as a generic circuit, which that QPM may compile
-# again. That covers an older QPM, and a simulator asked to run a circuit
-# compiled for a device.
 ISA_POLICY_GENERIC = "generic"
 
 # Run options forwarded to the QPM through the job's info dict. param_values
@@ -202,7 +198,7 @@ class QFwJob(Job):
 		param_values = self._options.get("param_values")
 		if param_values is not None:
 			param_values = normalize_param_values(param_values)
-		marker = self._isa_marker(circuit)
+		marker = self._marker_this_qpm_takes(circuit)
 		# get num_qubits from experiment
 		num_qubits = circuit.num_qubits
 		# let's form the info object to give to QFw!!
@@ -245,9 +241,7 @@ class QFwJob(Job):
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
 
-	def _isa_marker(self, circuit):
-		# The marker to send with a circuit, refusing before it is serialized
-		# when this QPM would not honour it.
+	def _marker_this_qpm_takes(self, circuit):
 		marker = get_isa_marker(circuit)
 		if marker is None:
 			return None

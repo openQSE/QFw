@@ -10,8 +10,6 @@ FAKE_IQM_PROVIDER = "fake-iqm"
 FAKE_IQM_TARGET_ID = "fake-iqm-20q"
 FAKE_IQM_MAX_QUBITS = 20
 FAKE_IQM_MAX_SHOTS = 10_000
-# Stands in for the calibration a real device would report, so a test can move
-# it between compiling a circuit and running it.
 FAKE_IQM_CALIBRATION_ENV = "QFW_FAKE_IQM_CALIBRATION_SET_ID"
 
 
