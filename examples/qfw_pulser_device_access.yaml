@@ -11,6 +11,24 @@ qpus:
     credential-provider: pasqal-no-secret
     libraries:
       - qrmi
+      - qdmi
+    preference: qrmi
+    execution-owner: qrmi
+    caps:
+      get_backend_info:
+        - qrmi
+        - qdmi
+      get_device_info:
+        - qdmi
+      run_circuit:
+        - qrmi
+        - qdmi
+      get_task_timing:
+        - qrmi
+        - qdmi
+      get_task_metadata:
+        - qrmi
+        - qdmi
     job-timeout-seconds: 1800
   # Pasqal's FRESNEL QPU, set up as pasqal-emu-free is. Its jobs queue behind
   # other users', so the wait allowed is longer.
@@ -23,6 +41,24 @@ qpus:
     credential-provider: pasqal-no-secret
     libraries:
       - qrmi
+      - qdmi
+    preference: qrmi
+    execution-owner: qrmi
+    caps:
+      get_backend_info:
+        - qrmi
+        - qdmi
+      get_device_info:
+        - qdmi
+      run_circuit:
+        - qrmi
+        - qdmi
+      get_task_timing:
+        - qrmi
+        - qdmi
+      get_task_metadata:
+        - qrmi
+        - qdmi
     job-timeout-seconds: 3600
 
 credential-providers:

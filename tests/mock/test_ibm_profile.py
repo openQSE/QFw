@@ -254,7 +254,7 @@ def test_native_submission_preserves_classical_counts(monkeypatch):
 	def to_result_record(result, shots, provider, device_id, **kwargs):
 		records.append((result, shots, provider, device_id, kwargs))
 		return {"schema": "qhw-result-v1"}
-	monkeypatch.setattr(qdmi_driver.fomac_normalize, "to_result_record", to_result_record)
+	monkeypatch.setattr(qdmi_driver.qdmi_normalize, "to_result_record", to_result_record)
 	circuit = types.SimpleNamespace(
 		info={"qasm": "source", "num_shots": 10, "poll_interval": 0.0},
 		get_cid=lambda: "cid-ibm")

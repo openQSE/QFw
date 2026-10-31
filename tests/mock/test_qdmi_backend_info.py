@@ -17,7 +17,7 @@ if SERVICES not in sys.path:
 	sys.path.insert(0, SERVICES)
 
 from svc_lib_qpm.descriptor import DEFAULT_CAPS  # noqa: E402
-from svc_lib_qpm.drivers import fomac_normalize  # noqa: E402
+from svc_lib_qpm.drivers import qdmi_normalize  # noqa: E402
 from svc_lib_qpm.drivers.qdmi_driver import QdmiDriver  # noqa: E402
 from svc_lib_qpm.frontend import Frontend, NotImplementedByLibrary  # noqa: E402
 
@@ -84,7 +84,7 @@ def test_get_backend_info_is_the_qrmi_composite_from_the_topology(monkeypatch):
 		records.append((topo, provider, device_id, kwargs))
 		return {"schema": "qhw-device-v1", "qubits": topo["qubits"]}
 
-	monkeypatch.setattr(fomac_normalize, "to_device_record", to_device_record)
+	monkeypatch.setattr(qdmi_normalize, "to_device_record", to_device_record)
 
 	info = _driver(device).get_backend_info()
 
@@ -109,7 +109,7 @@ def test_get_backend_info_is_the_qrmi_composite_from_the_topology(monkeypatch):
 def test_a_provider_without_a_calibration_slot_reports_none(monkeypatch):
 	_install_custom_property(monkeypatch)
 	monkeypatch.setattr(
-		fomac_normalize, "to_device_record",
+		qdmi_normalize, "to_device_record",
 		lambda topo, provider, device_id, **kwargs: {"qubits": topo["qubits"]})
 	device = _device()
 	driver = _driver(device)
@@ -194,7 +194,7 @@ def test_a_reservation_bound_read_opens_the_qdmi_device_with_its_credential(
 	# the call; QDMI is the default for this one.
 	_install_custom_property(monkeypatch)
 	monkeypatch.setattr(
-		fomac_normalize, "to_device_record",
+		qdmi_normalize, "to_device_record",
 		lambda topo, provider, device_id, **kwargs: {"qubits": topo["qubits"]})
 	driver = _driver(_device())
 	opened = []

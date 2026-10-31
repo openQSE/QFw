@@ -364,7 +364,7 @@ def test_the_qdmi_driver_transcodes_the_declared_circuit(monkeypatch):
 	monkeypatch.setattr(
 		circuit_payload, "load_qpy", lambda data: ("loaded", data))
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
+		qdmi_driver.qdmi_normalize, "extract_topology",
 		lambda device: {"qubits": ["QB1"]})
 	driver = qdmi_driver.QdmiDriver({"provider": "iqm"})
 	stub_qdmi_session(driver)

@@ -279,7 +279,7 @@ by the library itself.** Two shapes cover what we have:
   by a provider adapter (`qhw-iqm`), which also captures provider-specific extras
   such as calibration and quality metrics.
 - **Neutral query interface** — MQT Core's QDMI API exposes vendor-neutral
-  device queries. `drivers/fomac_normalize.py` turns these queries into qhw
+  device queries. `drivers/qdmi_normalize.py` turns these queries into qhw
   records.
 
 For Amazon Braket, `services/util/braket_transcode.py` converts QPY or
@@ -435,7 +435,7 @@ concern.
    Only a language-neutral definition can serve as the open specification that
    QRMI (Rust + C + Python) and QDMI (C) each implement against (Section 14).
 5. **Normalization strategy** — shape-driven (today: `qhw-iqm` for libraries
-   that expose raw IQM data, `fomac_normalize` for those that expose QDMI's
+   that expose raw IQM data, `qdmi_normalize` for those that expose QDMI's
    neutral query interface) versus a single `Target`-based normalizer for
    all libraries. The latter is uniform and works for any `BackendV2`, but gives
    up the provider adapter's calibration/quality richness for libraries that
@@ -454,7 +454,7 @@ but they are normalized differently, because they expose different things. QDMI
 is *vendor-neutral*: MQT Core's QDMI query interface (`mqt.core.qdmi`) exposes
 the device's real qubit labels, coupling map, gate loci, and calibration
 directly, so the QDMI driver reads them off the QDMI `Device` and normalizes
-with `drivers/fomac_normalize.py` — no Qiskit `Target`, no raw vendor data.
+with `drivers/qdmi_normalize.py` — no Qiskit `Target`, no raw vendor data.
 QRMI's `QuantumResource.target()` returns the *raw IQM data* (dynamic
 architecture / calibration / quality sets), so the QRMI driver feeds that
 straight to **`qhw-iqm`** — the same normalizer the native `svc_iqm_qpm` path
@@ -475,7 +475,7 @@ library says which calibration it was taken under. QRMI reads it from the
 is where QDMI-on-IQM publishes it. That slot is the wrinkle worth knowing:
 QDMI's custom device properties are numbered, not named, so the neutral model
 carries provider calibration identity only for a consumer that already knows
-the provider's slot convention. `drivers/fomac_normalize.py` keeps that
+the provider's slot convention. `drivers/qdmi_normalize.py` keeps that
 assumption in one constant.
 
 In the default IQM q20 descriptor both calls list `[qdmi, qrmi]` and the
@@ -511,7 +511,7 @@ single transcoded circuit through QDMI's `submit_job` with the `IQM_JSON`
 program format (QDMI-on-IQM wraps the circuit into a run request itself, where
 QRMI submits the whole run request — a genuine interface difference), polls
 `Job.check()`, reads `Job.get_counts()`, and normalizes to the same
-`qhw-result-v1` via `fomac_normalize.to_result_record`. In the descriptor
+`qhw-result-v1` via `qdmi_normalize.to_result_record`. In the descriptor
 `run_circuit` and the job calls list `[qrmi, qdmi]`; the execution owner (QRMI)
 serves the default, and `--lib qdmi` runs the QDMI path. A task's timing and
 metadata are read from the library that ran it, unless the call names another.

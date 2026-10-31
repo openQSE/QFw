@@ -302,6 +302,25 @@ The API key and service-instance CRN are bound to the reservation. A device's
 the existing shim service. Bind all parameters and use classical registers
 that cover each classical bit once, in bit order.
 
+### Pasqal
+
+Install `pasqal-qdmi[core,pulser]==1.0.0` from PyPI through
+`setup/qdmi-requirements.txt` (Python 3.11 or newer). Pasqal uses native
+Pulser JSON through QDMI; bind variables and register mappings and include a
+measurement before calling `Sequence.to_abstract_repr()`. The shim advertises
+`pulser-abstract-repr` and submits it as QDMI `ProgramFormat.CUSTOM1`.
+
+The existing reservation-bound `api_key`/`token` and `project_id` fields
+configure the QDMI session. The device's `project-id` supplies a default.
+Alternatively, the native library authenticates as the service account. Set
+`PASQAL_EMAIL`, `PASQAL_PASSWORD` and `PASQAL_PROJECT_ID` securely in the QPM
+process, or use a private `PASQAL_AUTHFILE`. Use an `entitlement` credential
+provider to authorize service-account reservations. `get_backend_info`
+serves the same `pulser_devices` record as QRMI, so the existing
+`qfw_pulser.QFwConnection(lib="qdmi")` client works unchanged. The
+[Pasqal recipe](recipes/run-against-pasqal.md) covers configuration, atom order,
+and submission through the existing QPM API.
+
 ## Step 4. Add a QPM Shim Service
 
 Add a service entry that uses the shim module and points at the logical machine.

@@ -150,7 +150,7 @@ def architecture_backend(dynamic_architecture):
 			to_jsonable(dynamic_architecture))
 	except Exception as exc:
 		# A caller that only knows the qubit list (the QDMI profile, when
-		# it cannot rebuild the architecture from FoMaC) cannot transpile,
+		# it cannot rebuild the architecture from QDMI) cannot transpile,
 		# and the caller falls back to serializing a circuit that is already
 		# native.
 		raise DEFwExecutionError(

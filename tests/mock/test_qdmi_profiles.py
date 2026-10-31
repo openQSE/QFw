@@ -16,7 +16,7 @@ if SERVICES not in sys.path:
 	sys.path.insert(0, SERVICES)
 
 from defw_exception import DEFwExecutionError  # noqa: E402
-from svc_lib_qpm.drivers import fomac_normalize, qdmi_driver  # noqa: E402
+from svc_lib_qpm.drivers import qdmi_normalize, qdmi_driver  # noqa: E402
 from svc_lib_qpm.drivers.qdmi_driver import QdmiDriver  # noqa: E402
 from svc_lib_qpm.drivers.qdmi_profiles import (  # noqa: E402
 	IqmQdmiProfile, profile_for)
@@ -34,14 +34,14 @@ def test_operation_loci_keep_ordered_three_qubit_tuples():
 	sites = [types.SimpleNamespace(name=lambda n=n: n)
 		for n in ["QB1", "QB2", "QB3", "QB3", "QB2", "QB1"]]
 	op = types.SimpleNamespace(sites=lambda: sites, qubits_num=lambda: 3)
-	assert fomac_normalize._operation_loci(op) == [
+	assert qdmi_normalize._operation_loci(op) == [
 		["QB1", "QB2", "QB3"], ["QB3", "QB2", "QB1"]]
 
 
 @pytest.mark.parametrize("arity", [None, 0])
 def test_unknown_arity_does_not_invent_site_tuples(arity):
 	op = types.SimpleNamespace(sites=lambda: [object()], qubits_num=lambda: arity)
-	assert fomac_normalize._operation_loci(op) == []
+	assert qdmi_normalize._operation_loci(op) == []
 
 
 def test_unsupported_arity_does_not_abort_introspection():
@@ -49,7 +49,7 @@ def test_unsupported_arity_does_not_abort_introspection():
 		raise NotImplementedError
 	op = types.SimpleNamespace(name=lambda: "measure", sites=lambda: [object()], qubits_num=qubits_num)
 	device = types.SimpleNamespace(operations=lambda: [op])
-	assert fomac_normalize._operations(device) == {"measure": []}
+	assert qdmi_normalize._operations(device) == {"measure": []}
 
 
 @pytest.mark.parametrize("variable", [
@@ -272,7 +272,7 @@ def test_the_iqm_profile_encodes_an_iqm_json_program(monkeypatch):
 
 	monkeypatch.setattr(iqm_transcode, "build_iqm_circuit", build_iqm_circuit)
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
+		qdmi_driver.qdmi_normalize, "extract_topology",
 		lambda device: {"qubits": ["QB1", "QB2"]})
 	driver = QdmiDriver({"provider": "iqm"})
 	driver._serialize_program = lambda iqm_circuit: f"json:{iqm_circuit}"
@@ -289,7 +289,7 @@ def test_the_iqm_profile_encodes_an_iqm_json_program(monkeypatch):
 
 # --- the IQM architecture rebuilt from QDMI ----------------------------------
 
-def _fomac_topology():
+def _qdmi_topology():
 	# Shaped like extract_topology's output for the q20, cut to three qubits.
 	return {
 		"num_qubits": 3,
@@ -303,10 +303,10 @@ def _fomac_topology():
 	}
 
 
-def test_the_iqm_architecture_is_rebuilt_from_fomac_topology():
+def test_the_iqm_architecture_is_rebuilt_from_qdmi_topology():
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	arch = iqm_architecture(_fomac_topology(), "cal-set-1")
+	arch = iqm_architecture(_qdmi_topology(), "cal-set-1")
 
 	assert arch["calibration_set_id"] == "cal-set-1"
 	assert arch["qubits"] == ["QB1", "QB2", "QB3"]
@@ -324,7 +324,7 @@ def test_without_a_calibration_set_only_the_qubits_are_passed():
 	# and build_iqm_circuit serializes an already-native circuit, as before.
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	assert iqm_architecture(_fomac_topology(), None) == {
+	assert iqm_architecture(_qdmi_topology(), None) == {
 		"qubits": ["QB1", "QB2", "QB3"]}
 
 
@@ -333,7 +333,7 @@ def test_without_a_measure_gate_only_the_qubits_are_passed():
 	# which build_iqm_circuit would not fall back on, when there is none.
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	topology = _fomac_topology()
+	topology = _qdmi_topology()
 	del topology["operations"]["measure"]
 
 	assert iqm_architecture(topology, "cal-set-1") == {
@@ -345,7 +345,7 @@ def test_a_locus_outside_the_qubits_means_only_the_qubits_are_passed():
 	# resonators, so a device with them is not rebuilt.
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	topology = _fomac_topology()
+	topology = _qdmi_topology()
 	topology["operations"]["move"] = [["QB1", "CR1"]]
 
 	assert iqm_architecture(topology, "cal-set-1") == {
@@ -369,10 +369,10 @@ def test_the_iqm_profile_transcodes_against_the_rebuilt_architecture(
 
 	monkeypatch.setattr(iqm_transcode, "build_iqm_circuit", build_iqm_circuit)
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
-		lambda device: _fomac_topology())
+		qdmi_driver.qdmi_normalize, "extract_topology",
+		lambda device: _qdmi_topology())
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "_calibration_set_id",
+		qdmi_driver.qdmi_normalize, "_calibration_set_id",
 		calibration_set_id)
 	driver = QdmiDriver({"provider": "iqm"})
 	driver._serialize_program = lambda iqm_circuit: f"json:{iqm_circuit}"
@@ -380,7 +380,7 @@ def test_the_iqm_profile_transcodes_against_the_rebuilt_architecture(
 	driver._profile.encode(driver, "OPENQASM 2.0;", {}, types.SimpleNamespace(device=object()))
 
 	assert slots == ["CUSTOM1"]
-	assert calls == [iqm_architecture(_fomac_topology(), "cal-set-1")]
+	assert calls == [iqm_architecture(_qdmi_topology(), "cal-set-1")]
 
 
 def test_the_iqm_profile_defaults():
@@ -447,7 +447,7 @@ def _running_driver(monkeypatch, counts, records, submitted):
 		iqm_transcode, "build_iqm_circuit",
 		lambda *args, **kwargs: "iqm-circuit")
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
+		qdmi_driver.qdmi_normalize, "extract_topology",
 		lambda device: {"qubits": ["QB1"]})
 
 	def to_result_record(counts, shots, provider, device_id, **kwargs):
@@ -455,7 +455,7 @@ def _running_driver(monkeypatch, counts, records, submitted):
 		return {"schema": "qhw-result-v1"}
 
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "to_result_record", to_result_record)
+		qdmi_driver.qdmi_normalize, "to_result_record", to_result_record)
 	_install_program_formats(monkeypatch)
 
 	def submit_job(program, fmt, shots, **kwargs):
@@ -600,7 +600,7 @@ def test_an_unknown_program_format_is_reported(monkeypatch):
 	assert submitted == []
 
 
-# --- fomac_normalize: the calibration slot and the technology ---------------
+# --- qdmi_normalize: the calibration slot and the technology ---------------
 
 class _CustomDevice:
 	def __init__(self, value="cal-set-1"):
@@ -631,7 +631,7 @@ def test_the_calibration_slot_defaults_to_custom1(monkeypatch):
 	_install_custom_property(monkeypatch)
 	device = _CustomDevice()
 
-	assert fomac_normalize._calibration_set_id(device) == "cal-set-1"
+	assert qdmi_normalize._calibration_set_id(device) == "cal-set-1"
 	assert device.queries == [("slot-1", str)]
 
 
@@ -639,7 +639,7 @@ def test_a_profile_can_point_at_another_slot(monkeypatch):
 	_install_custom_property(monkeypatch)
 	device = _CustomDevice()
 
-	assert fomac_normalize._calibration_set_id(device, "CUSTOM2") == "cal-set-1"
+	assert qdmi_normalize._calibration_set_id(device, "CUSTOM2") == "cal-set-1"
 	assert device.queries == [("slot-2", str)]
 
 
@@ -647,8 +647,8 @@ def test_no_slot_means_nothing_is_queried(monkeypatch):
 	_install_custom_property(monkeypatch)
 	device = _CustomDevice()
 
-	assert fomac_normalize._calibration_set_id(device, None) is None
-	cal = fomac_normalize.extract_calibration(
+	assert qdmi_normalize._calibration_set_id(device, None) is None
+	cal = qdmi_normalize.extract_calibration(
 		device, calibration_set_slot=None)
 
 	assert cal["calibration_set_id"] is None
@@ -680,10 +680,10 @@ def test_calibration_times_use_the_device_duration_scale(scale, expected_scale, 
 		device.duration_scale_factor = duration_scale_factor
 	if exception is not None:
 		with pytest.raises(exception):
-			fomac_normalize.extract_calibration(device, calibration_set_slot=None)
+			qdmi_normalize.extract_calibration(device, calibration_set_slot=None)
 		return
 
-	cal = fomac_normalize.extract_calibration(device, calibration_set_slot=None)
+	cal = qdmi_normalize.extract_calibration(device, calibration_set_slot=None)
 	assert cal["qubit_metrics"] == [
 		{"qubit": "0", "t1": 10000 * expected_scale, "t2": 8000 * expected_scale},
 		{"qubit": "1"}]
@@ -729,9 +729,9 @@ def test_a_device_record_carries_the_profile_technology():
 	topo = {"num_qubits": 2, "qubits": ["0", "1"], "edges": [["0", "1"]],
 		"operations": {}}
 
-	with_technology = fomac_normalize.to_device_record(
+	with_technology = qdmi_normalize.to_device_record(
 		topo, "aws", "aws-sv1", technology="simulator")
-	without = fomac_normalize.to_device_record(topo, "iqm", "ornl-iqm-20q")
+	without = qdmi_normalize.to_device_record(topo, "iqm", "ornl-iqm-20q")
 
 	assert with_technology["device"]["technology"] == "simulator"
 	assert "technology" not in without["device"]
@@ -749,8 +749,8 @@ def test_topology_and_calibration_share_three_qubit_loci():
 		name=lambda: "ccnot", qubits_num=lambda: 3,
 		sites=lambda: sites, fidelity=fidelity)
 	device = types.SimpleNamespace(operations=lambda: [op])
-	assert fomac_normalize._operations(device) == {"ccnot": [["0", "1", "2"]]}
-	assert fomac_normalize._operation_metrics(device, 1.0) == [{
+	assert qdmi_normalize._operations(device) == {"ccnot": [["0", "1", "2"]]}
+	assert qdmi_normalize._operation_metrics(device, 1.0) == [{
 		"operation": "ccnot", "locus": ["0", "1", "2"], "fidelity": 0.9}]
 	assert queried == [("0", "1", "2")]
 
@@ -758,4 +758,16 @@ def test_topology_and_calibration_share_three_qubit_loci():
 def test_incomplete_site_tuples_are_rejected():
 	op = types.SimpleNamespace(qubits_num=lambda: 3, sites=lambda: [0, 1])
 	with pytest.raises(DEFwExecutionError, match="incomplete"):
-		fomac_normalize._operation_loci(op)
+		qdmi_normalize._operation_loci(op)
+
+
+def test_analog_capacity_does_not_invent_fixed_sites():
+	device = types.SimpleNamespace(
+		regular_sites=lambda: [], qubits_num=lambda: 100,
+		operations=lambda: [], coupling_map=lambda: [])
+	topology = qdmi_normalize.extract_topology(device)
+	assert topology == {"num_qubits": 100, "qubits": [], "edges": [], "operations": {}}
+	pytest.importorskip("qhw_data")
+	record = qdmi_normalize.to_device_record(topology, "pasqal", "emu-free", technology="simulator")
+	assert record["device"]["num_qubits"] == 100
+	assert record["qubits"] == []

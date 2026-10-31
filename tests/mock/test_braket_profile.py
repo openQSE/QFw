@@ -215,7 +215,7 @@ def test_run_circuit_submits_qasm3_and_remaps_the_counts(monkeypatch):
 		return {"schema": "qhw-result-v1"}
 
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "to_result_record", to_result_record)
+		qdmi_driver.qdmi_normalize, "to_result_record", to_result_record)
 	monkeypatch.setitem(sys.modules, "mqt", _module("mqt"))
 	monkeypatch.setitem(sys.modules, "mqt.core", _module("mqt.core"))
 	monkeypatch.setitem(sys.modules, "mqt.core.qdmi", _module(

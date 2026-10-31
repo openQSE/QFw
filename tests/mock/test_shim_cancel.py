@@ -1,7 +1,7 @@
 # Guards cancelling a circuit the QRMI/QDMI shim is running. The QPM
 # controller cancels through the shim QRC's cancel(), which sets the
 # circuit's cancel_event. The driver notices while it polls and stops the
-# provider job (QRMI task_stop, FoMaC job.cancel()). A timeout stops the job
+# provider job (QRMI task_stop, QDMI job.cancel()). A timeout stops the job
 # too, so nothing keeps running at the provider after QFw has given up on it.
 #
 # The provider side is stubbed, so no qiskit, QRMI or QDMI is needed.
@@ -140,9 +140,9 @@ def test_a_cancel_before_submission_starts_no_qrmi_job(monkeypatch):
 	assert resource.started == []
 
 
-# --- QDMI: cancelling the FoMaC job -----------------------------------------
+# --- QDMI: cancelling the QDMI job -----------------------------------------
 
-class _FomacJob:
+class _QdmiJob:
 	def __init__(self, statuses, cancel_error=None):
 		self.statuses = list(statuses)
 		self.cancel_error = cancel_error
@@ -164,7 +164,7 @@ def _qdmi_driver():
 
 
 def test_a_cancel_cancels_the_qdmi_job():
-	job = _FomacJob(["RUNNING"])
+	job = _QdmiJob(["RUNNING"])
 
 	status = _qdmi_driver()._poll_job(
 		job, 60, 5.0, cancel_event=_cancelled())
@@ -174,7 +174,7 @@ def test_a_cancel_cancels_the_qdmi_job():
 
 
 def test_a_timeout_cancels_the_qdmi_job():
-	job = _FomacJob(["RUNNING"])
+	job = _QdmiJob(["RUNNING"])
 
 	with pytest.raises(DEFwExecutionError, match="and it was cancelled"):
 		_qdmi_driver()._poll_job(job, 0.0, 0.0)
@@ -183,7 +183,7 @@ def test_a_timeout_cancels_the_qdmi_job():
 
 
 def test_a_failed_qdmi_cancel_is_reported_with_the_timeout():
-	job = _FomacJob(["RUNNING"], cancel_error="device busy")
+	job = _QdmiJob(["RUNNING"], cancel_error="device busy")
 
 	with pytest.raises(
 			DEFwExecutionError, match=r"job\.cancel\(\) failed: device busy"):
@@ -191,7 +191,7 @@ def test_a_failed_qdmi_cancel_is_reported_with_the_timeout():
 
 
 def test_a_finished_qdmi_job_is_not_cancelled():
-	job = _FomacJob(["DONE"])
+	job = _QdmiJob(["DONE"])
 
 	status = _qdmi_driver()._poll_job(
 		job, 60, 0.0, cancel_event=threading.Event())
@@ -206,7 +206,7 @@ def test_a_cancel_before_submission_submits_no_qdmi_job(monkeypatch):
 		iqm_transcode, "build_iqm_circuit",
 		lambda *args, **kwargs: object())
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
+		qdmi_driver.qdmi_normalize, "extract_topology",
 		lambda device: {"qubits": ["QB1"]})
 	submitted = []
 	device = types.SimpleNamespace(

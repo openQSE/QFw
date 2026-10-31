@@ -52,9 +52,11 @@ jobs:
         from iqm.qdmi.qiskit import IQMBackend
         from amazon.braket.qdmi.qiskit import AmazonBraketBackend
         from ibm.qdmi.qiskit import IBMBackend
+        import pasqal.qdmi
+        from pulser import Sequence
         PY
     - name: Test adapters and serialization without provider submission
-      run: python -m pytest -q tests/qiskit/test_qdmi_adapters.py tests/qiskit/test_braket_qdmi.py tests/qiskit/test_ibm_qdmi.py
+      run: python -m pytest -q tests/qiskit/test_qdmi_adapters.py tests/qiskit/test_braket_qdmi.py tests/qiskit/test_ibm_qdmi.py tests/qiskit/test_pasqal_qdmi.py
 
   ci-resolve:
     name: ci-resolve (requirements resolve)

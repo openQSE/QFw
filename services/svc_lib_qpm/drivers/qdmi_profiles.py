@@ -1,7 +1,7 @@
 # QFw settings and policy for the MQT Core-backed provider adapters.
 # Imports stay lazy so services can start without a live device or credentials.
 
-from . import fomac_normalize
+from . import qdmi_normalize
 from defw_exception import DEFwExecutionError
 import os
 
@@ -64,7 +64,7 @@ class QdmiProfile:
 	requires = "a QDMI device library"
 	# The QDMI device-property CUSTOM slot that carries the provider's
 	# calibration set identifier, as a mqt.core.qdmi.CustomProperty attribute
-	# name, or None when the provider publishes none. fomac_normalize reads
+	# name, or None when the provider publishes none. qdmi_normalize reads
 	# it; a wrong slot would read some other vendor-defined value as an id.
 	calibration_set_slot = None
 
@@ -86,6 +86,13 @@ class QdmiProfile:
 	def describe(self, access):
 		# What to log once the session is open.
 		return access.get("qc_alias") or access.get("base_url")
+
+	def backend_info(self, device):
+		return None
+
+	def circuit_source(self, info):
+		from util.circuit_payload import qiskit_input
+		return qiskit_input(info)
 
 	def encode(self, driver, source, info, backend):
 		"""Encode a circuit for the device library.
@@ -229,8 +236,8 @@ class IqmQdmiProfile(QdmiProfile):
 		from util.iqm_transcode import build_iqm_circuit
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
 		device = backend.device
-		topo = fomac_normalize.extract_topology(device)
-		dynamic = iqm_architecture(topo, fomac_normalize._calibration_set_id(
+		topo = qdmi_normalize.extract_topology(device)
+		dynamic = iqm_architecture(topo, qdmi_normalize._calibration_set_id(
 			device, self.calibration_set_slot))
 		iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
 		return driver._serialize_program(iqm_circuit), "IQM_JSON", None
@@ -426,10 +433,94 @@ class IbmQdmiProfile(QdmiProfile):
 		return "superconducting"
 
 
+class PasqalQdmiProfile(QdmiProfile):
+	provider = "pasqal"
+	requires = "pasqal-qdmi"
+	DEFAULT_QDMI_DEVICE_ID = "pasqal.default"
+
+	def access(self, credential=None):
+		resource_type = self._descriptor.get("resource_type") or self._descriptor.get("resource-type")
+		if resource_type and resource_type != "PasqalCloud":
+			raise DEFwExecutionError(
+				f"Pasqal QDMI cannot serve resource-type {resource_type!r}; use PasqalCloud")
+		credential = dict(credential or {})
+		backend = (credential.get("provider_device_id")
+			or self._descriptor.get("provider_device_id")
+			or self._descriptor.get("provider-device-id"))
+		if not backend:
+			raise DEFwExecutionError(
+				"a Pasqal device needs its backend type (e.g. EMU_FREE) "
+				"as provider-device-id in device-access config")
+		project = credential.get("project_id") or self._descriptor.get("project_id")
+		return {
+			"qdmi_device_id": self._descriptor.get("qdmi_device_id") or self.DEFAULT_QDMI_DEVICE_ID,
+			"base_url": credential.get("url") or os.environ.get("QFW_QC_URL") or self._descriptor.get("url"),
+			"token": credential.get("api_key") or credential.get("token") or os.environ.get("QFW_API_KEY"),
+			"custom1": str(backend).upper(),
+			"custom3": str(project) if project else None,
+		}
+
+	def open_backend(self, access):
+		settings = dict(access)
+		if settings.get("token"):
+			for variable in ("PASQAL_EMAIL", "PASQAL_PASSWORD"):
+				if os.environ.get(variable):
+					raise DEFwExecutionError(
+						f"Unset {variable}; a Pasqal token session must not refresh as the service account")
+			# Suppress native login-file fallback for reservation-bound tokens.
+			settings["auth_file"] = os.devnull
+		from pasqal.qdmi import PASQAL_QDMI_DEVICE_ID
+		from mqt.core.qdmi import builtin_driver
+		from types import SimpleNamespace
+		device_id = settings.pop("qdmi_device_id", None) or PASQAL_QDMI_DEVICE_ID
+		# Pasqal has a native Pulser interface, with no Qiskit backend.
+		return SimpleNamespace(device=builtin_driver.open_device(device_id, **settings))
+
+	def describe(self, access):
+		return access["custom1"]
+
+	def backend_info(self, device):
+		import json
+		from mqt.core.qdmi import CustomProperty
+		from .base_driver import pasqal_backend_info
+		entries = json.loads(device.query_custom_property(CustomProperty.CUSTOM1, str))
+		return pasqal_backend_info(device.name(), entries)
+
+	def circuit_source(self, info):
+		from util.circuit_payload import pulser_sequence
+		return pulser_sequence(info)
+
+	def encode(self, driver, source, info, backend):
+		from pulser import Sequence
+		try:
+			sequence = Sequence.from_abstract_repr(source)
+		except Exception as exc:
+			raise DEFwExecutionError(f"invalid Pasqal Pulser JSON: {exc}") from exc
+		if sequence.is_parametrized() or sequence.is_register_mappable():
+			raise DEFwExecutionError(
+				"Pasqal sequences must have bound variables and a mapped register")
+		if not sequence.is_measured():
+			raise DEFwExecutionError("Pasqal sequences must include a measurement")
+		return source, "CUSTOM1", None
+
+	def check_shots(self, shots):
+		if shots <= 0:
+			raise DEFwExecutionError("Pasqal shots must be positive")
+		return super().check_shots(shots)
+
+	def result_counts(self, counts, measurement):
+		# Core puts atom zero on the right; Pulser reads insertion order left to right.
+		return {key[::-1]: value for key, value in counts.items()}
+
+	def technology(self):
+		return "neutral-atom"
+
+
 PROFILES = {
 	IqmQdmiProfile.provider: IqmQdmiProfile,
 	BraketQdmiProfile.provider: BraketQdmiProfile,
 	IbmQdmiProfile.provider: IbmQdmiProfile,
+	PasqalQdmiProfile.provider: PasqalQdmiProfile,
 }
 
 
