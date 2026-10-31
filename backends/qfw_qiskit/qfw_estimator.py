@@ -26,6 +26,7 @@ from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.estimator_pub import EstimatorPub
 from qiskit.primitives.primitive_job import PrimitiveJob
 
+from .qfw_metadata import isa_metadata
 from .qfw_simulator import QFwBackend
 
 
@@ -50,7 +51,7 @@ def _run_circuits(
 	for circ in circuits:
 		metadata.append(circ.metadata)
 		if clear_metadata:
-			circ.metadata = {}
+			circ.metadata = isa_metadata(circ)
 	if isinstance(backend, BackendV2):
 		max_circuits = backend.max_circuits
 	else:
@@ -508,7 +509,7 @@ class QFwEstimatorV2(BaseEstimatorV2):
 					)
 			circuit_copy.add_register(clbits)
 			circuit_copy.compose(meas_circuit, clbits=clbits, inplace=True)
-			circuit_copy.metadata = meas_circuit.metadata
+			circuit_copy.metadata = {**isa_metadata(circuit), **meas_circuit.metadata}
 			preprocessed_circuits.append(circuit_copy)
 		return preprocessed_circuits
 
