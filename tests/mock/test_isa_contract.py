@@ -185,7 +185,13 @@ def test_the_device_can_require_a_properties_time():
 
 
 def test_a_circuit_with_no_calibration_is_not_compared():
-	isa.check_calibration(_marker(calibration=None), "cal-2", isa.POLICY_REQUIRE)
+	isa.check_calibration(_marker(calibration=None), "cal-2")
+
+
+def test_a_device_that_requires_a_calibration_refuses_a_circuit_naming_none():
+	with pytest.raises(DEFwExecutionError, match="names none"):
+		isa.check_calibration(
+			_marker(calibration=None), "cal-2", isa.POLICY_REQUIRE)
 
 
 def test_a_policy_it_does_not_know_is_refused():

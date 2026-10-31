@@ -31,6 +31,7 @@ CALIBRATION_POLICIES = (POLICY_REQUIRE, POLICY_CURRENT)
 DEFAULT_CALIBRATION_POLICY = {
 	CALIBRATION_SET_ID: POLICY_REQUIRE,
 	CALIBRATION_PROPERTIES_TIME: POLICY_CURRENT,
+	CALIBRATION_NONE: POLICY_CURRENT,
 }
 
 
@@ -139,22 +140,31 @@ def check_index_labels(marker):
 			f"it cannot name other qubits: {labels}")
 
 
-def check_calibration(marker, current, policy=None):
-	calibration = marker.get("calibration") or {}
-	kind = calibration.get("kind", CALIBRATION_NONE)
-	if kind == CALIBRATION_NONE:
-		return
+def requires_calibration(marker, policy=None):
+	kind = (marker.get("calibration") or {}).get("kind", CALIBRATION_NONE)
 	policy = policy or DEFAULT_CALIBRATION_POLICY[kind]
 	if policy not in CALIBRATION_POLICIES:
 		raise DEFwExecutionError(
 			f"calibration-policy must be one of "
 			f"{', '.join(CALIBRATION_POLICIES)}: {policy!r}")
+	return policy == POLICY_REQUIRE
+
+
+def check_calibration(marker, current, policy=None):
+	required = requires_calibration(marker, policy)
+	calibration = marker.get("calibration") or {}
+	if calibration.get("kind", CALIBRATION_NONE) == CALIBRATION_NONE:
+		if required:
+			raise DEFwExecutionError(
+				"this device requires a circuit to name the calibration it "
+				"was compiled for, and this one names none")
+		return
 	compiled = calibration.get("value")
 	if current is not None and str(compiled) == str(current):
 		return
 	message = (
 		f"circuit was compiled for calibration {compiled}, and the device's "
 		f"current calibration is {current}")
-	if policy == POLICY_REQUIRE:
+	if required:
 		raise DEFwExecutionError(f"{message}; compile it again")
 	logging.warning(message)

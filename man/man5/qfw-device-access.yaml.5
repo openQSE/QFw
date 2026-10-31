@@ -164,7 +164,9 @@ not the device's current one:
 refuses it, and
 .B current
 runs it with a warning. Unset, a circuit that names a calibration set is
-refused, and one that names a properties time runs.
+refused, and one that names a properties time runs. Under
+.BR require ,
+a circuit that names no calibration is refused too.
 .TP
 .B max-concurrent-jobs
 How many of the device's circuits the QPM lets be at the provider at once,
