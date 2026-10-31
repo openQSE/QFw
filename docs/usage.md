@@ -1158,6 +1158,10 @@ not take a marked circuit refuses it at submission; pass
 `isa_policy="generic"` to `run` to send it as a generic circuit instead. See the
 front-end contract for what a QPM checks.
 
+`QFwSamplerV2` and `QFwEstimatorV2` keep the marker. The estimator adds basis
+changes to each circuit, translated to the backend's gates, and a QPM still
+refuses the result if they are not native there.
+
 `backend.telemetry` is also usable on its own. `get_backend_info()`,
 `get_device_info()`, `get_coupling_graph()`, `get_calibration_snapshot()` and
 `get_dynamic_backend_info()` return the QPM's records, with the backend's shim

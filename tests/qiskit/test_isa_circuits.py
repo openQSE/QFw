@@ -3,14 +3,18 @@
 # contract around it (test_isa_contract.py).
 
 import dataclasses
+import importlib
 import io
 import pathlib
 import sys
+import types
 
 import pytest
-from qiskit import QuantumCircuit, qpy
+from qiskit import QuantumCircuit, qpy, transpile
 from qiskit.circuit import Parameter
 from qiskit.circuit.library import CZGate, Measure, RZGate, SXGate, XGate
+from qiskit.providers.fake_provider import GenericBackendV2
+from qiskit.quantum_info import SparsePauliOp
 from qiskit.transpiler import Target
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -267,3 +271,159 @@ def test_an_ibm_circuit_with_a_foreign_gate_is_refused():
 
 	with pytest.raises(DEFwExecutionError, match="compile it again"):
 		require_isa_circuit(circuit, _ibm_target())
+
+
+def _stub_package(monkeypatch, name, path):
+	# The real package __init__ needs DEFw, which this job does not install.
+	package = types.ModuleType(name)
+	package.__path__ = [str(REPO_ROOT / path)]
+	monkeypatch.setitem(sys.modules, name, package)
+
+
+def _fresh_import(monkeypatch, name):
+	monkeypatch.delitem(sys.modules, name, raising=False)
+	module = importlib.import_module(name)
+	monkeypatch.setitem(sys.modules, name, module)
+	return module
+
+
+def _qdmi_encode(monkeypatch, topology, calibration_set_id, info):
+	_iqm()
+	_stub_package(monkeypatch, "svc_lib_qpm", "services/svc_lib_qpm")
+	_stub_package(
+		monkeypatch, "svc_lib_qpm.drivers", "services/svc_lib_qpm/drivers")
+	fomac_normalize = _fresh_import(
+		monkeypatch, "svc_lib_qpm.drivers.fomac_normalize")
+	qdmi_profiles = _fresh_import(
+		monkeypatch, "svc_lib_qpm.drivers.qdmi_profiles")
+	monkeypatch.setattr(
+		fomac_normalize, "extract_topology", lambda device: topology)
+	monkeypatch.setattr(
+		fomac_normalize, "_calibration_set_id",
+		lambda device, slot: calibration_set_id)
+	driver = types.SimpleNamespace(
+		_descriptor={}, _serialize_program=lambda circuit: circuit)
+	backend = types.SimpleNamespace(device=None)
+	profile = qdmi_profiles.IqmQdmiProfile.__new__(
+		qdmi_profiles.IqmQdmiProfile)
+	return profile.encode(driver, _native(0, 1), info, backend)[0]
+
+
+def _topology(extra_cz=()):
+	single = [[qubit] for qubit in QUBITS]
+	return {"qubits": list(QUBITS), "operations": {
+		"prx": single,
+		"cz": [["QB1", "QB2"], ["QB2", "QB3"], *extra_cz],
+		"measure": single,
+	}}
+
+
+def _calibrated_marker(calibration_set_id):
+	return isa.make_marker(
+		"iqm", "q20", qubit_labels=QUBITS,
+		calibration={"kind": "set-id", "value": calibration_set_id})
+
+
+def test_qdmi_runs_a_marked_circuit_on_the_qubits_it_names(monkeypatch):
+	built = _qdmi_encode(
+		monkeypatch, _topology(), "cal-1",
+		{"isa": _calibrated_marker("cal-1")})
+
+	assert _loci(built, "cz") == [("QB1", "QB2")]
+
+
+def test_qdmi_refuses_a_marked_circuit_on_uncoupled_qubits(monkeypatch):
+	marker = isa.make_marker(
+		"iqm", "q20", qubit_labels=["QB1", "QB3", "QB2"])
+
+	with pytest.raises(DEFwExecutionError, match="no cz"):
+		_qdmi_encode(monkeypatch, _topology(), "cal-1", {"isa": marker})
+
+
+def test_qdmi_refuses_a_stale_calibration(monkeypatch):
+	with pytest.raises(DEFwExecutionError, match="compile it again"):
+		_qdmi_encode(
+			monkeypatch, _topology(), "cal-2",
+			{"isa": _calibrated_marker("cal-1")})
+
+
+def test_qdmi_refuses_a_star_device_it_cannot_model(monkeypatch):
+	topology = _topology(extra_cz=[["QB1", "CR1"]])
+
+	with pytest.raises(DEFwExecutionError, match="names no gates"):
+		_qdmi_encode(
+			monkeypatch, topology, "cal-1",
+			{"isa": _calibrated_marker("cal-1")})
+
+
+def test_a_marked_circuit_with_unbound_parameters_is_refused():
+	iqm_transcode = _iqm()
+	circuit = QuantumCircuit(3, 1)
+	circuit.r(Parameter("theta"), 0.5, 0)
+	circuit.measure(0, 0)
+
+	with pytest.raises(DEFwExecutionError, match="could not serialize"):
+		iqm_transcode.build_isa_iqm_circuit(
+			circuit, _architecture(), _marker())
+
+
+class _Submitted(Exception):
+	pass
+
+
+def _primitive_module(monkeypatch, name):
+	_stub_package(monkeypatch, "qfw_qiskit", "backends/qfw_qiskit")
+	simulator = types.ModuleType("qfw_qiskit.qfw_simulator")
+	simulator.QFwBackend = object
+	monkeypatch.setitem(sys.modules, simulator.__name__, simulator)
+	_fresh_import(monkeypatch, "qfw_qiskit.qfw_metadata")
+	return _fresh_import(monkeypatch, name)
+
+
+def _capturing_backend():
+	class Backend(GenericBackendV2):
+		def run(self, circuits, **options):
+			self.submitted = circuits
+			raise _Submitted()
+
+	return Backend(3, seed=1)
+
+
+def _marked_for(backend):
+	circuit = QuantumCircuit(3)
+	circuit.h(0)
+	circuit.cx(0, 1)
+	circuit.cx(1, 2)
+	compiled = transpile(circuit, target=backend.target, seed_transpiler=1)
+	compiled.metadata = {"qfw": {"isa": _marker()}, "experiment": "ghz"}
+	return compiled
+
+
+def test_the_estimator_keeps_the_marker_on_every_circuit_it_runs(monkeypatch):
+	estimator = _primitive_module(
+		monkeypatch, "qfw_qiskit.qfw_estimator")
+	backend = _capturing_backend()
+	primitive = estimator.QFwEstimatorV2(backend=backend)
+	observables = SparsePauliOp(["ZZI", "XXX"])
+
+	with pytest.raises(_Submitted):
+		primitive.run([(_marked_for(backend), observables)]).result()
+
+	assert len(backend.submitted) == 2
+	for circuit in backend.submitted:
+		assert circuit.metadata == {"qfw": {"isa": _marker()}}
+		assert require_isa_circuit(circuit, backend.target)
+
+
+def test_the_sampler_keeps_the_marker_on_every_circuit_it_runs(monkeypatch):
+	sampler = _primitive_module(monkeypatch, "qfw_qiskit.qfw_sampler")
+	backend = _capturing_backend()
+	primitive = sampler.QFwSamplerV2(backend=backend)
+	circuit = _marked_for(backend)
+	circuit.measure_all()
+
+	with pytest.raises(_Submitted):
+		primitive.run([circuit]).result()
+
+	assert [item.metadata["qfw"]["isa"] for item in backend.submitted] == [
+		_marker()]

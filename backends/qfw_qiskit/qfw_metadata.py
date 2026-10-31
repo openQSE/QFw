@@ -62,3 +62,10 @@ def get_isa_marker(circuit):
 	metadata = getattr(circuit, "metadata", None) or {}
 	qfw_metadata = metadata.get(QFW_METADATA_NAMESPACE) or {}
 	return qfw_metadata.get(QFW_METADATA_ISA)
+
+
+def isa_metadata(circuit):
+	marker = get_isa_marker(circuit)
+	if marker is None:
+		return {}
+	return {QFW_METADATA_NAMESPACE: {QFW_METADATA_ISA: marker}}
