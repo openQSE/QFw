@@ -94,7 +94,13 @@ def make_marker(provider, device_id, calibration=None, qubit_labels=None,
 		"calibration": _checked_calibration(calibration),
 	}
 	if qubit_labels is not None:
-		marker["qubit_labels"] = [str(label) for label in qubit_labels]
+		labels = [str(label) for label in qubit_labels]
+		repeated = sorted({label for label in labels if labels.count(label) > 1})
+		if repeated:
+			# Two circuit indices on one qubit would run as a different circuit.
+			raise DEFwExecutionError(
+				f"an ISA marker names these qubits twice: {repeated}")
+		marker["qubit_labels"] = labels
 	if compiler is not None:
 		marker["compiler"] = str(compiler)
 	return marker
@@ -121,7 +127,7 @@ def read_marker(info):
 		marker.get("compiler"))
 
 
-def check_envelope(info, stages, device_id):
+def check_envelope(info, stages, device_id, provider):
 	# What can be refused from the request alone, so a circuit that could
 	# never run fails its submission rather than a dispatch slot.
 	from util.circuit_payload import QPY_FORMATS
@@ -133,6 +139,10 @@ def check_envelope(info, stages, device_id):
 		raise DEFwExecutionError(
 			"this QPM does not take a circuit compiled ahead of time; it "
 			f"declares the stages {', '.join(stages or ())}")
+	if str(provider).lower() != marker["provider"]:
+		raise DEFwExecutionError(
+			f"this circuit was compiled for {marker['provider']!r}, and this "
+			f"QPM serves {provider!r}")
 	if str(device_id) != marker["device_id"]:
 		raise DEFwExecutionError(
 			f"this circuit was compiled for device {marker['device_id']!r}, "
@@ -148,6 +158,16 @@ def check_envelope(info, stages, device_id):
 			"compilation_options do not apply to a circuit compiled ahead "
 			"of time; a QPM runs it as it stands")
 	return marker
+
+
+def check_index_labels(marker):
+	# A device addressed by index reads a circuit's indices as its qubits, so
+	# labels that say otherwise describe a circuit that would run elsewhere.
+	labels = marker.get("qubit_labels")
+	if labels and labels != [str(index) for index in range(len(labels))]:
+		raise DEFwExecutionError(
+			"this device addresses qubits by index, so a circuit compiled for "
+			f"it cannot name other qubits: {labels}")
 
 
 def check_calibration(marker, current, policy=None):

@@ -145,6 +145,9 @@ class QPM(UTIL_QPM):
 		return (os.environ.get('QFW_QPU_DEVICE_ID')
 			or resolve_descriptor().get("id"))
 
+	def isa_provider(self):
+		return self._provider()
+
 	def prepare_circuit(self, info):
 		# The qhw backend tag names the provider this resource belongs to, as
 		# its device-access entry declares it: iqm for the q20, aws for a

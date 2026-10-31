@@ -149,6 +149,14 @@ def test_a_marked_iqm_circuit_needs_its_labels():
 			isa.make_marker("iqm", "q20"))
 
 
+def test_a_marker_naming_too_few_qubits_says_so():
+	iqm_transcode = _iqm()
+
+	with pytest.raises(DEFwExecutionError, match="3 qubits.*names 2"):
+		iqm_transcode.build_isa_iqm_circuit(
+			_native(0, 1), _architecture(), _marker(QUBITS[:2]))
+
+
 def test_an_architecture_with_no_gates_cannot_vouch_for_a_circuit():
 	iqm_transcode = _iqm()
 	architecture = dict(_architecture(), gates={})
@@ -221,7 +229,8 @@ def test_the_marker_survives_the_trip_to_the_qpm():
 
 	assert received == circuit
 	assert isa.check_envelope(
-		dict(info, isa=_marker()), ["generic", "isa"], "q20") == _marker()
+		dict(info, isa=_marker()), ["generic", "isa"], "q20",
+		"iqm") == _marker()
 
 
 def _ibm_target():

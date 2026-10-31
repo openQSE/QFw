@@ -419,6 +419,7 @@ class IbmQdmiProfile(QdmiProfile):
 				"the classical bits in order")
 		marker = isa.read_marker(info)
 		if marker is not None:
+			isa.check_index_labels(marker)
 			# QDMI reports no calibration identity for an IBM device, so a
 			# device that requires one refuses here.
 			isa.check_calibration(

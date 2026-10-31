@@ -205,7 +205,8 @@ class UTIL_QPM:
 		prepared_info = dict(request.payload if request is not None else info)
 		if isa.requested(prepared_info):
 			isa.check_envelope(
-				prepared_info, self.circuit_stages(), self.isa_device_id())
+				prepared_info, self.circuit_stages(), self.isa_device_id(),
+				self.isa_provider())
 		hook_info = self.prepare_circuit(prepared_info)
 		if hook_info is not None:
 			prepared_info = hook_info
@@ -240,6 +241,10 @@ class UTIL_QPM:
 
 	def isa_device_id(self):
 		# The device a circuit compiled ahead of time has to name.
+		return None
+
+	def isa_provider(self):
+		# The provider a circuit compiled ahead of time has to name.
 		return None
 
 	def delete_circuit(self, cid, reservation_id=None, token=None):
