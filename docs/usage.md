@@ -1103,6 +1103,19 @@ and durations:
 | A QPM with a plain description, such as the fake IQM: a qubit count and a `couplings` list | The qubit count and the coupling edges, with QFw's generic gates on them |
 | `metadata_supported: false` (NWQSim, TNQVM, QB) | The generic 400-qubit all-to-all target |
 
+With no `lib` chosen, the backend reads a shim device through the library the
+QPM publishes as `description_library`: the device's execution owner, when that
+library serves the device, coupling and calibration reads. The target then
+comes from the library the circuits run on. On a device wired for QRMI and QDMI
+with the default execution owner, an IBM target therefore comes from QRMI's raw
+records. When no library is published, the shim's routing picks one, and QDMI
+describes any device through the qhw records in the second row.
+
+The shim's QRMI driver caches what a device reports for
+`QFW_QPU_TARGET_TTL_SECONDS` (default 300) of the service's environment, and 0
+reads the device every time. A recalibration reaches new backends once that
+time has passed.
+
 The target is built once per backend instance, on first use. When the
 telemetry call fails, or the QPM connection carries no telemetry binding, the
 backend keeps the generic target and logs why. `backend.target_source` says
@@ -1125,6 +1138,29 @@ print(target.num_qubits, target.build_coupling_map())
 isa_circuit = transpile(circuit, target=target)
 job = backend.run(isa_circuit, shots=100)
 ```
+
+A circuit transpiled this way is still a generic circuit to the QPM, which may
+compile it again. To have a QPM run it as it stands or refuse it, mark it with
+the device it was compiled for:
+
+```python
+from qfw_qiskit import mark_isa
+
+mark_isa(isa_circuit, "iqm", "q20",
+         calibration={"kind": "set-id", "value": calibration_set_id},
+         qubit_labels=["QB1", "QB2", "QB3"])
+job = backend.run(isa_circuit, shots=100)
+```
+
+`qubit_labels` names each circuit index, and an IQM device needs it. The marker
+is kept in a QPY file, so one job can compile and another run. A QPM that does
+not take a marked circuit refuses it at submission; pass
+`isa_policy="generic"` to `run` to send it as a generic circuit instead. See the
+front-end contract for what a QPM checks.
+
+`QFwSamplerV2` and `QFwEstimatorV2` keep the marker. The estimator adds basis
+changes to each circuit, translated to the backend's gates, and a QPM still
+refuses the result if they are not native there.
 
 `backend.telemetry` is also usable on its own. `get_backend_info()`,
 `get_device_info()`, `get_coupling_graph()`, `get_calibration_snapshot()` and

@@ -73,6 +73,14 @@ def compile_circuit(circuit, target, compilation_options=None):
 	return pm.run(circuit)
 
 
+def require_isa_circuit(circuit, target):
+	if not _circuit_is_isa(circuit, target):
+		raise DEFwExecutionError(
+			"this circuit was compiled ahead of time, but its gates are not "
+			"native to this device on the qubits it uses; compile it again")
+	return circuit
+
+
 def qiskit_sampler_input_json(isa_circuit, param_values=None, shots=None):
 	# Encode an ISA QuantumCircuit into the QiskitPrimitive Sampler V2 wire
 	# format. isa_circuit must already be transpiled to the target gate set

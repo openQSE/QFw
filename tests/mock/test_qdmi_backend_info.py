@@ -177,6 +177,32 @@ def test_the_capability_map_offers_get_backend_info_on_both_libraries():
 		.get_backend_info()["backend"] == "qrmi"
 
 
+def test_a_device_is_described_through_its_execution_owner():
+	assert _frontend(["qrmi", "qdmi"]).description_library() == "qrmi"
+	assert _frontend(["qdmi"]).description_library() == "qdmi"
+
+
+def test_no_description_library_when_the_owner_cannot_serve_the_reads():
+	class _RunsOnly(_Library):
+		CAPABILITIES = frozenset({"get_backend_info", "run_circuit"})
+
+	pasqal_like = Frontend([_RunsOnly("qrmi")], {
+		"id": "device",
+		"libraries": ["qrmi"],
+		"execution_owner": "qrmi",
+		"caps": {call: list(libs) for call, libs in DEFAULT_CAPS.items()},
+	})
+	unwired_owner = Frontend([_Library("qdmi")], {
+		"id": "device",
+		"libraries": ["qdmi"],
+		"execution_owner": "qrmi",
+		"caps": {call: list(libs) for call, libs in DEFAULT_CAPS.items()},
+	})
+
+	assert pasqal_like.description_library() is None
+	assert unwired_owner.description_library() is None
+
+
 def test_a_qdmi_only_resource_serves_get_backend_info():
 	# A Braket entry wires QDMI alone. Before, the call was a gap there.
 	frontend = _frontend(["qdmi"])

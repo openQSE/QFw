@@ -248,7 +248,9 @@ class QFwBackend(BackendV2):
 		# What every telemetry call carries: the shim library a run would
 		# use, so the device described is the one the circuits reach, and
 		# the reservation context when the run context holds one.
-		context = {"lib": self._shim_library()}
+		properties = getattr(self.qpm, "qpm_properties", None) or {}
+		context = {"lib": (self._shim_library() or
+				   properties.get("description_library"))}
 
 		reservation_id = getattr(self.options, "reservation_id", None)
 		if reservation_id is not None:
@@ -327,6 +329,7 @@ class QFwBackend(BackendV2):
 			timeout=None,
 			cancel_on_timeout=False,
 			lib=None,
+			isa_policy=None,
 		)
 
 	def compile(self, circuits, compiler='qiskit', **kwargs):
@@ -379,6 +382,9 @@ class QFwBackend(BackendV2):
 		lib = self._shim_library(kwargs.get("lib"))
 		if lib is not None:
 			options["lib"] = lib
+		isa_policy = kwargs.get("isa_policy", self.options.isa_policy)
+		if isa_policy is not None:
+			options["isa_policy"] = isa_policy
 		for key in QFW_INFO_PASSTHROUGH_OPTIONS:
 			if key in kwargs:
 				options[key] = kwargs[key]

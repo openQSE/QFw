@@ -5,6 +5,7 @@ from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.circuit_payload import qiskit_circuit_formats, OPENQASM2, PULSER
+from util import isa
 
 MAX_SHIM_QUBITS = 1024
 MAX_SHIM_SHOTS = 10000
@@ -115,6 +116,9 @@ class QPM(UTIL_QPM):
 		technology = _technology(descriptor)
 		if technology:
 			properties["technology"] = technology
+		description_library = self._description_library()
+		if description_library:
+			properties["description_library"] = description_library
 		if descriptor.get("num_qubits") not in (None, ""):
 			properties["num_qubits"] = int(descriptor["num_qubits"])
 		info = self.query_helper(
@@ -124,6 +128,22 @@ class QPM(UTIL_QPM):
 			properties=properties)
 		logging.debug(f"shim {SERVICE_DESC}: {info}")
 		return info
+
+	def _description_library(self):
+		frontend = getattr(getattr(self, "qrc", None), "frontend", None)
+		return frontend.description_library() if frontend is not None else None
+
+	def circuit_stages(self):
+		return isa.circuit_stages(self._provider())
+
+	def isa_device_id(self):
+		# Publishing this as device_id would change the service's id.
+		from .descriptor import resolve_descriptor
+		return (os.environ.get('QFW_QPU_DEVICE_ID')
+			or resolve_descriptor().get("id"))
+
+	def isa_provider(self):
+		return self._provider()
 
 	def prepare_circuit(self, info):
 		# The qhw backend tag names the provider this resource belongs to, as

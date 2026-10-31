@@ -31,7 +31,7 @@ from .admission import (
 from .scheduler import QPMSchedulerError, QPMSchedulerUnavailable
 from .util_circuit import Circuit, CircuitStates, MAX_PPN
 from .request import parse_execution_request
-from util import instrumentation
+from util import instrumentation, isa
 
 QPM_SERVICE_TYPE = "qfw.qpm"
 MANAGED_SUBMISSION_FAILURE_REASONS = (
@@ -203,6 +203,10 @@ class UTIL_QPM:
 
 		cid = str(uuid.uuid4())
 		prepared_info = dict(request.payload if request is not None else info)
+		if isa.requested(prepared_info):
+			isa.check_envelope(
+				prepared_info, self.circuit_stages(), self.isa_device_id(),
+				self.isa_provider())
 		hook_info = self.prepare_circuit(prepared_info)
 		if hook_info is not None:
 			prepared_info = hook_info
@@ -229,6 +233,15 @@ class UTIL_QPM:
 
 	def prepare_circuit(self, info):
 		return info
+
+	def circuit_stages(self):
+		return list(isa.DEFAULT_CIRCUIT_STAGES)
+
+	def isa_device_id(self):
+		return None
+
+	def isa_provider(self):
+		return None
 
 	def delete_circuit(self, cid, reservation_id=None, token=None):
 		if not qpm_initialized:
@@ -1000,6 +1013,7 @@ class UTIL_QPM:
 		# declares its own. See util.circuit_payload.
 		properties.setdefault(
 			"circuit_formats", list(DEFAULT_CIRCUIT_FORMATS))
+		properties.setdefault("circuit_stages", self.circuit_stages())
 		properties.setdefault("qpm_type", int(type_bits))
 		properties.setdefault("qpm_capabilities", int(caps_bits))
 		properties.setdefault(

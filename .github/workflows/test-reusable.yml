@@ -8,6 +8,7 @@
 #   - ci-syntax: Flake8 linting and Python syntax checks
 #   - ci-mock: pytest tests under tests/mock
 #   - ci-qdmi: released provider adapters
+#   - ci-qiskit: IQM transpilation, targets and circuit formats on real Qiskit
 #   - ci-pulser: the Pulser client against released Pulser
 #   - ci-resolve: the requirements files resolve together with overrides
 #
@@ -55,6 +56,25 @@ jobs:
         PY
     - name: Test adapters and serialization without provider submission
       run: python -m pytest -q tests/qiskit/test_qdmi_adapters.py tests/qiskit/test_braket_qdmi.py tests/qiskit/test_ibm_qdmi.py
+
+  ci-qiskit:
+    name: ci-qiskit (pinned Qiskit)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install the pinned Qiskit and IQM packages
+      # iqm-client ships iqm.qiskit_iqm, and declares qiskit<2.2 for its qiskit
+      # extra. QFw installs it without the extra and pins a newer Qiskit, so
+      # resolving the requirements does not show whether the two work
+      # together. These tests are what does.
+      run: python -m pip install -c setup/requirements.txt qiskit qiskit_aer qiskit-ibm-runtime iqm-client iqm-pulse iqm-station-control-client pyyaml psutil pytest
+    - name: Test IQM transpilation, device targets and circuit formats
+      run: python -m pytest -q tests/qiskit/test_iqm_transpile.py tests/qiskit/test_qfw_target.py tests/qiskit/test_circuit_format_client.py tests/qiskit/test_circuit_payload_qpy.py tests/qiskit/test_isa_circuits.py
 
   ci-resolve:
     name: ci-resolve (requirements resolve)

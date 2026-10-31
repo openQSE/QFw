@@ -213,6 +213,26 @@ def test_backend_binds_the_telemetry_api_next_to_the_execution_api(
 	assert backend.target_source is None
 
 
+def test_telemetry_reads_through_the_library_the_shim_describes_with(monkeypatch):
+	backend = _backend(monkeypatch)
+	backend.options.lib = None
+	backend.qpm.qpm_properties = {
+		"provider": "shim", "description_library": "qrmi"}
+
+	assert backend._telemetry_context()["lib"] == "qrmi"
+
+	backend.options.lib = "qdmi"
+	assert backend._telemetry_context()["lib"] == "qdmi"
+
+
+def test_telemetry_carries_no_library_when_the_shim_names_none(monkeypatch):
+	backend = _backend(monkeypatch)
+	backend.options.lib = None
+	backend.qpm.qpm_properties = {"provider": "shim"}
+
+	assert backend._telemetry_context()["lib"] is None
+
+
 def test_telemetry_calls_carry_the_shim_library_and_the_token(monkeypatch):
 	telemetry = FakeTelemetryAPI(backend_info=FAKE_IQM_INFO)
 	backend = _backend(

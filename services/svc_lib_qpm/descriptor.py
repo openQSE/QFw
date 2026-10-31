@@ -65,6 +65,7 @@ def resolve_descriptor(device_id=None):
 		"execution_owner": device.get(
 			"execution_owner", DEFAULT_EXECUTION_OWNER),
 		"caps": _copy_caps(device.get("caps")),
+		"calibration_policy": device.get("calibration-policy"),
 		# QRMI resource type. IBM QDMI accepts only IBMQiskitRuntimeService.
 		# A QRMI provider with one resource type can omit this setting.
 		"resource_type": (device.get("resource-type")

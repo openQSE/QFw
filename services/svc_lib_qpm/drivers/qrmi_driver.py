@@ -27,7 +27,7 @@ from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
 		pasqal_backend_info, poll_schedule, reservation_cache_key)
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
-from util import instrumentation
+from util import instrumentation, isa
 import json
 import logging
 import os
@@ -114,6 +114,22 @@ PASQAL_CAPABILITIES = frozenset({
 	"get_task_timing",
 	"get_task_metadata",
 })
+
+TARGET_TTL_ENV = "QFW_QPU_TARGET_TTL_SECONDS"
+DEFAULT_TARGET_TTL_SECONDS = 300
+
+
+def target_ttl_seconds():
+	value = os.environ.get(TARGET_TTL_ENV)
+	if value in (None, ""):
+		return DEFAULT_TARGET_TTL_SECONDS
+	text = str(value).strip()
+	if not text.isdigit():
+		raise DEFwExecutionError(
+			f"{TARGET_TTL_ENV} must be a whole number of seconds, not "
+			f"{value!r}")
+	return int(text)
+
 
 # IBM Cloud's IAM endpoint. QRMI trades the API key for a token there, with
 # grant_type urn:ibm:params:oauth:grant-type:apikey against /identity/token,
@@ -353,6 +369,8 @@ class QrmiDriver(BaseDriver):
 		self._resource_locks = {}
 		self._resource_locks_guard = threading.Lock()
 		self._target_cache = {}
+		self._target_fetched_at = {}
+		self._target_ttl_seconds = target_ttl_seconds()
 		self._jobs = JobRecords("QRMI")
 
 	def implements(self, call):
@@ -1017,6 +1035,7 @@ class QrmiDriver(BaseDriver):
 		with self._resource_lock(cache_key):
 			resource = self._resource_objs.pop(cache_key, None)
 			target = self._target_cache.pop(cache_key, None)
+			self._target_fetched_at.pop(cache_key, None)
 		with self._resource_locks_guard:
 			self._resource_locks.pop(cache_key, None)
 		if resource is not None:
@@ -1027,32 +1046,49 @@ class QrmiDriver(BaseDriver):
 
 	def _target(self, credential=None):
 		# QRMI target() is a remote call returning raw IQM JSON (dynamic
-		# architecture / calibration_set / quality_metrics). Parse it once per
-		# driver instance and serve every introspection call from the cache, so
-		# the four calls don't each re-fetch the same payload.
+		# architecture / calibration_set / quality_metrics). Parse it once and
+		# serve every introspection call from the cache, so the four calls
+		# don't each re-fetch the same payload.
 		cache_key = self._credential_cache_key(credential)
-		if cache_key not in self._target_cache:
-			try:
-				target_data = json.loads(
-					self._qpu(credential=credential).target().value)
-			except Exception as exc:
-				raise self._qrmi_error(
-					exc, "failed to read QRMI target()") from exc
+		cached = self._target_cache.get(cache_key)
+		if cached is not None and self._target_is_fresh(cache_key):
+			return cached
+		try:
+			target_data = json.loads(
+				self._qpu(credential=credential).target().value)
+		except Exception as exc:
+			if cached is not None:
+				logging.warning(
+					f"shim: keeping the cached QRMI target, refresh failed: {exc}")
+				return cached
+			raise self._qrmi_error(
+				exc, "failed to read QRMI target()") from exc
 
-			# IBM target() returns null for configuration or properties on failure.
-			# To avoid caching a failed or half-failed payload (which would stick
-			# in the cache after IBM recovers), do not cache if either is None.
-			if self._provider() == "ibm":
-				if (
-					isinstance(target_data, dict)
-					and target_data.get("configuration") is not None
-					and target_data.get("properties") is not None
-				):
-					self._target_cache[cache_key] = target_data
-			else:
-				self._target_cache[cache_key] = target_data
+		# IBM target() returns null for configuration or properties on failure.
+		# To avoid caching a failed or half-failed payload (which would stick
+		# in the cache after IBM recovers), do not cache if either is None.
+		if self._provider() == "ibm" and not (
+			isinstance(target_data, dict)
+			and target_data.get("configuration") is not None
+			and target_data.get("properties") is not None
+		):
+			if cached is not None:
+				logging.warning(
+					"shim: keeping the cached QRMI target, the refresh was "
+					"incomplete")
+				return cached
 			return target_data
-		return self._target_cache[cache_key]
+		self._cache_target(cache_key, target_data)
+		return target_data
+
+	def _target_is_fresh(self, cache_key):
+		fetched_at = self._target_fetched_at.get(cache_key)
+		return (fetched_at is not None
+			and time.monotonic() - fetched_at < self._target_ttl_seconds)
+
+	def _cache_target(self, cache_key, target_data):
+		self._target_cache[cache_key] = target_data
+		self._target_fetched_at[cache_key] = time.monotonic()
 
 	def _static_arch(self, target):
 		# QRMI 0.22.0 added the static architecture to target(). Before that the
@@ -1484,8 +1520,20 @@ class QrmiDriver(BaseDriver):
 				  " parameter name strings) for the following circuit parameters:"
 				  f" {[p.name for p in qiskit_circuit.parameters]}")
 
-		from util.ibm_transcode import compile_circuit
-		isa_circuit = compile_circuit(qiskit_circuit, target, compilation_options)
+		marker = isa.read_marker(info)
+		if marker is not None:
+			from util.ibm_transcode import require_isa_circuit
+			isa.check_index_labels(marker)
+			properties = self._target(credential=getattr(
+				source, "provider_credential", None)).get("properties") or {}
+			isa.check_calibration(
+				marker, properties.get("last_update_date"),
+				self._descriptor.get("calibration_policy"))
+			isa_circuit = require_isa_circuit(qiskit_circuit, target)
+		else:
+			from util.ibm_transcode import compile_circuit
+			isa_circuit = compile_circuit(
+				qiskit_circuit, target, compilation_options)
 
 		from util.ibm_transcode import qiskit_sampler_input_json
 		input_json = qiskit_sampler_input_json(isa_circuit, param_values, shots)
@@ -1514,10 +1562,17 @@ class QrmiDriver(BaseDriver):
 			or dynamic.get("calibration_set_id"))
 
 		from util.circuit_payload import qiskit_input
-		from util.iqm_transcode import build_iqm_circuit
+		from util.iqm_transcode import build_iqm_circuit, build_isa_iqm_circuit
 		with instrumentation.qpm_transpile():
 			circuit = qiskit_input(info)
-			iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
+			marker = isa.read_marker(info)
+			if marker is not None:
+				isa.check_calibration(
+					marker, dynamic.get("calibration_set_id"),
+					self._descriptor.get("calibration_policy"))
+				iqm_circuit = build_isa_iqm_circuit(circuit, dynamic, marker)
+			else:
+				iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
 			iqmjson, run_request = self._build_iqmjson(
 					iqm_circuit, shots, calibration_set_id)
 
