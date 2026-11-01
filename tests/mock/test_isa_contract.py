@@ -321,6 +321,11 @@ def _no_compile(*args, **kwargs):
 	raise AssertionError("a circuit compiled ahead of time was compiled again")
 
 
+def _iqm_target(calibration_set_id):
+	return {"dynamic_quantum_architecture": {
+		"calibration_set_id": calibration_set_id}}
+
+
 def test_qrmi_iqm_sends_a_marked_circuit_through_the_isa_path(monkeypatch):
 	import util.circuit_payload as circuit_payload
 	import util.iqm_transcode as iqm_transcode
@@ -336,8 +341,7 @@ def test_qrmi_iqm_sends_a_marked_circuit_through_the_isa_path(monkeypatch):
 	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
 	driver = QrmiDriver({"provider": "iqm"})
 	driver._resource = lambda: object()
-	driver._target = lambda credential=None: {
-		"dynamic_quantum_architecture": {"calibration_set_id": "cal-1"}}
+	driver._read_target = lambda credential=None: _iqm_target("cal-1")
 
 	with pytest.raises(_Stop):
 		driver._run_iqm_circuit(_source(**_info()))
@@ -353,11 +357,105 @@ def test_qrmi_iqm_refuses_a_stale_calibration(monkeypatch):
 	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
 	driver = QrmiDriver({"provider": "iqm"})
 	driver._resource = lambda: object()
-	driver._target = lambda credential=None: {
-		"dynamic_quantum_architecture": {"calibration_set_id": "cal-2"}}
+	driver._read_target = lambda credential=None: _iqm_target("cal-2")
 
 	with pytest.raises(DEFwExecutionError, match="compile it again"):
 		driver._run_iqm_circuit(_source(**_info()))
+
+
+def _driver_holding_a_cached_target(monkeypatch, provider, cached, **descriptor):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	monkeypatch.setattr(iqm_transcode, "build_isa_iqm_circuit", _no_compile)
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
+	driver = QrmiDriver(dict(descriptor, provider=provider))
+	driver._resource = lambda: object()
+	driver._read_target = lambda credential=None: cached
+	assert driver._target() == cached
+	return driver
+
+
+def test_a_required_calibration_is_read_past_the_cache(monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "iqm", _iqm_target("cal-1"))
+	driver._read_target = lambda credential=None: _iqm_target("cal-2")
+
+	with pytest.raises(DEFwExecutionError, match="compile it again"):
+		driver._run_iqm_circuit(_source(**_info()))
+
+
+def test_a_required_calibration_is_not_taken_from_a_cache_it_cannot_refresh(
+		monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "iqm", _iqm_target("cal-1"))
+
+	def unreachable(credential=None):
+		raise DEFwExecutionError("device unreachable")
+
+	driver._read_target = unreachable
+
+	with pytest.raises(DEFwExecutionError, match="device unreachable"):
+		driver._run_iqm_circuit(_source(**_info()))
+
+
+def _ibm_info(**fields):
+	marker = isa.make_marker(
+		"ibm", DEVICE, calibration={"kind": "properties-time", "value": "t1"})
+	return _info(isa=marker, **fields)
+
+
+def _ibm_target(properties_time):
+	return {"configuration": {"n_qubits": 2},
+		"properties": {"last_update_date": properties_time}}
+
+
+def test_qrmi_ibm_reads_a_required_calibration_before_it_builds_a_target(
+		monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "ibm", _ibm_target("t1"), calibration_policy="require")
+
+	def unreachable(credential=None):
+		raise DEFwExecutionError("device unreachable")
+
+	driver._read_target = unreachable
+	driver._build_backend_target = _no_compile
+
+	with pytest.raises(DEFwExecutionError, match="device unreachable"):
+		driver._run_ibm_circuit(_source(**_ibm_info()))
+
+
+def test_an_incomplete_read_of_a_required_calibration_is_refused(monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "ibm", _ibm_target("t1"), calibration_policy="require")
+	driver._read_target = lambda credential=None: {
+		"configuration": None, "properties": None}
+
+	with pytest.raises(DEFwExecutionError, match="came back incomplete"):
+		driver._refresh_target_when_required(_source(**_ibm_info()))
+
+	assert driver._target() == _ibm_target("t1")
+
+
+def test_a_refreshed_required_calibration_is_the_one_later_reads_see(monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "ibm", _ibm_target("t1"), calibration_policy="require")
+	driver._read_target = lambda credential=None: _ibm_target("t2")
+
+	driver._refresh_target_when_required(_source(**_ibm_info()))
+
+	driver._read_target = _no_compile
+	assert driver._target() == _ibm_target("t2")
+
+
+def test_the_cache_serves_a_calibration_that_is_not_required(monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "ibm", _ibm_target("t1"))
+	driver._read_target = _no_compile
+
+	driver._refresh_target_when_required(_source(**_ibm_info()))
+
+	assert driver._target() == _ibm_target("t1")
 
 
 def test_qrmi_ibm_checks_a_marked_circuit_instead_of_compiling_it(monkeypatch):

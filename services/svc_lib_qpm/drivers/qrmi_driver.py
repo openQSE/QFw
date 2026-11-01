@@ -1054,24 +1054,17 @@ class QrmiDriver(BaseDriver):
 		if cached is not None and self._target_is_fresh(cache_key):
 			return cached
 		try:
-			target_data = json.loads(
-				self._qpu(credential=credential).target().value)
+			target_data = self._read_target(credential)
 		except Exception as exc:
 			if cached is not None:
 				logging.warning(
 					f"shim: keeping the cached QRMI target, refresh failed: {exc}")
 				return cached
-			raise self._qrmi_error(
-				exc, "failed to read QRMI target()") from exc
+			raise
 
-		# IBM target() returns null for configuration or properties on failure.
 		# To avoid caching a failed or half-failed payload (which would stick
-		# in the cache after IBM recovers), do not cache if either is None.
-		if self._provider() == "ibm" and not (
-			isinstance(target_data, dict)
-			and target_data.get("configuration") is not None
-			and target_data.get("properties") is not None
-		):
+		# in the cache after IBM recovers), do not cache an incomplete one.
+		if not self._target_is_complete(target_data):
 			if cached is not None:
 				logging.warning(
 					"shim: keeping the cached QRMI target, the refresh was "
@@ -1080,6 +1073,36 @@ class QrmiDriver(BaseDriver):
 			return target_data
 		self._cache_target(cache_key, target_data)
 		return target_data
+
+	def _read_target(self, credential=None):
+		try:
+			return json.loads(self._qpu(credential=credential).target().value)
+		except Exception as exc:
+			raise self._qrmi_error(
+				exc, "failed to read QRMI target()") from exc
+
+	def _target_is_complete(self, target_data):
+		# IBM target() returns null for configuration or properties on failure.
+		if self._provider() != "ibm":
+			return True
+		return (isinstance(target_data, dict)
+			and target_data.get("configuration") is not None
+			and target_data.get("properties") is not None)
+
+	def _refresh_target_when_required(self, source):
+		# A cached target can name a calibration the device has left.
+		info = getattr(source, "info", None) or {}
+		marker = isa.read_marker(info)
+		if marker is None or not isa.requires_calibration(
+				marker, self._descriptor.get("calibration_policy")):
+			return
+		credential = getattr(source, "provider_credential", None)
+		target_data = self._read_target(credential)
+		if not self._target_is_complete(target_data):
+			raise DEFwExecutionError(
+				"cannot confirm this device's current calibration: its "
+				"target came back incomplete")
+		self._cache_target(self._credential_cache_key(credential), target_data)
 
 	def _target_is_fresh(self, cache_key):
 		fetched_at = self._target_fetched_at.get(cache_key)
@@ -1274,6 +1297,7 @@ class QrmiDriver(BaseDriver):
 				f" QPY format: {QPY_FORMATS}")
 
 		with instrumentation.backend_phase("acquire"):
+			self._refresh_target_when_required(source)
 			target, target_config_json = self._build_backend_target(source)
 		with instrumentation.qpm_transpile():
 			payload = self._build_ibm_payload(source, target)
@@ -1553,6 +1577,7 @@ class QrmiDriver(BaseDriver):
 		use_timeslot = bool(info.get("use_timeslot", False))
 
 		with instrumentation.backend_phase("acquire"):
+			self._refresh_target_when_required(source)
 			target = self._target(
 				credential=getattr(source, "provider_credential", None))
 		dynamic = target.get("dynamic_quantum_architecture") or {}
