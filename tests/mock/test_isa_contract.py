@@ -363,6 +363,36 @@ def test_qrmi_iqm_refuses_a_stale_calibration(monkeypatch):
 		driver._run_iqm_circuit(_source(**_info()))
 
 
+@pytest.mark.parametrize("field", ["calibration_set_id", "iqm_calibration_set_id"])
+def test_qrmi_iqm_refuses_a_job_pinned_to_another_calibration(monkeypatch, field):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	monkeypatch.setattr(iqm_transcode, "build_isa_iqm_circuit", _no_compile)
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
+	driver = QrmiDriver({"provider": "iqm"})
+	driver._resource = lambda: object()
+	driver._read_target = lambda credential=None: _iqm_target("cal-1")
+
+	with pytest.raises(DEFwExecutionError, match="cal-9"):
+		driver._run_iqm_circuit(_source(**_info(**{field: "cal-9"})))
+
+
+def test_pinning_the_compiled_calibration_does_not_excuse_a_recalibration(
+		monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	monkeypatch.setattr(iqm_transcode, "build_isa_iqm_circuit", _no_compile)
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "isa")
+	driver = QrmiDriver({"provider": "iqm"})
+	driver._resource = lambda: object()
+	driver._read_target = lambda credential=None: _iqm_target("cal-2")
+
+	with pytest.raises(DEFwExecutionError, match="cal-2"):
+		driver._run_iqm_circuit(_source(**_info(calibration_set_id="cal-1")))
+
+
 def _driver_holding_a_cached_target(monkeypatch, provider, cached, **descriptor):
 	import util.circuit_payload as circuit_payload
 	import util.iqm_transcode as iqm_transcode

@@ -1592,9 +1592,11 @@ class QrmiDriver(BaseDriver):
 			circuit = qiskit_input(info)
 			marker = isa.read_marker(info)
 			if marker is not None:
-				isa.check_calibration(
-					marker, dynamic.get("calibration_set_id"),
-					self._descriptor.get("calibration_policy"))
+				for calibration in {
+						dynamic.get("calibration_set_id"), calibration_set_id}:
+					isa.check_calibration(
+						marker, calibration,
+						self._descriptor.get("calibration_policy"))
 				iqm_circuit = build_isa_iqm_circuit(circuit, dynamic, marker)
 			else:
 				iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
