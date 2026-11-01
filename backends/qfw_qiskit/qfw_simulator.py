@@ -22,7 +22,7 @@ from .qfw_target import (
 	target_from_telemetry,
 )
 from .qfw_telemetry import QFwTelemetry
-from defw_exception import DEFwDumper
+from defw_exception import DEFwDumper, DEFwError
 from defw import me
 from .qfw_lookup_service import get_qpm, get_qpm_telemetry
 from .qpm_selection import qpm_selection_for_provider
@@ -331,6 +331,16 @@ class QFwBackend(BackendV2):
 			lib=None,
 			isa_policy=None,
 		)
+
+	def isa_device(self):
+		"""The (provider, device_id) a circuit is marked with for this QPM."""
+		properties = getattr(self.qpm, "qpm_properties", None) or {}
+		provider = properties.get("isa_provider")
+		device_id = properties.get("isa_device_id")
+		if not provider or not device_id:
+			raise DEFwError(
+				"this QPM does not take a circuit compiled ahead of time")
+		return provider, device_id
 
 	def compile(self, circuits, compiler='qiskit', **kwargs):
 		if compiler == 'qiskit':

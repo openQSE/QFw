@@ -4,6 +4,7 @@ import time
 import util.qpm.util_qpm as util_qpm
 from tests.mock.fakes import FakeSchedulerContext
 from svc_fake_iqm_qpm.svc_qpm import (
+	FAKE_IQM_PROVIDER,
 	FAKE_IQM_TARGET_ID,
 	QPM,
 )
@@ -174,6 +175,32 @@ def test_fake_iqm_query_metadata_matches_directory_contract(monkeypatch):
 		selector_resource=FAKE_IQM_TARGET_ID,
 	)
 	assert records[0]["service_record"]["service_id"] == info["service_id"]
+
+
+def _query_properties(monkeypatch, qpm_class=QPM):
+	_setup(monkeypatch)
+	return qpm_class(
+		admission_context_factory=FakeAdmissionContext,
+		scheduler_context_factory=FakeSchedulerContext,
+	).query()["properties"]
+
+
+def test_a_qpm_publishes_what_a_marker_must_name(monkeypatch):
+	properties = _query_properties(monkeypatch)
+
+	assert properties["isa_provider"] == FAKE_IQM_PROVIDER
+	assert properties["isa_device_id"] == FAKE_IQM_TARGET_ID
+
+
+def test_a_qpm_that_takes_no_marker_publishes_no_identity_for_one(monkeypatch):
+	class GenericOnly(QPM):
+		def circuit_stages(self):
+			return ["generic"]
+
+	properties = _query_properties(monkeypatch, GenericOnly)
+
+	assert "isa_provider" not in properties
+	assert "isa_device_id" not in properties
 
 
 def test_fake_iqm_qpm_registers_profile_and_executes(monkeypatch, tmp_path):

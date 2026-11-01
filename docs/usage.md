@@ -1148,7 +1148,7 @@ the device it was compiled for:
 ```python
 from qfw_qiskit import mark_isa
 
-mark_isa(isa_circuit, "iqm", "q20",
+mark_isa(isa_circuit, *backend.isa_device(),
          calibration={"kind": "set-id", "value": calibration_set_id},
          qubit_labels=["QB1", "QB2", "QB3"])
 job = backend.run(isa_circuit, shots=100)

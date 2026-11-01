@@ -1014,6 +1014,9 @@ class UTIL_QPM:
 		properties.setdefault(
 			"circuit_formats", list(DEFAULT_CIRCUIT_FORMATS))
 		properties.setdefault("circuit_stages", self.circuit_stages())
+		if isa.STAGE_ISA in properties["circuit_stages"]:
+			properties.setdefault("isa_provider", self.isa_provider())
+			properties.setdefault("isa_device_id", self.isa_device_id())
 		properties.setdefault("qpm_type", int(type_bits))
 		properties.setdefault("qpm_capabilities", int(caps_bits))
 		properties.setdefault(
