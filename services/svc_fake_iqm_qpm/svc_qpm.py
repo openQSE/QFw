@@ -3,6 +3,7 @@ import os
 
 from .svc_qrc import QRC
 from util import isa
+from util.circuit_payload import qiskit_circuit_formats
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.qpm.util_qpm import UTIL_QPM
 
@@ -74,6 +75,7 @@ class QPM(UTIL_QPM):
 			"num_qubits": FAKE_IQM_MAX_QUBITS,
 			"max_shots": FAKE_IQM_MAX_SHOTS,
 		})
+		properties.update(qiskit_circuit_formats())
 		info = self.query_helper(
 			QPMType.QPM_TYPE_HARDWARE,
 			QPMCapability.QPM_CAP_SUPERCONDUCTING,

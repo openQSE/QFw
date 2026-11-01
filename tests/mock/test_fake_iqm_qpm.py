@@ -192,6 +192,17 @@ def test_a_qpm_publishes_what_a_marker_must_name(monkeypatch):
 	assert properties["isa_device_id"] == FAKE_IQM_TARGET_ID
 
 
+def test_fake_iqm_declares_the_format_a_marked_circuit_travels_in(monkeypatch):
+	monkeypatch.setattr(
+		"svc_fake_iqm_qpm.svc_qpm.qiskit_circuit_formats",
+		lambda: {"circuit_formats": ["qpy+gzip", "qpy"], "qpy_version": 17})
+
+	properties = _query_properties(monkeypatch)
+
+	assert properties["circuit_formats"] == ["qpy+gzip", "qpy"]
+	assert properties["qpy_version"] == 17
+
+
 def test_a_qpm_that_takes_no_marker_publishes_no_identity_for_one(monkeypatch):
 	class GenericOnly(QPM):
 		def circuit_stages(self):
