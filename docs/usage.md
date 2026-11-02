@@ -1146,8 +1146,24 @@ job = backend.run(isa_circuit, shots=100)
 ```
 
 A circuit transpiled this way is still a generic circuit to the QPM, which may
-compile it again. To have a QPM run it as it stands or refuse it, mark it with
-the device it was compiled for:
+compile it again. `backend.compile` compiles for the device on the application's
+own CPUs, checks the result against the device, and marks it, so that a QPM runs
+it as it stands or refuses it:
+
+```python
+compiled = backend.compile(circuit, seed_transpiler=7)
+job = backend.run(compiled, shots=100)
+```
+
+An IQM device compiles through `transpile_to_IQM`, so a star device's resonator
+is routed, and every other device compiles to `backend.target`. Options go to
+the compiler. `refresh_target=True` reads the device again first, for a backend
+that has been open across a recalibration. Braket and Pasqal devices refuse
+`compile`, because they do not take a circuit compiled ahead of time. So does a
+backend whose `target_kind` is `fallback`, rather than compile for a device it
+could not describe. A simulator's result is not marked.
+
+To mark a circuit compiled some other way, name the device it was compiled for:
 
 ```python
 from qfw_qiskit import mark_isa

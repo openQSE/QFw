@@ -9,12 +9,13 @@ import sys
 from collections import deque
 from importlib.metadata import PackageNotFoundError, version
 
+from qiskit import QuantumCircuit
 from qiskit.providers import BackendV2, Options
 
 from .qfw_job import (
 	QFwJob, QFW_INFO_PASSTHROUGH_OPTIONS, SHIM_LIB_ENV,
 	normalize_reservation_id, normalize_shim_library)
-from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
+from .qfw_metadata import get_qubit_mapping, mark_isa, set_qubit_mapping
 from .qfw_target import (
 	QFW_NUM_QUBITS,
 	TARGET_DEVICE,
@@ -34,6 +35,8 @@ from api_qpm_common import QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 from util import instrumentation
+from util.compile_profiles import compile_profile
+from util.isa import make_marker
 
 QFW_RUN_CONTEXT_OPTIONS = (
 	"reservation_id",
@@ -98,6 +101,14 @@ def _mqt_core_version():
 	return raw, tuple(int(p) for p in match.group(1).split('.'))
 
 
+def _compiler_name(compiler):
+	package = {'qiskit': 'qiskit', 'mqt': 'mqt-core'}[compiler]
+	try:
+		return f"{compiler} {version(package)}"
+	except PackageNotFoundError:
+		return compiler
+
+
 class QFwBackend(BackendV2):
 	BACKEND_NAME = "QFw Backend"
 	BACKEND_VERSION = "1.0"
@@ -137,6 +148,7 @@ class QFwBackend(BackendV2):
 		self._telemetry_api = get_qpm_telemetry(self.qpm)
 		self._telemetry = None
 		self._target_source = None
+		self._target_supplied = target is not None
 		self._target_kind = None if target is None else TARGET_DEVICE
 		self._backend_info = {}
 		self.event_api = BaseEventAPI()
@@ -367,30 +379,111 @@ class QFwBackend(BackendV2):
 				"this QPM does not take a circuit compiled ahead of time")
 		return provider, device_id
 
-	def compile(self, circuits, compiler='qiskit', **kwargs):
-		if compiler == 'qiskit':
-			from qiskit import transpile
-			return transpile(circuits, target=self.target, **kwargs)
-		elif compiler == 'mqt':
-			from mqt.core import mlir
+	@property
+	def backend_info(self):
+		"""The get_backend_info record self.target was built from."""
+		return self._backend_info
 
-			# Version check the installed MQTC.
-			# TODO: Once setup/qdmi-requirements.txt pins a newer MQT
-			# Core, remove this check and the NOTE in examples/README.md.
-			require_mqtc_above = (4, 1, 1)
-			mqtc_ver_str, mqtc_ver = _mqt_core_version()
-			if mqtc_ver is not None and mqtc_ver <= require_mqtc_above:
-				require_mqtc_str = '.'.join(str(p) for p in require_mqtc_above)
-				raise RuntimeError(
-					f"The 'mqt' compiler requires an MQT Core newer than "
-					f"{require_mqtc_str}, but {mqtc_ver_str} is installed. "
-					"See notes for qfw_qiskit_simple_w_mqt.sh in "
-					"examples/README.md for more information.")
-			return mlir.compile_program(
-				circuits, target=self.target, **kwargs)
-		else:
+	def _forget_target(self):
+		if not self._target_supplied:
+			self._target = None
+			self._target_kind = None
+
+	def _published(self, name):
+		return (getattr(self.qpm, "qpm_properties", None) or {}).get(name)
+
+	def _device_provider(self):
+		return (self._published("isa_provider") or
+			self._published("device_provider") or
+			self._published("provider"))
+
+	def _require_a_device_target(self):
+		self.target
+		if self.target_kind == TARGET_FALLBACK:
+			raise DEFwError(
+				"compile needs a device's target with its connectivity, "
+				f"and this backend holds {self.target_source}")
+
+	def _read_compile_device(self, profile):
+		if profile.compiles_against_target:
+			self._require_a_device_target()
+		return profile.read_device(self)
+
+	def compile(self, circuits, compiler='qiskit', *, refresh_target=False,
+		    **kwargs):
+		"""Compile for this backend's device, on this process's CPUs. The
+		result is checked against the device and marked for it, so a QPM
+		runs it as it stands or refuses it. A simulator's result is not
+		marked. `refresh_target` reads the device again first."""
+		if compiler not in self.COMPILERS:
 			raise ValueError(
 				f"unknown compiler '{compiler}'; expected 'qiskit' or 'mqt'")
+		if refresh_target:
+			self._forget_target()
+		profile = compile_profile(self._device_provider())
+		if profile is None:
+			self._require_a_device_target()
+			return self.COMPILERS[compiler](self, circuits, **kwargs)
+		device = self._read_compile_device(profile)
+		if isinstance(circuits, QuantumCircuit):
+			return self._compile_for_device(
+				circuits, compiler, profile, device, kwargs)
+		return [
+			self._compile_for_device(circuit, compiler, profile, device, kwargs)
+			for circuit in circuits]
+
+	def _compile_for_device(self, circuit, compiler, profile, device, options):
+		if compiler == 'qiskit':
+			compiled, labels = profile.compile(
+				circuit, device, get_qubit_mapping(circuit), **options)
+		else:
+			labels = profile.labels_for_target(device)
+			compiled = self._compile_with_mqt(circuit, **options)
+		if not isinstance(compiled, QuantumCircuit):
+			raise DEFwError(
+				f"the {compiler} compiler returned {type(compiled).__name__}, "
+				"which QFw cannot check against the device")
+		compiled = compiled.copy()
+		set_qubit_mapping(compiled, labels)
+		device_id = self._published("isa_device_id")
+		marker = make_marker(
+			self._device_provider(), device_id or self._device_provider(),
+			profile.calibration(device), labels, _compiler_name(compiler))
+		profile.validate(compiled, device, marker)
+		if device_id is None:
+			logging.warning(
+				"QFw backend: this QPM does not take a circuit compiled ahead "
+				"of time, so it may compile this one again")
+			return compiled
+		return mark_isa(
+			compiled, marker["provider"], marker["device_id"],
+			marker["calibration"], labels, marker["compiler"])
+
+	def _compile_with_qiskit(self, circuits, **kwargs):
+		from qiskit import transpile
+		return transpile(circuits, target=self.target, **kwargs)
+
+	def _compile_with_mqt(self, circuits, **kwargs):
+		from mqt.core import mlir
+
+		# Version check the installed MQTC.
+		# TODO: Once setup/qdmi-requirements.txt pins a newer MQT
+		# Core, remove this check and the NOTE in examples/README.md.
+		require_mqtc_above = (4, 1, 1)
+		mqtc_ver_str, mqtc_ver = _mqt_core_version()
+		if mqtc_ver is not None and mqtc_ver <= require_mqtc_above:
+			require_mqtc_str = '.'.join(str(p) for p in require_mqtc_above)
+			raise RuntimeError(
+				f"The 'mqt' compiler requires an MQT Core newer than "
+				f"{require_mqtc_str}, but {mqtc_ver_str} is installed. "
+				"See notes for qfw_qiskit_simple_w_mqt.sh in "
+				"examples/README.md for more information.")
+		return mlir.compile_program(circuits, target=self.target, **kwargs)
+
+	COMPILERS = {
+		'qiskit': _compile_with_qiskit,
+		'mqt': _compile_with_mqt,
+	}
 
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:
