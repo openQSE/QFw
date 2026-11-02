@@ -17,7 +17,11 @@ from .qfw_job import (
 from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
 from .qfw_target import (
 	QFW_NUM_QUBITS,
+	TARGET_DEVICE,
+	TARGET_FALLBACK,
+	TARGET_GENERIC_BY_DESIGN,
 	build_qfw_target,
+	has_connectivity,
 	qfw_basis_gates,
 	target_from_telemetry,
 )
@@ -133,6 +137,8 @@ class QFwBackend(BackendV2):
 		self._telemetry_api = get_qpm_telemetry(self.qpm)
 		self._telemetry = None
 		self._target_source = None
+		self._target_kind = None if target is None else TARGET_DEVICE
+		self._backend_info = {}
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
 		self._event_endpoint = me.my_endpoint()
@@ -275,28 +281,47 @@ class QFwBackend(BackendV2):
 		"generic: <reason>"; None until the target has been built."""
 		return self._target_source
 
+	@property
+	def target_kind(self):
+		"""What self.target stands for: TARGET_DEVICE, a device with its
+		connectivity; TARGET_GENERIC_BY_DESIGN, a QPM with no device to
+		describe; TARGET_FALLBACK, a device QFw could not describe. None
+		until the target has been built."""
+		return self._target_kind
+
+	def _generic_target(self, reason, log=logging.info):
+		log(f"QFw backend: {reason}; using the generic "
+		    f"{self._num_qubits}-qubit QFw target")
+		self._target_source = f"generic: {reason}"
+		return build_qfw_target(self._num_qubits)
+
+	def _kind_without_a_device(self):
+		properties = getattr(self.qpm, "qpm_properties", None) or {}
+		return (TARGET_FALLBACK if properties.get("hardware")
+			else TARGET_GENERIC_BY_DESIGN)
+
 	def _build_target(self):
-		generic = f"the generic {self._num_qubits}-qubit QFw target"
+		self._backend_info = {}
 		telemetry = self.telemetry
 		if telemetry is None:
-			reason = "the QPM connection has no telemetry binding"
-			logging.info(f"QFw backend: {reason}; using {generic}")
-			self._target_source = f"generic: {reason}"
-			return build_qfw_target(self._num_qubits)
+			self._target_kind = self._kind_without_a_device()
+			return self._generic_target(
+				"the QPM connection has no telemetry binding")
 		try:
 			info = telemetry.get_backend_info() or {}
 			target = target_from_telemetry(telemetry, backend_info=info)
 		except Exception as exc:
-			reason = f"the QPM's device telemetry failed: {exc}"
-			logging.warning(f"QFw backend: {reason}; using {generic}")
-			self._target_source = f"generic: {reason}"
-			return build_qfw_target(self._num_qubits)
+			self._target_kind = TARGET_FALLBACK
+			return self._generic_target(
+				f"the QPM's device telemetry failed: {exc}", logging.warning)
+		self._backend_info = info
 		if target is None:
+			self._target_kind = self._kind_without_a_device()
 			name = info.get("backend") or self._provider or "default"
-			reason = f"QPM {name} reports no device metadata"
-			logging.info(f"QFw backend: {reason}; using {generic}")
-			self._target_source = f"generic: {reason}"
-			return build_qfw_target(self._num_qubits)
+			return self._generic_target(
+				f"QPM {name} reports no device metadata")
+		self._target_kind = (TARGET_DEVICE if has_connectivity(target)
+			else TARGET_FALLBACK)
 		self._target_source = f"device: {target.description}"
 		logging.info(f"QFw backend: {target.description}: "
 			     f"{target.num_qubits} qubits, "

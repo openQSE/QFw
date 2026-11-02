@@ -292,6 +292,7 @@ def test_target_from_device_metadata_has_the_qubits_gates_and_coupling(
 	assert target.num_qubits == 4
 	assert target.description == "QFw fake-iqm fake-iqm-20q target"
 	assert backend.target_source == "device: QFw fake-iqm fake-iqm-20q target"
+	assert backend.target_kind == "device"
 	assert {"x", "rz", "cx", "rzz", "measure", "reset"} <= set(
 		target.operation_names)
 	assert _qargs(target, "x") == {(0,), (1,), (2,), (3,)}
@@ -434,6 +435,9 @@ def test_ibm_configuration_goes_through_the_runtime_converter(monkeypatch):
 		num_qubits = 2
 		operation_names = {"cx", "sx"}
 
+		def build_coupling_map(self):
+			return [[0, 1]]
+
 	def convert_to_target(configuration, properties=None):
 		calls.append((configuration.data,
 			      None if properties is None else properties.data))
@@ -519,7 +523,18 @@ def test_target_is_generic_when_the_qpm_reports_no_metadata(
 	assert telemetry.names() == ["get_backend_info"]
 	assert backend.target_source == (
 		"generic: QPM nwqsim reports no device metadata")
+	assert backend.target_kind == "generic_by_design"
 	assert "reports no device metadata" in caplog.text
+
+
+def test_hardware_that_reports_no_metadata_is_a_fallback(monkeypatch):
+	telemetry = FakeTelemetryAPI(backend_info={
+		"backend": "iqm", "metadata_supported": False})
+	backend = _backend(monkeypatch, telemetry, qpm_properties={"hardware": True})
+
+	backend.target
+
+	assert backend.target_kind == "fallback"
 
 
 def test_target_is_generic_when_the_telemetry_call_fails(monkeypatch, caplog):
@@ -535,6 +550,7 @@ def test_target_is_generic_when_the_telemetry_call_fails(monkeypatch, caplog):
 	assert target.num_qubits == 16
 	assert backend.target_source == (
 		"generic: the QPM's device telemetry failed: binding unavailable")
+	assert backend.target_kind == "fallback"
 	assert "binding unavailable" in caplog.text
 	assert "generic 16-qubit QFw target" in caplog.text
 
@@ -548,7 +564,16 @@ def test_target_is_generic_without_a_managed_binding(monkeypatch, caplog):
 	assert target.num_qubits == 400
 	assert backend.target_source == (
 		"generic: the QPM connection has no telemetry binding")
+	assert backend.target_kind == "generic_by_design"
 	assert "no telemetry binding" in caplog.text
+
+
+def test_hardware_with_no_telemetry_binding_is_a_fallback(monkeypatch):
+	backend = _backend(monkeypatch, qpm_properties={"hardware": True})
+
+	backend.target
+
+	assert backend.target_kind == "fallback"
 
 
 def test_secondary_records_are_optional(monkeypatch):
@@ -567,6 +592,7 @@ def test_secondary_records_are_optional(monkeypatch):
 	assert target.qargs_for_operation_name("cx") is None
 	assert "ccx" in target.operation_names
 	assert backend.target_source == "device: QFw fake-iqm fake-iqm-20q target"
+	assert backend.target_kind == "fallback"
 
 
 def test_target_is_built_once_per_backend(monkeypatch):

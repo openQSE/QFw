@@ -1118,6 +1118,10 @@ time has passed. When a device cannot be reached, the driver keeps the last
 target it read, except for a circuit whose calibration is required: that read
 goes past the cache, and the circuit is refused if it fails.
 
+`backend.target_kind` says what the target stands for: `device` for a device
+with its connectivity, `generic_by_design` for a QPM with no device to describe,
+and `fallback` for a device QFw could not describe.
+
 The target is built once per backend instance, on first use. When the
 telemetry call fails, or the QPM connection carries no telemetry binding, the
 backend keeps the generic target and logs why. `backend.target_source` says

@@ -597,6 +597,15 @@ def _duration_seconds(value, unit):
 
 # --- the Target itself --------------------------------------------------------
 
+TARGET_DEVICE = "device"
+TARGET_GENERIC_BY_DESIGN = "generic_by_design"
+TARGET_FALLBACK = "fallback"
+
+
+def has_connectivity(target):
+	return target.num_qubits <= 1 or target.build_coupling_map() is not None
+
+
 def target_from_description(description):
 	target = Target(
 		description=f"QFw {description.provider} {description.device_id} target",
