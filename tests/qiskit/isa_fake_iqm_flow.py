@@ -17,19 +17,17 @@ for path in (".", "services", "backends"):
 	sys.path.insert(0, str(REPO_ROOT / path))
 
 
+IQM_CALIBRATION_SET_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
 def compile_job(path, device_id, calibration_set_id):
 	spec = importlib.util.spec_from_file_location(
 		"qfw_metadata", REPO_ROOT / "backends/qfw_qiskit/qfw_metadata.py")
 	metadata = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(metadata)
 
-	circuit = QuantumCircuit(3, 3)
-	circuit.h(0)
-	circuit.cx(0, 1)
-	circuit.cx(1, 2)
-	circuit.measure([0, 1, 2], [0, 1, 2])
 	compiled = transpile(
-		circuit, target=GenericBackendV2(3, seed=1).target, seed_transpiler=1)
+		_ghz(), target=GenericBackendV2(3, seed=1).target, seed_transpiler=1)
 	metadata.mark_isa(
 		compiled, "fake-iqm", device_id,
 		calibration={"kind": "set-id", "value": calibration_set_id},
@@ -56,24 +54,134 @@ def _reserve(qpm):
 	})["reservation_id"]
 
 
+def _ghz():
+	circuit = QuantumCircuit(3, 3)
+	circuit.h(0)
+	circuit.cx(0, 1)
+	circuit.cx(1, 2)
+	circuit.measure([0, 1, 2], [0, 1, 2])
+	return circuit
+
+
+def _fake_iqm_qpm(monkeypatch, config_dir):
+	from svc_fake_iqm_qpm.svc_qpm import QPM
+	from tests.mock import test_fake_iqm_qpm as fake_iqm
+	from tests.mock.fakes import FakeSchedulerContext
+
+	fake_iqm._setup(monkeypatch)
+	fake_iqm.configure_fake_credentials(
+		monkeypatch, pathlib.Path(config_dir), "isa-user")
+	return QPM(
+		admission_context_factory=fake_iqm.FakeAdmissionContext,
+		scheduler_context_factory=FakeSchedulerContext)
+
+
+def backend_compile_job(path, config_dir):
+	import pytest
+	import tests.mock.conftest  # noqa: F401
+	from tests.mock import test_qfw_backend_target as target_tests
+
+	monkeypatch = pytest.MonkeyPatch()
+	qpm = _fake_iqm_qpm(monkeypatch, config_dir)
+	backend = target_tests._backend(
+		monkeypatch, qpm, qpm_properties=qpm.query()["properties"])
+	compiled = backend.compile(_ghz(), seed_transpiler=1)
+	with open(path, "wb") as stream:
+		qpy.dump(compiled, stream)
+	return {"target_kind": backend.target_kind}
+
+
+def check_job(path, config_dir):
+	import pytest
+	import tests.mock.conftest  # noqa: F401
+	from defw_exception import DEFwExecutionError
+	from tests.mock import test_qfw_backend_target as target_tests
+
+	monkeypatch = pytest.MonkeyPatch()
+	qpm = _fake_iqm_qpm(monkeypatch, config_dir)
+	backend = target_tests._backend(
+		monkeypatch, qpm, qpm_properties=qpm.query()["properties"])
+	with open(path, "rb") as stream:
+		compiled = qpy.load(stream)[0]
+	try:
+		backend.check_isa(compiled)
+	except DEFwExecutionError as exc:
+		return {"refused": str(exc)}
+	return {"checked": True}
+
+
+def iqm_job(fake_backend):
+	import pytest
+	from iqm.qiskit_iqm import fake_backends
+	from iqm.qiskit_iqm.fake_backends.fake_garnet import IQMFakeGarnet
+	import tests.mock.conftest  # noqa: F401
+	import util.iqm_transcode as iqm_transcode
+	from qfw_qiskit import qfw_metadata
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	from tests.mock import test_qfw_backend_target as target_tests
+	from types import SimpleNamespace
+	import util.circuit_payload as circuit_payload
+
+	monkeypatch = pytest.MonkeyPatch()
+	make = {"garnet": IQMFakeGarnet, "deneb": fake_backends.IQMFakeDeneb}
+	dynamic = iqm_transcode.to_jsonable(make[fake_backend]().architecture)
+	dynamic["calibration_set_id"] = IQM_CALIBRATION_SET_ID
+	telemetry = target_tests.FakeTelemetryAPI(
+		backend_info={"backend": "iqm", "metadata_supported": True})
+	telemetry.records["get_dynamic_backend_info"] = {
+		"dynamic_architecture": dynamic}
+	properties = {
+		"isa_provider": "iqm", "isa_device_id": "q20",
+		"circuit_stages": ["generic", "isa"]}
+	backend = target_tests._backend(
+		monkeypatch, telemetry, qpm_properties=properties)
+	compiled = backend.compile(_ghz())
+	backend.check_isa(compiled)
+
+	marker = qfw_metadata.get_isa_marker(compiled)
+	encoded = circuit_payload.encode_qiskit_circuit(
+		compiled, circuit_payload.qiskit_circuit_formats())
+	assert encoded["circuit"]["format"] in circuit_payload.QPY_FORMATS
+	built = []
+
+	class Stop(Exception):
+		pass
+
+	def stop(iqm_circuit, shots, calibration_set_id):
+		built.append((iqm_circuit, calibration_set_id))
+		raise Stop()
+
+	driver = QrmiDriver({"provider": "iqm"})
+	driver._resource = lambda: object()
+	driver._read_target = lambda credential=None: {
+		"dynamic_quantum_architecture": dynamic}
+	driver._build_iqmjson = stop
+	source = SimpleNamespace(
+		info=dict(encoded, isa=marker), provider_credential=None)
+	try:
+		driver._run_iqm_circuit(source)
+	except Stop:
+		pass
+	return {
+		"labels": marker["qubit_labels"],
+		"calibration": marker["calibration"],
+		"resonators": dynamic.get("computational_resonators") or [],
+		"operations": sorted({
+			operation.name for operation in built[0][0].instructions}),
+		"pinned": built[0][1],
+	}
+
+
 def run_job(path, config_dir):
 	import pytest
 	import tests.mock.conftest  # noqa: F401
 	import qfw_qiskit.qfw_job as qfw_job
 	from defw_exception import DEFwExecutionError
-	from svc_fake_iqm_qpm.svc_qpm import QPM
 	from tests.mock import test_fake_iqm_qpm as fake_iqm
-	from tests.mock.fakes import (
-		FakeEventAPI, FakeQPM, FakeSchedulerContext, FakeSlurmDriver)
+	from tests.mock.fakes import FakeEventAPI, FakeQPM, FakeSlurmDriver
 	from util.circuit_payload import qiskit_input
 
-	monkeypatch = pytest.MonkeyPatch()
-	fake_iqm._setup(monkeypatch)
-	fake_iqm.configure_fake_credentials(
-		monkeypatch, pathlib.Path(config_dir), "isa-user")
-	qpm = QPM(
-		admission_context_factory=fake_iqm.FakeAdmissionContext,
-		scheduler_context_factory=FakeSchedulerContext)
+	qpm = _fake_iqm_qpm(pytest.MonkeyPatch(), config_dir)
 
 	with open(path, "rb") as stream:
 		compiled = qpy.load(stream)[0]
@@ -107,4 +215,10 @@ if __name__ == "__main__":
 	if sys.argv[1] == "compile":
 		compile_job(*sys.argv[2:])
 	else:
-		print(json.dumps(run_job(*sys.argv[2:])))
+		jobs = {
+			"backend-compile": backend_compile_job,
+			"check": check_job,
+			"iqm": iqm_job,
+			"run": run_job,
+		}
+		print(json.dumps(jobs[sys.argv[1]](*sys.argv[2:])))

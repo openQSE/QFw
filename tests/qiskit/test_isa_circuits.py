@@ -459,3 +459,67 @@ def test_a_circuit_compiled_for_another_device_is_refused_by_the_run_job(tmp_pat
 
 	assert "'q20'" in result["refused"]
 	assert result["cids"] == []
+
+
+def _last_json(output):
+	return json.loads(output.strip().splitlines()[-1])
+
+
+def _backend_compile(tmp_path, calibration="cal-1"):
+	circuit = str(tmp_path / "compiled.qpy")
+	result = _last_json(_flow(
+		"backend-compile", circuit, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID=calibration))
+	assert result == {"target_kind": "device"}
+	return circuit
+
+
+def test_backend_compile_runs_unchanged_on_fake_iqm(tmp_path):
+	circuit = _backend_compile(tmp_path)
+
+	result = _last_json(_flow(
+		"run", circuit, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID="cal-1"))
+
+	assert result == {
+		"outcome": "COMPLETED", "device_id": "fake-iqm-20q", "unchanged": True}
+
+
+def test_check_isa_passes_what_compile_wrote(tmp_path):
+	circuit = _backend_compile(tmp_path)
+
+	assert _last_json(_flow(
+		"check", circuit, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID="cal-1")) == {"checked": True}
+
+
+def test_check_isa_catches_a_recalibration_before_the_run_job_queues(tmp_path):
+	circuit = _backend_compile(tmp_path)
+
+	result = _last_json(_flow(
+		"check", circuit, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID="cal-2"))
+
+	assert "compile it again" in result["refused"]
+
+
+def test_backend_compile_for_a_star_device_reaches_the_driver_with_its_resonator():
+	pytest.importorskip("iqm.qiskit_iqm")
+
+	result = _last_json(_flow("iqm", "deneb"))
+
+	assert result["resonators"][0] in result["labels"]
+	assert "move" in result["operations"]
+	assert result["calibration"] == {
+		"kind": "set-id", "value": _architecture()["calibration_set_id"]}
+	assert result["pinned"] == _architecture()["calibration_set_id"]
+
+
+def test_backend_compile_for_a_crystal_device_reaches_the_driver():
+	pytest.importorskip("iqm.qiskit_iqm")
+
+	result = _last_json(_flow("iqm", "garnet"))
+
+	assert result["resonators"] == []
+	assert "cz" in result["operations"]
+	assert result["labels"][0].startswith("QB")
