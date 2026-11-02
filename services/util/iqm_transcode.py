@@ -261,8 +261,10 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 	else:
 		backend = architecture_backend(dynamic_architecture)
 
+	qiskit_circuit = load_qiskit_circuit(circuit)
 	try:
-		transpiled, index_to_name = transpile_for_iqm(circuit, backend, mapping)
+		transpiled, index_to_name = transpile_for_iqm(
+			qiskit_circuit, backend, mapping)
 		instructions = tuple(serialize_instructions(
 			transpiled, qubit_index_to_name=index_to_name))
 	except Exception as exc:
