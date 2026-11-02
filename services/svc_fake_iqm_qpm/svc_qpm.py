@@ -110,6 +110,7 @@ class QPM(UTIL_QPM):
 			"backend": FAKE_IQM_PROVIDER,
 			"target_id": FAKE_IQM_TARGET_ID,
 			"metadata_supported": True,
+			"calibration_set_id": os.environ.get(FAKE_IQM_CALIBRATION_ENV),
 		}
 
 	def get_device_info(self, lib=None, token=None):
