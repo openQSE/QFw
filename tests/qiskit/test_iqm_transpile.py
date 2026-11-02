@@ -224,9 +224,9 @@ def _qdmi_iqm_architecture(monkeypatch):
 	return iqm_architecture
 
 
-def _fomac_topology(count=5):
-	# The same chain as _architecture(), the way FoMaC reports it
-	# (fomac_normalize.extract_topology): qubit labels and each operation's
+def _qdmi_topology(count=5):
+	# The same chain as _architecture(), the way QDMI reports it
+	# (qdmi_normalize.extract_topology): qubit labels and each operation's
 	# loci, with no implementation names and no calibration set id.
 	qubits = [f"QB{index}" for index in range(1, count + 1)]
 	single = [[qubit] for qubit in qubits]
@@ -246,12 +246,12 @@ def _fomac_topology(count=5):
 
 def test_a_ghz_runs_through_the_architecture_qdmi_rebuilds(monkeypatch):
 	# The QDMI path had only the qubit list, so h and cx failed there as they
-	# did on QRMI. Rebuilt from FoMaC, the architecture transpiles the same.
+	# did on QRMI. Rebuilt from QDMI, the architecture transpiles the same.
 	_iqm()
 	from util.iqm_transcode import build_iqm_circuit
 	iqm_architecture = _qdmi_iqm_architecture(monkeypatch)
 
-	arch = iqm_architecture(_fomac_topology(), CALIBRATION_SET_ID)
+	arch = iqm_architecture(_qdmi_topology(), CALIBRATION_SET_ID)
 	iqm_circuit = build_iqm_circuit(_ghz(), arch, None)
 
 	names = sorted({op.name for op in iqm_circuit.instructions})
@@ -267,7 +267,7 @@ def test_a_mapping_holds_on_the_architecture_qdmi_rebuilds(monkeypatch):
 	from util.iqm_transcode import build_iqm_circuit
 	iqm_architecture = _qdmi_iqm_architecture(monkeypatch)
 
-	arch = iqm_architecture(_fomac_topology(), CALIBRATION_SET_ID)
+	arch = iqm_architecture(_qdmi_topology(), CALIBRATION_SET_ID)
 	iqm_circuit = build_iqm_circuit(_ghz(), arch, ["QB3", "QB4", "QB5"])
 
 	assert _loci(iqm_circuit) == ["QB3", "QB4", "QB5"]

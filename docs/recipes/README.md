@@ -30,6 +30,7 @@ execution recipe.
 | [Heterogeneous execution](test-heterogeneous-allocation.md) | Separates the application and services with a heterogeneous allocation. Use this for local-mode tests that need distinct Slurm groups. |
 | [Service recovery](recover-services.md) | Recovers interrupted directory, DVM, QPM, or reservation state. Read this when cleanup or restart behavior leaves stale runtime artifacts behind. |
 | [Amazon Braket devices](run-against-aws-braket.md) | Runs the QDMI shim against Amazon Braket's SV1 simulator and Rigetti's Cepheus-1-108Q. Read this for the AWS account prerequisites, how the service gets its AWS identity, the device entries, and the smoke and Qiskit runs. |
+| [Pasqal through QDMI](run-against-pasqal.md) | Runs native Pulser sequences through the released Pasqal QDMI device, with the existing Pulser frontend and QRMI/QDMI library selection. |
 | [IQM Garnet mock](run-against-iqm-garnet-mock.md) | Runs the examples against IQM Resonance's noiseless 20-qubit Garnet mock simulator with the `iqm-garnet-mock` backend. Read this for the device-access and credential templates, `QFW_EXAMPLE_DEVICE_ACCESS_CONFIG`, and the run commands. |
 
 ## Command and Configuration References

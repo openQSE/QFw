@@ -211,6 +211,18 @@ QFW_API_KEY=... QFW_PASQAL_PROJECT_ID=... \
 	./qfw_pulser.sh --device-id pasqal-fresnel --atoms 42
 ```
 
+Install `setup/qdmi-requirements.txt` in the service environment to use the
+released Pasqal QDMI device. The same example runs through QDMI, or compares
+both libraries, with the same token and project:
+
+```bash
+./qfw_pulser.sh --libs qdmi
+./qfw_pulser.sh --libs qrmi,qdmi
+```
+
+See the [Pasqal QDMI recipe](../docs/recipes/run-against-pasqal.md) for
+native service-account authentication and site configuration.
+
 ### `measure_shim_introspection.py`
 
 Measures what device introspection costs through each shim library, cold and

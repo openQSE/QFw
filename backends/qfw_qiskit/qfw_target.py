@@ -516,7 +516,7 @@ def calibration_metrics(calibration):
 
 
 def _fomac_metrics(fomac, gates, qubits):
-	# fomac_normalize: gate_metrics [{operation, locus, fidelity?, duration?}]
+	# qdmi_normalize: gate_metrics [{operation, locus, fidelity?, duration?}]
 	# and qubit_metrics [{qubit, t1?, t2?}], times in duration_unit.
 	scale = _duration_scale(fomac.get("duration_unit"))
 	for entry in fomac.get("gate_metrics") or []:

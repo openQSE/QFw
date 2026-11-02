@@ -19,8 +19,7 @@ pulser-core.
 
 Options:
   --libs <list>       comma-separated shim libraries to run the program
-                      through, in order. Pasqal devices run through qrmi
-                      only (the default).
+                      through, in order: qrmi (default), qdmi, or both.
   --device-id <id>    the device in qfw_pulser_device_access.yaml (default
                       pasqal-emu-free, Pasqal Cloud's EMU_FREE; pasqal-fresnel
                       is the FRESNEL QPU).
@@ -57,8 +56,8 @@ while [[ $# -gt 0 ]]; do
 done
 IFS=, read -r -a lib_list <<< "${libs}"
 for lib in "${lib_list[@]}"; do
-	if [[ "${lib}" != "qrmi" ]]; then
-		echo "ERROR: Pasqal devices run through qrmi only, got '${lib}'" >&2
+	if [[ "${lib}" != "qrmi" && "${lib}" != "qdmi" ]]; then
+		echo "ERROR: Pasqal devices run through qrmi or qdmi, got '${lib}'" >&2
 		exit 1
 	fi
 done

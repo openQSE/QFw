@@ -211,7 +211,9 @@ def test_pulser_example_devices_reach_the_driver(
 	assert resolved["provider"] == "pasqal"
 	assert resolved["provider_device_id"] == provider_device_id
 	assert resolved["resource_type"] == "PasqalCloud"
-	assert resolved["libraries"] == ["qrmi"]
+	assert resolved["libraries"] == ["qrmi", "qdmi"]
+	assert resolved["caps"]["get_backend_info"] == ["qrmi", "qdmi"]
+	assert resolved["caps"]["run_circuit"] == ["qrmi", "qdmi"]
 	assert resolved["project_id"] == "proj"
 
 

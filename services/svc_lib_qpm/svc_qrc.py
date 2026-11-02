@@ -207,7 +207,7 @@ class QRC:
 		# method, and provider_handle is the cid async_run returned. The
 		# controller calls it while holding its lock, so it only signals the
 		# circuit's runner. The driver stops the provider job at its next poll
-		# (QRMI task_stop, FoMaC job.cancel()). "cancelled" and "not-found"
+		# (QRMI task_stop, QDMI job.cancel()). "cancelled" and "not-found"
 		# follow the fake IQM QRC, and the controller treats both as final.
 		with self._cancel_lock:
 			cancel_event = self._cancel_events.get(provider_handle)

@@ -93,11 +93,12 @@ def to_device_record(topo, provider, device_id, include_raw=False,
 	"""
 	from qhw_data import new_device
 	qubits = topo.get("qubits") or []
-	device_fields = {"num_qubits": len(qubits)}
+	capacity = topo.get("num_qubits", len(qubits))
+	device_fields = {"num_qubits": capacity}
 	if technology:
 		device_fields["technology"] = technology
 	builder = (
-		new_device(provider, device_id, num_qubits=len(qubits))
+		new_device(provider, device_id, num_qubits=capacity)
 		.device(device_id, **device_fields)
 		.qubits(qubits)
 		.metadata({"source": "qdmi", "via": "mqt.core.qdmi"})
