@@ -759,15 +759,3 @@ def test_incomplete_site_tuples_are_rejected():
 	op = types.SimpleNamespace(qubits_num=lambda: 3, sites=lambda: [0, 1])
 	with pytest.raises(DEFwExecutionError, match="incomplete"):
 		qdmi_normalize._operation_loci(op)
-
-
-def test_analog_capacity_does_not_invent_fixed_sites():
-	device = types.SimpleNamespace(
-		regular_sites=lambda: [], qubits_num=lambda: 100,
-		operations=lambda: [], coupling_map=lambda: [])
-	topology = qdmi_normalize.extract_topology(device)
-	assert topology == {"num_qubits": 100, "qubits": [], "edges": [], "operations": {}}
-	pytest.importorskip("qhw_data")
-	record = qdmi_normalize.to_device_record(topology, "pasqal", "emu-free", technology="simulator")
-	assert record["device"]["num_qubits"] == 100
-	assert record["qubits"] == []

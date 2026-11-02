@@ -36,8 +36,7 @@ def extract_topology(device):
 	operations = _operations(device)
 	edges = _coupling_edges(device, operations)
 	return {
-		# Analog devices report capacity without fixed physical sites.
-		"num_qubits": len(qubits) if sites else int(device.qubits_num()),
+		"num_qubits": len(qubits),
 		"qubits": qubits,
 		"edges": edges,
 		"operations": operations,

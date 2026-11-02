@@ -304,7 +304,7 @@ that cover each classical bit once, in bit order.
 
 ### Pasqal
 
-Install `pasqal-qdmi[core,pulser]==1.0.0` from PyPI through
+Install `pasqal-qdmi[mqt-core,pulser]==1.1.0` from PyPI through
 `setup/qdmi-requirements.txt` (Python 3.11 or newer). Pasqal uses native
 Pulser JSON through QDMI; bind variables and register mappings and include a
 measurement before calling `Sequence.to_abstract_repr()`. The shim advertises

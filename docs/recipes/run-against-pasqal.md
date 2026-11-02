@@ -3,7 +3,7 @@
 Pasqal accepts native Pulser sequences. It does not compile Qiskit gate
 circuits into pulses. Use Python 3.11 or newer and install the released
 packages from `setup/qdmi-requirements.txt`, which pins
-[`pasqal-qdmi[core,pulser]==1.0.0`](https://pypi.org/project/pasqal-qdmi/1.0.0/).
+[`pasqal-qdmi[mqt-core,pulser]==1.1.0`](https://pypi.org/project/pasqal-qdmi/1.1.0/).
 
 The provider's `pulser` extra installs Pulser for sequence serialization.
 The existing `qfw_pulser.sh --libs qdmi` example
@@ -77,10 +77,10 @@ when the timeout expires, and cancellation support depends on the backend.
 
 `get_backend_info` serves the cloud's current Pulser specs through the
 same `pulser_devices` mapping as QRMI. The device record reports atom
-capacity with an empty physical-site list.
-Atom placement belongs to each sequence, so the configuration does not advertise
-gate coupling or gate calibration calls. Set `num-qubits` if the directory
-record needs a site-configured capacity before opening a session.
+capacity and regular atom slots indexed from zero in register insertion order.
+Each sequence defines its atom labels and coordinates. The configuration does
+not advertise gate coupling or gate calibration calls. Set `num-qubits` if the
+directory record needs a site-configured capacity before opening a session.
 
 ## 3. Submit native Pulser JSON
 

@@ -85,6 +85,7 @@ def test_mappable_registers_are_rejected(profile):
 
 @pytest.mark.parametrize("credential_mode", ["auth-file", "bound-token"])
 def test_installed_device_opens_and_submits_against_local_cloud(profile, monkeypatch, tmp_path, credential_mode):
+	from svc_lib_qpm.drivers import qdmi_normalize
 	# Only HTTP responses are synthetic; catalogue discovery, session opening,
 	# native submission and result decoding run through the PyPI wheels.
 	for name in ("PASQAL_EMAIL", "PASQAL_PASSWORD", "PASQAL_PROJECT_ID",
@@ -144,7 +145,10 @@ def test_installed_device_opens_and_submits_against_local_cloud(profile, monkeyp
 			access["base_url"] = base_url
 			device = profile.open_backend(access).device
 			assert device.qubits_num() == 100
-			assert device.regular_sites() == []
+			assert qdmi_normalize.extract_topology(device) == {
+				"num_qubits": 100, "qubits": [str(i) for i in range(100)],
+				"edges": [], "operations": {},
+			}
 			assert profile.backend_info(device)["pulser_devices"] == {"FRESNEL": MockDevice.to_abstract_repr()}
 			job = device.submit_job(program, getattr(ProgramFormat, fmt), 10)
 			assert job.wait(timeout=5)
