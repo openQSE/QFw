@@ -71,7 +71,7 @@ class FakeContext:
 		return route
 
 	def compiler_target(self, route):
-		from libquantum_compiler_qiskit.target import qhw_to_qiskit_target
+		from libquantum_plugin_qiskit.target import qhw_to_qiskit_target
 		self.target_requests.append(route)
 		return qhw_to_qiskit_target(
 			route.device.qhw_device,

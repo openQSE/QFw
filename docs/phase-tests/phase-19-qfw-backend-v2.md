@@ -5,9 +5,9 @@ QFw helper, and Qiskit compiler wheels. It needs no network, reservation
 service, credential, or quantum device.
 
 Frozen revisions for the retained run are libquantum `5b066a225e39`, QFw
-`3de71470c0bb`, and libquantum-compiler-qiskit `698062f20752`. Package versions
-are `libquantum==0.1.0.dev0`, `qfw-qiskit==0.0.1`,
-`libquantum-compiler-qiskit==0.1.0`, and `qiskit==2.2.3`.
+`3de71470c0bb`, and the Qiskit plugin from the libquantum monorepo. Package
+versions are `libquantum==0.1.0.dev0`, `qfw-qiskit==0.0.1`,
+`libquantum-plugin-qiskit==0.1.0`, and `qiskit==2.5.2`.
 
 ## Installed-wheel gate
 
@@ -20,7 +20,7 @@ TARGET=$(mktemp -d /tmp/qfw-v2-install-XXXXXX)
 python3.12 -m pip wheel --no-deps -w "$WHEELS" \
   /path/to/libquantum \
   /path/to/QFw/backends \
-  /path/to/libquantum-compiler-qiskit
+  /path/to/libquantum/plugins/qiskit
 python3.12 -m pip install --no-deps --target "$TARGET" \
   "$WHEELS"/*.whl
 ```

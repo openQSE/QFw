@@ -21,7 +21,7 @@ class QFwBackendV2(BackendV2):
 		context = None
 		try:
 			import libquantum as lq
-			from libquantum_compiler_qiskit import plugin_path
+			from libquantum_plugin_qiskit import plugin_path
 
 			context = lq.initialize(lq.InitConfig(
 				compiler_paths=(plugin_path(),),

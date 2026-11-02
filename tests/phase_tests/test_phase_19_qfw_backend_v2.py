@@ -11,7 +11,7 @@ from qiskit.quantum_info import SparsePauliOp
 
 import libquantum as lq
 from libquantum._handles import _initialize_with_runtime
-from libquantum_compiler_qiskit import plugin_path
+from libquantum_plugin_qiskit import plugin_path
 from qfw_qiskit import QFwBackendV2
 
 
