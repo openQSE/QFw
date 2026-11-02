@@ -192,6 +192,42 @@ def architecture_backend(dynamic_architecture):
 			f"architecture: {exc!r}") from exc
 
 
+def transpile_for_iqm(circuit, backend, mapping=None, **options):
+	try:
+		from iqm.qiskit_iqm import transpile_to_IQM
+	except Exception as exc:
+		raise DEFwExecutionError(
+			"iqm.qiskit_iqm is required to transpile qiskit circuits "
+			f"for IQM execution: {exc}") from exc
+
+	qiskit_circuit = load_qiskit_circuit(circuit)
+	index_to_name = None
+	restrict_to_qubits = None
+	if mapping:
+		index_to_name = logical_to_physical_qubits(
+			qiskit_circuit, backend.architecture, mapping)
+		restrict_to_qubits = list(index_to_name.values())
+	transpiled = transpile_to_IQM(
+		qiskit_circuit,
+		backend,
+		restrict_to_qubits=restrict_to_qubits,
+		**options,
+	)
+	# Naming the qubits is the part that goes wrong quietly. A restricted
+	# transpile renumbers the circuit onto the restricted set, so index 0
+	# is the first RESTRICTED qubit, not the device's first. iqm documents
+	# this on transpile_to_IQM: pass the matching qubit_index_to_name.
+	# logical_to_physical_qubits already built that map, so use it, and
+	# only fall back to the device's full index map when nothing was
+	# restricted. A star device's circuit is wider than backend.num_qubits.
+	if index_to_name is None:
+		index_to_name = {
+			index: backend.index_to_qubit_name(index)
+			for index in range(transpiled.num_qubits)
+		}
+	return transpiled, index_to_name
+
+
 def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 		mapping=None, dynamic_architecture=None):
 	# Transpile to IQM native operations and serialize. The backend comes
@@ -199,7 +235,6 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 	# architecture alone (the QRMI driver, which does not).
 	Circuit, _ = load_iqm_pulse_module()
 	try:
-		from iqm.qiskit_iqm import transpile_to_IQM
 		from iqm.qiskit_iqm.qiskit_to_iqm import serialize_instructions
 	except Exception as exc:
 		raise DEFwExecutionError(
@@ -226,31 +261,8 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 	else:
 		backend = architecture_backend(dynamic_architecture)
 
-	qiskit_circuit = load_qiskit_circuit(circuit)
 	try:
-		index_to_name = None
-		restrict_to_qubits = None
-		if mapping:
-			index_to_name = logical_to_physical_qubits(
-				qiskit_circuit, backend.architecture, mapping)
-			restrict_to_qubits = list(index_to_name.values())
-		transpiled = transpile_to_IQM(
-			qiskit_circuit,
-			backend,
-			restrict_to_qubits=restrict_to_qubits,
-		)
-		# Naming the qubits is the part that goes wrong quietly. A restricted
-		# transpile renumbers the circuit onto the restricted set, so index 0
-		# is the first RESTRICTED qubit, not the device's first. iqm documents
-		# this on transpile_to_IQM: pass the matching qubit_index_to_name.
-		# logical_to_physical_qubits already built that map, so use it, and
-		# only fall back to the device's full index map when nothing was
-		# restricted. A star device's circuit is wider than backend.num_qubits.
-		if index_to_name is None:
-			index_to_name = {
-				index: backend.index_to_qubit_name(index)
-				for index in range(transpiled.num_qubits)
-			}
+		transpiled, index_to_name = transpile_for_iqm(circuit, backend, mapping)
 		instructions = tuple(serialize_instructions(
 			transpiled, qubit_index_to_name=index_to_name))
 	except Exception as exc:
