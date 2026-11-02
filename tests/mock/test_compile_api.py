@@ -333,3 +333,49 @@ def test_check_isa_needs_a_qpm_that_takes_a_marker(monkeypatch):
 
 	with pytest.raises(DEFwError, match="compiled ahead of time"):
 		backend.check_isa(_marked())
+
+
+# --- device_snapshot ---------------------------------------------------------
+
+def _snapshot_telemetry(**fields):
+	return target_tests.FakeTelemetryAPI(
+		backend_info={"backend": "iqm", "metadata_supported": True},
+		device_info={"device": 1}, coupling_graph={"coupling": 1},
+		calibration={"calibration": 1}, **fields)
+
+
+def test_a_snapshot_holds_the_device_records(monkeypatch):
+	backend = _backend(monkeypatch, telemetry=_snapshot_telemetry())
+
+	snapshot = backend.device_snapshot()
+
+	assert snapshot["schema"] == "qfw-device-snapshot-v1"
+	assert (snapshot["provider"], snapshot["device_id"]) == ("iqm", DEVICE)
+	assert snapshot["captured_at"].endswith("+00:00")
+	assert snapshot["records"]["get_backend_info"]["backend"] == "iqm"
+	assert snapshot["records"]["get_device_info"] == {"device": 1}
+	assert snapshot["records"]["get_coupling_graph"] == {"coupling": 1}
+	assert snapshot["records"]["get_calibration_snapshot"] == {"calibration": 1}
+	assert "get_dynamic_backend_info" in snapshot["records"]
+
+
+def test_a_snapshot_goes_without_a_record_the_qpm_cannot_give(monkeypatch):
+	telemetry = _snapshot_telemetry(failures={
+		"get_coupling_graph": RuntimeError("not implemented")})
+	backend = _backend(monkeypatch, telemetry=telemetry)
+
+	assert backend.device_snapshot()["records"]["get_coupling_graph"] is None
+
+
+def test_a_snapshot_needs_a_device_to_describe(monkeypatch):
+	telemetry = target_tests.FakeTelemetryAPI(
+		backend_info={"backend": "nwqsim", "metadata_supported": False})
+	backend = _backend(monkeypatch, telemetry=telemetry)
+
+	with pytest.raises(DEFwError, match="does not describe a device"):
+		backend.device_snapshot()
+
+
+def test_a_snapshot_needs_the_telemetry_binding(monkeypatch):
+	with pytest.raises(DEFwError, match="no telemetry binding"):
+		_backend(monkeypatch).device_snapshot()

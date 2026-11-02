@@ -7,6 +7,7 @@ import threading
 import yaml
 import sys
 from collections import deque
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 
 from qiskit import QuantumCircuit
@@ -90,6 +91,7 @@ class CircuitMetrics:
 g_circ_metrics = CircuitMetrics()
 
 EVENT_TYPE_CIRC_RESULT = 1
+DEVICE_SNAPSHOT_SCHEMA = "qfw-device-snapshot-v1"
 
 
 def _mqt_core_version():
@@ -483,6 +485,29 @@ class QFwBackend(BackendV2):
 			check_calibration(
 				marker, current, self._published("calibration_policy"))
 			profile.validate(circuit, device, marker)
+
+	def device_snapshot(self):
+		"""The device as its QPM describes it now, as plain data."""
+		telemetry = self.telemetry
+		if telemetry is None:
+			raise DEFwError("this QPM connection has no telemetry binding")
+		info = telemetry.get_backend_info() or {}
+		if not info.get("metadata_supported"):
+			raise DEFwError("this QPM does not describe a device")
+		records = {"get_backend_info": info}
+		for call in QFwTelemetry.CALLS[1:]:
+			try:
+				records[call] = getattr(telemetry, call)()
+			except Exception as exc:
+				logging.info(f"QFw backend: {call} unavailable: {exc}")
+				records[call] = None
+		return {
+			"schema": DEVICE_SNAPSHOT_SCHEMA,
+			"provider": self._device_provider(),
+			"device_id": self._published("isa_device_id"),
+			"captured_at": datetime.now(timezone.utc).isoformat(),
+			"records": records,
+		}
 
 	def _compile_with_qiskit(self, circuits, **kwargs):
 		from qiskit import transpile

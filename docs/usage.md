@@ -1168,6 +1168,10 @@ refuse: a circuit that is unmarked, marked for another device, compiled for a
 calibration the device's policy will not run, or not native to the device as it
 stands. Call it first in a run job, before a long queue wait is spent on it.
 
+`backend.device_snapshot()` returns the QPM's records of the device, with its
+provider, id and the time they were read, as plain data that can be saved as
+JSON.
+
 To mark a circuit compiled some other way, name the device it was compiled for:
 
 ```python
