@@ -5,7 +5,10 @@
 import dataclasses
 import importlib
 import io
+import json
+import os
 import pathlib
+import subprocess
 import sys
 import types
 
@@ -416,3 +419,43 @@ def test_the_sampler_keeps_the_marker_on_every_circuit_it_runs(monkeypatch):
 
 	assert [item.metadata["qfw"]["isa"] for item in backend.submitted] == [
 		_marker()]
+
+
+FLOW = str(REPO_ROOT / "tests/qiskit/isa_fake_iqm_flow.py")
+
+
+def _flow(*arguments, **env):
+	finished = subprocess.run(
+		[sys.executable, FLOW, *arguments], capture_output=True, text=True,
+		env=dict(os.environ, **env), cwd=REPO_ROOT)
+	assert finished.returncode == 0, finished.stderr
+	return finished.stdout
+
+
+def _compile_then_run(tmp_path, device="fake-iqm-20q", compiled_for="cal-1",
+		device_calibration="cal-1"):
+	circuit = str(tmp_path / "isa.qpy")
+	_flow("compile", circuit, device, compiled_for)
+	output = _flow(
+		"run", circuit, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID=device_calibration)
+	return json.loads(output.strip().splitlines()[-1])
+
+
+def test_a_circuit_compiled_in_one_job_runs_unchanged_in_another(tmp_path):
+	assert _compile_then_run(tmp_path) == {
+		"outcome": "COMPLETED", "device_id": "fake-iqm-20q", "unchanged": True}
+
+
+def test_a_recalibration_between_the_jobs_refuses_the_circuit(tmp_path):
+	result = _compile_then_run(tmp_path, device_calibration="cal-2")
+
+	assert "compile it again" in result["refused"]
+	assert result["cids"] == []
+
+
+def test_a_circuit_compiled_for_another_device_is_refused_by_the_run_job(tmp_path):
+	result = _compile_then_run(tmp_path, device="q20")
+
+	assert "'q20'" in result["refused"]
+	assert result["cids"] == []
