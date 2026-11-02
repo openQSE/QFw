@@ -593,6 +593,9 @@ marker (`util/isa.py`) names the provider, device and calibration the circuit
 was compiled for, and the label of each circuit index. It travels in the
 circuit's metadata and so survives a QPY file passed between jobs, and the
 client lifts it into `info["isa"]`, the only place a QPM reads it.
+`QFwBackend.compile` writes the marker after checking its result with the same
+check the QPM runs (`util/compile_profiles.py`), and `mark_isa` writes it for a
+circuit compiled some other way.
 
 ```json
 {"v": 1, "provider": "iqm", "device_id": "q20",

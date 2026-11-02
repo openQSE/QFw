@@ -383,6 +383,12 @@ generic target. On a `credential-mode: required` device those calls resolve
 the credential record of the user the QPM runs as, so that user needs an
 enabled record for the device. See the Device Target section of `usage.md`.
 
+A provider whose circuits can be compiled on the client adds an entry to
+`COMPILE_PROFILES` in `services/util/compile_profiles.py`, and one that cannot
+adds its reason to `NOT_COMPILED_AHEAD_OF_TIME`. `QFwBackend.compile` reads the
+device, compiles, checks the result and marks it through that profile, so the
+client itself holds no provider branch.
+
 If adding a machine requires machine-specific changes in the shim, treat that
 as an architecture gap to clean up separately, not as normal machine onboarding.
 
