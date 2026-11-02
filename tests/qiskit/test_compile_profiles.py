@@ -123,6 +123,24 @@ def test_iqm_puts_a_circuit_on_the_qubits_its_mapping_names():
 	profile.validate(compiled, device, _marker("iqm", labels))
 
 
+def test_iqm_options_reach_the_transpiler(monkeypatch):
+	from util import iqm_transcode
+	profile = compile_profiles.compile_profile("iqm")
+	seen = {}
+
+	def transpile(circuit, backend, mapping, **options):
+		seen.update(options)
+		return QuantumCircuit(1), {0: "QB1"}
+
+	monkeypatch.setattr(iqm_transcode, "transpile_for_iqm", transpile)
+	monkeypatch.setattr(
+		iqm_transcode, "architecture_backend", lambda dynamic: None)
+
+	profile.compile(_ghz(), {"dynamic": {}}, optimization_level=1)
+
+	assert seen == {"optimization_level": 1}
+
+
 def test_iqm_refuses_a_circuit_that_is_not_native():
 	profile = compile_profiles.compile_profile("iqm")
 	device = {"dynamic": _garnet_architecture()}
