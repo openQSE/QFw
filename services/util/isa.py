@@ -101,12 +101,7 @@ def read_marker(info):
 		marker.get("compiler"))
 
 
-def check_envelope(info, stages, device_id, provider):
-	from util.circuit_payload import QPY_FORMATS
-
-	marker = read_marker(info)
-	if marker is None:
-		return None
+def check_device(marker, stages, device_id, provider):
 	if STAGE_ISA not in (stages or ()):
 		raise DEFwExecutionError(
 			"this QPM does not take a circuit compiled ahead of time; it "
@@ -119,6 +114,15 @@ def check_envelope(info, stages, device_id, provider):
 		raise DEFwExecutionError(
 			f"this circuit was compiled for device {marker['device_id']!r}, "
 			f"and this QPM serves {device_id!r}")
+
+
+def check_envelope(info, stages, device_id, provider):
+	from util.circuit_payload import QPY_FORMATS
+
+	marker = read_marker(info)
+	if marker is None:
+		return None
+	check_device(marker, stages, device_id, provider)
 	circuit = info.get("circuit")
 	fmt = circuit.get("format") if isinstance(circuit, dict) else None
 	if fmt not in QPY_FORMATS:

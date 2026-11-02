@@ -15,7 +15,8 @@ from qiskit.providers import BackendV2, Options
 from .qfw_job import (
 	QFwJob, QFW_INFO_PASSTHROUGH_OPTIONS, SHIM_LIB_ENV,
 	normalize_reservation_id, normalize_shim_library)
-from .qfw_metadata import get_qubit_mapping, mark_isa, set_qubit_mapping
+from .qfw_metadata import (
+	get_isa_marker, get_qubit_mapping, mark_isa, set_qubit_mapping)
 from .qfw_target import (
 	QFW_NUM_QUBITS,
 	TARGET_DEVICE,
@@ -36,7 +37,8 @@ from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 from util import instrumentation
 from util.compile_profiles import compile_profile
-from util.isa import make_marker
+from util.isa import (
+	check_calibration, check_device, make_marker, read_marker)
 
 QFW_RUN_CONTEXT_OPTIONS = (
 	"reservation_id",
@@ -458,6 +460,29 @@ class QFwBackend(BackendV2):
 		return mark_isa(
 			compiled, marker["provider"], marker["device_id"],
 			marker["calibration"], labels, marker["compiler"])
+
+	def check_isa(self, circuits):
+		"""Refuse now what this QPM would refuse after a queue wait: a
+		circuit marked for another device, for a calibration the device's
+		policy will not run, or not native to the device as it stands."""
+		provider, device_id = self.isa_device()
+		self._forget_target()
+		profile = compile_profile(provider)
+		device = self._read_compile_device(profile)
+		current = (profile.calibration(device) or {}).get("value")
+		if isinstance(circuits, QuantumCircuit):
+			circuits = [circuits]
+		for circuit in circuits:
+			marker = read_marker({"isa": get_isa_marker(circuit)})
+			if marker is None:
+				raise DEFwError(
+					f"circuit {circuit.name} is not marked as compiled for "
+					"a device")
+			check_device(
+				marker, self._published("circuit_stages"), device_id, provider)
+			check_calibration(
+				marker, current, self._published("calibration_policy"))
+			profile.validate(circuit, device, marker)
 
 	def _compile_with_qiskit(self, circuits, **kwargs):
 		from qiskit import transpile

@@ -241,3 +241,95 @@ def test_refresh_target_keeps_a_target_the_caller_supplied(monkeypatch):
 	backend.compile(Circuit(), refresh_target=True)
 
 	assert backend._target == "supplied"
+
+
+# --- check_isa ---------------------------------------------------------------
+
+STAGES = {"circuit_stages": ["generic", "isa"]}
+
+
+def _marked(calibration=CALIBRATION, device=DEVICE):
+	circuit = Circuit()
+	return qfw_metadata.mark_isa(
+		circuit, "iqm", device, calibration=calibration, qubit_labels=LABELS)
+
+
+def _checking_backend(monkeypatch, profile, **properties):
+	return _backend(monkeypatch, profile, dict(PUBLISHED, **STAGES, **properties))
+
+
+def test_check_isa_passes_a_circuit_the_device_would_run(monkeypatch):
+	profile = Profile()
+	circuit = _marked()
+
+	_checking_backend(monkeypatch, profile).check_isa(circuit)
+
+	assert profile.validated[0][0] is circuit
+
+
+def test_check_isa_reads_the_device_again(monkeypatch):
+	telemetry = target_tests.FakeTelemetryAPI(
+		backend_info={"backend": "nwqsim", "metadata_supported": False})
+	profile = Profile()
+	profile.compiles_against_target = True
+	profile.read_device = lambda backend: backend.target and {}
+	backend = _backend(
+		monkeypatch, profile, dict(PUBLISHED, **STAGES), telemetry)
+	backend.target
+	reads = telemetry.names().count("get_backend_info")
+
+	backend.check_isa(_marked())
+
+	assert telemetry.names().count("get_backend_info") == reads + 1
+
+
+def test_check_isa_takes_a_list(monkeypatch):
+	profile = Profile()
+
+	_checking_backend(monkeypatch, profile).check_isa([_marked(), _marked()])
+
+	assert len(profile.validated) == 2
+
+
+def test_check_isa_refuses_an_unmarked_circuit(monkeypatch):
+	with pytest.raises(DEFwError, match="not marked"):
+		_checking_backend(monkeypatch, Profile()).check_isa(Circuit())
+
+
+def test_check_isa_refuses_another_device(monkeypatch):
+	with pytest.raises(DEFwExecutionError, match="'q54'"):
+		_checking_backend(monkeypatch, Profile()).check_isa(_marked(device="q54"))
+
+
+def test_check_isa_refuses_a_stale_calibration(monkeypatch):
+	stale = {"kind": "set-id", "value": "cal-0"}
+
+	with pytest.raises(DEFwExecutionError, match="compile it again"):
+		_checking_backend(monkeypatch, Profile()).check_isa(_marked(stale))
+
+
+def test_check_isa_honours_the_policy_the_qpm_publishes(monkeypatch):
+	stale = {"kind": "set-id", "value": "cal-0"}
+	backend = _checking_backend(
+		monkeypatch, Profile(), calibration_policy="current")
+
+	backend.check_isa(_marked(stale))
+
+
+def test_check_isa_refuses_what_the_device_would(monkeypatch):
+	profile = Profile()
+
+	def refuse(circuit, device, marker):
+		raise DEFwExecutionError("not native")
+
+	profile.validate = refuse
+
+	with pytest.raises(DEFwExecutionError, match="not native"):
+		_checking_backend(monkeypatch, profile).check_isa(_marked())
+
+
+def test_check_isa_needs_a_qpm_that_takes_a_marker(monkeypatch):
+	backend = _backend(monkeypatch, Profile(), {"provider": "nwqsim"})
+
+	with pytest.raises(DEFwError, match="compiled ahead of time"):
+		backend.check_isa(_marked())

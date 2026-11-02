@@ -1163,6 +1163,11 @@ that has been open across a recalibration. Braket and Pasqal devices refuse
 backend whose `target_kind` is `fallback`, rather than compile for a device it
 could not describe. A simulator's result is not marked.
 
+`backend.check_isa(circuits)` reads the device and raises on what the QPM would
+refuse: a circuit that is unmarked, marked for another device, compiled for a
+calibration the device's policy will not run, or not native to the device as it
+stands. Call it first in a run job, before a long queue wait is spent on it.
+
 To mark a circuit compiled some other way, name the device it was compiled for:
 
 ```python
