@@ -119,6 +119,8 @@ class QPM(UTIL_QPM):
 		description_library = self._description_library()
 		if description_library:
 			properties["description_library"] = description_library
+		if descriptor.get("calibration_policy"):
+			properties["calibration_policy"] = descriptor["calibration_policy"]
 		if descriptor.get("num_qubits") not in (None, ""):
 			properties["num_qubits"] = int(descriptor["num_qubits"])
 		info = self.query_helper(

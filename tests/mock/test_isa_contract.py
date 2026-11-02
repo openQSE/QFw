@@ -249,6 +249,20 @@ def test_a_qpm_compares_its_own_device_and_provider(device, provider, refusal):
 		QPM.__new__(QPM).create_circuit(_info())
 
 
+def test_the_shim_publishes_the_device_calibration_policy(monkeypatch):
+	import svc_lib_qpm.svc_qpm as svc_qpm
+	import svc_lib_qpm.descriptor as descriptor
+	seen = {}
+	monkeypatch.setattr(descriptor, "resolve_descriptor", lambda: {
+		"id": DEVICE, "provider": "iqm", "calibration_policy": "require"})
+	qpm = svc_qpm.QPM.__new__(svc_qpm.QPM)
+	qpm.query_helper = lambda *args, properties: seen.update(properties)
+
+	qpm.query()
+
+	assert seen["calibration_policy"] == "require"
+
+
 def test_the_native_iqm_qpm_does_not_take_isa():
 	from svc_iqm_qpm.svc_qpm import QPM
 	qpm = QPM.__new__(QPM)
