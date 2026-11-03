@@ -24,6 +24,11 @@ class TargetProfile:
 		from qiskit import transpile
 		return transpile(circuit, target=device["target"], **options), None
 
+	def compile_all(self, circuits, device, mappings, **options):
+		from qiskit import transpile
+		compiled = transpile(list(circuits), target=device["target"], **options)
+		return [(circuit, None) for circuit in compiled]
+
 	def labels_for_target(self, device):
 		return None
 
@@ -76,6 +81,11 @@ class IqmProfile:
 		compiled, names = transpile_for_iqm(
 			circuit, architecture_backend(device["dynamic"]), mapping, **options)
 		return compiled, [names[index] for index in range(compiled.num_qubits)]
+
+	def compile_all(self, circuits, device, mappings, **options):
+		return [
+			self.compile(circuit, device, mapping, **options)
+			for circuit, mapping in zip(circuits, mappings)]
 
 	def labels_for_target(self, device):
 		dynamic = device["dynamic"]

@@ -41,6 +41,12 @@ class Profile:
 		self.options.append(options)
 		return self.compiled, LABELS
 
+	def compile_all(self, circuits, device, mappings, **options):
+		self.batches = getattr(self, "batches", 0) + 1
+		return [
+			self.compile(circuit, device, mapping, **options)
+			for circuit, mapping in zip(circuits, mappings)]
+
 	def labels_for_target(self, device):
 		return LABELS
 
@@ -133,12 +139,14 @@ def test_the_input_mapping_and_options_reach_the_profile(monkeypatch):
 
 
 def test_a_list_comes_back_a_list(monkeypatch):
-	backend = _backend(monkeypatch, Profile())
+	profile = Profile()
+	backend = _backend(monkeypatch, profile)
 
 	compiled = backend.compile([Circuit(), Circuit()])
 
 	assert len(compiled) == 2
 	assert all(qfw_metadata.get_isa_marker(circuit) for circuit in compiled)
+	assert profile.batches == 1
 
 
 def test_a_qpm_that_takes_no_marker_gets_an_unmarked_circuit(monkeypatch, caplog):

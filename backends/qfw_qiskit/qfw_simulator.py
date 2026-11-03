@@ -440,24 +440,29 @@ class QFwBackend(BackendV2):
 				f"QFw backend: {exc}; compiling to backend.target unmarked, "
 				"so the QPM may compile it again")
 			return self._compile_to_target(compiler, circuits, kwargs)
-		if isinstance(circuits, QuantumCircuit):
-			return self._compile_for_device(
-				circuits, compiler, profile, device, kwargs)
-		return [
-			self._compile_for_device(circuit, compiler, profile, device, kwargs)
-			for circuit in circuits]
+		single = isinstance(circuits, QuantumCircuit)
+		batch = [circuits] if single else list(circuits)
+		checked = [
+			self._check_and_mark(compiled, labels, compiler, profile, device)
+			for compiled, labels in self._compile_batch(
+				batch, compiler, profile, device, kwargs)]
+		return checked[0] if single else checked
 
 	def _compile_to_target(self, compiler, circuits, options):
 		self._require_a_device_target()
 		return self.COMPILERS[compiler](self, circuits, **options)
 
-	def _compile_for_device(self, circuit, compiler, profile, device, options):
+	def _compile_batch(self, circuits, compiler, profile, device, options):
 		if compiler == 'qiskit':
-			compiled, labels = profile.compile(
-				circuit, device, get_qubit_mapping(circuit), **options)
-		else:
-			labels = profile.labels_for_target(device)
-			compiled = self._compile_with_mqt(circuit, **options)
+			return profile.compile_all(
+				circuits, device,
+				[get_qubit_mapping(circuit) for circuit in circuits], **options)
+		labels = profile.labels_for_target(device)
+		return [
+			(self._compile_with_mqt(circuit, **options), labels)
+			for circuit in circuits]
+
+	def _check_and_mark(self, compiled, labels, compiler, profile, device):
 		if not isinstance(compiled, QuantumCircuit):
 			raise DEFwError(
 				f"the {compiler} compiler returned {type(compiled).__name__}, "

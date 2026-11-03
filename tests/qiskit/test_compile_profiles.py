@@ -85,6 +85,28 @@ def test_a_native_circuit_is_still_laid_out_as_asked():
 	assert compiled.layout.initial_index_layout()[:3] == [2, 1, 0]
 
 
+def test_a_target_profile_compiles_a_batch_in_one_transpile(monkeypatch):
+	import qiskit
+	profile = compile_profiles.compile_profile("ibm")
+	device = {"target": GenericBackendV2(3, seed=1).target, "backend_info": {}}
+	transpile = qiskit.transpile
+	calls = []
+
+	def counting(circuits, **options):
+		calls.append(len(circuits))
+		return transpile(circuits, **options)
+
+	monkeypatch.setattr(qiskit, "transpile", counting)
+
+	compiled = profile.compile_all(
+		[_ghz(), _ghz()], device, [None, None], seed_transpiler=1)
+
+	assert calls == [2]
+	assert all(labels is None for _, labels in compiled)
+	for circuit, _ in compiled:
+		profile.validate(circuit, device, _marker("ibm", None))
+
+
 def test_ibm_refuses_a_circuit_that_is_not_native():
 	profile = compile_profiles.compile_profile("ibm")
 	device = {"target": GenericBackendV2(3, seed=1).target, "backend_info": {}}
