@@ -318,6 +318,41 @@ def test_check_isa_reads_the_device_again(monkeypatch):
 	assert telemetry.names().count("get_backend_info") == reads + 1
 
 
+def _device_backend(monkeypatch, profile):
+	telemetry = target_tests.FakeTelemetryAPI(*target_tests.iqm_records())
+	backend = _backend(
+		monkeypatch, profile, dict(PUBLISHED, **STAGES, hardware=True),
+		telemetry)
+	assert backend.target_kind is None and backend.target is not None
+	assert backend.target_kind == "device"
+	telemetry.failures["get_backend_info"] = RuntimeError("QPM restarting")
+	return backend
+
+
+def test_a_failed_check_keeps_the_device_target(monkeypatch):
+	profile = Profile()
+	profile.compiles_against_target = True
+	backend = _device_backend(monkeypatch, profile)
+	target = backend.target
+
+	with pytest.raises(DEFwError, match="QPM restarting"):
+		backend.check_isa(_marked())
+
+	assert backend.target is target
+	assert backend.target_kind == "device"
+
+
+def test_a_failed_refresh_keeps_the_device_target(monkeypatch):
+	backend = _device_backend(monkeypatch, Profile())
+	target = backend.target
+
+	with pytest.raises(DEFwError, match="last read"):
+		backend.compile(Circuit(), refresh_target=True)
+
+	assert backend.target is target
+	assert backend.target_kind == "device"
+
+
 def test_check_isa_takes_a_list(monkeypatch):
 	profile = Profile()
 

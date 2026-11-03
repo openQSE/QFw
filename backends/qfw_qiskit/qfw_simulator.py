@@ -388,10 +388,19 @@ class QFwBackend(BackendV2):
 		"""The get_backend_info record self.target was built from."""
 		return self._backend_info
 
-	def _forget_target(self):
-		if not self._target_supplied:
-			self._target = None
-			self._target_kind = None
+	def _refresh_target(self):
+		if self._target_supplied:
+			return
+		held = (self._target, self._target_kind, self._target_source,
+			self._backend_info)
+		self._target = self._build_target()
+		if held[1] == TARGET_DEVICE and self._target_kind != TARGET_DEVICE:
+			reason = self._target_source
+			(self._target, self._target_kind, self._target_source,
+			 self._backend_info) = held
+			raise DEFwError(
+				f"could not read the device again ({reason}); the backend "
+				"keeps the device target it last read")
 
 	def _published(self, name):
 		return (getattr(self.qpm, "qpm_properties", None) or {}).get(name)
@@ -423,7 +432,7 @@ class QFwBackend(BackendV2):
 			raise ValueError(
 				f"unknown compiler '{compiler}'; expected 'qiskit' or 'mqt'")
 		if refresh_target:
-			self._forget_target()
+			self._refresh_target()
 		profile = compile_profile(self._device_provider())
 		if profile is None:
 			return self._compile_to_target(compiler, circuits, kwargs)
@@ -477,8 +486,9 @@ class QFwBackend(BackendV2):
 		circuit marked for another device, for a calibration the device's
 		policy will not run, or not native to the device as it stands."""
 		provider, device_id = self.isa_device()
-		self._forget_target()
 		profile = compile_profile(provider)
+		if profile.compiles_against_target:
+			self._refresh_target()
 		device = self._read_compile_device(profile)
 		current = (profile.calibration(device) or {}).get("value")
 		if isinstance(circuits, QuantumCircuit):
