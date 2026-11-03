@@ -374,6 +374,20 @@ def test_the_shim_compares_the_device_it_publishes(monkeypatch):
 	assert QPM.__new__(QPM).isa_device_id() == DEVICE
 
 
+def test_the_shim_reads_its_device_id_once(monkeypatch):
+	import svc_lib_qpm.descriptor as descriptor
+	from svc_lib_qpm.svc_qpm import QPM
+	monkeypatch.delenv("QFW_QPU_DEVICE_ID", raising=False)
+	reads = []
+	monkeypatch.setattr(
+		descriptor, "resolve_descriptor",
+		lambda: reads.append(1) or {"id": DEVICE})
+	qpm = QPM.__new__(QPM)
+
+	assert [qpm.isa_device_id() for _ in range(3)] == [DEVICE] * 3
+	assert len(reads) == 1
+
+
 def test_the_shim_compares_the_provider_of_its_device():
 	from svc_lib_qpm.svc_qpm import QPM
 	qpm = QPM.__new__(QPM)

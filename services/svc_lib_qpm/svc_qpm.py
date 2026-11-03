@@ -147,9 +147,13 @@ class QPM(UTIL_QPM):
 
 	def isa_device_id(self):
 		# Publishing this as device_id would change the service's id.
-		from .descriptor import resolve_descriptor
-		return (os.environ.get('QFW_QPU_DEVICE_ID')
-			or resolve_descriptor().get("id"))
+		device_id = getattr(self, "_isa_device_id", None)
+		if device_id is None:
+			from .descriptor import resolve_descriptor
+			device_id = (os.environ.get('QFW_QPU_DEVICE_ID')
+				or resolve_descriptor().get("id"))
+			self._isa_device_id = device_id
+		return device_id
 
 	def isa_provider(self):
 		return self._provider()
