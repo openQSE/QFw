@@ -1059,7 +1059,7 @@ class QrmiDriver(BaseDriver):
 			if cached is not None:
 				logging.warning(
 					f"shim: keeping the cached QRMI target, refresh failed: {exc}")
-				return self._keep_until_next_refresh(cache_key)
+				return self._keep_until_next_refresh(cache_key, cached)
 			raise
 
 		# To avoid caching a failed or half-failed payload (which would stick
@@ -1069,7 +1069,7 @@ class QrmiDriver(BaseDriver):
 				logging.warning(
 					"shim: keeping the cached QRMI target, the refresh was "
 					"incomplete")
-				return self._keep_until_next_refresh(cache_key)
+				return self._keep_until_next_refresh(cache_key, cached)
 			return target_data
 		self._cache_target(cache_key, target_data)
 		return target_data
@@ -1117,10 +1117,11 @@ class QrmiDriver(BaseDriver):
 		self._target_cache[cache_key] = target_data
 		self._target_fetched_at[cache_key] = time.monotonic()
 
-	def _keep_until_next_refresh(self, cache_key):
+	def _keep_until_next_refresh(self, cache_key, cached):
 		# So a device that stays down is asked once per TTL, not per call.
-		self._target_fetched_at[cache_key] = time.monotonic()
-		return self._target_cache[cache_key]
+		if cache_key in self._target_cache:
+			self._target_fetched_at[cache_key] = time.monotonic()
+		return cached
 
 	def _static_arch(self, target):
 		# QRMI 0.22.0 added the static architecture to target(). Before that the

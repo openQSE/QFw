@@ -354,6 +354,23 @@ def test_a_refresh_after_a_failure_replaces_the_target(monkeypatch):
 	assert driver._target() == newer
 
 
+def test_a_reservation_ending_during_a_failed_refresh_still_serves_the_target(
+		monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	driver = _expired_driver(monkeypatch, "iqm", good, None)
+	cache_key = driver._credential_cache_key(None)
+
+	def evicted_while_reading(credential=None):
+		driver._target_cache.pop(cache_key)
+		driver._target_fetched_at.pop(cache_key)
+		raise RuntimeError("device unreachable")
+
+	driver._read_target = evicted_while_reading
+
+	assert driver._target() == good
+	assert cache_key not in driver._target_fetched_at
+
+
 def test_a_device_that_stays_down_is_asked_once_per_ttl(monkeypatch):
 	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
 	attempts = []
