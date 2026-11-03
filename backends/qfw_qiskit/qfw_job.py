@@ -64,6 +64,20 @@ def normalize_param_values(param_values):
 	return normalized
 
 
+def bind_marked_circuit(circuit, param_values):
+	"""Bind a circuit compiled ahead of time before it is sent, since only
+	IBM QRMI reads param_values. A name the compiler optimised away is
+	ignored."""
+	if param_values:
+		circuit = circuit.assign_parameters(param_values, strict=False)
+	if circuit.parameters:
+		raise DEFwError(
+			"a circuit compiled ahead of time runs with every parameter "
+			"bound; param_values has no value for "
+			f"{sorted(parameter.name for parameter in circuit.parameters)}")
+	return circuit
+
+
 # The libraries a shim QPM can run a circuit through (svc_lib_qpm).
 SHIM_LIBRARIES = ("qrmi", "qdmi")
 # The shim library a job runs through when the program names none, so a batch
@@ -201,6 +215,8 @@ class QFwJob(Job):
 		if param_values is not None:
 			param_values = normalize_param_values(param_values)
 		marker = self._marker_this_qpm_takes(circuit)
+		if marker is not None:
+			circuit = bind_marked_circuit(circuit, param_values)
 		# get num_qubits from experiment
 		num_qubits = circuit.num_qubits
 		# let's form the info object to give to QFw!!
@@ -227,7 +243,9 @@ class QFwJob(Job):
 		for key in QFW_INFO_PASSTHROUGH_OPTIONS:
 			if self._options.get(key) is not None:
 				info[key] = self._options[key]
-		if param_values is not None:
+		if marker is not None:
+			info.pop("param_values", None)
+		elif param_values is not None:
 			info["param_values"] = param_values
 		return info
 

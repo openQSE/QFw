@@ -413,6 +413,7 @@ def _install_qiskit_stubs():
 			self.num_clbits = num_qubits
 			self.cregs = []
 			self.metadata = {}
+			self.parameters = set()
 
 	class ClassicalRegister:
 		def __init__(self, size=0, name="c"):

@@ -359,6 +359,33 @@ def test_a_marked_circuit_with_unbound_parameters_is_refused():
 			circuit, _architecture(), _marker())
 
 
+def _parameterized_marked():
+	circuit = QuantumCircuit(2)
+	circuit.rz(Parameter("theta"), 0)
+	circuit.rz(Parameter("phi"), 1)
+	circuit.metadata = {"qfw": {"isa": _marker()}}
+	return circuit
+
+
+def test_a_marked_circuit_is_bound_by_parameter_name(monkeypatch):
+	qfw_job = _primitive_module(monkeypatch, "qfw_qiskit.qfw_job")
+
+	bound = qfw_job.bind_marked_circuit(
+		_parameterized_marked(),
+		{"theta": 0.5, "phi": 0.25, "optimised_away": 1.0})
+
+	assert not bound.parameters
+	assert [op.operation.params[0] for op in bound.data] == [0.5, 0.25]
+	assert bound.metadata == {"qfw": {"isa": _marker()}}
+
+
+def test_a_marked_circuit_left_unbound_is_refused(monkeypatch):
+	qfw_job = _primitive_module(monkeypatch, "qfw_qiskit.qfw_job")
+
+	with pytest.raises(qfw_job.DEFwError, match=r"\['phi'\]"):
+		qfw_job.bind_marked_circuit(_parameterized_marked(), {"theta": 0.5})
+
+
 class _Submitted(Exception):
 	pass
 

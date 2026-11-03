@@ -688,6 +688,37 @@ def test_the_client_refuses_a_qpm_that_does_not_take_isa(
 	assert fake_qpm.submitted_payloads == []
 
 
+def _binding_job(monkeypatch, marker=None):
+	import qfw_qiskit.qfw_job as qfw_job
+	job, fake_qpm = _job(
+		monkeypatch, {"circuit_stages": STAGES}, marker=marker,
+		param_values={"theta": 0.5})
+	bound = []
+	monkeypatch.setattr(
+		qfw_job, "bind_marked_circuit",
+		lambda circuit, values: bound.append(values) or circuit)
+	return job, fake_qpm, bound
+
+
+def test_the_client_binds_a_marked_circuit_instead_of_sending_values(
+		monkeypatch):
+	job, fake_qpm, bound = _binding_job(monkeypatch, marker=_marker())
+
+	job.submit()
+
+	assert bound == [{"theta": 0.5}]
+	assert "param_values" not in fake_qpm.submitted_payloads[0]
+
+
+def test_the_client_sends_a_generic_circuits_values_alongside_it(monkeypatch):
+	job, fake_qpm, bound = _binding_job(monkeypatch)
+
+	job.submit()
+
+	assert bound == []
+	assert fake_qpm.submitted_payloads[0]["param_values"] == {"theta": 0.5}
+
+
 def test_the_client_submits_none_of_a_batch_it_would_refuse_part_of(
 		monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
