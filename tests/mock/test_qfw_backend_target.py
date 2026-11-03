@@ -253,6 +253,25 @@ def test_telemetry_calls_carry_the_shim_library_and_the_token(monkeypatch):
 	]
 
 
+def test_the_live_architecture_is_read_from_whichever_library_serves_it(
+		monkeypatch):
+	telemetry = FakeTelemetryAPI(backend_info=FAKE_IQM_INFO)
+	backend = _backend(
+		monkeypatch, telemetry, qpm_properties={
+			"provider": "shim", "description_library": "qdmi"})
+	backend.options.lib = "qdmi"
+
+	backend.telemetry.get_dynamic_backend_info()
+	backend.telemetry.get_dynamic_backend_info(lib="qrmi")
+
+	assert telemetry.calls == [
+		("get_dynamic_backend_info", {
+			"lib": None, "calibration_set_id": None}),
+		("get_dynamic_backend_info", {
+			"lib": "qrmi", "calibration_set_id": None}),
+	]
+
+
 def test_reserved_target_passes_reservation_only_to_backend_info(monkeypatch):
 	info, device, coupling, calibration = iqm_records()
 	telemetry = FakeTelemetryAPI(info, device, coupling, calibration)
