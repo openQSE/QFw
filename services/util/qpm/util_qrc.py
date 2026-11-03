@@ -6,7 +6,6 @@ import queue
 import threading
 import sys
 import os
-import psutil
 from defw_exception import DEFwExecutionError, DEFwInProgress, DEFwOutOfResources
 import svc_launcher
 import cdefw_global
@@ -33,8 +32,7 @@ class UTIL_QRC:
 		self.worker_pool_rr = 0
 		self.num_workers = num_workers
 		self.num_worker_tasks = num_worker_tasks
-		self.num_cores = psutil.cpu_count(logical=False)
-		logging.debug(f'num_cores = {self.num_cores} start = {start}')
+		logging.debug(f'start = {start}')
 		if start:
 			self.launcher = svc_launcher.Launcher()
 			for x in range(0, self.num_workers):
@@ -134,19 +132,14 @@ class UTIL_QRC:
 		# if one is available run it
 		# check on currently running tasks to see if any of them complete
 		# Add completed tasks to the results dictionary
-		super_affinity = os.sched_getaffinity(0)
+		super_affinity = sorted(os.sched_getaffinity(0))
 		with self.worker_pool_lock:
 			my_queue = self.worker_pool[my_id]['queue']
 			# bind to core
 			# We can enhance this more to avoid core 0 in every l3 cache
-			bound_core = (my_id + 1) % self.num_cores
-			if bound_core not in super_affinity:
-				tmp = bound_core + 1
-				while tmp != bound_core:
-					if tmp in super_affinity:
-						bound_core = tmp
-						break
-					tmp = (tmp + 1) % len(super_affinity)
+			# The processes a runner launches inherit its core. Choose from
+			# the cores this process may use, which need not start at 0.
+			bound_core = super_affinity[(my_id + 1) % len(super_affinity)]
 			try:
 				logging.debug(
 					f'binding {threading.get_ident()} to '
@@ -157,9 +150,15 @@ class UTIL_QRC:
 				raise e
 
 		while not self.shutdown_workers:
+			# Poll only while launched tasks may finish. An idle runner
+			# blocks until async_run() or shutdown() fills its queue.
+			if self.worker_pool[my_id]['active_tasks']:
+				timeout = 0.001
+			else:
+				timeout = None
 			empty = False
 			try:
-				circ = my_queue.get(timeout=0.001)  # sleep
+				circ = my_queue.get(timeout=timeout)
 				if circ is None:
 					self.shutdown_workers = True
 					continue
@@ -392,3 +391,7 @@ class UTIL_QRC:
 		logging.critical("shutdown called")
 		self.launcher.shutdown()
 		self.shutdown_workers = True
+		# Wake the runners blocked on an empty queue.
+		with self.worker_pool_lock:
+			for v in self.worker_pool:
+				v['queue'].put(None)
