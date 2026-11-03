@@ -638,22 +638,20 @@ def _job(monkeypatch, properties, marker=None, **options):
 	return job, fake_qpm
 
 
-def _isa_device(properties):
-	from qfw_qiskit.qfw_simulator import QFwBackend
-	backend = types.SimpleNamespace(
-		qpm=types.SimpleNamespace(qpm_properties=properties))
-	return QFwBackend.isa_device(backend)
+def _isa_device(monkeypatch, properties):
+	from tests.mock.test_qfw_backend_target import _backend
+	return _backend(monkeypatch, qpm_properties=properties).isa_device()
 
 
-def test_a_backend_names_the_device_its_qpm_compares():
-	assert _isa_device({"isa_provider": "iqm", "isa_device_id": DEVICE}) == (
-		"iqm", DEVICE)
+def test_a_backend_names_the_device_its_qpm_compares(monkeypatch):
+	assert _isa_device(monkeypatch, {
+		"isa_provider": "iqm", "isa_device_id": DEVICE}) == ("iqm", DEVICE)
 
 
-def test_a_backend_says_when_its_qpm_names_no_device():
+def test_a_backend_says_when_its_qpm_names_no_device(monkeypatch):
 	from defw_exception import DEFwError
 	with pytest.raises(DEFwError, match="compiled ahead of time"):
-		_isa_device({"circuit_stages": [isa.STAGE_GENERIC]})
+		_isa_device(monkeypatch, {"circuit_stages": [isa.STAGE_GENERIC]})
 
 
 def test_the_client_lifts_the_marker_into_info(monkeypatch):

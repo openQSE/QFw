@@ -47,9 +47,12 @@ def mark_isa(circuit, provider, device_id, calibration=None, qubit_labels=None,
 	"""Mark a circuit as compiled ahead of time for one device, so a QPM runs
 	it as it stands or refuses it. `qubit_labels` names each circuit index,
 	which an IQM device needs. See util.isa."""
-	marker = make_marker(
+	return set_isa_marker(circuit, make_marker(
 		provider, device_id, calibration=calibration,
-		qubit_labels=qubit_labels, compiler=compiler)
+		qubit_labels=qubit_labels, compiler=compiler))
+
+
+def set_isa_marker(circuit, marker):
 	metadata = dict(getattr(circuit, "metadata", None) or {})
 	qfw_metadata = dict(metadata.get(QFW_METADATA_NAMESPACE) or {})
 	qfw_metadata[QFW_METADATA_ISA] = marker

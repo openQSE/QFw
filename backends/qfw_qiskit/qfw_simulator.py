@@ -17,7 +17,7 @@ from .qfw_job import (
 	QFwJob, QFW_INFO_PASSTHROUGH_OPTIONS, SHIM_LIB_ENV,
 	normalize_reservation_id, normalize_shim_library)
 from .qfw_metadata import (
-	get_isa_marker, get_qubit_mapping, mark_isa, set_qubit_mapping)
+	get_isa_marker, get_qubit_mapping, set_isa_marker, set_qubit_mapping)
 from .qfw_target import (
 	QFW_NUM_QUBITS,
 	TARGET_DEVICE,
@@ -270,9 +270,8 @@ class QFwBackend(BackendV2):
 		# What every telemetry call carries: the shim library a run would
 		# use, so the device described is the one the circuits reach, and
 		# the reservation context when the run context holds one.
-		properties = getattr(self.qpm, "qpm_properties", None) or {}
 		context = {"lib": (self._shim_library() or
-				   properties.get("description_library"))}
+				   self._published("description_library"))}
 
 		reservation_id = getattr(self.options, "reservation_id", None)
 		if reservation_id is not None:
@@ -312,8 +311,7 @@ class QFwBackend(BackendV2):
 		return build_qfw_target(self._num_qubits)
 
 	def _kind_without_a_device(self):
-		properties = getattr(self.qpm, "qpm_properties", None) or {}
-		return (TARGET_FALLBACK if properties.get("hardware")
+		return (TARGET_FALLBACK if self._published("hardware")
 			else TARGET_GENERIC_BY_DESIGN)
 
 	def _build_target(self):
@@ -375,9 +373,8 @@ class QFwBackend(BackendV2):
 
 	def isa_device(self):
 		"""The (provider, device_id) a circuit is marked with for this QPM."""
-		properties = getattr(self.qpm, "qpm_properties", None) or {}
-		provider = properties.get("isa_provider")
-		device_id = properties.get("isa_device_id")
+		provider = self._published("isa_provider")
+		device_id = self._published("isa_device_id")
 		if not provider or not device_id:
 			raise DEFwError(
 				"this QPM does not take a circuit compiled ahead of time")
@@ -477,9 +474,7 @@ class QFwBackend(BackendV2):
 				"QFw backend: this QPM does not take a circuit compiled ahead "
 				"of time, so it may compile this one again")
 			return compiled
-		return mark_isa(
-			compiled, marker["provider"], marker["device_id"],
-			marker["calibration"], labels, marker["compiler"])
+		return set_isa_marker(compiled, marker)
 
 	def check_isa(self, circuits):
 		"""Refuse now what this QPM would refuse after a queue wait: a
