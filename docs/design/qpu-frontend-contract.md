@@ -621,7 +621,7 @@ qubits, and apply the device's `calibration-policy`.
 
 The client binds a marked circuit's parameters before sending it. A QPM refuses
 `info["calibration_set_id"]` at submission unless it can run on that set; today
-only the shim's IQM device through QRMI can.
+the native IQM service and the shim's IQM device through QRMI can.
 
 ## 14. Strategic positioning: implementation-first to a specification
 

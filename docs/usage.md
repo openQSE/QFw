@@ -1206,8 +1206,8 @@ observables = observables.apply_layout(compiled.layout)
 job = QFwEstimatorV2(backend=backend).run([(compiled, observables)])
 ```
 
-`run(..., calibration_set_id=...)` runs on a chosen IQM calibration set. Only
-an IQM device run through QRMI can; other QPMs refuse it at submission.
+`run(..., calibration_set_id=...)` runs on a chosen IQM calibration set,
+through the native IQM service or QRMI. Other QPMs refuse it at submission.
 
 `backend.telemetry` is also usable on its own. `get_backend_info()`,
 `get_device_info()`, `get_coupling_graph()`, `get_calibration_snapshot()` and

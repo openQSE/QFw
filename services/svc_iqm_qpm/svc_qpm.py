@@ -52,6 +52,9 @@ class QPM(UTIL_QPM):
 		info['qfw_backend'] = 'iqm'
 		return info
 
+	def runs_on_a_chosen_calibration(self, info):
+		return True
+
 	def get_backend_info(self, lib=None, token=None, reservation_id=None):
 		return self.qrc.get_backend_info()
 

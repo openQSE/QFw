@@ -256,6 +256,12 @@ def test_a_qpm_refuses_a_calibration_set_it_cannot_run_on():
 		_base_qpm().create_circuit(info)
 
 
+def test_the_native_iqm_qpm_runs_on_a_chosen_calibration():
+	from svc_iqm_qpm.svc_qpm import QPM
+
+	assert QPM.__new__(QPM).runs_on_a_chosen_calibration({}) is True
+
+
 def _shim_routing_runs_to(provider, library):
 	from svc_lib_qpm.svc_qpm import QPM
 	qpm = QPM.__new__(QPM)
