@@ -202,6 +202,41 @@ def test_a_simulator_compiles_to_its_generic_target_unmarked(monkeypatch):
 	assert seen == [circuit]
 
 
+def test_a_device_its_qpm_cannot_describe_compiles_to_the_target_unmarked(
+		monkeypatch, caplog):
+	from util.compile_profiles import DeviceNotDescribed
+	profile = Profile()
+
+	def not_described(backend):
+		raise DeviceNotDescribed("no dynamic architecture")
+
+	profile.read_device = not_described
+	backend = _backend(monkeypatch, profile)
+	monkeypatch.setattr(backend, "_require_a_device_target", lambda: None)
+	monkeypatch.setitem(
+		backend.COMPILERS, "qiskit",
+		lambda self, circuits, **options: "compiled")
+
+	with caplog.at_level("WARNING"):
+		assert backend.compile(Circuit()) == "compiled"
+	assert "compile it again" in caplog.text
+
+
+def test_check_isa_refuses_a_device_its_qpm_cannot_describe(monkeypatch):
+	from util.compile_profiles import DeviceNotDescribed
+	profile = Profile()
+
+	def not_described(backend):
+		raise DeviceNotDescribed("no dynamic architecture")
+
+	profile.read_device = not_described
+	backend = _backend(
+		monkeypatch, profile, dict(PUBLISHED, circuit_stages=["isa"]))
+
+	with pytest.raises(DeviceNotDescribed):
+		backend.check_isa(Circuit())
+
+
 def test_a_fallback_target_is_never_compiled_to(monkeypatch):
 	backend = _backend(
 		monkeypatch, properties={"provider": "qb", "hardware": True})

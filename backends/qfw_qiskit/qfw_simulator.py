@@ -37,7 +37,7 @@ from api_qpm_common import QPMCapability
 from defw_event_baseapi import BaseEventAPI
 from defw_common_def import g_rpc_metrics
 from util import instrumentation
-from util.compile_profiles import compile_profile
+from util.compile_profiles import DeviceNotDescribed, compile_profile
 from util.isa import (
 	check_calibration, check_device, make_marker, read_marker)
 
@@ -426,15 +426,24 @@ class QFwBackend(BackendV2):
 			self._forget_target()
 		profile = compile_profile(self._device_provider())
 		if profile is None:
-			self._require_a_device_target()
-			return self.COMPILERS[compiler](self, circuits, **kwargs)
-		device = self._read_compile_device(profile)
+			return self._compile_to_target(compiler, circuits, kwargs)
+		try:
+			device = self._read_compile_device(profile)
+		except DeviceNotDescribed as exc:
+			logging.warning(
+				f"QFw backend: {exc}; compiling to backend.target unmarked, "
+				"so the QPM may compile it again")
+			return self._compile_to_target(compiler, circuits, kwargs)
 		if isinstance(circuits, QuantumCircuit):
 			return self._compile_for_device(
 				circuits, compiler, profile, device, kwargs)
 		return [
 			self._compile_for_device(circuit, compiler, profile, device, kwargs)
 			for circuit in circuits]
+
+	def _compile_to_target(self, compiler, circuits, options):
+		self._require_a_device_target()
+		return self.COMPILERS[compiler](self, circuits, **options)
 
 	def _compile_for_device(self, circuit, compiler, profile, device, options):
 		if compiler == 'qiskit':

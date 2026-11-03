@@ -10,6 +10,10 @@ except ImportError:
 	DEFwExecutionError = RuntimeError
 
 
+class DeviceNotDescribed(DEFwExecutionError):
+	pass
+
+
 class TargetProfile:
 	compiles_against_target = True
 
@@ -54,10 +58,15 @@ class IqmProfile:
 
 	def read_device(self, backend):
 		telemetry = backend.telemetry
-		info = (telemetry.get_dynamic_backend_info() or {}) if telemetry else {}
+		try:
+			info = (telemetry.get_dynamic_backend_info() or {}) if telemetry else {}
+		except Exception as exc:
+			raise DeviceNotDescribed(
+				"this QPM could not report the device's dynamic architecture: "
+				f"{exc}") from exc
 		dynamic = info.get("dynamic_architecture")
 		if not dynamic:
-			raise DEFwExecutionError(
+			raise DeviceNotDescribed(
 				"compiling for an IQM device needs its dynamic architecture, "
 				"and this QPM did not report one")
 		return {"dynamic": dynamic}

@@ -1161,7 +1161,9 @@ the compiler. `refresh_target=True` reads the device again first, for a backend
 that has been open across a recalibration. Braket and Pasqal devices refuse
 `compile`, because they do not take a circuit compiled ahead of time. So does a
 backend whose `target_kind` is `fallback`, rather than compile for a device it
-could not describe. A simulator's result is not marked.
+could not describe. A simulator's result is not marked, and neither is an IQM
+device's when its QPM cannot report the device's dynamic architecture, as when
+only QDMI is wired: that circuit compiles to `backend.target`, with a warning.
 
 `backend.check_isa(circuits)` reads the device and raises on what the QPM would
 refuse: a circuit that is unmarked, marked for another device, compiled for a

@@ -158,6 +158,18 @@ def test_iqm_says_when_the_qpm_reports_no_architecture():
 		profile.read_device(types.SimpleNamespace(telemetry=telemetry))
 
 
+def test_iqm_says_when_no_library_serves_the_architecture():
+	profile = compile_profiles.compile_profile("iqm")
+
+	def not_served():
+		raise DEFwExecutionError("no wired library implements it")
+
+	telemetry = types.SimpleNamespace(get_dynamic_backend_info=not_served)
+
+	with pytest.raises(compile_profiles.DeviceNotDescribed, match="no wired"):
+		profile.read_device(types.SimpleNamespace(telemetry=telemetry))
+
+
 def test_a_qiskit_target_cannot_stand_for_a_star_device():
 	profile = compile_profiles.compile_profile("iqm")
 
