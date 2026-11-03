@@ -1115,7 +1115,7 @@ The shim's QRMI driver caches what a device reports for
 `QFW_QPU_TARGET_TTL_SECONDS` (default 300) of the service's environment, and 0
 reads the device every time. A recalibration reaches new backends once that
 time has passed. When a device cannot be reached, the driver keeps the last
-target it read, except for a circuit whose calibration is required: that read
+target it read and asks again after another TTL, except for a circuit whose calibration is required: that read
 goes past the cache, and the circuit is refused if it fails.
 `get_dynamic_backend_info` always goes past the cache, so an IQM `compile` or
 `check_isa` sees the current calibration set. An IBM target is still read
