@@ -1194,9 +1194,26 @@ not take a marked circuit refuses it at submission; pass
 `isa_policy="generic"` to `run` to send it as a generic circuit instead. See the
 front-end contract for what a QPM checks.
 
+A marked circuit with parameters is bound on the client before it is sent, by
+parameter name, from the `param_values` passed to `run`. A name the compiler
+optimised away is ignored, and a parameter left without a value is refused. A
+generic circuit's `param_values` still travel beside it, as before.
+
 `QFwSamplerV2` and `QFwEstimatorV2` keep the marker. The estimator adds basis
 changes to each circuit, translated to the backend's gates, and a QPM still
-refuses the result if they are not native there.
+refuses the result if they are not native there. A compiled circuit may have
+moved its qubits, so lay the observables out the same way first:
+
+```python
+compiled = backend.compile(circuit)
+observables = observables.apply_layout(compiled.layout)
+job = QFwEstimatorV2(backend=backend).run([(compiled, observables)])
+```
+
+`run(..., calibration_set_id=...)` runs a circuit on a chosen IQM calibration
+set. Only an IQM device run through QRMI can; every other QPM, QDMI included,
+refuses it at submission. A marked circuit compiled for another calibration set
+is still refused under `require`.
 
 `backend.telemetry` is also usable on its own. `get_backend_info()`,
 `get_device_info()`, `get_coupling_graph()`, `get_calibration_snapshot()` and

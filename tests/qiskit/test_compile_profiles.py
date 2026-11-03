@@ -107,6 +107,23 @@ def test_a_target_profile_compiles_a_batch_in_one_transpile(monkeypatch):
 		profile.validate(circuit, device, _marker("ibm", None))
 
 
+@pytest.mark.parametrize("provider", ["ibm", "iqm"])
+def test_a_compiled_circuit_lays_out_its_observables(provider):
+	from qiskit.quantum_info import SparsePauliOp
+	profile = compile_profiles.compile_profile(provider)
+	device = ({"dynamic": _garnet_architecture()} if provider == "iqm" else
+		{"target": GenericBackendV2(5, seed=1).target, "backend_info": {}})
+	circuit = QuantumCircuit(3)
+	circuit.h(0)
+	circuit.cx(0, 1)
+	circuit.cx(1, 2)
+
+	compiled, _ = profile.compile(circuit, device, seed_transpiler=1)
+	observable = SparsePauliOp(["ZZI"]).apply_layout(compiled.copy().layout)
+
+	assert observable.num_qubits == compiled.num_qubits
+
+
 def test_ibm_refuses_a_circuit_that_is_not_native():
 	profile = compile_profiles.compile_profile("ibm")
 	device = {"target": GenericBackendV2(3, seed=1).target, "backend_info": {}}
