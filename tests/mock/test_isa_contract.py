@@ -649,10 +649,29 @@ def test_ibm_qdmi_refuses_when_the_device_requires_a_calibration_it_cannot_read(
 	marker = isa.make_marker("ibm", "ibm_torino", calibration={
 		"kind": "properties-time", "value": "t1"})
 
-	with pytest.raises(DEFwExecutionError, match="compile it again"):
+	with pytest.raises(DEFwExecutionError, match="QDMI reports no calibration"):
 		_ibm_qdmi_encode(
 			monkeypatch, {"isa": marker}, _no_compile,
 			descriptor={"calibration_policy": isa.POLICY_REQUIRE})
+
+
+def test_ibm_qdmi_reports_no_mismatch_for_a_calibration_it_cannot_read(
+		monkeypatch, caplog):
+	marker = isa.make_marker("ibm", "ibm_torino", calibration={
+		"kind": "properties-time", "value": "t1"})
+
+	class Preprocessed(Exception):
+		pass
+
+	def preprocess(circuit):
+		raise Preprocessed
+
+	with caplog.at_level(logging.WARNING), pytest.raises(Preprocessed):
+		_ibm_qdmi_encode(
+			monkeypatch, {"isa": marker}, preprocess,
+			descriptor={"calibration_policy": isa.POLICY_CURRENT})
+
+	assert "current calibration" not in caplog.text
 
 
 # --- the client --------------------------------------------------------------

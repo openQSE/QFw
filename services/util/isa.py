@@ -154,6 +154,14 @@ def requires_calibration(marker, policy=None):
 	return policy == POLICY_REQUIRE
 
 
+def check_unreported_calibration(marker, policy, library):
+	if requires_calibration(marker, policy):
+		raise DEFwExecutionError(
+			f"{library} reports no calibration for this device, so it cannot "
+			"confirm the one this circuit requires; run it through another "
+			"library or set calibration-policy: current")
+
+
 def check_calibration(marker, current, policy=None):
 	required = requires_calibration(marker, policy)
 	calibration = marker.get("calibration") or {}

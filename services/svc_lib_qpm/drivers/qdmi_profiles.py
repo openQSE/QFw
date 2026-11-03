@@ -427,9 +427,8 @@ class IbmQdmiProfile(QdmiProfile):
 		marker = isa.read_marker(info)
 		if marker is not None:
 			isa.check_index_labels(marker)
-			# QDMI reports no calibration identity for an IBM device.
-			isa.check_calibration(
-				marker, None, driver._descriptor.get("calibration_policy"))
+			isa.check_unreported_calibration(
+				marker, driver._descriptor.get("calibration_policy"), "QDMI")
 		try:
 			circuit = backend._preprocess_circuit(circuit)
 		except UnsupportedOperationError:
