@@ -40,6 +40,7 @@ class QPM(UTIL_QPM):
 		# unless the service's own configuration says otherwise.
 		for key, value in qiskit_circuit_formats().items():
 			properties.setdefault(key, value)
+		properties["dynamic_architecture"] = True
 		info = self.query_helper(
 			QPMType.QPM_TYPE_HARDWARE,
 			QPMCapability.QPM_CAP_SUPERCONDUCTING,

@@ -132,7 +132,7 @@ def iqm_job(fake_backend):
 		"dynamic_architecture": dynamic}
 	properties = {
 		"isa_provider": "iqm", "isa_device_id": "q20",
-		"circuit_stages": ["generic", "isa"]}
+		"circuit_stages": ["generic", "isa"], "dynamic_architecture": True}
 	backend = target_tests._backend(
 		monkeypatch, telemetry, qpm_properties=properties)
 	compiled = backend.compile(_ghz())

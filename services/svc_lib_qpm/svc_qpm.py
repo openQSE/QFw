@@ -119,6 +119,8 @@ class QPM(UTIL_QPM):
 		description_library = self._description_library()
 		if description_library:
 			properties["description_library"] = description_library
+		if self._serves_dynamic_architecture():
+			properties["dynamic_architecture"] = True
 		if descriptor.get("calibration_policy"):
 			properties["calibration_policy"] = descriptor["calibration_policy"]
 		if descriptor.get("num_qubits") not in (None, ""):
@@ -134,6 +136,11 @@ class QPM(UTIL_QPM):
 	def _description_library(self):
 		frontend = getattr(getattr(self, "qrc", None), "frontend", None)
 		return frontend.description_library() if frontend is not None else None
+
+	def _serves_dynamic_architecture(self):
+		frontend = getattr(getattr(self, "qrc", None), "frontend", None)
+		return bool(frontend is not None and
+			frontend.capability_map().get("get_dynamic_backend_info"))
 
 	def circuit_stages(self):
 		return isa.circuit_stages(self._provider())

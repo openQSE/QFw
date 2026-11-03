@@ -613,7 +613,9 @@ whose circuits reach the provider unchanged. The shim declares `isa` for IBM and
 IQM. Braket compiles non-verbatim programs itself and Pasqal runs Pulser
 sequences, so neither takes it, and the native IQM service does not, because its
 client tier transpiles first. A QPM that declares `isa` publishes the
-`isa_provider` and `isa_device_id` a marker must name. A QPM refuses from the
+`isa_provider` and `isa_device_id` a marker must name. A QPM that serves
+`get_dynamic_backend_info` publishes `dynamic_architecture: true`, which an IQM
+compile needs. A QPM refuses from the
 request alone an undeclared stage, another provider or device, a format other
 than QPY, and `compilation_options`.
 Before submitting, the drivers refuse a gate the device does not have on those

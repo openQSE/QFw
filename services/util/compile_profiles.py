@@ -63,15 +63,13 @@ class IqmProfile:
 
 	def read_device(self, backend):
 		telemetry = backend.telemetry
-		try:
-			info = (telemetry.get_dynamic_backend_info() or {}) if telemetry else {}
-		except Exception as exc:
+		if telemetry is None or not backend.published("dynamic_architecture"):
 			raise DeviceNotDescribed(
-				"this QPM could not report the device's dynamic architecture: "
-				f"{exc}") from exc
+				"this QPM does not report the device's dynamic architecture")
+		info = telemetry.get_dynamic_backend_info() or {}
 		dynamic = info.get("dynamic_architecture")
 		if not dynamic:
-			raise DeviceNotDescribed(
+			raise DEFwExecutionError(
 				"compiling for an IQM device needs its dynamic architecture, "
 				"and this QPM did not report one")
 		return {"dynamic": dynamic}

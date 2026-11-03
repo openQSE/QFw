@@ -211,25 +211,40 @@ def test_iqm_refuses_a_circuit_that_is_not_native():
 		profile.validate(_ghz(), device, _marker("iqm", device["dynamic"]["qubits"]))
 
 
+def _iqm_backend(get_dynamic_backend_info, serves=True):
+	return types.SimpleNamespace(
+		telemetry=types.SimpleNamespace(
+			get_dynamic_backend_info=get_dynamic_backend_info),
+		published={"dynamic_architecture": serves}.get)
+
+
 def test_iqm_says_when_the_qpm_reports_no_architecture():
 	profile = compile_profiles.compile_profile("iqm")
-	telemetry = types.SimpleNamespace(get_dynamic_backend_info=lambda: {
+	backend = _iqm_backend(lambda: {
 		"metadata_supported": False, "dynamic_architecture": {}})
 
 	with pytest.raises(DEFwExecutionError, match="dynamic architecture"):
-		profile.read_device(types.SimpleNamespace(telemetry=telemetry))
+		profile.read_device(backend)
 
 
-def test_iqm_says_when_no_library_serves_the_architecture():
+def test_iqm_says_when_its_qpm_does_not_serve_the_architecture():
+	profile = compile_profiles.compile_profile("iqm")
+	backend = _iqm_backend(lambda: pytest.fail("not served"), serves=None)
+
+	with pytest.raises(compile_profiles.DeviceNotDescribed):
+		profile.read_device(backend)
+
+
+def test_a_failed_architecture_read_is_not_taken_for_an_undescribed_device():
 	profile = compile_profiles.compile_profile("iqm")
 
-	def not_served():
-		raise DEFwExecutionError("no wired library implements it")
+	def unreachable():
+		raise DEFwExecutionError("device unreachable")
 
-	telemetry = types.SimpleNamespace(get_dynamic_backend_info=not_served)
+	with pytest.raises(DEFwExecutionError, match="unreachable") as raised:
+		profile.read_device(_iqm_backend(unreachable))
 
-	with pytest.raises(compile_profiles.DeviceNotDescribed, match="no wired"):
-		profile.read_device(types.SimpleNamespace(telemetry=telemetry))
+	assert not isinstance(raised.value, compile_profiles.DeviceNotDescribed)
 
 
 def test_a_qiskit_target_cannot_stand_for_a_star_device():

@@ -271,7 +271,7 @@ class QFwBackend(BackendV2):
 		# use, so the device described is the one the circuits reach, and
 		# the reservation context when the run context holds one.
 		context = {"lib": (self._shim_library() or
-				   self._published("description_library"))}
+				   self.published("description_library"))}
 
 		reservation_id = getattr(self.options, "reservation_id", None)
 		if reservation_id is not None:
@@ -311,7 +311,7 @@ class QFwBackend(BackendV2):
 		return build_qfw_target(self._num_qubits)
 
 	def _kind_without_a_device(self):
-		return (TARGET_FALLBACK if self._published("hardware")
+		return (TARGET_FALLBACK if self.published("hardware")
 			else TARGET_GENERIC_BY_DESIGN)
 
 	def _build_target(self):
@@ -373,8 +373,8 @@ class QFwBackend(BackendV2):
 
 	def isa_device(self):
 		"""The (provider, device_id) a circuit is marked with for this QPM."""
-		provider = self._published("isa_provider")
-		device_id = self._published("isa_device_id")
+		provider = self.published("isa_provider")
+		device_id = self.published("isa_device_id")
 		if not provider or not device_id:
 			raise DEFwError(
 				"this QPM does not take a circuit compiled ahead of time")
@@ -399,13 +399,14 @@ class QFwBackend(BackendV2):
 				f"could not read the device again ({reason}); the backend "
 				"keeps the device target it last read")
 
-	def _published(self, name):
+	def published(self, name):
+		"""A property the QPM published about itself, or None."""
 		return (getattr(self.qpm, "qpm_properties", None) or {}).get(name)
 
 	def _device_provider(self):
-		return (self._published("isa_provider") or
-			self._published("device_provider") or
-			self._published("provider"))
+		return (self.published("isa_provider") or
+			self.published("device_provider") or
+			self.published("provider"))
 
 	def _require_a_device_target(self):
 		self.target
@@ -469,7 +470,7 @@ class QFwBackend(BackendV2):
 				"which QFw cannot check against the device")
 		compiled = compiled.copy()
 		set_qubit_mapping(compiled, labels)
-		device_id = self._published("isa_device_id")
+		device_id = self.published("isa_device_id")
 		marker = make_marker(
 			self._device_provider(), device_id or self._device_provider(),
 			profile.calibration(device), labels, _compiler_name(compiler))
@@ -500,9 +501,9 @@ class QFwBackend(BackendV2):
 					f"circuit {circuit.name} is not marked as compiled for "
 					"a device")
 			check_device(
-				marker, self._published("circuit_stages"), device_id, provider)
+				marker, self.published("circuit_stages"), device_id, provider)
 			check_calibration(
-				marker, current, self._published("calibration_policy"))
+				marker, current, self.published("calibration_policy"))
 			profile.validate(circuit, device, marker)
 
 	def device_snapshot(self):
@@ -523,7 +524,7 @@ class QFwBackend(BackendV2):
 		return {
 			"schema": DEVICE_SNAPSHOT_SCHEMA,
 			"provider": self._device_provider(),
-			"device_id": self._published("isa_device_id"),
+			"device_id": self.published("isa_device_id"),
 			"captured_at": datetime.now(timezone.utc).isoformat(),
 			"records": records,
 		}

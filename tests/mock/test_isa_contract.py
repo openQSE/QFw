@@ -304,6 +304,38 @@ def test_the_shim_publishes_the_device_calibration_policy(monkeypatch):
 	assert seen["calibration_policy"] == "require"
 
 
+@pytest.mark.parametrize("served_by, published", [
+	(["qrmi"], True), ([], None),
+])
+def test_the_shim_publishes_whether_it_serves_the_dynamic_architecture(
+		monkeypatch, served_by, published):
+	import svc_lib_qpm.svc_qpm as svc_qpm
+	import svc_lib_qpm.descriptor as descriptor
+	seen = {}
+	monkeypatch.setattr(descriptor, "resolve_descriptor", lambda: {
+		"id": DEVICE, "provider": "iqm"})
+	qpm = svc_qpm.QPM.__new__(svc_qpm.QPM)
+	qpm.qrc = types.SimpleNamespace(frontend=types.SimpleNamespace(
+		description_library=lambda: None,
+		capability_map=lambda: {"get_dynamic_backend_info": served_by}))
+	qpm.query_helper = lambda *args, properties: seen.update(properties)
+
+	qpm.query()
+
+	assert seen.get("dynamic_architecture") is published
+
+
+def test_the_native_iqm_qpm_serves_the_dynamic_architecture(monkeypatch):
+	from svc_iqm_qpm.svc_qpm import QPM
+	qpm = QPM.__new__(QPM)
+	seen = {}
+	qpm.query_helper = lambda *args, properties: seen.update(properties)
+
+	qpm.query()
+
+	assert seen["dynamic_architecture"] is True
+
+
 def test_the_native_iqm_qpm_does_not_take_isa():
 	from svc_iqm_qpm.svc_qpm import QPM
 	qpm = QPM.__new__(QPM)
