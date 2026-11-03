@@ -249,6 +249,41 @@ def test_a_qpm_compares_its_own_device_and_provider(device, provider, refusal):
 		QPM.__new__(QPM).create_circuit(_info())
 
 
+def test_a_qpm_refuses_a_calibration_set_it_cannot_run_on():
+	info = {"calibration_set_id": "cal-0", "qasm": "OPENQASM 2.0;"}
+
+	with pytest.raises(DEFwExecutionError, match="chosen calibration set"):
+		_base_qpm().create_circuit(info)
+
+
+def _shim_routing_runs_to(provider, library):
+	from svc_lib_qpm.svc_qpm import QPM
+	qpm = QPM.__new__(QPM)
+	qpm._descriptor_provider = provider
+	routed = []
+
+	def route(call, lib=None):
+		routed.append((call, lib))
+		return types.SimpleNamespace(name=library or lib)
+
+	qpm.qrc = types.SimpleNamespace(
+		frontend=types.SimpleNamespace(route=route))
+	return qpm, routed
+
+
+@pytest.mark.parametrize("provider, library, runs", [
+	("iqm", "qrmi", True),
+	("iqm", "qdmi", False),
+	("ibm", "qrmi", False),
+])
+def test_the_shim_runs_on_a_chosen_calibration_only_for_iqm_through_qrmi(
+		provider, library, runs):
+	qpm, routed = _shim_routing_runs_to(provider, library)
+
+	assert qpm.runs_on_a_chosen_calibration({"lib": "qdmi"}) is runs
+	assert routed == [("run_circuit", "qdmi")]
+
+
 def test_the_shim_publishes_the_device_calibration_policy(monkeypatch):
 	import svc_lib_qpm.svc_qpm as svc_qpm
 	import svc_lib_qpm.descriptor as descriptor

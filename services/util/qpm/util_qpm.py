@@ -207,6 +207,11 @@ class UTIL_QPM:
 			isa.check_envelope(
 				prepared_info, self.circuit_stages(), self.isa_device_id(),
 				self.isa_provider())
+		if (prepared_info.get("calibration_set_id") is not None
+				and not self.runs_on_a_chosen_calibration(prepared_info)):
+			raise DEFwExecutionError(
+				"this QPM cannot run a circuit on a chosen calibration set; "
+				"leave calibration_set_id out")
 		hook_info = self.prepare_circuit(prepared_info)
 		if hook_info is not None:
 			prepared_info = hook_info
@@ -242,6 +247,9 @@ class UTIL_QPM:
 
 	def isa_provider(self):
 		return None
+
+	def runs_on_a_chosen_calibration(self, info):
+		return False
 
 	def delete_circuit(self, cid, reservation_id=None, token=None):
 		if not qpm_initialized:

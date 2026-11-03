@@ -147,6 +147,15 @@ class QPM(UTIL_QPM):
 	def isa_provider(self):
 		return self._provider()
 
+	def runs_on_a_chosen_calibration(self, info):
+		# Only IQM through QRMI submits with a calibration set id.
+		try:
+			library = self.qrc.frontend.route(
+				"run_circuit", lib=info.get("lib")).name
+		except Exception:
+			return False
+		return self._provider() == "iqm" and library == "qrmi"
+
 	def prepare_circuit(self, info):
 		# The qhw backend tag names the provider this resource belongs to, as
 		# its device-access entry declares it: iqm for the q20, aws for a
