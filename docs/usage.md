@@ -1117,6 +1117,9 @@ reads the device every time. A recalibration reaches new backends once that
 time has passed. When a device cannot be reached, the driver keeps the last
 target it read, except for a circuit whose calibration is required: that read
 goes past the cache, and the circuit is refused if it fails.
+`get_dynamic_backend_info` always goes past the cache, so an IQM `compile` or
+`check_isa` sees the current calibration set. An IBM target is still read
+through the cache.
 
 `backend.target_kind` says what the target stands for: `device` for a device
 with its connectivity, `generic_by_design` for a QPM with no device to describe,

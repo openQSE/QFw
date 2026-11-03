@@ -523,13 +523,28 @@ def test_get_dynamic_backend_info_iqm_returns_live_architecture(monkeypatch):
 
 	iqm_target = {"dynamic_quantum_architecture": {"qubits": ["QB1", "QB2"]}}
 	driver = QrmiDriver({"provider": "iqm", "id": "my-iqm"})
-	driver._target = lambda credential=None: iqm_target
+	driver._read_target = lambda credential=None: iqm_target
 
 	result = driver.get_dynamic_backend_info()
 
 	assert result["backend"] == "iqm"
 	assert result["metadata_supported"] is True
 	assert result["dynamic_architecture"] == {"qubits": ["QB1", "QB2"]}
+
+
+def test_get_dynamic_backend_info_reads_past_the_cache(monkeypatch):
+	recalibrated = {"dynamic_quantum_architecture": {
+		"calibration_set_id": "cal-2"}}
+	driver = QrmiDriver({"provider": "iqm", "id": "my-iqm"})
+	driver._cache_target(
+		driver._credential_cache_key(None),
+		{"dynamic_quantum_architecture": {"calibration_set_id": "cal-1"}})
+	driver._read_target = lambda credential=None: recalibrated
+
+	result = driver.get_dynamic_backend_info()
+
+	assert result["dynamic_architecture"]["calibration_set_id"] == "cal-2"
+	assert driver._target() is recalibrated
 
 
 # ===========================================================================

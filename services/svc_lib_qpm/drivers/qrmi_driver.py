@@ -1096,13 +1096,17 @@ class QrmiDriver(BaseDriver):
 		if marker is None or not isa.requires_calibration(
 				marker, self._descriptor.get("calibration_policy")):
 			return
-		credential = getattr(source, "provider_credential", None)
+		self._read_target_past_cache(
+			getattr(source, "provider_credential", None))
+
+	def _read_target_past_cache(self, credential=None):
 		target_data = self._read_target(credential)
 		if not self._target_is_complete(target_data):
 			raise DEFwExecutionError(
 				"cannot confirm this device's current calibration: its "
 				"target came back incomplete")
 		self._cache_target(self._credential_cache_key(credential), target_data)
+		return target_data
 
 	def _target_is_fresh(self, cache_key):
 		fetched_at = self._target_fetched_at.get(cache_key)
@@ -1209,7 +1213,8 @@ class QrmiDriver(BaseDriver):
 			"backend": self._descriptor.get("provider", "iqm"),
 			"metadata_supported": True,
 			"dynamic_architecture":
-				self._target().get("dynamic_quantum_architecture") or {},
+				self._read_target_past_cache().get(
+					"dynamic_quantum_architecture") or {},
 		}
 
 	def get_backend_info(self, credential=None):
