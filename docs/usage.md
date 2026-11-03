@@ -1115,11 +1115,10 @@ The shim's QRMI driver caches what a device reports for
 `QFW_QPU_TARGET_TTL_SECONDS` (default 300) of the service's environment, and 0
 reads the device every time. A recalibration reaches new backends once that
 time has passed. When a device cannot be reached, the driver keeps the last
-target it read and asks again after another TTL, except for a circuit whose calibration is required: that read
-goes past the cache, and the circuit is refused if it fails.
-`get_dynamic_backend_info` always goes past the cache, so an IQM `compile` or
-`check_isa` sees the current calibration set. An IBM target is still read
-through the cache.
+target it read and asks again after another TTL, except for a circuit whose
+calibration is required: that read goes past the cache, and the circuit is
+refused if it fails. `get_dynamic_backend_info` always goes past the cache, so
+an IQM `compile` or `check_isa` sees the current calibration set.
 
 `backend.target_kind` says what the target stands for: `device` for a device
 with its connectivity, `generic_by_design` for a QPM with no device to describe,
@@ -1164,9 +1163,8 @@ the compiler. `refresh_target=True` reads the device again first, for a backend
 that has been open across a recalibration. Braket and Pasqal devices refuse
 `compile`, because they do not take a circuit compiled ahead of time. So does a
 backend whose `target_kind` is `fallback`, rather than compile for a device it
-could not describe. A simulator's result is not marked, and neither is an IQM
-device's when its QPM cannot report the device's dynamic architecture, as when
-only QDMI is wired: that circuit compiles to `backend.target`, with a warning.
+could not describe. A simulator's result is not marked, nor is an IQM device's
+when its QPM has no QRMI to describe it; that compiles to `backend.target`.
 
 `backend.check_isa(circuits)` reads the device and raises on what the QPM would
 refuse: a circuit that is unmarked, marked for another device, compiled for a
@@ -1194,15 +1192,13 @@ not take a marked circuit refuses it at submission; pass
 `isa_policy="generic"` to `run` to send it as a generic circuit instead. See the
 front-end contract for what a QPM checks.
 
-A marked circuit with parameters is bound on the client before it is sent, by
-parameter name, from the `param_values` passed to `run`. A name the compiler
-optimised away is ignored, and a parameter left without a value is refused. A
-generic circuit's `param_values` still travel beside it, as before.
+`run` binds a marked circuit's parameters from `param_values` before sending
+it, and refuses one left without a value.
 
 `QFwSamplerV2` and `QFwEstimatorV2` keep the marker. The estimator adds basis
 changes to each circuit, translated to the backend's gates, and a QPM still
-refuses the result if they are not native there. A compiled circuit may have
-moved its qubits, so lay the observables out the same way first:
+refuses the result if they are not native there. Lay observables out the way
+the circuit was compiled:
 
 ```python
 compiled = backend.compile(circuit)
@@ -1210,10 +1206,8 @@ observables = observables.apply_layout(compiled.layout)
 job = QFwEstimatorV2(backend=backend).run([(compiled, observables)])
 ```
 
-`run(..., calibration_set_id=...)` runs a circuit on a chosen IQM calibration
-set. Only an IQM device run through QRMI can; every other QPM, QDMI included,
-refuses it at submission. A marked circuit compiled for another calibration set
-is still refused under `require`.
+`run(..., calibration_set_id=...)` runs on a chosen IQM calibration set. Only
+an IQM device run through QRMI can; other QPMs refuse it at submission.
 
 `backend.telemetry` is also usable on its own. `get_backend_info()`,
 `get_device_info()`, `get_coupling_graph()`, `get_calibration_snapshot()` and

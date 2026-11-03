@@ -619,10 +619,9 @@ than QPY, and `compilation_options`.
 Before submitting, the drivers refuse a gate the device does not have on those
 qubits, and apply the device's `calibration-policy`.
 
-A marked circuit arrives bound: the client assigns its `param_values` before
-sending it, so no driver needs to bind one. `info["calibration_set_id"]` asks
-for a run on that calibration set. A QPM refuses it at submission unless it can
-honour it, which only the shim's IQM device run through QRMI does today.
+The client binds a marked circuit's parameters before sending it. A QPM refuses
+`info["calibration_set_id"]` at submission unless it can run on that set; today
+only the shim's IQM device through QRMI can.
 
 ## 14. Strategic positioning: implementation-first to a specification
 
