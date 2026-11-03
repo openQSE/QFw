@@ -35,6 +35,7 @@ ISA_POLICY_GENERIC = "generic"
 QFW_INFO_PASSTHROUGH_OPTIONS = (
 	"param_values",
 	"compilation_options",
+	"calibration_set_id",
 )
 
 

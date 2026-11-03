@@ -631,10 +631,16 @@ def test_qfw_job_forwards_each_passthrough_option_on_its_own(monkeypatch):
 	assert "param_values" not in only_compile
 
 
+def test_qfw_job_forwards_the_calibration_set_to_run_on(monkeypatch):
+	payload = _submit_with_options(monkeypatch, calibration_set_id="cal-1")
+	assert payload["calibration_set_id"] == "cal-1"
+
+
 def test_qfw_job_leaves_passthrough_options_out_when_unset(monkeypatch):
 	payload = _submit_with_options(monkeypatch)
 	assert "param_values" not in payload
 	assert "compilation_options" not in payload
+	assert "calibration_set_id" not in payload
 
 
 def test_qfw_job_leaves_passthrough_options_out_when_none(monkeypatch):
