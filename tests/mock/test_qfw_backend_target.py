@@ -561,7 +561,7 @@ def test_target_is_generic_when_the_telemetry_call_fails(monkeypatch, caplog):
 		backend_info=FAKE_IQM_INFO,
 		failures={"get_backend_info": RuntimeError("binding unavailable")})
 	backend = _backend(monkeypatch, telemetry, provider="fake-iqm",
-			   num_qubits=16)
+			   qpm_properties={"hardware": True}, num_qubits=16)
 
 	with caplog.at_level(logging.WARNING):
 		target = backend.target
@@ -572,6 +572,18 @@ def test_target_is_generic_when_the_telemetry_call_fails(monkeypatch, caplog):
 	assert backend.target_kind == "fallback"
 	assert "binding unavailable" in caplog.text
 	assert "generic 16-qubit QFw target" in caplog.text
+
+
+def test_a_simulator_whose_telemetry_call_fails_is_generic_by_design(
+		monkeypatch):
+	telemetry = FakeTelemetryAPI(
+		failures={"get_backend_info": RuntimeError("binding unavailable")})
+	backend = _backend(
+		monkeypatch, telemetry, qpm_properties={"simulator": True})
+
+	backend.target
+
+	assert backend.target_kind == "generic_by_design"
 
 
 def test_target_is_generic_without_a_managed_binding(monkeypatch, caplog):

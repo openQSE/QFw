@@ -327,7 +327,7 @@ class QFwBackend(BackendV2):
 			info = telemetry.get_backend_info() or {}
 			target = target_from_telemetry(telemetry, backend_info=info)
 		except Exception as exc:
-			self._target_kind = TARGET_FALLBACK
+			self._target_kind = self._kind_without_a_device()
 			return self._generic_target(
 				f"the QPM's device telemetry failed: {exc}", logging.warning)
 		self._backend_info = info
