@@ -62,6 +62,29 @@ def test_ibm_compiles_to_the_target_and_passes_its_own_check():
 	profile.validate(compiled, device, _marker("ibm", None))
 
 
+def test_a_target_compile_takes_every_transpile_option():
+	profile = compile_profiles.compile_profile("ibm")
+	device = {"target": GenericBackendV2(3, seed=1).target, "backend_info": {}}
+	passes = []
+
+	profile.compile(
+		_ghz(), device, seed_transpiler=1, num_processes=1,
+		callback=lambda **kwargs: passes.append(kwargs["pass_"]))
+
+	assert passes
+
+
+def test_a_native_circuit_is_still_laid_out_as_asked():
+	profile = compile_profiles.compile_profile("ibm")
+	device = {"target": GenericBackendV2(3, seed=1).target, "backend_info": {}}
+	native, _ = profile.compile(_ghz(), device, seed_transpiler=1)
+
+	compiled, _ = profile.compile(
+		native, device, initial_layout=[2, 1, 0], seed_transpiler=1)
+
+	assert compiled.layout.initial_index_layout()[:3] == [2, 1, 0]
+
+
 def test_ibm_refuses_a_circuit_that_is_not_native():
 	profile = compile_profiles.compile_profile("ibm")
 	device = {"target": GenericBackendV2(3, seed=1).target, "backend_info": {}}

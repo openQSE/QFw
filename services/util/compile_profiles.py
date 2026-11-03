@@ -21,8 +21,8 @@ class TargetProfile:
 		return {"target": backend.target, "backend_info": backend.backend_info}
 
 	def compile(self, circuit, device, mapping=None, **options):
-		from util.ibm_transcode import compile_circuit
-		return compile_circuit(circuit, device["target"], options), None
+		from qiskit import transpile
+		return transpile(circuit, target=device["target"], **options), None
 
 	def labels_for_target(self, device):
 		return None
