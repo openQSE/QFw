@@ -690,6 +690,18 @@ def test_the_client_refuses_a_qpm_that_does_not_take_isa(
 	assert fake_qpm.submitted_payloads == []
 
 
+def test_the_client_submits_none_of_a_batch_it_would_refuse_part_of(
+		monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	job, fake_qpm = _job(monkeypatch, {}, marker=_marker())
+	job._qobj = [qfw_job.QuantumCircuit(2, name="generic"), job._qobj]
+
+	with pytest.raises(qfw_job.DEFwError, match="compiled ahead of time"):
+		job.submit()
+
+	assert fake_qpm.submitted_payloads == []
+
+
 def test_the_client_can_send_a_marked_circuit_as_generic(monkeypatch, caplog):
 	job, fake_qpm = _job(
 		monkeypatch, {}, marker=_marker(), isa_policy="generic")

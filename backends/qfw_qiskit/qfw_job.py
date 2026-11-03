@@ -192,7 +192,9 @@ class QFwJob(Job):
 		self._telemetry = None
 
 	def _run_experiment_async(self, circuit):
-		self.start_time = time.time()
+		return self._submit_experiment(self._experiment_info(circuit))
+
+	def _experiment_info(self, circuit):
 		# Validate param_values before the circuit is serialized, so a bad
 		# value fails without doing that work first.
 		param_values = self._options.get("param_values")
@@ -227,7 +229,10 @@ class QFwJob(Job):
 				info[key] = self._options[key]
 		if param_values is not None:
 			info["param_values"] = param_values
+		return info
 
+	def _submit_experiment(self, info):
+		self.start_time = time.time()
 		try:
 			context = self._execution_context()
 			with instrumentation.transport_rpc(
@@ -310,8 +315,11 @@ class QFwJob(Job):
 		start = time.time()
 		try:
 			with instrumentation.job_scope(self._telemetry):
-				for circuit in circuits:
-					cid = self._run_experiment_async(circuit)
+				# Every circuit is checked before any reaches the QPM, which
+				# this job has no way to cancel.
+				infos = [self._experiment_info(circuit) for circuit in circuits]
+				for circuit, info in zip(circuits, infos):
+					cid = self._submit_experiment(info)
 					self._cid_list.append({cid: {'exp': circuit, 'status': 0}})
 		except Exception as e:
 			self._status = JobStatus.ERROR
