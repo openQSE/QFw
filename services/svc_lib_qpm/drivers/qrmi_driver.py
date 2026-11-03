@@ -117,6 +117,9 @@ PASQAL_CAPABILITIES = frozenset({
 
 TARGET_TTL_ENV = "QFW_QPU_TARGET_TTL_SECONDS"
 DEFAULT_TARGET_TTL_SECONDS = 300
+# How long a read past the cache confirms a required calibration for the
+# circuits that follow it, so a batch is not one device read per circuit.
+REQUIRED_CALIBRATION_READ_SECONDS = 5
 
 
 def target_ttl_seconds():
@@ -370,6 +373,7 @@ class QrmiDriver(BaseDriver):
 		self._resource_locks_guard = threading.Lock()
 		self._target_cache = {}
 		self._target_fetched_at = {}
+		self._target_retry_after = {}
 		self._target_ttl_seconds = target_ttl_seconds()
 		self._jobs = JobRecords("QRMI")
 
@@ -1036,6 +1040,7 @@ class QrmiDriver(BaseDriver):
 			resource = self._resource_objs.pop(cache_key, None)
 			target = self._target_cache.pop(cache_key, None)
 			self._target_fetched_at.pop(cache_key, None)
+			self._target_retry_after.pop(cache_key, None)
 		with self._resource_locks_guard:
 			self._resource_locks.pop(cache_key, None)
 		if resource is not None:
@@ -1096,8 +1101,12 @@ class QrmiDriver(BaseDriver):
 		if marker is None or not isa.requires_calibration(
 				marker, self._descriptor.get("calibration_policy")):
 			return
-		self._read_target_past_cache(
-			getattr(source, "provider_credential", None))
+		credential = getattr(source, "provider_credential", None)
+		if self._target_read_within(
+				self._credential_cache_key(credential),
+				REQUIRED_CALIBRATION_READ_SECONDS):
+			return
+		self._read_target_past_cache(credential)
 
 	def _read_target_past_cache(self, credential=None):
 		target_data = self._read_target(credential)
@@ -1108,19 +1117,26 @@ class QrmiDriver(BaseDriver):
 		self._cache_target(self._credential_cache_key(credential), target_data)
 		return target_data
 
-	def _target_is_fresh(self, cache_key):
+	def _target_read_within(self, cache_key, seconds):
 		fetched_at = self._target_fetched_at.get(cache_key)
 		return (fetched_at is not None
-			and time.monotonic() - fetched_at < self._target_ttl_seconds)
+			and time.monotonic() - fetched_at < seconds)
+
+	def _target_is_fresh(self, cache_key):
+		retry_after = self._target_retry_after.get(cache_key)
+		return (self._target_read_within(cache_key, self._target_ttl_seconds)
+			or (retry_after is not None and time.monotonic() < retry_after))
 
 	def _cache_target(self, cache_key, target_data):
 		self._target_cache[cache_key] = target_data
 		self._target_fetched_at[cache_key] = time.monotonic()
+		self._target_retry_after.pop(cache_key, None)
 
 	def _keep_until_next_refresh(self, cache_key, cached):
 		# So a device that stays down is asked once per TTL, not per call.
 		if cache_key in self._target_cache:
-			self._target_fetched_at[cache_key] = time.monotonic()
+			self._target_retry_after[cache_key] = (
+				time.monotonic() + self._target_ttl_seconds)
 		return cached
 
 	def _static_arch(self, target):

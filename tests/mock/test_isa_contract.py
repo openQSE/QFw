@@ -504,7 +504,52 @@ def _driver_holding_a_cached_target(monkeypatch, provider, cached, **descriptor)
 	driver._resource = lambda: object()
 	driver._read_target = lambda credential=None: cached
 	assert driver._target() == cached
+	_age_reads(driver, _read_window())
 	return driver
+
+
+def _read_window():
+	from svc_lib_qpm.drivers.qrmi_driver import REQUIRED_CALIBRATION_READ_SECONDS
+	return REQUIRED_CALIBRATION_READ_SECONDS
+
+
+def _age_reads(driver, seconds):
+	driver._target_fetched_at = {
+		key: fetched_at - seconds
+		for key, fetched_at in driver._target_fetched_at.items()}
+
+
+def test_a_required_calibration_is_read_once_for_circuits_close_together(
+		monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "iqm", _iqm_target("cal-1"))
+	reads = []
+	driver._read_target = lambda credential=None: (
+		reads.append(credential) or _iqm_target("cal-1"))
+
+	for _ in range(3):
+		driver._refresh_target_when_required(_source(**_info()))
+	assert len(reads) == 1
+
+	_age_reads(driver, _read_window())
+	driver._refresh_target_when_required(_source(**_info()))
+	assert len(reads) == 2
+
+
+def test_a_cache_kept_through_a_failed_read_does_not_confirm_a_calibration(
+		monkeypatch):
+	driver = _driver_holding_a_cached_target(
+		monkeypatch, "iqm", _iqm_target("cal-1"))
+	_age_reads(driver, driver._target_ttl_seconds)
+
+	def unreachable(credential=None):
+		raise DEFwExecutionError("device unreachable")
+
+	driver._read_target = unreachable
+	driver._target()
+
+	with pytest.raises(DEFwExecutionError, match="device unreachable"):
+		driver._refresh_target_when_required(_source(**_info()))
 
 
 def test_a_required_calibration_is_read_past_the_cache(monkeypatch):

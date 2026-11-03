@@ -1116,8 +1116,8 @@ The shim's QRMI driver caches what a device reports for
 reads the device every time. A recalibration reaches new backends once that
 time has passed. When a device cannot be reached, the driver keeps the last
 target it read and asks again after another TTL, except for a circuit whose
-calibration is required: that read goes past the cache, and the circuit is
-refused if it fails. `get_dynamic_backend_info` always goes past the cache, so
+calibration is required: that read goes past the cache, unless one did in the
+last 5 seconds, and the circuit is refused if it fails. `get_dynamic_backend_info` always goes past the cache, so
 an IQM `compile` or `check_isa` sees the current calibration set.
 
 `backend.target_kind` says what the target stands for: `device` for a device

@@ -368,7 +368,7 @@ def test_a_reservation_ending_during_a_failed_refresh_still_serves_the_target(
 	driver._read_target = evicted_while_reading
 
 	assert driver._target() == good
-	assert cache_key not in driver._target_fetched_at
+	assert cache_key not in driver._target_retry_after
 
 
 def test_a_device_that_stays_down_is_asked_once_per_ttl(monkeypatch):
