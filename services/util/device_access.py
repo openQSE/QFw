@@ -284,8 +284,17 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 			selected[key] = device[key]
 	if "execution-owner" in device:
 		selected["execution_owner"] = device["execution-owner"]
+	_check_calibration_policy(device_id, path, device.get("calibration-policy"))
 
 	return selected
+
+
+def _check_calibration_policy(device_id, path, policy):
+	from util.isa import CALIBRATION_POLICIES
+	if policy is not None and policy not in CALIBRATION_POLICIES:
+		raise DEFwExecutionError(
+			f"QPU device {device_id!r} in {path}: calibration-policy must be "
+			f"one of {', '.join(CALIBRATION_POLICIES)}, not {policy!r}")
 
 
 def _credential_provider_config(device_config, provider_ref):

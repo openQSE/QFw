@@ -212,6 +212,20 @@ def test_device_access_carries_the_calibration_policy(monkeypatch):
 	assert selected["calibration-policy"] == "current"
 
 
+@pytest.mark.parametrize("policy", ["required", {"set-id": "require"}])
+def test_device_access_refuses_a_calibration_policy_it_does_not_know(
+		monkeypatch, policy):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	device = {
+		"provider": "iqm", "url": "https://example.org/",
+		"credential-db": "creds.json", "calibration-policy": policy,
+	}
+
+	with pytest.raises(DEFwExecutionError, match="calibration-policy"):
+		device_access.select_qpu(
+			{"qpus": {DEVICE: device}}, "cfg.yaml", provider="iqm")
+
+
 # --- the QPMs ----------------------------------------------------------------
 
 def _base_qpm():
