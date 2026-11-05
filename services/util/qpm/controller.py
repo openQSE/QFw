@@ -1217,6 +1217,7 @@ class QPMTargetController:
 					     operation="execution"):
 		reservation_id = normalize_reservation_id(
 			request_context.reservation_id)
+		deliveries = []
 		try:
 			with self.lock:
 				reservation = get_reservation(
@@ -1226,22 +1227,26 @@ class QPMTargetController:
 						f"reservation is closing: "
 						f"reservation_id={reservation_id}")
 				self._require_reservation_active(reservation, operation)
-				self._require_reservation_not_expired(reservation)
+				self._require_reservation_not_expired(
+					reservation, deliveries)
 				self._require_reservation_matches_context_locked(
 					reservation, request_context)
 				return reservation
 		finally:
+			self._dispatch_completion_deliveries(deliveries)
 			self._drain_provider_credential_cleanup()
 
 	def provider_credential_for_reservation(self, reservation_id,
 						operation="execution"):
 		reservation_id = normalize_reservation_id(reservation_id)
+		deliveries = []
 		try:
 			with self.lock:
 				reservation = get_reservation(
 					self.admission_context, reservation_id)
 				self._require_reservation_active(reservation, operation)
-				self._require_reservation_not_expired(reservation)
+				self._require_reservation_not_expired(
+					reservation, deliveries)
 				record = self.reservation_credentials_by_id.get(reservation_id)
 				if record is None:
 					record = self._fallback_provider_credential_locked(
@@ -1256,6 +1261,7 @@ class QPMTargetController:
 					"metadata": dict(record.get("metadata") or {}),
 				}
 		finally:
+			self._dispatch_completion_deliveries(deliveries)
 			self._drain_provider_credential_cleanup()
 
 	def attach_provider_credential(self, circuit):
@@ -1580,6 +1586,7 @@ class QPMTargetController:
 
 	def retry_pending_capacity(self, reservation_id=None):
 		results = []
+		deliveries = []
 		with self.lock:
 			pending_items = list(self.pending_capacity.items())
 			for qtask_id, pending in pending_items:
@@ -1592,7 +1599,7 @@ class QPMTargetController:
 					continue
 				try:
 					self._require_pending_capacity_reservation_valid_locked(
-						qtask_id, pending, runtime)
+						qtask_id, pending, runtime, deliveries)
 				except QPMAdmissionValidationError as error:
 					results.append(
 						self._reject_pending_capacity_locked(
@@ -1644,11 +1651,12 @@ class QPMTargetController:
 					"status": "accepted",
 					"decision": dict(committed),
 				})
+		self._dispatch_completion_deliveries(deliveries)
 		self._drain_provider_credential_cleanup()
 		return results
 
 	def _require_pending_capacity_reservation_valid_locked(
-			self, qtask_id, pending, runtime):
+			self, qtask_id, pending, runtime, deliveries):
 		reservation_id = pending.get("reservation_id")
 		if reservation_id is None:
 			raise QPMAdmissionValidationError(
@@ -1672,7 +1680,7 @@ class QPMTargetController:
 				f"error={error}") from error
 		self._require_reservation_active(
 			reservation, "pending capacity retry")
-		self._require_reservation_not_expired(reservation)
+		self._require_reservation_not_expired(reservation, deliveries)
 		return reservation
 
 	def _reject_pending_capacity_locked(self, qtask_id, pending, runtime,
@@ -3599,7 +3607,7 @@ class QPMTargetController:
 			f"invalid reservation for {operation}: "
 			f"state={reservation.get('state')}")
 
-	def _require_reservation_not_expired(self, reservation):
+	def _require_reservation_not_expired(self, reservation, deliveries):
 		expires_at_ns = reservation.get("expires_at_ns")
 		if not expires_at_ns:
 			return
@@ -3607,7 +3615,9 @@ class QPMTargetController:
 		if expires_at_ns > now_ns:
 			return
 		reservation_id = reservation.get("reservation_id")
-		self._close_reservation(reservation_id, "expire", now_ns=now_ns)
+		self._close_reservation(
+			reservation_id, "expire", now_ns=now_ns,
+			deliveries=deliveries)
 		raise QPMAdmissionValidationError(
 			f"expired reservation: reservation_id={reservation_id}")
 
