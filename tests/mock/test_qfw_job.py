@@ -23,6 +23,10 @@ class FakeBackend:
 		return self._statevector
 
 	def log_statistics(self, result):
+		timing = ("creation_time", "launch_time", "resources_consumed_time",
+			"exec_time", "completion_time", "cq_enqueue_time",
+			"cq_dequeue_time")
+		assert all(key in result for key in timing), result
 		self.logged_results.append(result)
 
 	def dump_statistics(self):

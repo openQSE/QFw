@@ -26,6 +26,10 @@ EXECUTION_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
+# A task the QPM ended itself, failed or cancelled, without running it: its
+# completion carries no timing.
+QPM_ENDED_OUTCOMES = ("FAILED", "CANCELLED")
+
 # Run options forwarded to the QPM through the job's info dict. param_values
 # is keyed by parameter name first (see normalize_param_values).
 QFW_INFO_PASSTHROUGH_OPTIONS = (
@@ -390,7 +394,7 @@ class QFwJob(Job):
 		failures = [
 			qr["res"] for qr in qpm_results
 			if qr["res"].get("rc") not in (None, 0)
-			or qr["res"].get("outcome") in ("FAILED", "CANCELLED")
+			or qr["res"].get("outcome") in QPM_ENDED_OUTCOMES
 		]
 		if not failures:
 			return
@@ -442,7 +446,8 @@ class QFwJob(Job):
 			raise DEFwError("no QPM circuit results were received")
 
 		for qr in qpm_results:
-			self._backend.log_statistics(qr['res'])
+			if qr['res'].get("outcome") not in QPM_ENDED_OUTCOMES:
+				self._backend.log_statistics(qr['res'])
 		try:
 			self._raise_for_failed_results(qpm_results)
 		except JobError:
