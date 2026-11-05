@@ -9,6 +9,7 @@ class FakeQPM:
 		self.registrations = []
 		self.unregistrations = []
 		self.submitted_payloads = []
+		self.cancelled = []
 		self.shutdown_called = False
 		self._registration_id_next = 1
 		self._live_registration_ids = set()
@@ -43,6 +44,10 @@ class FakeQPM:
 		if self.cids:
 			return self.cids.pop(0)
 		return f"cid-{len(self.submitted_payloads)}"
+
+	def cancel_task(self, cid=None, **kwargs):
+		self.cancelled.append(dict(kwargs, cid=cid))
+		return {"outcome": "CANCELLED", "cid": cid}
 
 	def shutdown(self):
 		self.shutdown_called = True

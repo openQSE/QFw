@@ -5,7 +5,7 @@ import select
 from collections.abc import Mapping
 
 from qiskit import QuantumCircuit
-from qiskit.providers import JobError, JobV1 as Job
+from qiskit.providers import JobError, JobTimeoutError, JobV1 as Job
 from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
@@ -283,19 +283,21 @@ class QFwJob(Job):
 		return
 
 	def _result_reader(self, cid_list):
-		circuit_run_timeout = self._backend.COMPLETION_TIMEOUT_SEC
 		total_circ = len(self._cid_list)
-		total_circuits_completed = 0
 		results = []
 		qpm_results = []
 
 		start = time.time()
+		deadline = _result_deadline(start, self._options.get("timeout"))
 		logging.defw_app(f"result reader start time: {start}")
 		event_fd = self._qpm_event_api.fileno()
 		expected_cids = {list(entry.keys())[0] for entry in cid_list}
 		completed_cids = set()
-		while time.time() - start < circuit_run_timeout and total_circuits_completed != total_circ:
-			readable, _, _ = select.select([event_fd], [], [], 1)
+		while len(completed_cids) != total_circ:
+			if deadline is not None and time.time() >= deadline:
+				self._time_out(expected_cids - completed_cids)
+			readable, _, _ = select.select(
+				[event_fd], [], [], _select_wait(deadline))
 			if len(readable) > 0 and event_fd not in readable:
 				raise DEFwError("Something wrong with select")
 			if len(readable) > 0:
@@ -308,10 +310,9 @@ class QFwJob(Job):
 					instrumentation.record_transport_return(
 						payload, labels=self._job_labels())
 					completed_cids.add(cid)
-					total_circuits_completed += 1
 
 		logging.defw_app(
-			f"Result reader thread ending. Events: {total_circuits_completed}."
+			f"Result reader thread ending. Events: {len(completed_cids)}."
 			f" Expected: {total_circ}. Time: {time.time()}")
 		for r in results:
 			res = r.get_event()
@@ -325,6 +326,23 @@ class QFwJob(Job):
 			qpm_results.append({'cid': res['cid'], 'res': res, 'exp': exp})
 
 		return qpm_results
+
+	def _time_out(self, missing_cids):
+		if self._options.get("cancel_on_timeout"):
+			context = self._execution_context()
+			for cid in missing_cids:
+				self._qpm.cancel_task(
+					cid=cid, reservation_id=context["reservation_id"],
+					token=context.get("token"), reason="job-timeout")
+		self._status = JobStatus.ERROR
+		missing = ", ".join(
+			f"{cid} ({entry[cid]['exp'].name})"
+			for entry in self._cid_list for cid in entry
+			if cid in missing_cids)
+		raise JobTimeoutError(
+			f"QFw job {self._job_id} timed out after "
+			f"{self._options['timeout']}s with {len(missing_cids)} of "
+			f"{len(self._cid_list)} circuit(s) unfinished: {missing}")
 
 	def _get_memory_from_counts(self, counts):
 		m = []
@@ -423,16 +441,6 @@ class QFwJob(Job):
 		if not qpm_results:
 			raise DEFwError("no QPM circuit results were received")
 
-		if not qpm_results:
-			# _result_reader returns early when it times out; with no completed
-			# circuits there is nothing to assemble and the per-circuit `out`
-			# referenced below (and in the job-level result) never binds. Fail
-			# loudly with the cause instead of raising a bare NameError.
-			raise DEFwError(
-				f"QFw job {self._job_id} returned no circuit results within "
-				f"{self._backend.COMPLETION_TIMEOUT_SEC}s "
-				f"(expected {len(self._cid_list)} circuit(s))")
-
 		for qr in qpm_results:
 			self._backend.log_statistics(qr['res'])
 		try:
@@ -517,6 +525,18 @@ class QFwJob(Job):
 
 	def options(self):
 		return self._options
+
+
+def _result_deadline(start, timeout):
+	if timeout is None:
+		return None
+	return start + float(timeout)
+
+
+def _select_wait(deadline):
+	if deadline is None:
+		return 1
+	return min(1, max(0, deadline - time.time()))
 
 
 def _async_response_cid(response):
