@@ -274,12 +274,14 @@ class QFwBackend(BackendV2):
 
 	def _build_target(self):
 		generic = f"the generic {self._num_qubits}-qubit QFw target"
+		instructions = (getattr(self.qpm, "qpm_properties", None)
+			or {}).get("instructions")
 		telemetry = self.telemetry
 		if telemetry is None:
 			reason = "the QPM connection has no telemetry binding"
 			logging.info(f"QFw backend: {reason}; using {generic}")
 			self._target_source = f"generic: {reason}"
-			return build_qfw_target(self._num_qubits)
+			return build_qfw_target(self._num_qubits, instructions)
 		try:
 			info = telemetry.get_backend_info() or {}
 			target = target_from_telemetry(telemetry, backend_info=info)
@@ -287,13 +289,13 @@ class QFwBackend(BackendV2):
 			reason = f"the QPM's device telemetry failed: {exc}"
 			logging.warning(f"QFw backend: {reason}; using {generic}")
 			self._target_source = f"generic: {reason}"
-			return build_qfw_target(self._num_qubits)
+			return build_qfw_target(self._num_qubits, instructions)
 		if target is None:
 			name = info.get("backend") or self._provider or "default"
 			reason = f"QPM {name} reports no device metadata"
 			logging.info(f"QFw backend: {reason}; using {generic}")
 			self._target_source = f"generic: {reason}"
-			return build_qfw_target(self._num_qubits)
+			return build_qfw_target(self._num_qubits, instructions)
 		self._target_source = f"device: {target.description}"
 		logging.info(f"QFw backend: {target.description}: "
 			     f"{target.num_qubits} qubits, "
