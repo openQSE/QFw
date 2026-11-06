@@ -58,14 +58,14 @@ class Profile:
 
 
 def _backend(monkeypatch, profile=None, properties=None, telemetry=None):
-	import qfw_qiskit.qfw_simulator as qfw_simulator
+	import qfw_qiskit.qfw_compile as qfw_compile
 	if properties is None:
 		properties = PUBLISHED
 	backend = target_tests._backend(
 		monkeypatch, telemetry, qpm_properties=dict(properties))
 	if profile is not None:
 		monkeypatch.setattr(
-			qfw_simulator, "compile_profile", lambda provider: profile)
+			qfw_compile, "compile_profile", lambda provider: profile)
 	return backend
 
 

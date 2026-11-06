@@ -28,8 +28,8 @@ def test_the_compile_profiles_load_without_defw():
 	assert result.returncode == 0, result.stderr
 
 
-def test_a_compiled_circuit_can_be_marked_without_defw():
+def test_a_circuit_can_be_compiled_and_marked_without_defw():
 	result = _runs_without_defw(
-		"import qfw_qiskit.qfw_target", "from qfw_qiskit import mark_isa")
+		"import qfw_qiskit.qfw_compile", "from qfw_qiskit import mark_isa")
 
 	assert result.returncode == 0, result.stderr
