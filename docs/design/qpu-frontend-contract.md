@@ -595,7 +595,9 @@ circuit's metadata and so survives a QPY file passed between jobs, and the
 client lifts it into `info["isa"]`, the only place a QPM reads it.
 `QFwBackend.compile` writes the marker after checking its result with the same
 check the QPM runs (`util/compile_profiles.py`), and `mark_isa` writes it for a
-circuit compiled some other way.
+circuit compiled some other way. A job with no QPM or DEFw compiles the same way
+from a `QFwBackend.device_snapshot()` file, through `SnapshotDevice` or
+`qfw-compile(1)`.
 
 ```json
 {"v": 1, "provider": "iqm", "device_id": "q20",

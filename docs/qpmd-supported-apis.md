@@ -73,6 +73,11 @@ status, cancellation, timing, and metadata.
 | `get_task_timing` | Return provider and QPM timing for a reservation-scoped task. |
 | `get_task_metadata` | Return permitted lifecycle, scheduler, provider, and result metadata for a reservation-scoped task. |
 
+A run's `info` may carry `isa`, the marker of a circuit compiled ahead of time
+for this QPM's device, and `calibration_set_id`, the calibration to run on. A
+QPM refuses either at submission unless it declares it can honour it; see the
+front-end contract.
+
 ## Telemetry And Discovery
 
 Telemetry and discovery are important because QPMd must expose what the target
