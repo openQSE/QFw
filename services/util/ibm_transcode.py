@@ -7,7 +7,7 @@
 import json
 import logging
 
-from defw_exception import DEFwExecutionError
+from util.execution_error import DEFwExecutionError
 
 
 def _circuit_is_isa(circuit, target):

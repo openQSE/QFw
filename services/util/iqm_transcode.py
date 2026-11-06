@@ -12,7 +12,7 @@
 # dynamic_architecture is the IQM dynamic quantum architecture (a dict or an
 # iqm-client object; to_jsonable coerces it).
 
-from defw_exception import DEFwExecutionError
+from util.execution_error import DEFwExecutionError
 from dataclasses import asdict, is_dataclass
 from uuid import UUID
 import logging

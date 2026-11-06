@@ -2,12 +2,7 @@
 # holds no provider branches, so what differs between providers is here.
 
 from util import isa
-
-# A compile job may run with no DEFw.
-try:
-	from defw_exception import DEFwExecutionError
-except ImportError:
-	DEFwExecutionError = RuntimeError
+from util.execution_error import DEFwExecutionError
 
 
 class DeviceNotDescribed(DEFwExecutionError):

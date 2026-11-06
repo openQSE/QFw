@@ -2,11 +2,7 @@
 
 import logging
 
-# A compile job may run with no DEFw.
-try:
-	from defw_exception import DEFwExecutionError
-except ImportError:
-	DEFwExecutionError = RuntimeError
+from util.execution_error import DEFwExecutionError
 
 ISA_MARKER_VERSION = 1
 

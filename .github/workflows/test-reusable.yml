@@ -76,7 +76,7 @@ jobs:
       # together. These tests are what does.
       run: python -m pip install -c setup/requirements.txt qiskit qiskit_aer qiskit-ibm-runtime iqm-client iqm-pulse iqm-station-control-client pyyaml psutil pytest
     - name: Test IQM transpilation, device targets and circuit formats
-      run: python -m pytest -q tests/qiskit/test_iqm_transpile.py tests/qiskit/test_qfw_target.py tests/qiskit/test_circuit_format_client.py tests/qiskit/test_circuit_payload_qpy.py tests/qiskit/test_isa_circuits.py tests/qiskit/test_compile_profiles.py
+      run: python -m pytest -q tests/qiskit/test_iqm_transpile.py tests/qiskit/test_qfw_target.py tests/qiskit/test_circuit_format_client.py tests/qiskit/test_circuit_payload_qpy.py tests/qiskit/test_isa_circuits.py tests/qiskit/test_compile_profiles.py tests/qiskit/test_compile_without_defw.py
 
   ci-resolve:
     name: ci-resolve (requirements resolve)
