@@ -338,6 +338,7 @@ def test_qiskit_job_is_the_trace_root_and_counts_itself(monkeypatch, recording):
 	assert root.attributes["qfw.backend.kind"] == "fake-iqm"
 	assert root.attributes["qfw.outcome"] == "completed"
 	assert prepare.attributes["qfw.circuit.num_qubits"] == 2
+	assert prepare.attributes["qfw.circuit.stage"] == "generic"
 	assert prepare.attributes["qfw.circuit.format"] == "openqasm2"
 	assert prepare.attributes["qfw.circuit.payload_bytes"] == len(
 		"OPENQASM 2.0;")
@@ -354,6 +355,18 @@ def test_qiskit_job_is_the_trace_root_and_counts_itself(monkeypatch, recording):
 	assert count[1].value == 1
 	# The transport extension is off unless asked for: no span, no metric.
 	assert recording.points("qfw.transport.duration") == []
+
+
+def test_compiling_ahead_of_time_is_a_trace_of_its_own(monkeypatch, recording):
+	from tests.mock import test_compile_api as compile_tests
+	backend = compile_tests._backend(monkeypatch, compile_tests.Profile())
+
+	backend.compile([compile_tests.Circuit(), compile_tests.Circuit()])
+
+	(span,) = recording.spans_by_name()["qfw.app.compile"]
+	assert span.parent is None
+	assert span.attributes["qfw.app.circuits"] == 2
+	assert span.attributes["qfw.app.compiler"] == "qiskit"
 
 
 def test_failed_submission_closes_the_job_as_failed(monkeypatch, recording):

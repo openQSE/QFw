@@ -8,6 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from qiskit import QuantumCircuit
 
+from util import instrumentation
 from util.compile_profiles import DeviceNotDescribed, compile_profile
 from util.execution_error import DEFwExecutionError
 from util.isa import check_calibration, check_device, make_marker, read_marker
@@ -86,6 +87,11 @@ class DeviceCompiler:
 		if compiler not in self.COMPILERS:
 			raise ValueError(
 				f"unknown compiler '{compiler}'; expected 'qiskit' or 'mqt'")
+		count = 1 if isinstance(circuits, QuantumCircuit) else len(circuits)
+		with instrumentation.app_compile(count, compiler):
+			return self._compile(circuits, compiler, refresh_target, kwargs)
+
+	def _compile(self, circuits, compiler, refresh_target, kwargs):
 		if refresh_target:
 			self._refresh_target()
 		profile = compile_profile(self._device_provider())

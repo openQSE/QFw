@@ -884,6 +884,39 @@ def test_the_client_sends_a_generic_circuits_values_alongside_it(monkeypatch):
 	assert fake_qpm.submitted_payloads[0]["param_values"] == {"theta": 0.5}
 
 
+def _result_metadata(monkeypatch, marker, qhw_result):
+	import qfw_qiskit.qfw_job as qfw_job
+	from tests.mock.fakes import make_result_event
+	from tests.mock.test_qfw_job import FakeBackend
+	job, _ = _job(
+		monkeypatch, {"circuit_stages": STAGES}, marker=marker,
+		seed_simulator=1)
+	job._backend = FakeBackend()
+	job._qpm_event_api = FakeEventAPI(events=[make_result_event(
+		"cid-isa", result={"counts": {"00": 1}, "qhw_result": qhw_result})],
+		fd=42)
+	monkeypatch.setattr(
+		qfw_job.select, "select", lambda r, w, x, t: (r, [], []))
+	job.submit()
+	return job.result().data["results"][0]["data"]["metadata"]
+
+
+def test_a_marked_circuits_result_names_both_calibrations(monkeypatch):
+	metadata = _result_metadata(
+		monkeypatch, _marker(),
+		{"schema": "qhw-result-v1", "calibration": {"id": "cal-2"}})
+
+	assert metadata["calibration"] == {"compiled": "cal-1", "executed": "cal-2"}
+
+
+def test_a_generic_circuits_result_names_no_calibration(monkeypatch):
+	metadata = _result_metadata(
+		monkeypatch, None,
+		{"schema": "qhw-result-v1", "calibration": {"id": "cal-2"}})
+
+	assert "calibration" not in metadata
+
+
 def test_the_client_submits_none_of_a_batch_it_would_refuse_part_of(
 		monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job

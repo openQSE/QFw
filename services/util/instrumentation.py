@@ -52,6 +52,7 @@ except Exception:  # the package is optional, QFw runs without it
 # Span names.
 SPAN_APP_JOB = "qfw.app.job"
 SPAN_APP_PREPARE = "qfw.app.prepare"
+SPAN_APP_COMPILE = "qfw.app.compile"
 SPAN_QPM_RECEIVE = "qfw.qpm.receive"
 SPAN_QPM_TRANSPILE = "qfw.qpm.transpile"
 SPAN_QPM_QUEUE = "qfw.qpm.queue"
@@ -88,6 +89,8 @@ ATTR_RESERVATION_ID = "qfw.reservation.id"
 ATTR_CIRCUITS = "qfw.app.circuits"
 ATTR_SHOTS = "qfw.circuit.shots"
 ATTR_CIRCUIT_FORMAT = "qfw.circuit.format"
+ATTR_CIRCUIT_STAGE = "qfw.circuit.stage"
+ATTR_COMPILER = "qfw.app.compiler"
 ATTR_PAYLOAD_BYTES = "qfw.circuit.payload_bytes"
 ATTR_VENDOR_JOB_ID = "qfw.vendor.job_id"
 ATTR_VENDOR_QUEUE_POSITION = "qfw.vendor.queue_position"
@@ -630,7 +633,7 @@ def end_job(job, outcome, error=None):
 
 
 @contextlib.contextmanager
-def app_prepare(circuit):
+def app_prepare(circuit, stage=None):
 	"""qfw.app.prepare around encoding one circuit for the QPM."""
 	if not enabled():
 		yield None
@@ -638,7 +641,27 @@ def app_prepare(circuit):
 	with _telemetry.tracer().start_as_current_span(
 			SPAN_APP_PREPARE, record_exception=False,
 			set_status_on_exception=False) as span:
-		_set(span, {ATTR_NUM_QUBITS: _int(getattr(circuit, "num_qubits", None))})
+		_set(span, {
+			ATTR_NUM_QUBITS: _int(getattr(circuit, "num_qubits", None)),
+			ATTR_CIRCUIT_STAGE: stage,
+		})
+		try:
+			yield span
+		except BaseException as error:
+			_mark_error(span, error)
+			raise
+
+
+@contextlib.contextmanager
+def app_compile(num_circuits, compiler):
+	"""qfw.app.compile around compiling circuits ahead of time."""
+	if not enabled():
+		yield None
+		return
+	with _telemetry.tracer().start_as_current_span(
+			SPAN_APP_COMPILE, record_exception=False,
+			set_status_on_exception=False) as span:
+		_set(span, {ATTR_CIRCUITS: _int(num_circuits), ATTR_COMPILER: compiler})
 		try:
 			yield span
 		except BaseException as error:

@@ -1171,6 +1171,10 @@ refuse: a circuit that is unmarked, marked for another device, compiled for a
 calibration the device's policy will not run, or not native to the device as it
 stands. Call it first in a run job, before a long queue wait is spent on it.
 
+A marked circuit's result metadata has `calibration`: the set it was
+`compiled` for and the one the device reports it `executed` on, which is `None`
+when the device does not say.
+
 `backend.device_snapshot()` returns the QPM's records of the device, with its
 provider, id and the time they were read, as plain data that can be saved as
 JSON.

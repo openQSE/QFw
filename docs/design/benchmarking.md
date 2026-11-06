@@ -638,6 +638,7 @@ Signal tiers per instrumentation point:
 | `qfw.bench.run`, `qfw.bench.iter` | yes | iteration histogram | Per-iteration latency is a headline hybrid-loop number |
 | `qfw.app.job` | yes | duration histogram, counters | End-to-end latency and throughput must survive with traces off |
 | `qfw.app.prepare` | yes | no | Per-job fixed cost, adequately characterized from sampled runs |
+| `qfw.app.compile` | yes | no | Runs before and apart from a job, often in another Slurm job, so sampled traces suffice |
 | `qfw.qpm.*` | yes | duration histogram by op | Framework overhead attribution is the Type B headline, so it must not depend on sampling |
 | `qfw.backend.*` | yes | duration histogram by op | Same, and it carries the Type A API-path comparison |
 | `qfw.transport.rpc` | flag-guarded | flag-guarded | Only meaningful while the transport is under study, and the call site must not run otherwise |
@@ -693,7 +694,8 @@ because revision 2 got both wrong:
 | `qfw.bench.run` | scenario driver | The whole benchmark run; carries run label and workload attributes |
 | `qfw.bench.iter` | scenario driver | One hybrid-algorithm iteration; attribute `qfw.bench.iter.index` |
 | `qfw.app.job` | front end (`qfw_qiskit`) | One circuit/job end to end, submission to result delivery |
-| `qfw.app.prepare` | `qfw_qiskit` | Getting the circuit into canonical submittable form: conversion to OpenQASM 3 and encoding. Payload size attribute |
+| `qfw.app.prepare` | `qfw_qiskit` | Getting the circuit into canonical submittable form: conversion to OpenQASM 3 and encoding. Payload size attribute, and `qfw.circuit.stage` = `generic` \| `isa` |
+| `qfw.app.compile` | `qfw_qiskit` | Compiling circuits ahead of time for one device, a trace of its own. Attributes `qfw.app.circuits` and `qfw.app.compiler` |
 | `qfw.qpm.receive` | QPM service | Job arrival and admission at the QPM |
 | `qfw.qpm.transpile` | QPM service, from inside its driver | QFw-side transpilation or transcoding into the provider's program; pre/post circuit-statistics attributes |
 | `qfw.qpm.queue` | QPM service | Time queued inside QFw before dispatch |

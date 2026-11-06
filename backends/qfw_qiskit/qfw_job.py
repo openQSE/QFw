@@ -12,7 +12,7 @@ from qiskit.result import Result
 from defw_exception import DEFwError
 from util.circuit_payload import QPY_FORMATS, encode_qiskit_circuit
 from util import instrumentation
-from util.isa import STAGE_ISA
+from util.isa import STAGE_GENERIC, STAGE_ISA
 from util.qpm.statevector import (
 	decode_statevector_payload,
 	statevector_payload_size_summary,
@@ -63,6 +63,18 @@ def normalize_param_values(param_values):
 				f"param_values names parameter {name!r} more than once")
 		normalized[name] = value
 	return normalized
+
+
+def calibration_metadata(marker, qhw_result):
+	"""The calibration a marked circuit was compiled for and the one the
+	device reports it ran on, which is None when the device does not say."""
+	if marker is None:
+		return None
+	executed = ((qhw_result or {}).get("calibration") or {}).get("id")
+	return {
+		"compiled": (marker.get("calibration") or {}).get("value"),
+		"executed": executed,
+	}
 
 
 def bind_marked_circuit(circuit, param_values):
@@ -226,9 +238,10 @@ class QFwJob(Job):
 			"num_shots": self.options()["shots"],
 			"compiler": "staq",
 		}
+		stage = STAGE_GENERIC if marker is None else STAGE_ISA
 		# Serialize in the best format this QPM says it reads. A QPM that
 		# declares nothing gets OpenQASM 2 in info["qasm"], exactly as before.
-		with instrumentation.app_prepare(circuit) as prepare:
+		with instrumentation.app_prepare(circuit, stage) as prepare:
 			info.update(
 				encode_qiskit_circuit(circuit, self._declared_properties()))
 			instrumentation.describe_payload(prepare, info)
@@ -513,6 +526,10 @@ class QFwJob(Job):
 			output = res.get("result", {})
 			counts, statevector, metadata = self._split_result_payload(
 				output, cid=res.get("cid"))
+			calibration = calibration_metadata(
+				get_isa_marker(qr['exp']), metadata.get("qhw_result"))
+			if calibration is not None:
+				metadata["calibration"] = calibration
 
 			out = {
 				"counts": counts,
