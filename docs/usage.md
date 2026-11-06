@@ -334,6 +334,30 @@ directly.
 | `QFW_GROUP_0_NODELIST`, `QFW_GROUP_1_NODELIST`, `QFW_GROUPS` | Normalized application and quantum-service placement derived from the Slurm allocation. |
 | `QFW_RESERVATION_ID` | Reservation context supplied to an application by a trusted Slurm/site launcher or by the example driver. It is not a user credential. |
 
+These values describe one run, so a process inherits them only by mistake,
+for example a job submitted from inside another run, since `sbatch` exports
+the submitter's environment by default. `qfw-setup` prepares a new run and
+ignores them, except `QFW_RESERVATION_ID`, and names what it ignored on
+standard error. `qfw-srun` takes them from its run's state. A `QFW_RUN_ID` or
+`QFW_DIRECTORY_SERVICE_INFO` that arrives with a `QFW_RUN_TMP_PATH` belongs to
+that earlier run, so `qfw-setup` ignores those as well.
+
+`qfw-srun`, `qfw-status` and `qfw-teardown` find the run through
+`QFW_RUN_TMP_PATH` when it is set, and otherwise through the `current` marker
+below `QFW_RUN_BASE_DIR`. They use `QFW_RUN_TMP_PATH` only for a run prepared
+in the same Slurm job, or outside Slurm when they run outside Slurm. For any
+other run they say so on standard error and fall back to the marker.
+
+DEFw describes the process it runs in with `DEFW_AGENT_NAME`,
+`DEFW_AGENT_TYPE`, `DEFW_SHELL_TYPE`, `DEFW_LISTEN_PORT`, `DEFW_TELNET_PORT`,
+`DEFW_PARENT_ADDR`, `DEFW_PARENT_HOSTNAME`, `DEFW_PARENT_NAME`,
+`DEFW_PARENT_PORT`, `DEFW_DISABLE_DIRSVC`, `DEFW_LOG_DIR` and
+`DEFW_ONLY_LOAD_MODULE`. Importing DEFw writes placeholders for them into the
+importing process's environment, so a workflow manager that uses a QFw client
+and then calls `sbatch` passes them to its jobs. QFw sets these variables for
+the application and for every service it starts, and ignores inherited values.
+DEFw's installation paths and log levels pass through unchanged.
+
 Example-only controls such as `QFW_RUN_ALL_BACKEND` are documented with their
 wrappers in [examples/README.md](../examples/README.md). Provider credentials
 are service configuration and must not be placed in these application runtime
@@ -360,7 +384,7 @@ services they start. A running daemon does not pick up a change; restart it.
 | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` (SDK default) | A standard OpenTelemetry variable. `delta` makes each export carry only what happened since the previous one, which suits short-lived clients. |
 | `DEFW_LOG_LEVEL` | `error` | DEFw runtime log level: `error`, `debug`, `message`, or `all`. An unrecognized value falls back to `error`. |
 | `DEFW_PY_LOGLEVEL` | `critical` for applications and the directory service, `debug,DEFW_ALL` for QPM services | Python logging selection for DEFw's per-process log file: comma-separated standard level names and DEFw categories (`DEFW_CORE`, `DEFW_WORKER`, `DEFW_SERVICE`, `DEFW_APP`, `DEFW_RPC`, `DEFW_STACKTRACE`, `DEFW_ALL`). This selects what the file keeps; `QFW_TELEMETRY_LOGS` selects what is exported, and QFw's own loggers export at that level whatever this is set to. |
-| `DEFW_LOG_DIR` | The run's log directory | Directory of DEFw's per-process log files. `qfw-setup` and the service launcher point it at the run's log directories; DEFw's own fallback is `/tmp/<agent name>`. |
+| `DEFW_LOG_DIR` | The run's log directory | Directory of DEFw's per-process log files. `qfw-srun` and the service launcher point it at the run's log directories, `<run dir>/application/logs` for the application, and ignore an inherited value; DEFw's own fallback is `/tmp/<agent name>`. |
 
 A service's two DEFw levels can also be set without touching the shared
 environment. The launcher resolves each of them in this order:

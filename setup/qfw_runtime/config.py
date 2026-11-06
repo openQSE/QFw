@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import socket
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -25,6 +26,49 @@ CALLER_ENVIRONMENT_KEYS = (
     "VIRTUAL_ENV",
     "VIRTUAL_ENV_PROMPT",
 )
+# DEFw describes the process it runs in with these variables, and importing
+# DEFw writes a default for each of them into the importer's own environment.
+# Inherited from a caller, they describe the caller's DEFw process, and sbatch
+# carries them into a job (openQSE/QFw#187). QFw's launchers set them for each
+# process they start instead of inheriting them.
+DEFW_PROCESS_VARIABLES = frozenset((
+    "DEFW_AGENT_NAME",
+    "DEFW_AGENT_TYPE",
+    "DEFW_SHELL_TYPE",
+    "DEFW_LISTEN_PORT",
+    "DEFW_TELNET_PORT",
+    "DEFW_PARENT_ADDR",
+    "DEFW_PARENT_HOSTNAME",
+    "DEFW_PARENT_NAME",
+    "DEFW_PARENT_PORT",
+    "DEFW_DISABLE_DIRSVC",
+    "DEFW_LOG_DIR",
+    "DEFW_ONLY_LOAD_MODULE",
+))
+# qfw-setup publishes these for one run. Inherited from a caller, they describe
+# the caller's run, so a new run ignores them and qfw-srun takes them from its
+# own run's state.
+RUN_STATE_VARIABLES = frozenset((
+    "QFW_RUN_TMP_PATH",
+    "QFW_LOG_DIR",
+    "QFW_DVM_URI_PATH",
+    "QFW_LOCAL_DIRSVC_ENDPOINT",
+    "QFW_LOCAL_DIRSVC_NAME",
+    "QFW_LOCAL_SERVICE_CONFIG",
+    "QFW_SERVICE_SCOPE",
+    "QFW_QPM_SERVICE_IDS",
+    "QFW_STARTUP_DRY_RUN",
+    "QFW_ALLOCATION_MODE",
+    "QFW_GROUP_0_NODELIST",
+    "QFW_GROUP_1_NODELIST",
+    "QFW_GROUPS",
+))
+# A run publishes these too, but a caller may also set them to configure a new
+# run. When they arrive with a QFW_RUN_TMP_PATH, they are that run's values.
+RUN_INPUT_VARIABLES = frozenset((
+    "QFW_RUN_ID",
+    "QFW_DIRECTORY_SERVICE_INFO",
+))
 ENVIRONMENT_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 UNBRACED_ENVIRONMENT_REFERENCE = re.compile(
     r"\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -52,6 +96,43 @@ def _persist_caller_environment(environment):
         value = os.environ.get(name)
         if value:
             environment[name] = value
+
+
+def inherited_variables(environ=None, run_state=True):
+    """Names in environ that describe another DEFw process or another run.
+
+    With run_state False, only the DEFw process variables are returned, for a
+    launcher whose caller sets the run variables it needs.
+    """
+    environ = os.environ if environ is None else environ
+    names = DEFW_PROCESS_VARIABLES
+    if run_state:
+        names = names | RUN_STATE_VARIABLES
+        if environ.get("QFW_RUN_TMP_PATH"):
+            names = names | RUN_INPUT_VARIABLES
+    return sorted(name for name in names if name in environ)
+
+
+def launch_environment(environ=None, run_state=True):
+    """A copy of environ for a process QFw starts, without what it inherits
+    from another DEFw process or another run."""
+    environ = os.environ if environ is None else environ
+    drop = set(inherited_variables(environ, run_state=run_state))
+    return {
+        name: value for name, value in environ.items() if name not in drop
+    }
+
+
+def discard_inherited_environment(environ=None):
+    """Remove the inherited variables from environ in place.
+
+    qfw-setup calls this on its own environment before it prepares a run, so
+    that every value it reads and every service it starts sees the caller's
+    configuration but not the caller's DEFw process or run.
+    """
+    environ = os.environ if environ is None else environ
+    for name in inherited_variables(environ):
+        environ.pop(name, None)
 
 
 def qfw_prefix():
@@ -668,6 +749,7 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         "run_dir": str(run_root),
         "log_dir": str(log_dir),
         "state_dir": str(state_dir),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID", ""),
         "site_config": str(site_config_path),
         "runtime_config": str(runtime_config_path),
         "profile": profile,
@@ -727,8 +809,18 @@ def write_current_run(run_base, run_id):
 
 
 def current_run_dir():
-    if os.environ.get("QFW_RUN_TMP_PATH"):
-        return Path(os.environ["QFW_RUN_TMP_PATH"]).expanduser().resolve()
+    run_tmp_path = os.environ.get("QFW_RUN_TMP_PATH")
+    if run_tmp_path:
+        run_dir = Path(run_tmp_path).expanduser().resolve()
+        reason = _other_run_reason(run_dir)
+        if not reason:
+            return run_dir
+        # A job inherits QFW_RUN_TMP_PATH from a submitter that was in a run
+        # of its own. Using it would run, and tear down, the submitter's run.
+        print(
+            f"qfw: ignoring QFW_RUN_TMP_PATH={run_tmp_path}: {reason}",
+            file=sys.stderr,
+        )
     run_base = qfw_run_base_dir()
     current = run_base / "current"
     if not current.exists():
@@ -738,6 +830,24 @@ def current_run_dir():
     if not run_id:
         raise FileNotFoundError(f"empty QFw current run marker: {current}")
     return run_base / run_id
+
+
+def _other_run_reason(run_dir):
+    """Why run_dir is not a run of this Slurm job, or "" when it is.
+
+    A run prepared outside Slurm matches only a process outside Slurm.
+    """
+    try:
+        state = read_state(run_dir)
+    except (OSError, ValueError):
+        return "it holds no readable QFw runtime state"
+    recorded = str(state.get("slurm_job_id") or "")
+    current = os.environ.get("SLURM_JOB_ID", "")
+    if recorded == current:
+        return ""
+    where = f"in Slurm job {recorded}" if recorded else "outside Slurm"
+    here = f"Slurm job {current}" if current else "a process outside Slurm"
+    return f"it was prepared {where}, and this is {here}"
 
 
 def clear_current_run(state):
