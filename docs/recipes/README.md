@@ -28,6 +28,7 @@ execution recipe.
 | [Site QPM, heterogeneous allocation](test-long-running-qpm-heterogeneous.md) | Exercises the qfw-slurm path from a heterogeneous allocation against a site-owned QPM. Use this when validating separate application and quantum resource placement. |
 | [Same-node execution](test-same-node.md) | Runs an application and its services on one node. Use this for focused local-mode tests where service placement should stay simple. |
 | [Heterogeneous execution](test-heterogeneous-allocation.md) | Separates the application and services with a heterogeneous allocation. Use this for local-mode tests that need distinct Slurm groups. |
+| [Compile, then run](compile-then-run.md) | Compiles circuits in a CPU-only job from a device snapshot, then runs them in a QPU job that starts after it. Use this when compiling would otherwise hold a QPU reservation. |
 | [Service recovery](recover-services.md) | Recovers interrupted directory, DVM, QPM, or reservation state. Read this when cleanup or restart behavior leaves stale runtime artifacts behind. |
 | [Amazon Braket devices](run-against-aws-braket.md) | Runs the QDMI shim against Amazon Braket's SV1 simulator and Rigetti's Cepheus-1-108Q. Read this for the AWS account prerequisites, how the service gets its AWS identity, the device entries, and the smoke and Qiskit runs. |
 | [Pasqal through QDMI](run-against-pasqal.md) | Runs native Pulser sequences through the released Pasqal QDMI device, with the existing Pulser frontend and QRMI/QDMI library selection. |
