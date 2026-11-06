@@ -176,6 +176,7 @@ file(CHMOD
 		WORLD_READ WORLD_EXECUTE)
 
 foreach(qfw_command
+		qfw-compile
 		qfw-setup
 		qfw-status
 		qfw-srun
@@ -195,6 +196,7 @@ endforeach()
 install(PROGRAMS
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
 	"${QFW_GENERATED_BIN_DIR}/defw-python"
+	"${QFW_GENERATED_BIN_DIR}/qfw-compile"
 	"${QFW_GENERATED_BIN_DIR}/qfw-setup"
 	"${QFW_GENERATED_BIN_DIR}/qfw-status"
 	"${QFW_GENERATED_BIN_DIR}/qfw-srun"

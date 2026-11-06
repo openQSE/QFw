@@ -106,6 +106,7 @@ endif()
 foreach(command_name
 			qfw-activate
 			defw-python
+			qfw-compile
 			qfw-setup
 			qfw-status
 			qfw-srun
@@ -128,6 +129,7 @@ set(qfw_man_root "${QFW_INSTALL_PREFIX}/${QFW_INSTALL_MANDIR}")
 foreach(man_page
 		man1/defw-python.1
 		man1/qfw-activate.1
+		man1/qfw-compile.1
 		man1/qfw-deactivate.1
 		man1/qfw-dir-svc.1
 		man1/qfw_chem_app.sh.1

@@ -14,6 +14,7 @@ from . import service_plane as qfw_service_plane
 
 
 COMMANDS = {
+    "qfw-compile",
     "qfw-setup",
     "qfw-status",
     "qfw-srun",
@@ -34,6 +35,8 @@ def main(argv=None):
         return 2
     command = argv.pop(0)
     try:
+        if command == "qfw-compile":
+            return qfw_compile(argv)
         if command == "qfw-setup":
             return qfw_setup(argv)
         if command == "qfw-status":
@@ -46,6 +49,41 @@ def main(argv=None):
         print(f"{command}: {exc}", file=sys.stderr)
         return 1
     return 2
+
+
+def qfw_compile(argv):
+    parser = argparse.ArgumentParser(
+        prog="qfw-compile",
+        description="Compile circuits for the device a snapshot recorded.")
+    parser.add_argument("--snapshot", required=True)
+    parser.add_argument("--in", dest="input", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--compiler", choices=("qiskit", "mqt"),
+                        default="qiskit")
+    parser.add_argument("--optimization-level", type=int)
+    parser.add_argument("--seed-transpiler", type=int)
+    args = parser.parse_args(argv)
+
+    from qiskit import qpy
+    from qfw_qiskit.qfw_compile import SnapshotDevice
+    from util.execution_error import DEFwExecutionError
+
+    options = {
+        name: value for name, value in (
+            ("optimization_level", args.optimization_level),
+            ("seed_transpiler", args.seed_transpiler))
+        if value is not None}
+    with open(args.input, "rb") as stream:
+        circuits = qpy.load(stream)
+    try:
+        compiled = SnapshotDevice.load(args.snapshot).compile(
+            circuits, args.compiler, **options)
+    except DEFwExecutionError as exc:
+        raise RuntimeError(getattr(exc, "msg", None) or str(exc)) from exc
+    with open(args.out, "wb") as stream:
+        qpy.dump(compiled, stream)
+    print(args.out)
+    return 0
 
 
 def qfw_setup(argv):

@@ -1,0 +1,35 @@
+.TH QFW-COMPILE 1 "November 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-compile \- compile circuits for a device from its snapshot
+.SH SYNOPSIS
+.B qfw-compile
+.BI --snapshot " device.json"
+.BI --in " circuits.qpy"
+.BI --out " compiled.qpy"
+.RI [ --compiler " qiskit|mqt" ]
+.RI [ --optimization-level " n" ]
+.RI [ --seed-transpiler " n" ]
+.SH DESCRIPTION
+.B qfw-compile
+compiles the circuits in a QPY file for the device a snapshot recorded, checks
+them against it, and marks them for it, as
+.B QFwBackend.compile
+does against a live QPM. It needs no QPM, no DEFw and no reservation, so it can
+run in a CPU job ahead of the job that runs the circuits. A snapshot is the JSON
+that
+.B QFwBackend.device_snapshot()
+returns.
+.PP
+A QPM refuses a marked circuit whose calibration the device has since left,
+under its
+.BR calibration-policy .
+Call
+.B backend.check_isa()
+first in the run job to find that out before the queue wait.
+.SH EXIT STATUS
+Zero when every circuit compiled. Nonzero when a circuit cannot be compiled for
+the device or a file cannot be read.
+.SH SEE ALSO
+.BR qfw-setup (1),
+.BR qfw-srun (1),
+.BR qfw (7)

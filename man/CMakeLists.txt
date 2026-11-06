@@ -1,6 +1,7 @@
 set(QFW_MAN1_PAGES
 	man1/defw-python.1
 	man1/qfw-activate.1
+	man1/qfw-compile.1
 	man1/qfw-deactivate.1
 	man1/qfw-dir-svc.1
 	man1/qfw_chem_app.sh.1

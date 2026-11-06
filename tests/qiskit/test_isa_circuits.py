@@ -552,6 +552,56 @@ def test_a_circuit_compiled_from_a_snapshot_runs_unchanged(tmp_path):
 		"outcome": "COMPLETED", "device_id": "fake-iqm-20q", "unchanged": True}
 
 
+def _qfw_compile(*arguments):
+	return subprocess.run(
+		[sys.executable, "-m", "qfw_runtime.commands", "qfw-compile",
+		 *arguments],
+		capture_output=True, text=True, cwd=REPO_ROOT,
+		env=dict(os.environ, PYTHONPATH=os.pathsep.join(
+			str(REPO_ROOT / path) for path in ("setup", "backends", "services"))))
+
+
+def test_qfw_compile_writes_a_circuit_the_device_runs_unchanged(tmp_path):
+	snapshot = str(tmp_path / "device.json")
+	generic, compiled = str(tmp_path / "ghz.qpy"), str(tmp_path / "isa.qpy")
+	_flow(
+		"snapshot", snapshot, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID="cal-1")
+	circuit = QuantumCircuit(3, 3)
+	circuit.h(0)
+	circuit.cx(0, 1)
+	circuit.cx(1, 2)
+	circuit.measure([0, 1, 2], [0, 1, 2])
+	with open(generic, "wb") as stream:
+		qpy.dump(circuit, stream)
+
+	finished = _qfw_compile(
+		"--snapshot", snapshot, "--in", generic, "--out", compiled,
+		"--seed-transpiler", "1")
+	assert finished.returncode == 0, finished.stderr
+
+	result = _last_json(_flow(
+		"run", compiled, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID="cal-1"))
+	assert result == {
+		"outcome": "COMPLETED", "device_id": "fake-iqm-20q", "unchanged": True}
+
+
+def test_qfw_compile_says_why_a_snapshot_cannot_be_used(tmp_path):
+	snapshot = tmp_path / "device.json"
+	snapshot.write_text(json.dumps({"schema": "something-else"}))
+	generic = tmp_path / "ghz.qpy"
+	with open(generic, "wb") as stream:
+		qpy.dump(QuantumCircuit(1), stream)
+
+	finished = _qfw_compile(
+		"--snapshot", str(snapshot), "--in", str(generic),
+		"--out", str(tmp_path / "isa.qpy"))
+
+	assert finished.returncode == 1
+	assert "qfw-device-snapshot-v1" in finished.stderr
+
+
 def test_check_isa_catches_a_recalibration_since_the_snapshot(tmp_path):
 	circuit = _snapshot_compile(tmp_path)
 
