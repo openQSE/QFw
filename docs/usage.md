@@ -771,6 +771,20 @@ completed records. The byte limit is 64 MiB by default. If a result's size
 cannot be measured, the QPM still enforces the age and record-count limits.
 Explicit non-positive values are invalid.
 
+A simulator QPM also limits how long one circuit's runner may take:
+
+```yaml
+qpm:
+  circuit-time-limit-seconds: 600
+```
+
+When a runner passes the limit, the QPM kills its launcher, fails the circuit
+and moves on. Without a limit, a runner whose exit never reaches the QPM, as
+when PRTE loses it, holds the QPM's dispatch slot for good, and every later
+circuit waits behind it. The default is `600` seconds, well past the 200
+seconds QFw's Qiskit backend waits for a circuit's result. Raise it for
+circuits that take longer, or set `0` for no limit.
+
 Simulator-specific MPI and wrapper settings live with the corresponding
 entries in `local-services.yaml`; hardware QPMs do not receive those settings.
 

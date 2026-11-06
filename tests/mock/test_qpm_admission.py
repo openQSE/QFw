@@ -284,6 +284,42 @@ class NonCancellableAdmissionQPM(UTIL_QPM):
 		return info
 
 
+class EndsTasksOnceSchedulerContext(FakeSchedulerContext):
+	"""Refuses to end a task a second time, as qhw_scheduler does: it
+	answers QHW_SCHED_ERR_STATE (rc -7)."""
+
+	def _refuse_if_ended(self, task_id, action):
+		if self.states.get(task_id) in ("completed", "failed", "cancelled"):
+			raise RuntimeError(f"failed to mark task {action}: rc=-7")
+
+	def task_completed(self, task_id):
+		self._refuse_if_ended(task_id, "completed")
+		super().task_completed(task_id)
+
+	def task_failed(self, task_id):
+		self._refuse_if_ended(task_id, "failed")
+		super().task_failed(task_id)
+
+	def task_cancelled(self, task_id):
+		self._refuse_if_ended(task_id, "cancelled")
+		super().task_cancelled(task_id)
+
+
+class NonCancellableStrictSchedulerQPM(UTIL_QPM):
+	def __init__(self, target_id="admission-noncancellable-strict"):
+		self.fake_qrc = NonCancellableQRC()
+		super().__init__(
+			self.fake_qrc,
+			target_id=target_id,
+			admission_context_factory=FakeAdmissionContext,
+			scheduler_context_factory=EndsTasksOnceSchedulerContext,
+		)
+
+	def prepare_circuit(self, info):
+		info["qfw_backend"] = "hook"
+		return info
+
+
 def _setup(monkeypatch):
 	_clear_target_controllers_for_tests()
 	FakeAdmissionContext.next_reservation_id = 100
@@ -1326,6 +1362,58 @@ def test_release_waits_when_provider_cancellation_is_unsupported(monkeypatch):
 	assert qtask_id not in qpm.controller.capacity_holds
 	assert qpm.controller.admission_context.released == [(reservation_id, 16)]
 	assert qpm.controller.admission_context.returned[-1][1]["task_id"] == qtask_id
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed"])
+def test_a_task_that_ends_after_its_reservation_closed_frees_the_qpm(
+		monkeypatch, outcome):
+	# openQSE/QFw#196: a job ended while its circuit ran. The close
+	# cancelled the task in the scheduler, and when the circuit ended the
+	# scheduler refused to end it again. The QPM kept the circuit's hosts,
+	# so every later circuit waited for them.
+	_setup(monkeypatch)
+	qpm = NonCancellableStrictSchedulerQPM()
+	idle_hosts = dict(qpm.free_hosts)
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	response = qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+	qtask_id = response["qtask_id"]
+	runtime = qpm.controller.task_for_cid(response["cid"])
+	scheduler = qpm.controller.scheduler_context
+
+	assert qpm.release(reservation_id=reservation_id, reason=16)[
+		"status"] == "pending"
+	assert scheduler.states[runtime.scheduler_task_id] == "cancelled"
+	assert qpm.free_hosts != idle_hosts
+
+	circuit = qpm.circuits[response["cid"]]
+	if outcome == "completed":
+		circuit.set_exec_done()
+	else:
+		circuit.set_fail()
+	circuit.free_resources(circuit, result={
+		"cid": response["cid"],
+		"qtask_id": qtask_id,
+		"rc": 0 if outcome == "completed" else -9,
+	})
+
+	assert qpm.free_hosts == idle_hosts
+	assert runtime.state == outcome
+	assert scheduler.states[runtime.scheduler_task_id] == "cancelled"
+	assert qpm.release(reservation_id=reservation_id, reason=16)[
+		"status"] == "accepted"
+
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	})
+
+	assert len(qpm.fake_qrc.async_cids) == 2
 
 
 def test_shared_context_handles_concurrent_reservations(monkeypatch):
