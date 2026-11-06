@@ -435,6 +435,34 @@ def test_a_snapshot_holds_the_device_records(monkeypatch):
 	assert snapshot["records"]["get_coupling_graph"] == {"coupling": 1}
 	assert snapshot["records"]["get_calibration_snapshot"] == {"calibration": 1}
 	assert "get_dynamic_backend_info" in snapshot["records"]
+	assert snapshot["published"] == PUBLISHED
+
+
+def test_a_snapshot_of_another_schema_is_refused():
+	from qfw_qiskit.qfw_compile import SnapshotDevice
+
+	with pytest.raises(DEFwExecutionError, match="qfw-device-snapshot-v1"):
+		SnapshotDevice({"schema": "something-else"})
+
+
+def test_a_snapshot_cannot_read_its_device_again(monkeypatch):
+	from qfw_qiskit.qfw_compile import SnapshotDevice
+	snapshot = _backend(
+		monkeypatch, telemetry=_snapshot_telemetry()).device_snapshot()
+
+	with pytest.raises(DEFwExecutionError, match="take a new one"):
+		SnapshotDevice(snapshot).compile(Circuit(), refresh_target=True)
+
+
+def test_a_snapshot_answers_for_the_qpm_it_recorded(monkeypatch):
+	from qfw_qiskit.qfw_compile import SnapshotDevice
+	snapshot = _backend(
+		monkeypatch, telemetry=_snapshot_telemetry()).device_snapshot()
+
+	device = SnapshotDevice(snapshot)
+
+	assert device.isa_device() == ("iqm", DEVICE)
+	assert device.telemetry.get_device_info() == {"device": 1}
 
 
 def test_a_snapshot_goes_without_a_record_the_qpm_cannot_give(monkeypatch):

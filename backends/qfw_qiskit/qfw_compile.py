@@ -1,6 +1,7 @@
 # Compiling ahead of time for one device, on the caller's own CPUs. Imports no
 # DEFw, so a compile job on a CPU node can use it with a device snapshot.
 
+import json
 import logging
 import re
 from importlib.metadata import PackageNotFoundError, version
@@ -13,7 +14,17 @@ from util.isa import check_calibration, check_device, make_marker, read_marker
 
 from .qfw_metadata import (
 	get_isa_marker, get_qubit_mapping, set_isa_marker, set_qubit_mapping)
-from .qfw_target import TARGET_FALLBACK
+from .qfw_target import (
+	TARGET_DEVICE, TARGET_FALLBACK, has_connectivity, target_from_telemetry)
+from .qfw_telemetry import QFwTelemetry
+
+DEVICE_SNAPSHOT_SCHEMA = "qfw-device-snapshot-v1"
+# The QPM properties a compile reads, kept in a snapshot.
+SNAPSHOT_PROPERTIES = (
+	"provider", "device_provider", "isa_provider", "isa_device_id",
+	"circuit_stages", "calibration_policy", "dynamic_architecture",
+	"hardware",
+)
 
 
 def _mqt_core_version():
@@ -177,3 +188,66 @@ class DeviceCompiler:
 		'qiskit': _compile_with_qiskit,
 		'mqt': _compile_with_mqt,
 	}
+
+
+class _RecordedTelemetry:
+	def __init__(self, records):
+		self._records = records
+
+	def __getattr__(self, call):
+		if call not in QFwTelemetry.CALLS:
+			raise AttributeError(call)
+		return lambda **arguments: self._records.get(call)
+
+
+class SnapshotDevice(DeviceCompiler):
+	"""A device as QFwBackend.device_snapshot() recorded it, to compile for
+	and check against with no QPM."""
+
+	def __init__(self, snapshot):
+		if snapshot.get("schema") != DEVICE_SNAPSHOT_SCHEMA:
+			raise DEFwExecutionError(
+				f"not a {DEVICE_SNAPSHOT_SCHEMA} snapshot: "
+				f"{snapshot.get('schema')!r}")
+		self.captured_at = snapshot.get("captured_at")
+		self._published = dict(snapshot.get("published") or {})
+		records = dict(snapshot.get("records") or {})
+		self.telemetry = QFwTelemetry(_RecordedTelemetry(records))
+		self.backend_info = records.get("get_backend_info") or {}
+		self._target = None
+
+	@classmethod
+	def load(cls, path):
+		with open(path) as snapshot:
+			return cls(json.load(snapshot))
+
+	def published(self, name):
+		return self._published.get(name)
+
+	@property
+	def target(self):
+		if self._target is None:
+			self._target = target_from_telemetry(
+				self.telemetry, backend_info=self.backend_info)
+			if self._target is None:
+				raise DEFwExecutionError("this snapshot describes no device")
+		return self._target
+
+	@property
+	def target_kind(self):
+		return (TARGET_DEVICE if has_connectivity(self.target)
+			else TARGET_FALLBACK)
+
+	@property
+	def target_source(self):
+		return f"snapshot: {self.target.description}"
+
+	def _refresh_target(self):
+		pass
+
+	def compile(self, circuits, compiler='qiskit', *, refresh_target=False,
+		    **kwargs):
+		if refresh_target:
+			raise DEFwExecutionError(
+				"a snapshot cannot read the device again; take a new one")
+		return super().compile(circuits, compiler, **kwargs)

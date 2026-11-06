@@ -530,6 +530,38 @@ def test_check_isa_catches_a_recalibration_before_the_run_job_queues(tmp_path):
 	assert "compile it again" in result["refused"]
 
 
+def _snapshot_compile(tmp_path, calibration="cal-1"):
+	snapshot = str(tmp_path / "device.json")
+	circuit = str(tmp_path / "isa.qpy")
+	_flow(
+		"snapshot", snapshot, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID=calibration)
+	result = _last_json(_flow("snapshot-compile", snapshot, circuit))
+	assert result == {"defw_loaded": False}
+	return circuit
+
+
+def test_a_circuit_compiled_from_a_snapshot_runs_unchanged(tmp_path):
+	circuit = _snapshot_compile(tmp_path)
+
+	result = _last_json(_flow(
+		"run", circuit, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID="cal-1"))
+
+	assert result == {
+		"outcome": "COMPLETED", "device_id": "fake-iqm-20q", "unchanged": True}
+
+
+def test_check_isa_catches_a_recalibration_since_the_snapshot(tmp_path):
+	circuit = _snapshot_compile(tmp_path)
+
+	result = _last_json(_flow(
+		"check", circuit, str(tmp_path),
+		QFW_FAKE_IQM_CALIBRATION_SET_ID="cal-2"))
+
+	assert "compile it again" in result["refused"]
+
+
 def test_backend_compile_for_a_star_device_reaches_the_driver_with_its_resonator():
 	pytest.importorskip("iqm.qiskit_iqm")
 

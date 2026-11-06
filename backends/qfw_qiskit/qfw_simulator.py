@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 
 from qiskit.providers import BackendV2, Options
 
-from .qfw_compile import DeviceCompiler
+from .qfw_compile import (
+	DEVICE_SNAPSHOT_SCHEMA, SNAPSHOT_PROPERTIES, DeviceCompiler)
 from .qfw_job import (
 	QFwJob, QFW_INFO_PASSTHROUGH_OPTIONS, SHIM_LIB_ENV,
 	normalize_reservation_id, normalize_shim_library)
@@ -85,7 +86,6 @@ class CircuitMetrics:
 g_circ_metrics = CircuitMetrics()
 
 EVENT_TYPE_CIRC_RESULT = 1
-DEVICE_SNAPSHOT_SCHEMA = "qfw-device-snapshot-v1"
 
 
 class QFwBackend(DeviceCompiler, BackendV2):
@@ -389,6 +389,9 @@ class QFwBackend(DeviceCompiler, BackendV2):
 			"provider": self._device_provider(),
 			"device_id": self.published("isa_device_id"),
 			"captured_at": datetime.now(timezone.utc).isoformat(),
+			"published": {
+				name: self.published(name) for name in SNAPSHOT_PROPERTIES
+				if self.published(name) is not None},
 			"records": records,
 		}
 

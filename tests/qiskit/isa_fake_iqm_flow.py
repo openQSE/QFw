@@ -91,6 +91,31 @@ def backend_compile_job(path, config_dir):
 	return {"target_kind": backend.target_kind}
 
 
+def snapshot_job(path, config_dir):
+	import pytest
+	import tests.mock.conftest  # noqa: F401
+	from tests.mock import test_qfw_backend_target as target_tests
+
+	monkeypatch = pytest.MonkeyPatch()
+	qpm = _fake_iqm_qpm(monkeypatch, config_dir)
+	backend = target_tests._backend(
+		monkeypatch, qpm, qpm_properties=qpm.query()["properties"])
+	with open(path, "w") as stream:
+		json.dump(backend.device_snapshot(), stream)
+	return {"written": True}
+
+
+def snapshot_compile_job(snapshot_path, path):
+	sys.modules["defw_exception"] = None
+	from qfw_qiskit.qfw_compile import SnapshotDevice
+
+	compiled = SnapshotDevice.load(snapshot_path).compile(
+		_ghz(), seed_transpiler=1)
+	with open(path, "wb") as stream:
+		qpy.dump(compiled, stream)
+	return {"defw_loaded": "defw" in sys.modules}
+
+
 def check_job(path, config_dir):
 	import pytest
 	import tests.mock.conftest  # noqa: F401
@@ -220,5 +245,7 @@ if __name__ == "__main__":
 			"check": check_job,
 			"iqm": iqm_job,
 			"run": run_job,
+			"snapshot": snapshot_job,
+			"snapshot-compile": snapshot_compile_job,
 		}
 		print(json.dumps(jobs[sys.argv[1]](*sys.argv[2:])))
