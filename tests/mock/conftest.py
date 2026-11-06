@@ -27,15 +27,6 @@ def _add_repo_paths():
 			sys.path.insert(0, path_str)
 
 
-def _install_qfw_package_stub():
-	if "qfw_qiskit" in sys.modules:
-		return
-
-	package = types.ModuleType("qfw_qiskit")
-	package.__path__ = [str(REPO_ROOT / "backends" / "qfw_qiskit")]
-	sys.modules["qfw_qiskit"] = package
-
-
 def _install_numpy_stub():
 	if "numpy" in sys.modules:
 		return
@@ -785,7 +776,6 @@ def _install_qiskit_stubs():
 
 
 _add_repo_paths()
-_install_qfw_package_stub()
 _install_numpy_stub()
 _install_yaml_stub()
 _install_defw_stubs()
