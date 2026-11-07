@@ -13,7 +13,7 @@
 # transcoder with no client at all.
 #
 # They need qiskit, iqm-client's Qiskit adapter and iqm.pulse. The CI mock job
-# installs none of those, so these run in QFw's own venv.
+# installs none of those, so these run in the ci-qiskit job.
 
 import os
 import pathlib
@@ -99,6 +99,20 @@ def test_a_ghz_runs_through_the_clientless_path():
 	assert len(measures) == 3
 
 
+def test_a_ghz_transpiles_for_a_star_device():
+	_iqm()
+	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
+	from util.iqm_transcode import build_iqm_circuit
+
+	iqm_circuit = build_iqm_circuit(
+		_ghz(), IQMFakeDeneb().architecture, None)
+
+	assert iqm_circuit.metadata.get("qfw_transpiled_to_iqm") is True
+	names = {op.name for op in iqm_circuit.instructions}
+	assert "move" in names, names
+	assert "CR1" in _loci(iqm_circuit)
+
+
 def test_the_serializer_alone_cannot_take_a_ghz():
 	# Why the transpile tier is load-bearing rather than an optimisation.
 	# Without it a GHZ reaches a tier that only accepts native operations.
@@ -154,6 +168,26 @@ def test_a_mapping_given_as_a_dict_is_honoured_too():
 		_ghz(), _architecture(), {0: "QB2", 1: "QB3", 2: "QB4"})
 
 	assert _loci(iqm_circuit) == ["QB2", "QB3", "QB4"]
+
+
+def _measured_on(iqm_circuit):
+	return [operation.locus[0] for operation in sorted(
+		(operation for operation in iqm_circuit.instructions
+		 if operation.name == "measure"),
+		key=lambda operation: operation.args["key"])]
+
+
+def test_a_mapped_ghz_transpiles_for_a_star_device():
+	_iqm()
+	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
+	from util.iqm_transcode import build_iqm_circuit
+
+	iqm_circuit = build_iqm_circuit(
+		_ghz(), IQMFakeDeneb().architecture, ["QB4", "QB2", "QB6"])
+
+	assert iqm_circuit.metadata.get("qfw_transpiled_to_iqm") is True
+	assert _loci(iqm_circuit) == ["CR1", "QB2", "QB4", "QB6"]
+	assert _measured_on(iqm_circuit) == ["QB4", "QB2", "QB6"]
 
 
 def test_without_a_mapping_the_device_order_is_used():
