@@ -7,7 +7,7 @@
 # Current CI scope:
 #   - ci-syntax: Flake8 linting and Python syntax checks
 #   - ci-mock: pytest tests under tests/mock
-#   - ci-qdmi: released provider adapters
+#   - ci-qdmi: tests/qiskit, against the released provider adapters
 #   - ci-pulser: the Pulser client against released Pulser
 #   - ci-resolve: the requirements files resolve together with overrides
 #
@@ -44,9 +44,15 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-    - name: Install released QDMI adapters
-      run: python -m pip install -r setup/qdmi-requirements.txt -c setup/requirements.txt pytest
-    - name: Require provider adapters
+    - name: Install released QDMI adapters and what tests/qiskit needs
+      # Besides the adapters, tests/qiskit needs IQM's Qiskit transpiler and
+      # IBM's fake backends. iqm.qiskit_iqm ships in iqm-client and imports
+      # qiskit-aer. iqm-client goes in without its [qiskit] extra, as
+      # setup/requirements.txt installs it, because that extra caps Qiskit
+      # below the 2.5 series QFw pins.
+      run: python -m pip install -r setup/qdmi-requirements.txt -c setup/requirements.txt pytest iqm-client qiskit-aer qiskit-ibm-runtime
+    - name: Require provider adapters and transpilers
+      # The tests skip when one of these is missing, so fail here instead.
       run: |
         python - <<'PY'
         from iqm.qdmi.qiskit import IQMBackend
@@ -54,9 +60,12 @@ jobs:
         from ibm.qdmi.qiskit import IBMBackend
         import pasqal.qdmi
         from pulser import Sequence
+        from iqm.qiskit_iqm import transpile_to_IQM
+        import iqm.pulse
+        from qiskit_ibm_runtime.fake_provider import FakeManilaV2
         PY
-    - name: Test adapters and serialization without provider submission
-      run: python -m pytest -q tests/qiskit/test_qdmi_adapters.py tests/qiskit/test_braket_qdmi.py tests/qiskit/test_ibm_qdmi.py tests/qiskit/test_pasqal_qdmi.py
+    - name: Test tests/qiskit without provider submission
+      run: python -m pytest -q tests/qiskit
 
   ci-resolve:
     name: ci-resolve (requirements resolve)
