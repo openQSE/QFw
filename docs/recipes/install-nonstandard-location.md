@@ -57,6 +57,7 @@ activate this prefix and venv before starting an application or service.
 
 ```bash
 test -x "${QFW_INSTALL_PREFIX}/bin/qfw-activate"
+test -x "${QFW_INSTALL_PREFIX}/bin/qfw-compile"
 test -x "${QFW_INSTALL_PREFIX}/bin/qfw-setup"
 test -x "${QFW_INSTALL_PREFIX}/bin/qfw-status"
 test -x "${QFW_INSTALL_PREFIX}/bin/qfw-srun"

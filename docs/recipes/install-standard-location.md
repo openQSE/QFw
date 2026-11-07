@@ -91,6 +91,7 @@ prefix and virtual environment when the runtime starts.
 ```bash
 readlink -f /opt/openqse/qfw/current
 test -x "${QFW_CURRENT}/bin/qfw-activate"
+test -x "${QFW_CURRENT}/bin/qfw-compile"
 test -x "${QFW_CURRENT}/bin/qfw-setup"
 test -x "${QFW_CURRENT}/bin/qfw-status"
 test -x "${QFW_CURRENT}/bin/qfw-srun"
