@@ -34,6 +34,7 @@ def _info(**fields):
 
 
 STAGES = [isa.STAGE_GENERIC, isa.STAGE_ISA]
+TAKES_ISA = {"circuit_stages": STAGES, "isa_provider": "iqm", "isa_device_id": DEVICE}
 
 
 # --- the marker --------------------------------------------------------------
@@ -854,7 +855,7 @@ def test_a_backend_says_when_its_qpm_names_no_device(monkeypatch):
 
 def test_the_client_lifts_the_marker_into_info(monkeypatch):
 	job, fake_qpm = _job(
-		monkeypatch, {"circuit_stages": STAGES}, marker=_marker())
+		monkeypatch, TAKES_ISA, marker=_marker())
 
 	job.submit()
 
@@ -864,7 +865,7 @@ def test_the_client_lifts_the_marker_into_info(monkeypatch):
 
 
 def test_the_client_sends_no_marker_for_a_generic_circuit(monkeypatch):
-	job, fake_qpm = _job(monkeypatch, {"circuit_stages": STAGES})
+	job, fake_qpm = _job(monkeypatch, TAKES_ISA)
 
 	job.submit()
 
@@ -889,7 +890,7 @@ def test_the_client_refuses_a_qpm_that_does_not_take_isa(
 def _binding_job(monkeypatch, marker=None):
 	import qfw_qiskit.qfw_job as qfw_job
 	job, fake_qpm = _job(
-		monkeypatch, {"circuit_stages": STAGES}, marker=marker,
+		monkeypatch, TAKES_ISA, marker=marker,
 		param_values={"theta": 0.5})
 	bound = []
 	monkeypatch.setattr(
@@ -922,7 +923,7 @@ def _result_metadata(monkeypatch, marker, qhw_result):
 	from tests.mock.fakes import make_result_event
 	from tests.mock.test_qfw_job import FakeBackend
 	job, _ = _job(
-		monkeypatch, {"circuit_stages": STAGES}, marker=marker,
+		monkeypatch, TAKES_ISA, marker=marker,
 		seed_simulator=1)
 	job._backend = FakeBackend()
 	job._qpm_event_api = FakeEventAPI(events=[make_result_event(
@@ -962,6 +963,24 @@ def test_the_client_submits_none_of_a_batch_it_would_refuse_part_of(
 	assert fake_qpm.submitted_payloads == []
 
 
+@pytest.mark.parametrize("marker, options, refusal", [
+	(_marker(device_id="q54"), {}, "'q54'"),
+	(_marker(provider="ibm"), {}, "'ibm'"),
+	(_marker(), {"compilation_options": {"optimization_level": 3}},
+	 "compilation_options"),
+])
+def test_the_client_refuses_before_submitting_what_the_qpm_would_refuse(
+		monkeypatch, marker, options, refusal):
+	import qfw_qiskit.qfw_job as qfw_job
+	job, fake_qpm = _job(monkeypatch, TAKES_ISA, marker=marker, **options)
+	job._qobj = [qfw_job.QuantumCircuit(2, name="generic"), job._qobj]
+
+	with pytest.raises(qfw_job.DEFwError, match=refusal):
+		job.submit()
+
+	assert fake_qpm.submitted_payloads == []
+
+
 def test_the_client_can_send_a_marked_circuit_as_generic(monkeypatch, caplog):
 	job, fake_qpm = _job(
 		monkeypatch, {}, marker=_marker(), isa_policy="generic")
@@ -976,7 +995,7 @@ def test_the_client_can_send_a_marked_circuit_as_generic(monkeypatch, caplog):
 def test_the_client_refuses_an_isa_policy_it_does_not_know(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 	job, _ = _job(
-		monkeypatch, {"circuit_stages": STAGES}, marker=_marker(),
+		monkeypatch, TAKES_ISA, marker=_marker(),
 		isa_policy="ignore")
 
 	with pytest.raises(qfw_job.DEFwError, match="isa_policy"):
@@ -986,7 +1005,7 @@ def test_the_client_refuses_an_isa_policy_it_does_not_know(monkeypatch):
 def test_the_client_refuses_to_send_a_marked_circuit_as_openqasm(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 	job, fake_qpm = _job(monkeypatch, {
-		"circuit_stages": STAGES,
+		**TAKES_ISA,
 		"_encoded": {"qasm": "OPENQASM 2.0;"},
 	}, marker=_marker())
 

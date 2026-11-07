@@ -12,7 +12,9 @@ from qiskit.result import Result
 from defw_exception import DEFwError
 from util.circuit_payload import QPY_FORMATS, encode_qiskit_circuit
 from util import instrumentation
-from util.isa import STAGE_GENERIC, STAGE_ISA
+from util.isa import (
+	STAGE_GENERIC, STAGE_ISA, check_device, read_marker,
+	refuse_compilation_options)
 from util.qpm.statevector import (
 	decode_statevector_payload,
 	statevector_payload_size_summary,
@@ -288,6 +290,10 @@ class QFwJob(Job):
 				f"isa_policy must be {ISA_POLICY_GENERIC!r}: {policy!r}")
 		properties = self._declared_properties() or {}
 		if STAGE_ISA in (properties.get("circuit_stages") or ()):
+			check_device(
+				read_marker({"isa": marker}), properties["circuit_stages"],
+				properties.get("isa_device_id"), properties.get("isa_provider"))
+			refuse_compilation_options(self._options.get("compilation_options"))
 			return marker
 		if policy == ISA_POLICY_GENERIC:
 			logging.warning(

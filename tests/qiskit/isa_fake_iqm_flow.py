@@ -217,12 +217,13 @@ def run_job(path, config_dir):
 	options = dict(
 		FakeSlurmDriver().execution_options(shots=64),
 		reservation_id=reservation_id)
-	qfw_job.QFwJob(backend, client, FakeEventAPI(), compiled, options).submit()
-	info = {
-		key: value for key, value in client.submitted_payloads[0].items()
-		if key not in ("reservation_id", "token", "timeout", "cancel_on_timeout")}
-
 	try:
+		qfw_job.QFwJob(
+			backend, client, FakeEventAPI(), compiled, options).submit()
+		info = {
+			key: value for key, value in client.submitted_payloads[0].items()
+			if key not in (
+				"reservation_id", "token", "timeout", "cancel_on_timeout")}
 		response = qpm.async_run(info, reservation_id=reservation_id)
 	except DEFwExecutionError as exc:
 		return {"refused": str(exc), "cids": list(qpm.circuits)}

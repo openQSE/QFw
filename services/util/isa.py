@@ -125,11 +125,15 @@ def check_envelope(info, stages, device_id, provider):
 		raise DEFwExecutionError(
 			"a circuit compiled ahead of time travels as QPY, because "
 			f"OpenQASM 2 does not keep its native gates, not as {fmt!r}")
-	if info.get("compilation_options"):
+	refuse_compilation_options(info.get("compilation_options"))
+	return marker
+
+
+def refuse_compilation_options(compilation_options):
+	if compilation_options:
 		raise DEFwExecutionError(
 			"compilation_options do not apply to a circuit compiled ahead "
 			"of time; a QPM runs it as it stands")
-	return marker
 
 
 def check_index_labels(marker):
