@@ -30,6 +30,10 @@ EXECUTION_CONTEXT_KEYS = (
 # completion carries no timing.
 QPM_ENDED_OUTCOMES = ("FAILED", "CANCELLED")
 
+# How long result() waits with no completion before asking the QPM whether it
+# is still there.
+QPM_STATUS_CHECK_INTERVAL_SEC = 60
+
 # Run options forwarded to the QPM through the job's info dict. param_values
 # is keyed by parameter name first (see normalize_param_values).
 QFW_INFO_PASSTHROUGH_OPTIONS = (
@@ -297,6 +301,7 @@ class QFwJob(Job):
 		event_fd = self._qpm_event_api.fileno()
 		expected_cids = {list(entry.keys())[0] for entry in cid_list}
 		completed_cids = set()
+		last_heard = start
 		while len(completed_cids) != total_circ:
 			past_deadline = deadline is not None and time.time() >= deadline
 			readable, _, _ = select.select(
@@ -313,8 +318,13 @@ class QFwJob(Job):
 					instrumentation.record_transport_return(
 						payload, labels=self._job_labels())
 					completed_cids.add(cid)
+					last_heard = time.time()
 			if past_deadline and len(completed_cids) != total_circ:
 				self._time_out(expected_cids - completed_cids)
+			if (len(completed_cids) != total_circ and
+					time.time() - last_heard >= QPM_STATUS_CHECK_INTERVAL_SEC):
+				self._check_qpm_reachable(expected_cids - completed_cids)
+				last_heard = time.time()
 
 		logging.defw_app(
 			f"Result reader thread ending. Events: {len(completed_cids)}."
@@ -344,14 +354,32 @@ class QFwJob(Job):
 				except Exception as e:
 					logging.defw_app(
 						f"QFw job {self._job_id} could not cancel {cid}: {e}")
+		raise JobTimeoutError(
+			f"QFw job {self._job_id} timed out after "
+			f"{self._options['timeout']}s with "
+			f"{self._describe_unfinished(missing_cids)}")
+
+	def _check_qpm_reachable(self, missing_cids):
+		context = self._execution_context()
+		try:
+			self._qpm.task_status(
+				cid=next(iter(missing_cids)),
+				reservation_id=context["reservation_id"],
+				token=context.get("token"))
+		except Exception as e:
+			self._status = JobStatus.ERROR
+			raise JobError(
+				f"QFw job {self._job_id} could not reach its QPM with "
+				f"{self._describe_unfinished(missing_cids)}: {e}") from e
+
+	def _describe_unfinished(self, missing_cids):
 		missing = ", ".join(
 			f"{cid} ({entry[cid]['exp'].name})"
 			for entry in self._cid_list for cid in entry
 			if cid in missing_cids)
-		raise JobTimeoutError(
-			f"QFw job {self._job_id} timed out after "
-			f"{self._options['timeout']}s with {len(missing_cids)} of "
-			f"{len(self._cid_list)} circuit(s) unfinished: {missing}")
+		return (
+			f"{len(missing_cids)} of {len(self._cid_list)} circuit(s) "
+			f"unfinished: {missing}")
 
 	def _get_memory_from_counts(self, counts):
 		m = []

@@ -198,6 +198,49 @@ def test_qfw_job_times_out_and_cancels_the_rest_when_a_cancel_is_refused(
 	assert job.status() == qfw_job.JobStatus.ERROR
 
 
+def test_qfw_job_fails_when_its_qpm_stops_answering(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from defw_exception import DEFwError
+
+	class GoneQPM(FakeQPM):
+		def task_status(self, cid=None, **kwargs):
+			raise DEFwError("connection refused")
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	circuit = qfw_job.QuantumCircuit(1, name="orphan")
+	job = _submitted_job(
+		monkeypatch, GoneQPM(cids=["cid-1"]), FakeEventAPI(), circuit)
+
+	with pytest.raises(
+			qfw_job.JobError,
+			match=r"could not reach its QPM with 1 of 1 circuit\(s\) "
+			r"unfinished: cid-1 \(orphan\): connection refused"):
+		job.result()
+	assert job.status() == qfw_job.JobStatus.ERROR
+
+
+def test_qfw_job_keeps_waiting_while_its_qpm_answers(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	class SlowEventAPI(FakeEventAPI):
+		def __init__(self, batches):
+			super().__init__()
+			self.batches = list(batches)
+
+		def get(self):
+			return self.batches.pop(0) if self.batches else []
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	circuit = qfw_job.QuantumCircuit(1, name="slow")
+	fake_qpm = FakeQPM(cids=["cid-1"])
+	event_api = SlowEventAPI([[], [], [make_result_event("cid-1", {"0": 2})]])
+	job = _submitted_job(monkeypatch, fake_qpm, event_api, circuit)
+
+	assert job.result().get_counts() == {"0": 2}
+	assert fake_qpm.status_requests == [
+		{"cid": "cid-1", "reservation_id": 1, "token": None}] * 2
+
+
 def test_qfw_job_without_a_timeout_waits_for_every_circuit(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 
