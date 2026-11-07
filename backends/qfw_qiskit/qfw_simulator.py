@@ -290,7 +290,7 @@ class QFwBackend(DeviceCompiler, BackendV2):
 		return (TARGET_FALLBACK if self.published("hardware")
 			else TARGET_GENERIC_BY_DESIGN)
 
-	def _build_target(self):
+	def _build_target(self, refresh=False):
 		self._backend_info = {}
 		telemetry = self.telemetry
 		if telemetry is None:
@@ -298,7 +298,7 @@ class QFwBackend(DeviceCompiler, BackendV2):
 			return self._generic_target(
 				"the QPM connection has no telemetry binding")
 		try:
-			info = telemetry.get_backend_info() or {}
+			info = telemetry.get_backend_info(refresh=refresh) or {}
 			target = target_from_telemetry(telemetry, backend_info=info)
 		except Exception as exc:
 			self._target_kind = self._kind_without_a_device()
@@ -357,7 +357,8 @@ class QFwBackend(DeviceCompiler, BackendV2):
 			return
 		held = (self._target, self._target_kind, self._target_source,
 			self._backend_info)
-		self._target = self._build_target()
+		self._target = self._build_target(
+			refresh=bool(self.published("refreshes_backend_info")))
 		if held[1] == TARGET_DEVICE and self._target_kind != TARGET_DEVICE:
 			reason = self._target_source
 			(self._target, self._target_kind, self._target_source,

@@ -93,7 +93,7 @@ def _discovery_qpm(monkeypatch, controller):
 	qpm = _lib_qpm(monkeypatch, "pasqal")
 	qpm.controller = controller
 	qpm.qrc = types.SimpleNamespace(
-		get_backend_info=lambda lib=None, credential=None: credential)
+		get_backend_info=lambda lib=None, credential=None, refresh=False: credential)
 	return qpm
 
 

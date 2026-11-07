@@ -683,6 +683,55 @@ def test_a_refreshed_required_calibration_is_the_one_later_reads_see(monkeypatch
 	assert driver._target() == _ibm_target("t2")
 
 
+def _ibm_driver_holding(monkeypatch, cached, refreshed):
+	qhw_ibm = types.ModuleType("qhw_ibm")
+	qhw_ibm.normalize_device = lambda *args, **kwargs: {}
+	monkeypatch.setitem(sys.modules, "qhw_ibm", qhw_ibm)
+	driver = _driver_holding_a_cached_target(monkeypatch, "ibm", cached)
+	driver._read_target = refreshed
+	return driver
+
+
+def test_a_refreshed_read_reports_the_device_not_the_cache(monkeypatch):
+	driver = _ibm_driver_holding(
+		monkeypatch, _ibm_target("t1"), lambda credential=None: _ibm_target("t2"))
+
+	assert driver.get_backend_info()["backend_properties"] == {
+		"last_update_date": "t1"}
+	assert driver.get_backend_info(refresh=True)["backend_properties"] == {
+		"last_update_date": "t2"}
+
+
+def test_a_refreshed_read_that_fails_is_refused_not_served_stale(monkeypatch):
+	def unreachable(credential=None):
+		raise DEFwExecutionError("device unreachable")
+
+	driver = _ibm_driver_holding(monkeypatch, _ibm_target("t1"), unreachable)
+
+	with pytest.raises(DEFwExecutionError, match="device unreachable"):
+		driver.get_backend_info(refresh=True)
+
+
+def test_the_shim_passes_a_refresh_down_and_says_it_does(monkeypatch):
+	from tests.mock import test_pulser_qpm as pulser_tests
+	import svc_lib_qpm.descriptor as descriptor
+	qpm = pulser_tests._lib_qpm(monkeypatch, "ibm")
+	asked = []
+	qpm.qrc = types.SimpleNamespace(
+		get_backend_info=lambda lib=None, credential=None, refresh=False:
+			asked.append(refresh))
+	qpm.get_backend_info(refresh=True)
+	qpm.get_backend_info()
+	assert asked == [True, False]
+
+	seen = {}
+	monkeypatch.setattr(descriptor, "resolve_descriptor", lambda: {
+		"id": DEVICE, "provider": "ibm"})
+	qpm.query_helper = lambda *args, properties: seen.update(properties)
+	qpm.query()
+	assert seen["refreshes_backend_info"] is True
+
+
 def test_the_cache_serves_a_calibration_that_is_not_required(monkeypatch):
 	driver = _driver_holding_a_cached_target(
 		monkeypatch, "ibm", _ibm_target("t1"))

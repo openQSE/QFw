@@ -8,7 +8,8 @@ def test_qpm_telemetry_api_accepts_token_placeholders():
 
 	expected_parameters = {
 		# A Pulser client reads a Pasqal QPU's devices as its reservation.
-		"get_backend_info": ["self", "lib", "token", "reservation_id"],
+		"get_backend_info": [
+			"self", "lib", "token", "reservation_id", "refresh"],
 		"get_device_info": ["self", "lib", "token"],
 		# An IQM compile reads the architecture as its reservation.
 		"get_dynamic_backend_info": [

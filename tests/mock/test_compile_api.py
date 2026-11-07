@@ -326,6 +326,30 @@ def test_check_isa_reads_the_device_again(monkeypatch):
 	assert telemetry.names().count("get_backend_info") == reads + 1
 
 
+def _refreshes(telemetry):
+	return [kwargs.get("refresh") for name, kwargs in telemetry.calls
+		if name == "get_backend_info"]
+
+
+@pytest.mark.parametrize("published, refresh", [
+	({"refreshes_backend_info": True}, True), ({}, None),
+])
+def test_a_refresh_asks_the_qpm_past_its_cache_only_if_it_can(
+		monkeypatch, published, refresh):
+	telemetry = target_tests.FakeTelemetryAPI(*target_tests.iqm_records())
+	profile = Profile()
+	profile.compiles_against_target = True
+	backend = _backend(
+		monkeypatch, profile, dict(PUBLISHED, **STAGES, **published),
+		telemetry)
+
+	backend.target
+	backend.compile(Circuit(), refresh_target=True)
+	backend.check_isa(_marked())
+
+	assert _refreshes(telemetry) == [None, refresh, refresh]
+
+
 def _device_backend(monkeypatch, profile):
 	telemetry = target_tests.FakeTelemetryAPI(*target_tests.iqm_records())
 	backend = _backend(

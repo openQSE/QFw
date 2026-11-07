@@ -149,7 +149,7 @@ class _Library:
 	def implements(self, call):
 		return call in self.CAPABILITIES
 
-	def get_backend_info(self, credential=None):
+	def get_backend_info(self, credential=None, refresh=False):
 		return {"backend": self.name, "metadata_supported": True}
 
 

@@ -142,7 +142,7 @@ class QdmiDriver(BaseDriver):
 
 	# --- introspection facet: QDMI Device -> qhw (section 13 milestone) ---
 
-	def get_backend_info(self, credential=None):
+	def get_backend_info(self, credential=None, refresh=False):
 		# The composite the QRMI driver returns for a device that is not IBM
 		# (and the native svc_iqm_qpm): the provider, that metadata is
 		# served, the active qubits and the embedded qhw device record, so a

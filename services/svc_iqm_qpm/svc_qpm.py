@@ -56,7 +56,8 @@ class QPM(UTIL_QPM):
 	def runs_on_a_chosen_calibration(self, info):
 		return True
 
-	def get_backend_info(self, lib=None, token=None, reservation_id=None):
+	def get_backend_info(self, lib=None, token=None, reservation_id=None,
+			     refresh=False):
 		return self.qrc.get_backend_info()
 
 	def get_device_info(self, lib=None, token=None):

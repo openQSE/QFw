@@ -157,11 +157,12 @@ class Frontend:
 
 	# --- contract surface (delegates to the routed driver) -----------
 
-	def get_backend_info(self, lib=None, credential=None):
+	def get_backend_info(self, lib=None, credential=None, refresh=False):
 		# Only a reservation-bound read carries a credential; every driver
 		# opens the device with it.
 		return self._dispatch(
-			"get_backend_info", lib=lib, credential=credential)
+			"get_backend_info", lib=lib, credential=credential,
+			refresh=refresh)
 
 	def get_device_info(self, lib=None):
 		return self._dispatch("get_device_info", lib=lib)

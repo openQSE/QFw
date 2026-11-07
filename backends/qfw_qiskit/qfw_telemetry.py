@@ -49,11 +49,14 @@ class QFwTelemetry:
 		arguments.update(extra)
 		return arguments
 
-	def get_backend_info(self, lib=None):
+	def get_backend_info(self, lib=None, refresh=False):
 		"""Backend metadata: whether the QPM has device metadata at all, and
-		for the shim the provider's static architecture."""
+		for the shim the provider's static architecture. `refresh` reads the
+		device rather than the QPM's cache; only ask it of a QPM that
+		publishes refreshes_backend_info."""
+		extra = {"refresh": True} if refresh else {}
 		return self._api.get_backend_info(
-			**self._arguments(lib, include_reservation=True))
+			**self._arguments(lib, include_reservation=True, **extra))
 
 	def get_device_info(self, lib=None):
 		"""The device record (qhw-device-v1 from the shim)."""

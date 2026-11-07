@@ -1108,6 +1108,13 @@ class QrmiDriver(BaseDriver):
 			return
 		self._read_target_past_cache(credential)
 
+	def _target_now(self, credential, refresh):
+		# A refresh the client asked for reads the device or fails, rather
+		# than return a target it already holds.
+		if refresh:
+			return self._read_target_past_cache(credential)
+		return self._target(credential=credential)
+
 	def _read_target_past_cache(self, credential=None):
 		target_data = self._read_target(credential)
 		if not self._target_is_complete(target_data):
@@ -1239,7 +1246,7 @@ class QrmiDriver(BaseDriver):
 					"dynamic_quantum_architecture") or {},
 		}
 
-	def get_backend_info(self, credential=None):
+	def get_backend_info(self, credential=None, refresh=False):
 		if self._provider() == "pasqal":
 			# target() is Pasqal Cloud's device-spec entries, read for each
 			# call rather than through the target cache, so a client builds
@@ -1258,7 +1265,7 @@ class QrmiDriver(BaseDriver):
 				entries)
 		if self._provider() == "ibm":
 			from qhw_ibm import normalize_device
-			target = self._target(credential=credential)
+			target = self._target_now(credential, refresh)
 			target_config_json = target.get("configuration") or {}
 			if not target_config_json:
 				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
@@ -1283,7 +1290,7 @@ class QrmiDriver(BaseDriver):
 		# architecture is empty against QRMI older than 0.22.0, which did not
 		# report it at all.
 		from qhw_iqm import normalize_device
-		target = self._target(credential=credential)
+		target = self._target_now(credential, refresh)
 		dynamic = target.get("dynamic_quantum_architecture") or {}
 		return {
 			"backend": self._descriptor.get("provider", "iqm"),

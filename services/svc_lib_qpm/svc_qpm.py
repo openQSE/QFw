@@ -121,6 +121,7 @@ class QPM(UTIL_QPM):
 			properties["description_library"] = description_library
 		if self._serves_dynamic_architecture():
 			properties["dynamic_architecture"] = True
+		properties["refreshes_backend_info"] = True
 		if descriptor.get("calibration_policy"):
 			properties["calibration_policy"] = descriptor["calibration_policy"]
 		if descriptor.get("num_qubits") not in (None, ""):
@@ -189,13 +190,15 @@ class QPM(UTIL_QPM):
 	def capability_map(self, token=None):
 		return self.qrc.capability_map()
 
-	def get_backend_info(self, lib=None, token=None, reservation_id=None):
+	def get_backend_info(self, lib=None, token=None, reservation_id=None,
+			     refresh=False):
 		# A client that names its reservation reads the device as the
 		# reservation's credential sees it, as its circuits run. A QPU's
 		# specs need a login, which the service may not hold for itself.
 		return self.qrc.get_backend_info(lib=lib,
 			credential=self._reservation_credential(
-				reservation_id, token, "get_backend_info"))
+				reservation_id, token, "get_backend_info"),
+			refresh=bool(refresh))
 
 	def _reservation_credential(self, reservation_id, token, operation):
 		# The credential bound to the reservation, resolved here from the
