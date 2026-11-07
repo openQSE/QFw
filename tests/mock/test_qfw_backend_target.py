@@ -4,6 +4,8 @@
 # describe or cannot be asked.
 import logging
 
+import pytest
+
 from tests.mock.fakes import FakeEventAPI, FakeQPM, FakeRuntime
 
 
@@ -270,6 +272,45 @@ def test_the_live_architecture_is_read_from_whichever_library_serves_it(
 		("get_dynamic_backend_info", {
 			"lib": "qrmi", "calibration_set_id": None}),
 	]
+
+
+def _reserved_iqm_backend(monkeypatch, **properties):
+	telemetry = FakeTelemetryAPI(backend_info={
+		"backend": "iqm", "metadata_supported": True})
+	telemetry.records["get_dynamic_backend_info"] = {
+		"dynamic_architecture": {"qubits": ["QB1"]}}
+	backend = _backend(
+		monkeypatch, telemetry, qpm_properties=dict(
+			{"isa_provider": "iqm", "isa_device_id": "q20"}, **properties))
+	backend.options.reservation_id = 7
+	return backend, telemetry
+
+
+def _dynamic_calls(telemetry):
+	return [kwargs for name, kwargs in telemetry.calls
+		if name == "get_dynamic_backend_info"]
+
+
+def test_an_iqm_compile_reads_the_architecture_as_its_reservation(monkeypatch):
+	from util.compile_profiles import compile_profile
+	backend, telemetry = _reserved_iqm_backend(
+		monkeypatch, dynamic_architecture=True)
+
+	compile_profile("iqm").read_device(backend)
+
+	assert _dynamic_calls(telemetry)[0]["reservation_id"] == 7
+
+
+@pytest.mark.parametrize("published, reservation", [
+	({"dynamic_architecture": True}, 7), ({}, None),
+])
+def test_a_snapshot_sends_its_reservation_only_to_a_qpm_that_takes_it(
+		monkeypatch, published, reservation):
+	backend, telemetry = _reserved_iqm_backend(monkeypatch, **published)
+
+	backend.device_snapshot()
+
+	assert _dynamic_calls(telemetry)[0].get("reservation_id") == reservation
 
 
 def test_reserved_target_passes_reservation_only_to_backend_info(monkeypatch):

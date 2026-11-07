@@ -88,7 +88,7 @@ capacity, queue, allocation, and lifecycle state are visible to callers.
 | --- | --- |
 | `get_backend_info` | Return backend metadata, with optional QRMI or QDMI library routing for shim QPMs. |
 | `get_device_info` | Return device properties, with optional QRMI or QDMI library routing for shim QPMs. |
-| `get_dynamic_backend_info` | Return dynamic backend metadata for a calibration context. |
+| `get_dynamic_backend_info` | Return dynamic backend metadata for a calibration context, read as a named reservation's credential on the shim. |
 | `get_calibration_snapshot` | Return calibration data for a device or calibration context. |
 | `get_coupling_graph` | Return device topology or coupling-graph data. |
 | `capability_map` | Return the library coverage map showing which wired QRMI or QDMI resources support each contract call. |

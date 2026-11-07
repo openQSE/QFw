@@ -194,9 +194,10 @@ class QPM(UTIL_QPM):
 		# reservation's credential sees it, as its circuits run. A QPU's
 		# specs need a login, which the service may not hold for itself.
 		return self.qrc.get_backend_info(lib=lib,
-			credential=self._reservation_credential(reservation_id, token))
+			credential=self._reservation_credential(
+				reservation_id, token, "get_backend_info"))
 
-	def _reservation_credential(self, reservation_id, token=None):
+	def _reservation_credential(self, reservation_id, token, operation):
 		# The credential bound to the reservation, resolved here from the
 		# controller rather than taken from the client, after the checks
 		# execution and cancel_task make (a reservation that is closing or
@@ -210,15 +211,18 @@ class QPM(UTIL_QPM):
 		self.require_managed_execution(request)
 		reservation_id = request.context.reservation_id
 		record = self.controller.provider_credential_for_reservation(
-			reservation_id, operation="get_backend_info")
+			reservation_id, operation=operation)
 		return dict(record.get("secret") or {}, reservation_id=reservation_id)
 
 	def get_device_info(self, lib=None, token=None):
 		return self.qrc.get_device_info(lib=lib)
 
 	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
-				     token=None):
-		return self.qrc.get_dynamic_backend_info(calibration_set_id, lib=lib)
+				     token=None, reservation_id=None):
+		return self.qrc.get_dynamic_backend_info(
+			calibration_set_id, lib=lib,
+			credential=self._reservation_credential(
+				reservation_id, token, "get_dynamic_backend_info"))
 
 	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,
 				     token=None):

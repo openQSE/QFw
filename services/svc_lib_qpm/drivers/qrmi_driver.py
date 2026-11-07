@@ -1219,7 +1219,7 @@ class QrmiDriver(BaseDriver):
 		}
 		return normalize_calibration(raw, device_id=self._device_id())
 
-	def get_dynamic_backend_info(self, calibration_set_id=None):
+	def get_dynamic_backend_info(self, calibration_set_id=None, credential=None):
 		if self._provider() == "ibm":
 			# IBM target() has no live dynamic state; configuration and
 			# properties are static snapshots with no calibration_set_id or
@@ -1235,7 +1235,7 @@ class QrmiDriver(BaseDriver):
 			"backend": self._descriptor.get("provider", "iqm"),
 			"metadata_supported": True,
 			"dynamic_architecture":
-				self._read_target_past_cache().get(
+				self._read_target_past_cache(credential).get(
 					"dynamic_quantum_architecture") or {},
 		}
 

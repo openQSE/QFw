@@ -17,7 +17,8 @@ class QFwTelemetry:
 	(qfw_lookup_service.get_qpm_telemetry). `context` is a callable
 	returning the backend's telemetry context. The shim library and token
 	are supplied to telemetry calls when present; `reservation_id` is
-	supplied only to `get_backend_info`, whose QPM API accepts it. A `lib`
+	supplied to `get_backend_info`, and to `get_dynamic_backend_info` when
+	asked, since an older QPM's API does not accept it there. A `lib`
 	passed to a call wins over the context's. The context's library is not
 	given to `get_dynamic_backend_info`, which a QPM serves from whichever of
 	its libraries can describe the device's live state.
@@ -58,9 +59,11 @@ class QFwTelemetry:
 		"""The device record (qhw-device-v1 from the shim)."""
 		return self._api.get_device_info(**self._arguments(lib))
 
-	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None):
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
+				     with_reservation=False):
 		return self._api.get_dynamic_backend_info(
-			**self._arguments(lib, include_library=False,
+			**self._arguments(lib, include_reservation=with_reservation,
+					  include_library=False,
 					  calibration_set_id=calibration_set_id))
 
 	def get_calibration_snapshot(self, calibration_set_id=None, lib=None):

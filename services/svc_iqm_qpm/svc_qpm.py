@@ -63,7 +63,7 @@ class QPM(UTIL_QPM):
 		return self.qrc.get_device_info()
 
 	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
-				     token=None):
+				     token=None, reservation_id=None):
 		return self.qrc.get_dynamic_backend_info(calibration_set_id)
 
 	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,

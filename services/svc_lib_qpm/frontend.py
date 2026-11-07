@@ -166,9 +166,11 @@ class Frontend:
 	def get_device_info(self, lib=None):
 		return self._dispatch("get_device_info", lib=lib)
 
-	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None):
+	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
+				     credential=None):
 		return self._dispatch(
-			"get_dynamic_backend_info", calibration_set_id, lib=lib)
+			"get_dynamic_backend_info", calibration_set_id, lib=lib,
+			credential=credential)
 
 	def get_calibration_snapshot(self, calibration_set_id=None, lib=None):
 		return self._dispatch(

@@ -220,7 +220,7 @@ def _iqm_backend(get_dynamic_backend_info, serves=True):
 
 def test_iqm_says_when_the_qpm_reports_no_architecture():
 	profile = compile_profiles.compile_profile("iqm")
-	backend = _iqm_backend(lambda: {
+	backend = _iqm_backend(lambda **arguments: {
 		"metadata_supported": False, "dynamic_architecture": {}})
 
 	with pytest.raises(DEFwExecutionError, match="dynamic architecture"):
@@ -229,7 +229,8 @@ def test_iqm_says_when_the_qpm_reports_no_architecture():
 
 def test_iqm_says_when_its_qpm_does_not_serve_the_architecture():
 	profile = compile_profiles.compile_profile("iqm")
-	backend = _iqm_backend(lambda: pytest.fail("not served"), serves=None)
+	backend = _iqm_backend(
+		lambda **arguments: pytest.fail("not served"), serves=None)
 
 	with pytest.raises(compile_profiles.DeviceNotDescribed):
 		profile.read_device(backend)
@@ -238,7 +239,7 @@ def test_iqm_says_when_its_qpm_does_not_serve_the_architecture():
 def test_a_failed_architecture_read_is_not_taken_for_an_undescribed_device():
 	profile = compile_profiles.compile_profile("iqm")
 
-	def unreachable():
+	def unreachable(**arguments):
 		raise DEFwExecutionError("device unreachable")
 
 	with pytest.raises(DEFwExecutionError, match="unreachable") as raised:

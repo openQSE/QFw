@@ -339,6 +339,39 @@ def test_the_shim_publishes_whether_it_serves_the_dynamic_architecture(
 	assert seen.get("dynamic_architecture") is published
 
 
+def test_the_architecture_is_read_with_the_reservations_credential(monkeypatch):
+	from tests.mock import test_pulser_qpm as pulser_tests
+	controller = pulser_tests._Controller()
+	qpm = pulser_tests._lib_qpm(monkeypatch, "iqm")
+	qpm.controller = controller
+	qpm.qrc = types.SimpleNamespace(
+		get_dynamic_backend_info=lambda calibration_set_id=None, lib=None,
+		credential=None: credential)
+
+	assert qpm.get_dynamic_backend_info(reservation_id="7") == {
+		"token": "alice-tok", "project_id": "proj-alice",
+		"reservation_id": 7}
+	assert controller.asked[-1] == (7, "get_dynamic_backend_info")
+	assert qpm.get_dynamic_backend_info() is None
+
+
+def test_the_architecture_credential_reaches_the_qrmi_driver():
+	from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
+	from svc_lib_qpm.frontend import Frontend
+	descriptor = {
+		"provider": "iqm", "id": DEVICE, "libraries": ["qrmi"],
+		"caps": {"get_dynamic_backend_info": ["qrmi"]}}
+	driver = QrmiDriver(descriptor)
+	read = []
+	driver._read_target = lambda credential=None: read.append(credential) or (
+		_iqm_target("cal-1"))
+
+	Frontend([driver], descriptor).get_dynamic_backend_info(
+		credential={"reservation_id": 7})
+
+	assert read == [{"reservation_id": 7}]
+
+
 def test_the_native_iqm_qpm_serves_the_dynamic_architecture(monkeypatch):
 	from svc_iqm_qpm.svc_qpm import QPM
 	qpm = QPM.__new__(QPM)

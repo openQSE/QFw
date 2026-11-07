@@ -61,7 +61,7 @@ class IqmProfile:
 		if telemetry is None or not backend.published("dynamic_architecture"):
 			raise DeviceNotDescribed(
 				"this QPM does not report the device's dynamic architecture")
-		info = telemetry.get_dynamic_backend_info() or {}
+		info = telemetry.get_dynamic_backend_info(with_reservation=True) or {}
 		dynamic = info.get("dynamic_architecture")
 		if not dynamic:
 			raise DEFwExecutionError(

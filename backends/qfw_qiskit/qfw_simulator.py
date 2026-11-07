@@ -378,9 +378,12 @@ class QFwBackend(DeviceCompiler, BackendV2):
 		if not info.get("metadata_supported"):
 			raise DEFwError("this QPM does not describe a device")
 		records = {"get_backend_info": info}
+		arguments = {"get_dynamic_backend_info": {
+			"with_reservation": bool(self.published("dynamic_architecture"))}}
 		for call in QFwTelemetry.CALLS[1:]:
 			try:
-				records[call] = getattr(telemetry, call)()
+				records[call] = getattr(telemetry, call)(
+					**arguments.get(call, {}))
 			except Exception as exc:
 				logging.info(f"QFw backend: {call} unavailable: {exc}")
 				records[call] = None

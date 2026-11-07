@@ -10,8 +10,9 @@ def test_qpm_telemetry_api_accepts_token_placeholders():
 		# A Pulser client reads a Pasqal QPU's devices as its reservation.
 		"get_backend_info": ["self", "lib", "token", "reservation_id"],
 		"get_device_info": ["self", "lib", "token"],
+		# An IQM compile reads the architecture as its reservation.
 		"get_dynamic_backend_info": [
-			"self", "calibration_set_id", "lib", "token"],
+			"self", "calibration_set_id", "lib", "token", "reservation_id"],
 		"get_calibration_snapshot": [
 			"self", "calibration_set_id", "lib", "token"],
 		"get_coupling_graph": [

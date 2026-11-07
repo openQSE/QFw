@@ -89,7 +89,7 @@ class QPM(UTIL_QPM):
 		}
 
 	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
-				     token=None):
+				     token=None, reservation_id=None):
 		return {
 			'backend': 'qb',
 			'calibration_set_id': calibration_set_id,

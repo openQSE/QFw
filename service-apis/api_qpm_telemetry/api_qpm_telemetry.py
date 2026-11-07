@@ -9,7 +9,7 @@ class QPMTelemetry(QPMRemoteBase):
 		pass
 
 	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
-				     token=None):
+				     token=None, reservation_id=None):
 		pass
 
 	def get_calibration_snapshot(self, calibration_set_id=None, lib=None,

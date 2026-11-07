@@ -123,7 +123,7 @@ class QPM(UTIL_QPM):
 		}
 
 	def get_dynamic_backend_info(self, calibration_set_id=None, lib=None,
-				     token=None):
+				     token=None, reservation_id=None):
 		info = self.get_device_info(lib=lib, token=token)
 		info["calibration_set_id"] = calibration_set_id
 		return info
