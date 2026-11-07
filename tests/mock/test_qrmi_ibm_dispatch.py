@@ -376,6 +376,39 @@ def test_a_reservation_ending_during_a_failed_refresh_still_serves_the_target(
 	assert cache_key not in driver._target_retry_after
 
 
+def test_an_iqm_job_pins_the_calibration_set_read_after_the_ttl(monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+
+	class Stop(Exception):
+		pass
+
+	pinned = []
+
+	def stop(iqm_circuit, shots, calibration_set_id):
+		pinned.append(calibration_set_id)
+		raise Stop()
+
+	recalibrated = {"dynamic_quantum_architecture": {
+		"calibration_set_id": "cal-2"}}
+	driver = _expired_driver(
+		monkeypatch, "iqm",
+		{"dynamic_quantum_architecture": {"calibration_set_id": "cal-1"}},
+		lambda credential=None: _qpu_returning(recalibrated))
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "circuit")
+	monkeypatch.setattr(
+		iqm_transcode, "build_iqm_circuit",
+		lambda circuit, dynamic, mapping: circuit)
+	driver._resource = lambda: object()
+	driver._build_iqmjson = stop
+
+	with pytest.raises(Stop):
+		driver._run_iqm_circuit(types.SimpleNamespace(
+			info={"num_shots": 1}, provider_credential=None))
+
+	assert pinned == ["cal-2"]
+
+
 def test_a_device_that_stays_down_is_asked_once_per_ttl(monkeypatch):
 	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
 	attempts = []
