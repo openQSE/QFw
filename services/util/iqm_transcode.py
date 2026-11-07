@@ -229,11 +229,10 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 			index_to_name = logical_to_physical_qubits(
 				qiskit_circuit, backend.architecture, mapping)
 			# A star device couples its qubits only through its resonators.
-			resonators = list(getattr(
-				backend.architecture, "computational_resonators", None) or ())
 			index_to_name.update({
 				len(index_to_name) + offset: resonator
-				for offset, resonator in enumerate(resonators)})
+				for offset, resonator in enumerate(
+					backend.architecture.computational_resonators)})
 			restrict_to_qubits = list(index_to_name.values())
 			initial_layout = list(range(qiskit_circuit.num_qubits))
 		transpiled = transpile_to_IQM(
