@@ -100,7 +100,6 @@ def test_a_ghz_runs_through_the_clientless_path():
 
 
 def test_a_ghz_transpiles_for_a_star_device():
-	# Naming qubits by backend.num_qubits left the resonator out: a KeyError.
 	_iqm()
 	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
 	from util.iqm_transcode import build_iqm_circuit
