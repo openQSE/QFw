@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from qiskit.providers import BackendV2, Options
 
 from .qfw_compile import (
-	DEVICE_SNAPSHOT_SCHEMA, SNAPSHOT_PROPERTIES, DeviceCompiler)
+	DEVICE_SNAPSHOT_SCHEMA, SNAPSHOT_PROPERTIES, DeviceCompiler,
+	SnapshotDevice)
 from .qfw_job import (
 	QFwJob, QFW_INFO_PASSTHROUGH_OPTIONS, SHIM_LIB_ENV,
 	normalize_reservation_id, normalize_shim_library)
@@ -387,7 +388,7 @@ class QFwBackend(DeviceCompiler, BackendV2):
 			except Exception as exc:
 				logging.info(f"QFw backend: {call} unavailable: {exc}")
 				records[call] = None
-		return {
+		snapshot = {
 			"schema": DEVICE_SNAPSHOT_SCHEMA,
 			"provider": self._device_provider(),
 			"device_id": self.published("isa_device_id"),
@@ -397,6 +398,13 @@ class QFwBackend(DeviceCompiler, BackendV2):
 				if self.published(name) is not None},
 			"records": records,
 		}
+		try:
+			SnapshotDevice(snapshot)._read_what_a_compile_reads()
+		except Exception as exc:
+			raise DEFwError(
+				"this snapshot lacks what a compile for the device needs, so "
+				f"take it again: {getattr(exc, 'msg', None) or exc}") from exc
+		return snapshot
 
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:

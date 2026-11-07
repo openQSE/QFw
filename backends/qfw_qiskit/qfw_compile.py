@@ -112,6 +112,19 @@ class DeviceCompiler:
 				batch, compiler, profile, device, kwargs)]
 		return checked[0] if single else checked
 
+	def _read_what_a_compile_reads(self):
+		try:
+			profile = compile_profile(self._device_provider())
+		except DEFwExecutionError:
+			return
+		if profile is not None:
+			try:
+				self._read_compile_device(profile)
+				return
+			except DeviceNotDescribed:
+				pass
+		self._require_a_device_target()
+
 	def _compile_to_target(self, compiler, circuits, options):
 		self._require_a_device_target()
 		return self.COMPILERS[compiler](self, circuits, **options)

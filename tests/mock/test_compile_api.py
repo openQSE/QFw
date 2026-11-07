@@ -415,27 +415,37 @@ def test_check_isa_needs_a_qpm_that_takes_a_marker(monkeypatch):
 
 # --- device_snapshot ---------------------------------------------------------
 
+SNAPSHOT_RECORDS = target_tests.iqm_records()
+DYNAMIC = {"dynamic_architecture": {"qubits": target_tests.IQM_QUBITS}}
+SERVES_DYNAMIC = dict(PUBLISHED, dynamic_architecture=True)
+
+
 def _snapshot_telemetry(**fields):
-	return target_tests.FakeTelemetryAPI(
-		backend_info={"backend": "iqm", "metadata_supported": True},
-		device_info={"device": 1}, coupling_graph={"coupling": 1},
-		calibration={"calibration": 1}, **fields)
+	telemetry = target_tests.FakeTelemetryAPI(*SNAPSHOT_RECORDS, **fields)
+	telemetry.records["get_dynamic_backend_info"] = DYNAMIC
+	return telemetry
+
+
+def _snapshot_backend(monkeypatch, properties=SERVES_DYNAMIC, **fields):
+	return _backend(
+		monkeypatch, properties=properties,
+		telemetry=_snapshot_telemetry(**fields))
 
 
 def test_a_snapshot_holds_the_device_records(monkeypatch):
-	backend = _backend(monkeypatch, telemetry=_snapshot_telemetry())
+	backend = _snapshot_backend(monkeypatch)
 
 	snapshot = backend.device_snapshot()
 
+	info, device, coupling, calibration = SNAPSHOT_RECORDS
 	assert snapshot["schema"] == "qfw-device-snapshot-v1"
 	assert (snapshot["provider"], snapshot["device_id"]) == ("iqm", DEVICE)
 	assert snapshot["captured_at"].endswith("+00:00")
-	assert snapshot["records"]["get_backend_info"]["backend"] == "iqm"
-	assert snapshot["records"]["get_device_info"] == {"device": 1}
-	assert snapshot["records"]["get_coupling_graph"] == {"coupling": 1}
-	assert snapshot["records"]["get_calibration_snapshot"] == {"calibration": 1}
-	assert "get_dynamic_backend_info" in snapshot["records"]
-	assert snapshot["published"] == PUBLISHED
+	assert snapshot["records"] == {
+		"get_backend_info": info, "get_device_info": device,
+		"get_coupling_graph": coupling, "get_calibration_snapshot": calibration,
+		"get_dynamic_backend_info": DYNAMIC}
+	assert snapshot["published"] == SERVES_DYNAMIC
 
 
 def test_a_snapshot_of_another_schema_is_refused():
@@ -447,8 +457,7 @@ def test_a_snapshot_of_another_schema_is_refused():
 
 def test_a_snapshot_cannot_read_its_device_again(monkeypatch):
 	from qfw_qiskit.qfw_compile import SnapshotDevice
-	snapshot = _backend(
-		monkeypatch, telemetry=_snapshot_telemetry()).device_snapshot()
+	snapshot = _snapshot_backend(monkeypatch).device_snapshot()
 
 	with pytest.raises(DEFwExecutionError, match="take a new one"):
 		SnapshotDevice(snapshot).compile(Circuit(), refresh_target=True)
@@ -456,21 +465,46 @@ def test_a_snapshot_cannot_read_its_device_again(monkeypatch):
 
 def test_a_snapshot_answers_for_the_qpm_it_recorded(monkeypatch):
 	from qfw_qiskit.qfw_compile import SnapshotDevice
-	snapshot = _backend(
-		monkeypatch, telemetry=_snapshot_telemetry()).device_snapshot()
+	snapshot = _snapshot_backend(monkeypatch).device_snapshot()
 
 	device = SnapshotDevice(snapshot)
 
 	assert device.isa_device() == ("iqm", DEVICE)
-	assert device.telemetry.get_device_info() == {"device": 1}
+	assert device.telemetry.get_dynamic_backend_info() == DYNAMIC
 
 
-def test_a_snapshot_goes_without_a_record_the_qpm_cannot_give(monkeypatch):
-	telemetry = _snapshot_telemetry(failures={
+def test_a_snapshot_goes_without_a_record_a_compile_does_not_read(monkeypatch):
+	backend = _snapshot_backend(monkeypatch, failures={
 		"get_coupling_graph": RuntimeError("not implemented")})
-	backend = _backend(monkeypatch, telemetry=telemetry)
 
 	assert backend.device_snapshot()["records"]["get_coupling_graph"] is None
+
+
+def test_a_snapshot_without_the_record_a_compile_reads_is_refused(monkeypatch):
+	backend = _snapshot_backend(monkeypatch, failures={
+		"get_dynamic_backend_info": RuntimeError("device unreachable")})
+
+	with pytest.raises(DEFwError, match="take it again"):
+		backend.device_snapshot()
+
+
+def test_a_snapshot_of_records_no_target_can_be_built_from_is_refused(
+		monkeypatch):
+	telemetry = target_tests.FakeTelemetryAPI(
+		backend_info={"backend": "iqm", "metadata_supported": True},
+		device_info={"device": 1})
+	backend = _backend(monkeypatch, properties=PUBLISHED, telemetry=telemetry)
+
+	with pytest.raises(DEFwError, match="take it again"):
+		backend.device_snapshot()
+
+
+def test_a_device_that_is_not_compiled_ahead_of_time_still_snapshots(
+		monkeypatch):
+	backend = _snapshot_backend(
+		monkeypatch, properties={"device_provider": "aws"})
+
+	assert backend.device_snapshot()["provider"] == "aws"
 
 
 def test_a_snapshot_needs_a_device_to_describe(monkeypatch):

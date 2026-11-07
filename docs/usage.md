@@ -1177,7 +1177,7 @@ when the device does not say.
 
 `backend.device_snapshot()` returns the QPM's records of the device, with its
 provider, id and the time they were read, as plain data that can be saved as
-JSON.
+JSON. It raises when a record a compile needs could not be read.
 
 To mark a circuit compiled some other way, name the device it was compiled for:
 
