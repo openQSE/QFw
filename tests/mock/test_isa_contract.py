@@ -274,10 +274,11 @@ def test_a_qpm_compares_its_own_device_and_provider(device, provider, refusal):
 		QPM.__new__(QPM).create_circuit(_info())
 
 
-def test_a_qpm_refuses_a_calibration_set_it_cannot_run_on():
-	info = {"calibration_set_id": "cal-0", "qasm": "OPENQASM 2.0;"}
+@pytest.mark.parametrize("key", ["calibration_set_id", "iqm_calibration_set_id"])
+def test_a_qpm_refuses_a_calibration_set_it_cannot_run_on(key):
+	info = {key: "cal-0", "qasm": "OPENQASM 2.0;"}
 
-	with pytest.raises(DEFwExecutionError, match="chosen calibration set"):
+	with pytest.raises(DEFwExecutionError, match=f"leave {key} out"):
 		_base_qpm().create_circuit(info)
 
 

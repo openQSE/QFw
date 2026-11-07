@@ -144,6 +144,10 @@ def _add_qpm_qubit_resource(resources, provider, num_qubits):
 	_add_metadata_value(resources, f"{str(provider).upper()}-{num_qubits}q")
 
 
+# The info keys the IQM run paths read as the calibration set to run on.
+CALIBRATION_PIN_KEYS = ("calibration_set_id", "iqm_calibration_set_id")
+
+
 class UTIL_QPM:
 	def __init__(self, qrc, max_ppn=MAX_PPN, start=True, target_id=None,
 		     admission_threading_mode=None, scheduler_threading_mode=None,
@@ -207,11 +211,12 @@ class UTIL_QPM:
 			isa.check_envelope(
 				prepared_info, self.circuit_stages(), self.isa_device_id(),
 				self.isa_provider())
-		if (prepared_info.get("calibration_set_id") is not None
-				and not self.runs_on_a_chosen_calibration(prepared_info)):
+		pinned = [key for key in CALIBRATION_PIN_KEYS
+			if prepared_info.get(key) is not None]
+		if pinned and not self.runs_on_a_chosen_calibration(prepared_info):
 			raise DEFwExecutionError(
 				"this QPM cannot run a circuit on a chosen calibration set; "
-				"leave calibration_set_id out")
+				f"leave {', '.join(pinned)} out")
 		hook_info = self.prepare_circuit(prepared_info)
 		if hook_info is not None:
 			prepared_info = hook_info
