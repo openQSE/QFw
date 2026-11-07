@@ -3,7 +3,9 @@ from defw_util import print_thread_stack_trace_to_logger
 import logging
 import time
 import queue
+import signal
 import threading
+import traceback
 import sys
 import os
 from defw_exception import DEFwExecutionError, DEFwInProgress, DEFwOutOfResources
@@ -13,6 +15,49 @@ from util.circuit_payload import openqasm2_text
 from util import instrumentation
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
+
+# A circuit's runner gets this long before the QPM kills it and fails the
+# circuit. PRTE can lose a finished runner's exit, and with nothing to stop
+# it the launcher then waits forever while every later circuit queues
+# behind it (openQSE/QFw#196). Set qpm.circuit-time-limit-seconds in the
+# site file to change it; 0 turns the limit off.
+SITE_CONFIG_ENV = "QFW_SITE_CONFIG"
+CIRCUIT_TIME_LIMIT_KEY = "circuit-time-limit-seconds"
+DEFAULT_CIRCUIT_TIME_LIMIT_SEC = 600
+
+
+def circuit_time_limit(path=None):
+	"""The runner time limit in seconds from the site file, or None for
+	no limit."""
+	if path is None:
+		path = os.environ.get(SITE_CONFIG_ENV, "").strip()
+	value = None
+	if path and os.path.exists(path):
+		try:
+			import yaml
+			with open(path, "r", encoding="utf-8") as stream:
+				data = yaml.safe_load(stream) or {}
+		except Exception:
+			# As for the completion-queue settings, a file this cannot
+			# read leaves the defaults.
+			data = {}
+		qpm = data.get("qpm") if isinstance(data, dict) else None
+		if isinstance(qpm, dict):
+			value = qpm.get(CIRCUIT_TIME_LIMIT_KEY)
+	if value is None:
+		return DEFAULT_CIRCUIT_TIME_LIMIT_SEC
+	source = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
+	if isinstance(value, bool):
+		raise ValueError(f"invalid {source}: {value!r}")
+	try:
+		limit = float(value)
+	except (TypeError, ValueError):
+		raise ValueError(f"invalid {source}: {value!r}") from None
+	if limit < 0 or limit != limit:
+		raise ValueError(
+			f"{source} must be a number of seconds, or 0 for no limit: "
+			f"{value!r}")
+	return limit or None
 
 
 class UTIL_QRC:
@@ -32,6 +77,7 @@ class UTIL_QRC:
 		self.worker_pool_rr = 0
 		self.num_workers = num_workers
 		self.num_worker_tasks = num_worker_tasks
+		self.circuit_time_limit = circuit_time_limit()
 		logging.debug(f'start = {start}')
 		if start:
 			self.launcher = svc_launcher.Launcher()
@@ -68,64 +114,119 @@ class UTIL_QRC:
 				#stdout, stderr, rc = task_info['launcher'].status(task_info['pid'])
 				stdout, stderr, rc = self.launcher.status(task_info['pid'])
 			except DEFwInProgress:
+				self._enforce_time_limit(task_info)
 				continue
 			except Exception as e:
 				raise e
 
 			# at this point, it already has a return code!
 			complete.append(task_info)
-
-			circ = task_info['circ']
-			cid = circ.get_cid()
-			qasm_file = task_info['qasm_file']
-
-			error = None
 			try:
-				if rc == 0:
-					try:
-						output = self.parse_task_result(stdout, circ, task_info)
-						circ.set_exec_done()
-					except Exception as e:
-						logging.critical(f"parse result failure = {e}")
-						output = "{result: missing, exception: " + f"{e}" + "}"
-						circ.set_fail()
-						error = e
-				else:
-					stdout = stdout.decode('utf-8')
-					stderr = stderr.decode('utf-8')
-					res = stdout + '\n' + stderr
-					output = "{result: " + f"{res}" + "}"
-					circ.set_fail()
-					error = DEFwExecutionError(f"circuit runner exited {rc}")
-			finally:
-				self.cleanup_task(circ, task_info)
-				instrumentation.finish_backend_execution(
-					task_info.get('telemetry'), circ, error=error)
-
-			try:
-				os.remove(qasm_file)
-			except OSError:
-				pass
-
-			r = {
-				'cid': cid,
-				'result': output,
-				'rc': rc,
-				'launch_time': circ.launch_time,
-				'creation_time': circ.creation_time,
-				'exec_time': circ.exec_time,
-				'completion_time': circ.completion_time,
-				'resources_consumed_time': circ.resources_consumed_time,
-				'cq_enqueue_time': time.time(),
-				'cq_dequeue_time': -1
-			}
-
-			logging.defw_service(f"QPM task result: {r}")
-			circ.free_resources(circ, result=r)
-			self._push_or_store_result(r)
+				self._finish_task(task_info, stdout, stderr, rc)
+			except Exception:
+				# The error belongs to this circuit. If it escaped,
+				# this runner would die with its other tasks, and the
+				# QPM would stop running circuits (openQSE/QFw#196).
+				logging.critical(
+					"finishing circuit "
+					f"{task_info['circ'].get_cid()} failed:\n"
+					f"{traceback.format_exc()}")
 
 		for task_info in complete:
 			self.worker_pool[wid]['active_tasks'].remove(task_info)
+
+	def _enforce_time_limit(self, task_info):
+		"""Kill a runner that has outlived the circuit time limit.
+
+		The launcher then reports the exit, and the circuit fails like
+		any other whose runner was killed.
+		"""
+		limit = self.circuit_time_limit
+		if not limit or task_info.get('time_limit_hit'):
+			return
+		started = task_info.get('started')
+		if started is None or time.monotonic() - started < limit:
+			return
+		pid = task_info['pid']
+		# A launch on another host returns 0, and killpg(0) would
+		# kill this process's own group.
+		if not isinstance(pid, int) or pid <= 0:
+			return
+		task_info['time_limit_hit'] = limit
+		logging.critical(
+			f"circuit {task_info['circ'].get_cid()} has run for more "
+			f"than {limit:g} s (qpm.{CIRCUIT_TIME_LIMIT_KEY}); killing "
+			f"its launcher, pid {pid}")
+		try:
+			# The launcher starts each runner in a session of its own,
+			# so this reaches whatever it started on this host.
+			os.killpg(pid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+
+	def _finish_task(self, task_info, stdout, stderr, rc):
+		circ = task_info['circ']
+		cid = circ.get_cid()
+		qasm_file = task_info['qasm_file']
+
+		error = None
+		try:
+			if rc == 0:
+				try:
+					output = self.parse_task_result(stdout, circ, task_info)
+					circ.set_exec_done()
+				except Exception as e:
+					logging.critical(f"parse result failure = {e}")
+					output = "{result: missing, exception: " + f"{e}" + "}"
+					circ.set_fail()
+					error = e
+			else:
+				stdout = stdout.decode('utf-8')
+				stderr = stderr.decode('utf-8')
+				res = stdout + '\n' + stderr
+				limit = task_info.get('time_limit_hit')
+				if limit:
+					message = (
+						f"circuit runner killed after {limit:g} s, the "
+						f"QPM's circuit time limit "
+						f"(qpm.{CIRCUIT_TIME_LIMIT_KEY})")
+					res = message + '\n' + res
+					error = DEFwExecutionError(message)
+				else:
+					error = DEFwExecutionError(
+						f"circuit runner exited {rc}")
+				output = "{result: " + f"{res}" + "}"
+				circ.set_fail()
+		finally:
+			self.cleanup_task(circ, task_info)
+			instrumentation.finish_backend_execution(
+				task_info.get('telemetry'), circ, error=error)
+
+		try:
+			os.remove(qasm_file)
+		except OSError:
+			pass
+
+		r = {
+			'cid': cid,
+			'result': output,
+			'rc': rc,
+			'launch_time': circ.launch_time,
+			'creation_time': circ.creation_time,
+			'exec_time': circ.exec_time,
+			'completion_time': circ.completion_time,
+			'resources_consumed_time': circ.resources_consumed_time,
+			'cq_enqueue_time': time.time(),
+			'cq_dequeue_time': -1
+		}
+
+		logging.defw_service(f"QPM task result: {r}")
+		try:
+			circ.free_resources(circ, result=r)
+		finally:
+			# The client gets its result even if the QPM's own
+			# bookkeeping for it failed.
+			self._push_or_store_result(r)
 
 	def runner(self, my_id):
 		# get the next available entry on the queue
@@ -281,6 +382,7 @@ class UTIL_QRC:
 		task_info['circ'] = circ
 		task_info['qasm_file'] = qasm_file
 		task_info['pid'] = pid
+		task_info['started'] = time.monotonic()
 		task_info['telemetry'] = execution
 
 		return task_info

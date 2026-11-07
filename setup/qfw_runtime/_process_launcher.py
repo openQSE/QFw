@@ -116,7 +116,9 @@ def start_directory(argv):
     pid_file = Path(args.pid_file) if args.pid_file else run_dir / "pid"
     ready_file = (
         Path(args.ready_file) if args.ready_file else run_dir / "ready.json")
-    env = os.environ.copy()
+    # The caller's own DEFw process variables would otherwise reach the
+    # service wherever this launcher does not set them (openQSE/QFw#187).
+    env = qfw_config.launch_environment(run_state=False)
     env.update({
         "DEFW_AGENT_NAME": dirsvc_name,
         "DEFW_LISTEN_PORT": str(dirsvc_port),
@@ -241,7 +243,9 @@ def start_qpm(argv):
         os.environ.get("QFW_SERVICE_ASSIGNED_HOSTS") or
         _resolve_host_policy(service.get("assigned-hosts"), allocation)
     )
-    env = os.environ.copy()
+    # The caller's own DEFw process variables would otherwise reach the
+    # service wherever this launcher does not set them (openQSE/QFw#187).
+    env = qfw_config.launch_environment(run_state=False)
     env.update({
         "DEFW_AGENT_NAME": service_id,
         "DEFW_LISTEN_PORT": str(service_port),

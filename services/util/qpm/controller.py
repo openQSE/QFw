@@ -98,6 +98,8 @@ QPM_TASK_TERMINAL_STATES = (
 	QPM_TASK_FAILED,
 	QPM_TASK_CANCELLED,
 )
+# The scheduler's names for a task it no longer runs.
+SCHEDULER_TASK_ENDED_STATES = ("completed", "failed", "cancelled")
 TELEMETRY_BASIC_DISCOVERY = "basic-discovery"
 TELEMETRY_CALLER_OWNED = "caller-owned"
 TELEMETRY_MANAGER_AGGREGATE = "manager-aggregate"
@@ -1932,8 +1934,8 @@ class QPMTargetController:
 				return runtime
 			self._reconcile_task_hold_locked(runtime, circuit)
 			if runtime.scheduler_task_id is not None:
-				mark_scheduler_task_completed(
-					self.scheduler_context, runtime.scheduler_task_id)
+				self._end_scheduler_task_locked(
+					runtime, mark_scheduler_task_completed)
 			self.provider_inflight.discard(qtask_id)
 			self.selected_qtask_ids.discard(qtask_id)
 			self.dispatching_qtask_ids.pop(qtask_id, None)
@@ -1953,6 +1955,29 @@ class QPMTargetController:
 			self._dispatch_completion_deliveries(deliveries)
 		return runtime
 
+	def _end_scheduler_task_locked(self, runtime, mark):
+		"""Tell the scheduler that a task ended, unless it already
+		knows.
+
+		Closing a reservation cancels its tasks in the scheduler first,
+		and a provider that cannot be cancelled keeps running. When that
+		provider finishes, the scheduler refuses to end the task a
+		second time. The task is over either way, so that refusal is no
+		error here. Raising it stopped the QPM, because the runner that
+		reported the result died before it gave back the circuit's
+		resources (openQSE/QFw#196).
+		"""
+		try:
+			mark(self.scheduler_context, runtime.scheduler_task_id)
+		except Exception:
+			try:
+				state = scheduler_task_state_name(
+					self.scheduler_context, runtime.scheduler_task_id)
+			except Exception:
+				state = None
+			if state not in SCHEDULER_TASK_ENDED_STATES:
+				raise
+
 	def _fail_scheduled_task_locked(self, circuit, error=None, reason=None,
 					deliveries=None):
 		qtask_id = circuit.info["qtask_id"]
@@ -1965,8 +1990,8 @@ class QPMTargetController:
 			return runtime
 		self._reconcile_task_hold_locked(runtime, circuit)
 		if runtime.scheduler_task_id is not None:
-			mark_scheduler_task_failed(
-				self.scheduler_context, runtime.scheduler_task_id)
+			self._end_scheduler_task_locked(
+				runtime, mark_scheduler_task_failed)
 		self.provider_inflight.discard(qtask_id)
 		self.selected_qtask_ids.discard(qtask_id)
 		self.dispatching_qtask_ids.pop(qtask_id, None)

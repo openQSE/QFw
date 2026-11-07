@@ -60,6 +60,15 @@ def qfw_setup(argv):
     parser.add_argument("--no-start-services", action="store_true")
     args = parser.parse_args(argv)
 
+    inherited = qfw_config.inherited_variables()
+    if inherited:
+        print(
+            "qfw-setup: ignoring inherited " + ", ".join(inherited) +
+            ": they describe another DEFw process or QFw run",
+            file=sys.stderr,
+        )
+        qfw_config.discard_inherited_environment()
+
     site_path = qfw_config.resolve_site_config(args.site_config)
     site = qfw_config.load_yaml(site_path)
     prefixes = qfw_config.site_install_prefixes(site)
@@ -156,7 +165,11 @@ def qfw_srun(argv):
 
 
 def _application_environment(state):
-    caller_env = os.environ.copy()
+    # The application's DEFw identity, its directory and the run's own
+    # variables come from this run's state, never from the caller: a job
+    # submitted by a process that imported DEFw inherits that process's
+    # placeholders (openQSE/QFw#187).
+    caller_env = qfw_config.launch_environment()
     runtime_env = state.get("environment") or {}
     env = dict(caller_env)
     env.update(runtime_env)
@@ -453,6 +466,9 @@ def _application_launch_command(command, allocation, launch_options=None):
 
 
 def _configure_application_defw_environment(env, state=None):
+    # env holds no inherited DEFw process variables (see
+    # qfw_config.DEFW_PROCESS_VARIABLES), so every value set here comes from
+    # the run's state.
     if state and not env.get("DEFW_LOG_DIR"):
         env["DEFW_LOG_DIR"] = str(
             Path(state["run_dir"]) / "application" / "logs")
@@ -461,14 +477,12 @@ def _configure_application_defw_environment(env, state=None):
         return
     parent_host, parent_port, parent_name = parent
     env["DEFW_DISABLE_DIRSVC"] = "no"
-    env.setdefault("DEFW_AGENT_TYPE", "agent")
-    env.setdefault("DEFW_SHELL_TYPE", "cmdline")
-    env.setdefault("DEFW_PARENT_HOSTNAME", parent_host)
-    env.setdefault("DEFW_PARENT_PORT", str(parent_port))
-    env.setdefault("DEFW_PARENT_NAME", parent_name)
-    parent_host = env.get("DEFW_PARENT_HOSTNAME", "")
-    parent_addr = env.get("DEFW_PARENT_ADDR", "")
-    if parent_host and parent_addr in {"", "0.0.0.0", "None"}:
+    env["DEFW_AGENT_TYPE"] = "agent"
+    env["DEFW_SHELL_TYPE"] = "cmdline"
+    env["DEFW_PARENT_HOSTNAME"] = parent_host
+    env["DEFW_PARENT_PORT"] = str(parent_port)
+    env["DEFW_PARENT_NAME"] = parent_name
+    if parent_host:
         env["DEFW_PARENT_ADDR"] = _resolve_host_address(parent_host)
     if _int_value(env.get("DEFW_LISTEN_PORT"), 0) <= 0:
         env["DEFW_LISTEN_PORT"] = str(_free_tcp_port(""))
