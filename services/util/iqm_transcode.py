@@ -239,11 +239,12 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 		# this on transpile_to_IQM: pass the matching qubit_index_to_name.
 		# logical_to_physical_qubits already built that map, so use it, and
 		# only fall back to the device's full index map when nothing was
-		# restricted.
+		# restricted. The transpiled circuit, not backend.num_qubits, sets
+		# its size: on a star device it also holds the resonator.
 		if index_to_name is None:
 			index_to_name = {
 				index: backend.index_to_qubit_name(index)
-				for index in range(backend.num_qubits)
+				for index in range(transpiled.num_qubits)
 			}
 		instructions = tuple(serialize_instructions(
 			transpiled, qubit_index_to_name=index_to_name))
