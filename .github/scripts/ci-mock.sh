@@ -18,7 +18,8 @@ PYTHONPYCACHEPREFIX=/tmp/qfw-pyc python -m pytest tests/mock -q
 # the stubs contained to the suite that wants them.
 #
 # tests/qiskit is still excluded here: it needs a real qiskit install, which
-# this job does not have. tests/pulser needs Pulser and runs in ci-pulser.
+# this job does not have, and runs in ci-qdmi and ci-qiskit. tests/pulser needs
+# Pulser and runs in ci-pulser.
 echo "--- ci-mock unit tests ---"
 PYTHONPYCACHEPREFIX=/tmp/qfw-pyc python -m pytest tests -q \
 	--ignore=tests/mock --ignore=tests/qiskit --ignore=tests/pulser
