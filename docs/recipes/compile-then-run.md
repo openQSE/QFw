@@ -76,9 +76,12 @@ qfw-teardown
 ```
 
 ```bash
-compiled=$(sbatch --parsable --partition=cpu compile.sh)
-sbatch --dependency=afterok:"${compiled}" --qpu=<name> run.sh
+compiled=$(sbatch --parsable --partition=<cpu-partition> compile.sh)
+sbatch --dependency=afterok:"${compiled}" --qpu=<name> \
+  --workload-kind=quantum --circ-count=1 --max-qubits=<device-qubits> \
+  --max-depth=20 --max-shots=1024 run.sh
 ```
 
 `--qpu` reserves the QPU before the batch script starts, so compiling inside
-`run.sh` would hold the reservation again.
+`run.sh` would hold the reservation again. A compiled circuit spans every qubit
+of the device, so `--max-qubits` is the device's width, not the circuit's.
