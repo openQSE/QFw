@@ -217,6 +217,17 @@ def run_job(path, config_dir):
 	options = dict(
 		FakeSlurmDriver().execution_options(shots=64),
 		reservation_id=reservation_id)
+	# The QPM drops a circuit once it has run, so read what it registered
+	# before that.
+	registered = {}
+	create_circuit = qpm.create_circuit
+
+	def recording_create_circuit(info, request=None):
+		cid = create_circuit(info, request=request)
+		registered[cid] = qpm.circuits[cid].info
+		return cid
+
+	qpm.create_circuit = recording_create_circuit
 	try:
 		qfw_job.QFwJob(
 			backend, client, FakeEventAPI(), compiled, options).submit()
@@ -227,7 +238,7 @@ def run_job(path, config_dir):
 		response = qpm.async_run(info, reservation_id=reservation_id)
 	except DEFwExecutionError as exc:
 		return {"refused": str(exc), "cids": list(qpm.circuits)}
-	received = qpm.circuits[response["cid"]].info
+	received = registered[response["cid"]]
 	completion = fake_iqm._wait_for_completion(
 		qpm, response["cid"], reservation_id)
 	return {
