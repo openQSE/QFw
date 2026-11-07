@@ -171,6 +171,31 @@ def test_qfw_job_cancels_the_unfinished_circuits_on_timeout_when_asked(
 	}]
 
 
+def test_qfw_job_times_out_and_cancels_the_rest_when_a_cancel_is_refused(
+		monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from defw_exception import DEFwError
+
+	class RefusingQPM(FakeQPM):
+		def cancel_task(self, cid=None, **kwargs):
+			super().cancel_task(cid=cid, **kwargs)
+			raise DEFwError(f"reservation 1 has expired, {cid} not cancelled")
+
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="first"),
+		qfw_job.QuantumCircuit(1, name="second"),
+	]
+	fake_qpm = RefusingQPM(cids=["cid-1", "cid-2"])
+	job = _submitted_job(
+		monkeypatch, fake_qpm, FakeEventAPI(), circuits,
+		timeout=0, cancel_on_timeout=True)
+
+	with pytest.raises(qfw_job.JobTimeoutError, match="2 of 2 circuit"):
+		job.result()
+	assert sorted(c["cid"] for c in fake_qpm.cancelled) == ["cid-1", "cid-2"]
+	assert job.status() == qfw_job.JobStatus.ERROR
+
+
 def test_qfw_job_without_a_timeout_waits_for_every_circuit(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 

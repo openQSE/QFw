@@ -332,13 +332,17 @@ class QFwJob(Job):
 		return qpm_results
 
 	def _time_out(self, missing_cids):
+		self._status = JobStatus.ERROR
 		if self._options.get("cancel_on_timeout"):
 			context = self._execution_context()
 			for cid in missing_cids:
-				self._qpm.cancel_task(
-					cid=cid, reservation_id=context["reservation_id"],
-					token=context.get("token"), reason="job-timeout")
-		self._status = JobStatus.ERROR
+				try:
+					self._qpm.cancel_task(
+						cid=cid, reservation_id=context["reservation_id"],
+						token=context.get("token"), reason="job-timeout")
+				except Exception as e:
+					logging.defw_app(
+						f"QFw job {self._job_id} could not cancel {cid}: {e}")
 		missing = ", ".join(
 			f"{cid} ({entry[cid]['exp'].name})"
 			for entry in self._cid_list for cid in entry
