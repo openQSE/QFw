@@ -301,6 +301,7 @@ def _expired_driver(monkeypatch, provider, first, refresh):
 	driver._target()
 	clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
 	driver._qpu = refresh
+	driver.clock = clock
 	return driver
 
 
@@ -353,7 +354,44 @@ def test_a_refresh_after_a_failure_replaces_the_target(monkeypatch):
 	driver._target()
 	driver._qpu = lambda credential=None: _qpu_returning(newer)
 
+	assert driver._target() == good
+	driver.clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
 	assert driver._target() == newer
+
+
+def test_a_reservation_ending_during_a_failed_refresh_still_serves_the_target(
+		monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	driver = _expired_driver(monkeypatch, "iqm", good, None)
+	cache_key = driver._credential_cache_key(None)
+
+	def evicted_while_reading(credential=None):
+		driver._target_cache.pop(cache_key)
+		driver._target_fetched_at.pop(cache_key)
+		raise RuntimeError("device unreachable")
+
+	driver._qpu = evicted_while_reading
+
+	assert driver._target() == good
+	assert cache_key not in driver._target_retry_after
+
+
+def test_a_device_that_stays_down_is_asked_once_per_ttl(monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	attempts = []
+
+	def refresh(credential=None):
+		attempts.append(credential)
+		raise RuntimeError("device unreachable")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, refresh)
+	for _ in range(3):
+		driver._target()
+	assert len(attempts) == 1
+
+	driver.clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
+	driver._target()
+	assert len(attempts) == 2
 
 
 def test_a_failed_first_read_still_raises(monkeypatch):

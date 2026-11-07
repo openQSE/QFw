@@ -372,6 +372,7 @@ class QrmiDriver(BaseDriver):
 		self._resource_locks_guard = threading.Lock()
 		self._target_cache = {}
 		self._target_fetched_at = {}
+		self._target_retry_after = {}
 		self._target_ttl_seconds = target_ttl_seconds()
 		self._jobs = JobRecords("QRMI")
 
@@ -1038,6 +1039,7 @@ class QrmiDriver(BaseDriver):
 			resource = self._resource_objs.pop(cache_key, None)
 			target = self._target_cache.pop(cache_key, None)
 			self._target_fetched_at.pop(cache_key, None)
+			self._target_retry_after.pop(cache_key, None)
 		with self._resource_locks_guard:
 			self._resource_locks.pop(cache_key, None)
 		if resource is not None:
@@ -1065,7 +1067,7 @@ class QrmiDriver(BaseDriver):
 			if cached is not None:
 				logging.warning(
 					f"shim: keeping the cached QRMI target, refresh failed: {exc}")
-				return cached
+				return self._keep_until_next_refresh(cache_key, cached)
 			raise self._qrmi_error(
 				exc, "failed to read QRMI target()") from exc
 
@@ -1081,19 +1083,30 @@ class QrmiDriver(BaseDriver):
 				logging.warning(
 					"shim: keeping the cached QRMI target, the refresh was "
 					"incomplete")
-				return cached
+				return self._keep_until_next_refresh(cache_key, cached)
 			return target_data
 		self._cache_target(cache_key, target_data)
 		return target_data
 
 	def _target_is_fresh(self, cache_key):
 		fetched_at = self._target_fetched_at.get(cache_key)
-		return (fetched_at is not None
-			and time.monotonic() - fetched_at < self._target_ttl_seconds)
+		retry_after = self._target_retry_after.get(cache_key)
+		now = time.monotonic()
+		return ((fetched_at is not None
+			 and now - fetched_at < self._target_ttl_seconds)
+			or (retry_after is not None and now < retry_after))
 
 	def _cache_target(self, cache_key, target_data):
 		self._target_cache[cache_key] = target_data
 		self._target_fetched_at[cache_key] = time.monotonic()
+		self._target_retry_after.pop(cache_key, None)
+
+	def _keep_until_next_refresh(self, cache_key, cached):
+		# So a device that stays down is asked once per TTL, not per call.
+		if cache_key in self._target_cache:
+			self._target_retry_after[cache_key] = (
+				time.monotonic() + self._target_ttl_seconds)
+		return cached
 
 	def _static_arch(self, target):
 		# QRMI 0.22.0 added the static architecture to target(). Before that the

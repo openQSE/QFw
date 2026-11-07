@@ -1144,7 +1144,8 @@ and durations:
 The shim's QRMI driver caches what a device reports for
 `QFW_QPU_TARGET_TTL_SECONDS` (default 300) of the service's environment, and 0
 reads the device every time. A recalibration reaches new backends once that
-time has passed.
+time has passed. When a device cannot be reached, the driver keeps the last
+target it read and asks again after another TTL.
 
 The target is built once per backend instance, on first use. When the
 telemetry call fails, or the QPM connection carries no telemetry binding, the
