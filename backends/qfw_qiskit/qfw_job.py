@@ -298,8 +298,7 @@ class QFwJob(Job):
 		expected_cids = {list(entry.keys())[0] for entry in cid_list}
 		completed_cids = set()
 		while len(completed_cids) != total_circ:
-			if deadline is not None and time.time() >= deadline:
-				self._time_out(expected_cids - completed_cids)
+			past_deadline = deadline is not None and time.time() >= deadline
 			readable, _, _ = select.select(
 				[event_fd], [], [], _select_wait(deadline))
 			if len(readable) > 0 and event_fd not in readable:
@@ -314,6 +313,8 @@ class QFwJob(Job):
 					instrumentation.record_transport_return(
 						payload, labels=self._job_labels())
 					completed_cids.add(cid)
+			if past_deadline and len(completed_cids) != total_circ:
+				self._time_out(expected_cids - completed_cids)
 
 		logging.defw_app(
 			f"Result reader thread ending. Events: {len(completed_cids)}."

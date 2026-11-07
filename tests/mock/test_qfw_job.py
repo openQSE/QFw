@@ -147,7 +147,9 @@ def test_qfw_job_result_names_the_circuits_unfinished_at_its_timeout(
 	job = _submitted_job(
 		monkeypatch, fake_qpm, event_api, circuits, timeout=0)
 
-	with pytest.raises(qfw_job.JobTimeoutError, match=r"cid-2 \(late\)$"):
+	with pytest.raises(
+			qfw_job.JobTimeoutError,
+			match=r"1 of 2 circuit\(s\) unfinished: cid-2 \(late\)$"):
 		job.result()
 	assert job.status() == qfw_job.JobStatus.ERROR
 	assert fake_qpm.cancelled == []
