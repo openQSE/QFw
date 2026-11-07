@@ -319,6 +319,19 @@ def test_a_failed_refresh_keeps_the_last_good_target(monkeypatch, caplog):
 	assert "device unreachable" in caplog.text
 
 
+def test_a_refresh_failing_as_any_defw_error_keeps_the_last_good_target(
+		monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	driver = _expired_driver(monkeypatch, "iqm", good, None)
+
+	def not_ready(credential=None):
+		raise qd.DEFwNotReady("device is busy")
+
+	driver._read_target = not_ready
+
+	assert driver._target() == good
+
+
 def test_an_incomplete_ibm_refresh_keeps_the_last_good_target(monkeypatch):
 	good = {"configuration": {"n_qubits": 5}, "properties": {"qubits": []}}
 	partial = {"configuration": {"n_qubits": 5}, "properties": None}
