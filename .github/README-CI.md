@@ -17,7 +17,7 @@ All three trigger workflows call `test-reusable.yml` with identical jobs, so PR 
 **Current scope** (standard GitHub Actions runners):
 - **`ci-syntax`** — Flake8 lint on `services/`, `service-apis/`, `backends/`, `examples/`, plus `python -m py_compile` on those directories
 - **`ci-mock`** — `python -m pytest tests/mock -q`
-- **`ci-qdmi`** — released IQM, Amazon Braket, and IBM adapters and circuit serialization, without provider submission
+- **`ci-qdmi`** — all of `tests/qiskit`, without provider submission: the released IQM, Amazon Braket, IBM, and Pasqal adapters, circuit serialization, IQM transpilation, and the Qiskit backend's target
 
 The syntax and mock jobs run on Python 3.10 and 3.12, selected by the shared `python_versions` input. The provider job uses Python 3.12 to match the cluster runtime.
 
