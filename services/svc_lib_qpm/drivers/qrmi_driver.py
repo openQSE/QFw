@@ -115,6 +115,22 @@ PASQAL_CAPABILITIES = frozenset({
 	"get_task_metadata",
 })
 
+TARGET_TTL_ENV = "QFW_QPU_TARGET_TTL_SECONDS"
+DEFAULT_TARGET_TTL_SECONDS = 300
+
+
+def target_ttl_seconds():
+	value = os.environ.get(TARGET_TTL_ENV)
+	if value in (None, ""):
+		return DEFAULT_TARGET_TTL_SECONDS
+	text = str(value).strip()
+	if not text.isdigit():
+		raise DEFwExecutionError(
+			f"{TARGET_TTL_ENV} must be a whole number of seconds, not "
+			f"{value!r}")
+	return int(text)
+
+
 # IBM Cloud's IAM endpoint. QRMI trades the API key for a token there, with
 # grant_type urn:ibm:params:oauth:grant-type:apikey against /identity/token,
 # and that is the same host for every IBM service. Only a non-public IBM Cloud
@@ -353,6 +369,9 @@ class QrmiDriver(BaseDriver):
 		self._resource_locks = {}
 		self._resource_locks_guard = threading.Lock()
 		self._target_cache = {}
+		self._target_fetched_at = {}
+		self._target_retry_after = {}
+		self._target_ttl_seconds = target_ttl_seconds()
 		self._jobs = JobRecords("QRMI")
 
 	def implements(self, call):
@@ -1017,6 +1036,8 @@ class QrmiDriver(BaseDriver):
 		with self._resource_lock(cache_key):
 			resource = self._resource_objs.pop(cache_key, None)
 			target = self._target_cache.pop(cache_key, None)
+			self._target_fetched_at.pop(cache_key, None)
+			self._target_retry_after.pop(cache_key, None)
 		with self._resource_locks_guard:
 			self._resource_locks.pop(cache_key, None)
 		if resource is not None:
@@ -1027,32 +1048,60 @@ class QrmiDriver(BaseDriver):
 
 	def _target(self, credential=None):
 		# QRMI target() is a remote call returning raw IQM JSON (dynamic
-		# architecture / calibration_set / quality_metrics). Parse it once per
-		# driver instance and serve every introspection call from the cache, so
-		# the four calls don't each re-fetch the same payload.
+		# architecture / calibration_set / quality_metrics). Parse it and
+		# serve every introspection call from the cache, so the four calls
+		# don't each re-fetch the same payload.
 		cache_key = self._credential_cache_key(credential)
-		if cache_key not in self._target_cache:
-			try:
-				target_data = json.loads(
-					self._qpu(credential=credential).target().value)
-			except Exception as exc:
-				raise self._qrmi_error(
-					exc, "failed to read QRMI target()") from exc
+		cached = self._target_cache.get(cache_key)
+		if cached is not None and self._target_is_fresh(cache_key):
+			return cached
+		try:
+			target_data = json.loads(
+				self._qpu(credential=credential).target().value)
+		except Exception as exc:
+			if cached is not None:
+				logging.warning(
+					f"shim: keeping the cached QRMI target, refresh failed: {exc}")
+				return self._keep_until_next_refresh(cache_key, cached)
+			raise self._qrmi_error(
+				exc, "failed to read QRMI target()") from exc
 
-			# IBM target() returns null for configuration or properties on failure.
-			# To avoid caching a failed or half-failed payload (which would stick
-			# in the cache after IBM recovers), do not cache if either is None.
-			if self._provider() == "ibm":
-				if (
-					isinstance(target_data, dict)
-					and target_data.get("configuration") is not None
-					and target_data.get("properties") is not None
-				):
-					self._target_cache[cache_key] = target_data
-			else:
-				self._target_cache[cache_key] = target_data
+		# IBM target() returns null for configuration or properties on failure.
+		# To avoid caching a failed or half-failed payload (which would stick
+		# in the cache after IBM recovers), do not cache if either is None.
+		if self._provider() == "ibm" and not (
+			isinstance(target_data, dict)
+			and target_data.get("configuration") is not None
+			and target_data.get("properties") is not None
+		):
+			if cached is not None:
+				logging.warning(
+					"shim: keeping the cached QRMI target, the refresh was "
+					"incomplete")
+				return self._keep_until_next_refresh(cache_key, cached)
 			return target_data
-		return self._target_cache[cache_key]
+		self._cache_target(cache_key, target_data)
+		return target_data
+
+	def _target_is_fresh(self, cache_key):
+		fetched_at = self._target_fetched_at.get(cache_key)
+		retry_after = self._target_retry_after.get(cache_key)
+		now = time.monotonic()
+		return ((fetched_at is not None
+			 and now - fetched_at < self._target_ttl_seconds)
+			or (retry_after is not None and now < retry_after))
+
+	def _cache_target(self, cache_key, target_data):
+		self._target_cache[cache_key] = target_data
+		self._target_fetched_at[cache_key] = time.monotonic()
+		self._target_retry_after.pop(cache_key, None)
+
+	def _keep_until_next_refresh(self, cache_key, cached):
+		# So a device that stays down is asked once per TTL, not per call.
+		if cache_key in self._target_cache:
+			self._target_retry_after[cache_key] = (
+				time.monotonic() + self._target_ttl_seconds)
+		return cached
 
 	def _static_arch(self, target):
 		# QRMI 0.22.0 added the static architecture to target(). Before that the
