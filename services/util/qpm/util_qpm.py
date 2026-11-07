@@ -389,7 +389,15 @@ class UTIL_QPM:
 		return selected
 
 	def free_resources(self, circ, result=None):
-		self.finalize_provider_task(circ, result=result)
+		# The hosts go back even when recording the outcome fails. Kept,
+		# they would leave every later circuit waiting for resources
+		# that never come back (openQSE/QFw#196).
+		try:
+			self.finalize_provider_task(circ, result=result)
+		finally:
+			self._return_hosts(circ)
+
+	def _return_hosts(self, circ):
 		with self.controller.lock:
 			res = circ.info['hosts']
 			for host in res.keys():
@@ -405,19 +413,23 @@ class UTIL_QPM:
 			self.controller.cleanup_circuit(cid)
 
 	def free_resources_and_oor(self, circ, result=None):
-		self.free_resources(circ, result=result)
-		# When resources are free, go through the queue and try
-		# to consume circuits from that queue until you run out of
-		# resources again. A provider's thread calls this before it
-		# hands over its own result, so a failure here, which belongs to
-		# another task, must not escape and lose that result.
 		try:
-			self.process_oor_queue()
-		except Exception as error:
-			logging.warning(
-				"dispatching queued work after "
-				f"{circ.get_cid()}: "
-				f"{type(error).__name__}: {error}")
+			self.free_resources(circ, result=result)
+		finally:
+			# When resources are free, go through the queue and try
+			# to consume circuits from that queue until you run out
+			# of resources again. This runs even when freeing raised,
+			# since free_resources gives the hosts back regardless. A
+			# provider's thread calls this before it hands over its
+			# own result, so a failure here, which belongs to another
+			# task, must not escape and lose that result.
+			try:
+				self.process_oor_queue()
+			except Exception as error:
+				logging.warning(
+					"dispatching queued work after "
+					f"{circ.get_cid()}: "
+					f"{type(error).__name__}: {error}")
 
 	def _prepare_run_circuit(self, cid, require_selected_cid=False):
 		with self.controller.lock:
