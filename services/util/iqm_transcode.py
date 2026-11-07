@@ -224,14 +224,23 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 	try:
 		index_to_name = None
 		restrict_to_qubits = None
+		layout = {}
 		if mapping:
 			index_to_name = logical_to_physical_qubits(
 				qiskit_circuit, backend.architecture, mapping)
+			# A star device couples its qubits only through its resonators.
+			resonators = list(getattr(
+				backend.architecture, "computational_resonators", None) or ())
+			index_to_name.update({
+				len(index_to_name) + offset: resonator
+				for offset, resonator in enumerate(resonators)})
 			restrict_to_qubits = list(index_to_name.values())
+			layout = {"initial_layout": list(range(qiskit_circuit.num_qubits))}
 		transpiled = transpile_to_IQM(
 			qiskit_circuit,
 			backend,
 			restrict_to_qubits=restrict_to_qubits,
+			**layout,
 		)
 		# Naming the qubits is the part that goes wrong quietly. A restricted
 		# transpile renumbers the circuit onto the restricted set, so index 0

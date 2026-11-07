@@ -171,6 +171,26 @@ def test_a_mapping_given_as_a_dict_is_honoured_too():
 	assert _loci(iqm_circuit) == ["QB2", "QB3", "QB4"]
 
 
+def _measured_on(iqm_circuit):
+	return [operation.locus[0] for operation in sorted(
+		(operation for operation in iqm_circuit.instructions
+		 if operation.name == "measure"),
+		key=lambda operation: operation.args["key"])]
+
+
+def test_a_mapped_ghz_transpiles_for_a_star_device():
+	_iqm()
+	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
+	from util.iqm_transcode import build_iqm_circuit
+
+	iqm_circuit = build_iqm_circuit(
+		_ghz(), IQMFakeDeneb().architecture, ["QB4", "QB2", "QB6"])
+
+	assert iqm_circuit.metadata.get("qfw_transpiled_to_iqm") is True
+	assert _loci(iqm_circuit) == ["CR1", "QB2", "QB4", "QB6"]
+	assert _measured_on(iqm_circuit) == ["QB4", "QB2", "QB6"]
+
+
 def test_without_a_mapping_the_device_order_is_used():
 	_iqm()
 	from util.iqm_transcode import build_iqm_circuit
