@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass, field
 
 from qiskit.circuit import Gate, Measure, Parameter, Reset
@@ -104,18 +105,41 @@ def qfw_instructions():
 	]
 
 
-def build_qfw_target(num_qubits=QFW_NUM_QUBITS):
+def build_qfw_target(num_qubits=QFW_NUM_QUBITS, instructions=None):
 	# The generic target: every gate QFw serializes, on any qubit, with no
-	# connectivity. It stands in when a QPM describes no device.
+	# connectivity. It stands in when a QPM describes no device. A QPM that
+	# publishes the OpenQASM 2 instructions it runs gets only the gates whose
+	# text uses those instructions alone.
 	target = Target(
 		description="Quantum Framework (QFw) Target",
 		num_qubits=num_qubits,
 	)
 
 	for instruction in qfw_instructions():
-		target.add_instruction(instruction)
+		if (instructions is None or set(openqasm2_instructions(instruction))
+				<= set(instructions)):
+			target.add_instruction(instruction)
 
 	return target
+
+
+def openqasm2_instructions(instruction):
+	"""The instructions a QPM reads in the OpenQASM 2 text QFw sends for
+	instruction: those it is written with, through the bodies of the gates
+	the text defines, never the defined names themselves."""
+	from qiskit import QuantumCircuit, qasm2
+
+	circuit = QuantumCircuit(instruction.num_qubits, instruction.num_clbits)
+	circuit.append(instruction, range(instruction.num_qubits),
+		range(instruction.num_clbits))
+	statements = re.split(r"[;{}]", qasm2.dumps(circuit))
+	names = [statement.split()[0].split("(")[0]
+		for statement in statements if statement.strip()]
+	defined = {statement.split()[1].split("(")[0]
+		for statement in statements
+		if statement.split()[:1] == ["gate"]}
+	declarations = {"OPENQASM", "include", "qreg", "creg", "gate"}
+	return sorted(set(names) - declarations - defined)
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,20 @@ from util.qpm.util_circuit import set_max_qubits_pp
 
 MAX_NWQSIM_QUBITS = 32
 MAX_NWQSIM_SHOTS = 1_000_000
+# The OpenQASM 2 instructions circuit_runner.nwqsim runs: DEFAULT_GATES in
+# NWQ-Sim's qasm/src/parser_util.hpp, and measure. Its parser skips any other
+# name with only an "Undefined instruction" line on stdout, so the circuit
+# runs without it.
+NWQSIM_INSTRUCTIONS = (
+	"u", "u3", "u2", "u1", "x", "y", "z", "h",
+	"s", "sdg", "t", "tdg", "sx",
+	"rx", "ry", "rz",
+	"cz", "cx", "cy", "ch",
+	"ccx", "crx", "cry", "crz", "cu", "ecr", "cu1", "cu3",
+	"reset", "swap", "cswap",
+	"id", "delay", "ri", "p", "cs", "csdg", "ct", "ctdg", "csx", "cp",
+	"rzz", "rxx", "ryy", "measure",
+)
 
 
 class QPM(UTIL_QPM):
@@ -26,6 +40,7 @@ class QPM(UTIL_QPM):
 				"provider": "nwqsim",
 				"num_qubits": MAX_NWQSIM_QUBITS,
 				"max_shots": MAX_NWQSIM_SHOTS,
+				"instructions": list(NWQSIM_INSTRUCTIONS),
 			})
 		logging.debug(f"NWQSIM {SERVICE_DESC}: {info}")
 		return info

@@ -464,9 +464,13 @@ def _install_qiskit_stubs():
 	class JobError(QiskitError):
 		pass
 
+	class JobTimeoutError(JobError):
+		pass
+
 	providers.Options = Options
 	providers.BackendV2 = BackendV2
 	providers.JobError = JobError
+	providers.JobTimeoutError = JobTimeoutError
 	providers.JobV1 = JobV1
 	qiskit.providers = providers
 	sys.modules["qiskit.providers"] = providers
