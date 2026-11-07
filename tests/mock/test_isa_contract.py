@@ -156,9 +156,19 @@ def test_a_set_id_requires_its_calibration_by_default():
 		isa.check_calibration(_marker(), "cal-2")
 
 
-def test_a_set_id_that_cannot_be_compared_is_refused():
-	with pytest.raises(DEFwExecutionError, match="compile it again"):
-		isa.check_calibration(_marker(), None)
+def test_a_set_id_that_cannot_be_compared_is_refused_without_asking_to_recompile():
+	with pytest.raises(
+			DEFwExecutionError, match="QDMI reports no calibration") as raised:
+		isa.check_calibration(_marker(), None, source="QDMI")
+
+	assert "compile it again" not in str(raised.value)
+
+
+def test_an_unreported_calibration_is_no_mismatch_under_current(caplog):
+	with caplog.at_level(logging.WARNING):
+		isa.check_calibration(_marker(), None, isa.POLICY_CURRENT)
+
+	assert caplog.text == ""
 
 
 def test_the_device_can_run_on_the_current_calibration(caplog):

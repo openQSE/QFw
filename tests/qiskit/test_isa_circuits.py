@@ -339,6 +339,13 @@ def test_qdmi_refuses_a_stale_calibration(monkeypatch):
 			{"isa": _calibrated_marker("cal-1")})
 
 
+def test_qdmi_says_when_it_reports_no_calibration(monkeypatch):
+	with pytest.raises(DEFwExecutionError, match="QDMI reports no calibration"):
+		_qdmi_encode(
+			monkeypatch, _topology(), None,
+			{"isa": _calibrated_marker("cal-1")})
+
+
 def test_qdmi_refuses_a_star_device_it_cannot_model(monkeypatch):
 	topology = _topology(extra_cz=[["QB1", "CR1"]])
 

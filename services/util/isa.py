@@ -154,15 +154,9 @@ def requires_calibration(marker, policy=None):
 	return policy == POLICY_REQUIRE
 
 
-def check_unreported_calibration(marker, policy, library):
-	if requires_calibration(marker, policy):
-		raise DEFwExecutionError(
-			f"{library} reports no calibration for this device, so it cannot "
-			"confirm the one this circuit requires; run it through another "
-			"library or set calibration-policy: current")
-
-
-def check_calibration(marker, current, policy=None):
+def check_calibration(marker, current, policy=None, source="the QPM"):
+	"""`current` is None when `source` reports no calibration, which no
+	recompile can change."""
 	required = requires_calibration(marker, policy)
 	calibration = marker.get("calibration") or {}
 	if calibration.get("kind", CALIBRATION_NONE) == CALIBRATION_NONE:
@@ -171,8 +165,15 @@ def check_calibration(marker, current, policy=None):
 				"this device requires a circuit to name the calibration it "
 				"was compiled for, and this one names none")
 		return
+	if current is None:
+		if required:
+			raise DEFwExecutionError(
+				f"{source} reports no calibration for this device, so it "
+				"cannot confirm the one this circuit requires; run it through "
+				"another library or set calibration-policy: current")
+		return
 	compiled = calibration.get("value")
-	if current is not None and str(compiled) == str(current):
+	if str(compiled) == str(current):
 		return
 	message = (
 		f"circuit was compiled for calibration {compiled}, and the device's "

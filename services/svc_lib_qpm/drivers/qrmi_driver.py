@@ -1579,7 +1579,7 @@ class QrmiDriver(BaseDriver):
 				source, "provider_credential", None)).get("properties") or {}
 			isa.check_calibration(
 				marker, properties.get("last_update_date"),
-				self._descriptor.get("calibration_policy"))
+				self._descriptor.get("calibration_policy"), "QRMI")
 			isa_circuit = require_isa_circuit(qiskit_circuit, target)
 		else:
 			from util.ibm_transcode import compile_circuit
@@ -1623,7 +1623,7 @@ class QrmiDriver(BaseDriver):
 						dynamic.get("calibration_set_id"), calibration_set_id}:
 					isa.check_calibration(
 						marker, calibration,
-						self._descriptor.get("calibration_policy"))
+						self._descriptor.get("calibration_policy"), "QRMI")
 				iqm_circuit = build_isa_iqm_circuit(circuit, dynamic, marker)
 			else:
 				iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
