@@ -266,8 +266,6 @@ def _counting_target_driver(monkeypatch, ttl=None):
 
 
 def test_target_is_read_again_once_its_entry_expires(monkeypatch):
-	# The ("default",) entry is never evicted, so without an expiry a
-	# long-running service describes the calibration it first saw for good.
 	driver, call_count = _counting_target_driver(monkeypatch)
 	clock = [1000.0]
 	monkeypatch.setattr(qd.time, "monotonic", lambda: clock[0])
@@ -292,7 +290,6 @@ def test_target_ttl_of_zero_reads_the_device_every_time(monkeypatch):
 
 
 def _expired_driver(monkeypatch, provider, first, refresh):
-	# A driver holding an expired entry, whose next read does what refresh says.
 	monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
 	driver = _driver(provider=provider)
 	clock = [1000.0]
@@ -306,8 +303,6 @@ def _expired_driver(monkeypatch, provider, first, refresh):
 
 
 def test_a_failed_refresh_keeps_the_last_good_target(monkeypatch, caplog):
-	# Before the expiry a job never reread the device, so an outage during a
-	# refresh must not fail a job that would have run.
 	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
 
 	def refresh(credential=None):
@@ -428,7 +423,6 @@ def test_a_device_that_stays_down_is_asked_once_per_ttl(monkeypatch):
 
 
 def test_a_failed_first_read_still_raises(monkeypatch):
-	# With nothing cached there is no target to keep.
 	monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
 	driver = _driver(provider="iqm")
 
