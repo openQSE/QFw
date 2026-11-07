@@ -1174,6 +1174,39 @@ def test_pending_capacity_retry_rejects_inactive_reservation(monkeypatch):
 		assert qpm.fake_qrc.async_cids == []
 
 
+def test_pending_capacity_retry_publishes_expiry_completions_when_it_raises(
+		monkeypatch):
+	import util.qpm.controller as controller_module
+
+	qpm, expired_id, expired_task = _delayed_capacity_qpm(
+		monkeypatch, target_id="admission-delayed-expired-raises")
+	live_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	qpm.async_run({
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": live_id,
+	})
+	qpm.controller.admission_context.reservations[
+		expired_id]["expires_at_ns"] = time.time_ns() - 1
+	delivered = []
+	monkeypatch.setattr(
+		qpm.controller, "_dispatch_completion_deliveries",
+		lambda deliveries: delivered.extend(
+			delivery["event"].get_event() for delivery in deliveries))
+
+	def refuse(*args, **kwargs):
+		raise RuntimeError("admission context unavailable")
+
+	monkeypatch.setattr(controller_module, "authorize_usage", refuse)
+
+	with pytest.raises(RuntimeError, match="admission context unavailable"):
+		qpm.controller.retry_pending_capacity()
+
+	assert [(event["cid"], event["outcome"], event["reason"])
+		for event in delivered] == [
+		(expired_task.cid, "CANCELLED", "expire")]
+
+
 def test_pending_capacity_retry_rejects_expired_reservation(monkeypatch):
 	qpm, reservation_id, runtime = _delayed_capacity_qpm(
 		monkeypatch, target_id="admission-delayed-expired")

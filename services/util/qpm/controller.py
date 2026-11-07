@@ -1589,71 +1589,73 @@ class QPMTargetController:
 	def retry_pending_capacity(self, reservation_id=None):
 		results = []
 		deliveries = []
-		with self.lock:
-			pending_items = list(self.pending_capacity.items())
-			for qtask_id, pending in pending_items:
-				if (reservation_id is not None and
-						pending["reservation_id"] != reservation_id):
-					continue
-				runtime = self.runtime_by_qtask_id.get(qtask_id)
-				if runtime is None:
+		try:
+			with self.lock:
+				pending_items = list(self.pending_capacity.items())
+				for qtask_id, pending in pending_items:
+					if (reservation_id is not None and
+							pending["reservation_id"] != reservation_id):
+						continue
+					runtime = self.runtime_by_qtask_id.get(qtask_id)
+					if runtime is None:
+						self.pending_capacity.pop(qtask_id, None)
+						continue
+					try:
+						self._require_pending_capacity_reservation_valid_locked(
+							qtask_id, pending, runtime, deliveries)
+					except QPMAdmissionValidationError as error:
+						results.append(
+							self._reject_pending_capacity_locked(
+								qtask_id, pending, runtime, error))
+						continue
+					usage = dict(pending["usage"])
+					authorized = authorize_usage(
+						self.admission_context, pending["reservation_id"],
+						usage)
+					if authorized.get("status") == "delayed":
+						pending["decision"] = dict(authorized)
+						results.append({
+							"qtask_id": qtask_id,
+							"status": "delayed",
+							"decision": dict(authorized),
+						})
+						continue
+					if authorized.get("status") != "accepted":
+						runtime.state = QPM_TASK_FAILED
+						self.pending_capacity.pop(qtask_id, None)
+						results.append({
+							"qtask_id": qtask_id,
+							"status": "rejected",
+							"decision": dict(authorized),
+						})
+						continue
+					committed = consume_usage(
+						self.admission_context, pending["reservation_id"],
+						usage)
+					if committed.get("status") != "accepted":
+						runtime.state = QPM_TASK_FAILED
+						self.pending_capacity.pop(qtask_id, None)
+						results.append({
+							"qtask_id": qtask_id,
+							"status": "commit-failed",
+							"decision": dict(committed),
+						})
+						continue
 					self.pending_capacity.pop(qtask_id, None)
-					continue
-				try:
-					self._require_pending_capacity_reservation_valid_locked(
-						qtask_id, pending, runtime, deliveries)
-				except QPMAdmissionValidationError as error:
-					results.append(
-						self._reject_pending_capacity_locked(
-							qtask_id, pending, runtime, error))
-					continue
-				usage = dict(pending["usage"])
-				authorized = authorize_usage(
-					self.admission_context, pending["reservation_id"],
-					usage)
-				if authorized.get("status") == "delayed":
-					pending["decision"] = dict(authorized)
+					self.capacity_holds[qtask_id] = {
+						"reservation_id": pending["reservation_id"],
+						"usage": usage,
+						"decision": dict(committed),
+					}
+					self.record_usage_event(qtask_id, qtask_id)
+					runtime.state = QPM_TASK_CAPACITY_HELD
 					results.append({
 						"qtask_id": qtask_id,
-						"status": "delayed",
-						"decision": dict(authorized),
-					})
-					continue
-				if authorized.get("status") != "accepted":
-					runtime.state = QPM_TASK_FAILED
-					self.pending_capacity.pop(qtask_id, None)
-					results.append({
-						"qtask_id": qtask_id,
-						"status": "rejected",
-						"decision": dict(authorized),
-					})
-					continue
-				committed = consume_usage(
-					self.admission_context, pending["reservation_id"],
-					usage)
-				if committed.get("status") != "accepted":
-					runtime.state = QPM_TASK_FAILED
-					self.pending_capacity.pop(qtask_id, None)
-					results.append({
-						"qtask_id": qtask_id,
-						"status": "commit-failed",
+						"status": "accepted",
 						"decision": dict(committed),
 					})
-					continue
-				self.pending_capacity.pop(qtask_id, None)
-				self.capacity_holds[qtask_id] = {
-					"reservation_id": pending["reservation_id"],
-					"usage": usage,
-					"decision": dict(committed),
-				}
-				self.record_usage_event(qtask_id, qtask_id)
-				runtime.state = QPM_TASK_CAPACITY_HELD
-				results.append({
-					"qtask_id": qtask_id,
-					"status": "accepted",
-					"decision": dict(committed),
-				})
-		self._dispatch_completion_deliveries(deliveries)
+		finally:
+			self._dispatch_completion_deliveries(deliveries)
 		self._drain_provider_credential_cleanup()
 		return results
 
