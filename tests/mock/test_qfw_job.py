@@ -14,8 +14,6 @@ from tests.mock.fakes import (
 
 
 class FakeBackend:
-	COMPLETION_TIMEOUT_SEC = 5
-
 	def __init__(self, statevector=False):
 		self.logged_results = []
 		self.dump_called = False
@@ -25,6 +23,10 @@ class FakeBackend:
 		return self._statevector
 
 	def log_statistics(self, result):
+		timing = ("creation_time", "launch_time", "resources_consumed_time",
+			"exec_time", "completion_time", "cq_enqueue_time",
+			"cq_dequeue_time")
+		assert all(key in result for key in timing), result
 		self.logged_results.append(result)
 
 	def dump_statistics(self):
@@ -118,28 +120,152 @@ def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 	assert result_entry["data"]["memory"] == ["0x0", "0x0", "0x3"]
 
 
-def test_qfw_job_result_raises_when_no_results(monkeypatch):
+def _submitted_job(monkeypatch, fake_qpm, event_api, circuits, **options):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	monkeypatch.setattr(
+		qfw_job.select, "select",
+		lambda readable, writable, exceptional, timeout: (readable, [], []))
+	_stub_qasm(monkeypatch)
+	job = qfw_job.QFwJob(
+		FakeBackend(), fake_qpm, event_api, circuits,
+		_driver_options(shots=2, seed=1, seed_simulator=1, **options))
+	job.submit()
+	return job
+
+
+def test_qfw_job_result_names_the_circuits_unfinished_at_its_timeout(
+		monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="done"),
+		qfw_job.QuantumCircuit(1, name="late"),
+	]
+	fake_qpm = FakeQPM(cids=["cid-1", "cid-2"])
+	event_api = FakeEventAPI(events=[make_result_event("cid-1", {"0": 2})])
+	job = _submitted_job(
+		monkeypatch, fake_qpm, event_api, circuits, timeout=0)
+
+	with pytest.raises(
+			qfw_job.JobTimeoutError,
+			match=r"1 of 2 circuit\(s\) unfinished: cid-2 \(late\)$"):
+		job.result()
+	assert job.status() == qfw_job.JobStatus.ERROR
+	assert fake_qpm.cancelled == []
+
+
+def test_qfw_job_cancels_the_unfinished_circuits_on_timeout_when_asked(
+		monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	circuit = qfw_job.QuantumCircuit(1, name="late")
+	fake_qpm = FakeQPM(cids=["cid-1"])
+	job = _submitted_job(
+		monkeypatch, fake_qpm, FakeEventAPI(), circuit,
+		timeout=0, cancel_on_timeout=True)
+
+	with pytest.raises(qfw_job.JobTimeoutError, match="1 of 1 circuit"):
+		job.result()
+	assert fake_qpm.cancelled == [{
+		"cid": "cid-1", "reservation_id": 1, "token": None,
+		"reason": "job-timeout",
+	}]
+
+
+def test_qfw_job_times_out_and_cancels_the_rest_when_a_cancel_is_refused(
+		monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 	from defw_exception import DEFwError
 
-	fake_qpm = FakeQPM(cids=["cid-1"])
-	event_api = FakeEventAPI()  # no result events ever arrive
-	backend = FakeBackend()
-	circuit = qfw_job.QuantumCircuit(1, name="timeout-path")
-	options = _driver_options(shots=2, seed=1, seed_simulator=1)
+	class RefusingQPM(FakeQPM):
+		def cancel_task(self, cid=None, **kwargs):
+			super().cancel_task(cid=cid, **kwargs)
+			raise DEFwError(f"reservation 1 has expired, {cid} not cancelled")
 
-	_stub_qasm(monkeypatch)
-	# COMPLETION_TIMEOUT_SEC == 0 makes _result_reader return immediately with no
-	# completed circuits -- a real timeout without the wall-clock wait.
-	monkeypatch.setattr(backend, "COMPLETION_TIMEOUT_SEC", 0)
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="first"),
+		qfw_job.QuantumCircuit(1, name="second"),
+	]
+	fake_qpm = RefusingQPM(cids=["cid-1", "cid-2"])
+	job = _submitted_job(
+		monkeypatch, fake_qpm, FakeEventAPI(), circuits,
+		timeout=0, cancel_on_timeout=True)
 
-	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
-	job.submit()
-
-	# With no results the per-circuit `out` never binds; result() must fail
-	# with a clear error naming the cause, not a bare NameError.
-	with pytest.raises(DEFwError, match="no QPM circuit results"):
+	with pytest.raises(qfw_job.JobTimeoutError, match="2 of 2 circuit"):
 		job.result()
+	assert sorted(c["cid"] for c in fake_qpm.cancelled) == ["cid-1", "cid-2"]
+	assert job.status() == qfw_job.JobStatus.ERROR
+
+
+def test_qfw_job_fails_when_its_qpm_stops_answering(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from defw_exception import DEFwError
+
+	class GoneQPM(FakeQPM):
+		def task_status(self, cid=None, **kwargs):
+			raise DEFwError("connection refused")
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	circuit = qfw_job.QuantumCircuit(1, name="orphan")
+	job = _submitted_job(
+		monkeypatch, GoneQPM(cids=["cid-1"]), FakeEventAPI(), circuit)
+
+	with pytest.raises(
+			qfw_job.JobError,
+			match=r"could not reach its QPM with 1 of 1 circuit\(s\) "
+			r"unfinished: cid-1 \(orphan\): connection refused"):
+		job.result()
+	assert job.status() == qfw_job.JobStatus.ERROR
+
+
+def test_qfw_job_keeps_waiting_while_its_qpm_answers(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	class SlowEventAPI(FakeEventAPI):
+		def __init__(self, batches):
+			super().__init__()
+			self.batches = list(batches)
+
+		def get(self):
+			return self.batches.pop(0) if self.batches else []
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	circuit = qfw_job.QuantumCircuit(1, name="slow")
+	fake_qpm = FakeQPM(cids=["cid-1"])
+	event_api = SlowEventAPI([[], [], [make_result_event("cid-1", {"0": 2})]])
+	job = _submitted_job(monkeypatch, fake_qpm, event_api, circuit)
+
+	assert job.result().get_counts() == {"0": 2}
+	assert fake_qpm.status_requests == [
+		{"cid": "cid-1", "reservation_id": 1, "token": None}] * 2
+
+
+def test_qfw_job_without_a_timeout_waits_for_every_circuit(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	class SlowEventAPI(FakeEventAPI):
+		def __init__(self, batches):
+			super().__init__()
+			self.batches = list(batches)
+
+		def get(self):
+			return self.batches.pop(0) if self.batches else []
+
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="first"),
+		qfw_job.QuantumCircuit(1, name="second"),
+	]
+	event_api = SlowEventAPI(
+		[[], [make_result_event("cid-1", {"0": 2})], [], [],
+		 [make_result_event("cid-2", {"1": 2})]])
+	job = _submitted_job(
+		monkeypatch, FakeQPM(cids=["cid-1", "cid-2"]), event_api, circuits)
+
+	result = job.result()
+
+	assert result.get_counts() == [{"0": 2}, {"1": 2}]
+	assert job.status() == qfw_job.JobStatus.DONE
 
 
 def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):

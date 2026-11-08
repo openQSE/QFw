@@ -149,3 +149,19 @@ def test_generic_target_stands_in_for_a_qpm_without_metadata():
 	generic = qfw_target.build_qfw_target()
 	assert generic.num_qubits == 400
 	assert len(generic.operation_names) == 39
+
+
+def test_a_defined_gate_is_read_as_the_instructions_its_body_uses():
+	from qiskit.circuit.library import RYYGate, RXXGate
+
+	assert qfw_target.openqasm2_instructions(RXXGate(0.1)) == ["rxx"]
+	assert qfw_target.openqasm2_instructions(RYYGate(0.1)) == [
+		"cx", "rz", "sx", "sxdg"]
+
+
+def test_the_generic_target_keeps_only_gates_written_with_instructions_the_qpm_runs():
+	every = {instruction.name for instruction in qfw_target.qfw_instructions()}
+	runs = sorted(every - {"sxdg"})
+	generic = qfw_target.build_qfw_target(num_qubits=4, instructions=runs)
+	assert every - set(generic.operation_names) == {"sxdg", "ryy"}
+	assert set(qfw_target.build_qfw_target(num_qubits=4).operation_names) == every

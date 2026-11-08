@@ -476,8 +476,6 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 	from qfw_qiskit.qfw_metadata import set_qubit_mapping
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 
@@ -511,8 +509,6 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 	from qfw_qiskit.qfw_job import QFwJob
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 
@@ -544,8 +540,6 @@ def test_qfw_job_requires_reservation_id():
 	from qfw_qiskit.qfw_job import QFwJob
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 
@@ -646,8 +640,6 @@ def test_qfw_job_forwards_shim_library_to_qpm():
 	from qfw_qiskit.qfw_job import QFwJob
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 
