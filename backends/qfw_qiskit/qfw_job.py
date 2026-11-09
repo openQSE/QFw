@@ -475,6 +475,12 @@ class QFwJob(Job):
 		res_wait_start = time.time()
 		qpm_results = self._result_reader(self._cid_list)
 		self._result_wait_time = time.time() - res_wait_start
+		# Completion events can arrive in any order, and callers such as
+		# QFwEstimatorV2 read the results by position.
+		sent = {
+			next(iter(entry)): position
+			for position, entry in enumerate(self._cid_list)}
+		qpm_results.sort(key=lambda result: sent[result['cid']])
 		if not qpm_results:
 			raise DEFwError("no QPM circuit results were received")
 

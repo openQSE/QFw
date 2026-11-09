@@ -295,6 +295,38 @@ def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
 	assert len(backend.logged_results) == 1
 
 
+def test_qfw_job_result_keeps_the_order_circuits_were_sent(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	circuits = [
+		qfw_job.QuantumCircuit(1, name=name)
+		for name in ("x-basis", "y-basis", "z-basis")]
+	# The z circuit's completion overtakes the y circuit's.
+	arrival = [("cid-x", {"0": 1}), ("cid-z", {"0": 3}), ("cid-y", {"0": 2})]
+	event_api = FakeEventAPI(
+		events=[make_result_event(cid, counts) for cid, counts in arrival],
+		fd=42)
+	options = _driver_options(shots=1, seed_simulator=1)
+
+	monkeypatch.setattr(
+		qfw_job.select, "select",
+		lambda readable, writable, exceptional, timeout: (readable, [], []))
+	monkeypatch.setattr(
+		qfw_job.Result, "from_dict", lambda result: result, raising=False)
+	_stub_qasm(monkeypatch)
+
+	job = qfw_job.QFwJob(
+		FakeBackend(), FakeQPM(cids=["cid-x", "cid-y", "cid-z"]), event_api,
+		circuits, options)
+	job.submit()
+	results = job.result()["results"]
+
+	assert [r["header"]["name"] for r in results] == [
+		"x-basis", "y-basis", "z-basis"]
+	assert [r["data"]["counts"] for r in results] == [
+		{"0": 1}, {"0": 2}, {"0": 3}]
+
+
 def test_qfw_job_decodes_compact_statevector_payload():
 	import qfw_qiskit.qfw_job as qfw_job
 	from util.qpm.statevector import encode_statevector_payload
