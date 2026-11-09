@@ -111,7 +111,7 @@ def test_a_broad_vocabulary_only_renames():
 	assert "cnot q[1], q[2];" in program
 	assert "v q[1];" in program
 	assert "si q[2];" in program
-	assert "barrier q[0], q[1], q[2];" in program
+	assert "barrier" not in program
 	assert "c[0] = measure q[0];" in program
 	assert "c[2] = measure q[2];" in program
 	# Nothing is written out as a gate definition in terms of U.
@@ -125,7 +125,7 @@ def test_a_restricted_vocabulary_decomposes_then_renames():
 	assert _gate_names(program) <= RESTRICTED
 	assert "cz" in _gate_names(program)
 	assert "c[0] = measure q[0];" in program
-	assert "barrier q[0], q[1], q[2];" in program
+	assert "barrier" not in program
 	assert measurement["num_clbits"] == 3
 	assert sorted(measurement["map"]) == [(0, 0), (1, 1), (2, 2)]
 
@@ -325,6 +325,65 @@ def test_barriers_and_other_qubits_may_follow_a_measurement():
 	program, measurement = to_braket_qasm3(circuit, _backend(BROAD))
 
 	assert "h q[1];" in program
+	assert "barrier" not in program
 	assert _measure_lines(program) == [
 		"c[0] = measure q[0];", "c[1] = measure q[1];"]
 	assert sorted(measurement["map"]) == [(0, 0), (1, 1)]
+
+
+def _dimer_like(barriers, idle=False):
+	# The shape of the helium pUCCD dimer circuit Rigetti's compiler rejected
+	# on Braket: a reference state, a full-width barrier before each two-qubit
+	# rotation, a partial one at the end, and Z-basis measurements. With idle,
+	# a fifth qubit that nothing but the barriers touch.
+	circuit = QuantumCircuit(5 if idle else 4, 4)
+	circuit.x([0, 1])
+	for a, b in [(0, 2), (1, 3), (0, 3), (1, 2)]:
+		if barriers:
+			circuit.barrier()
+		circuit.cx(b, a)
+		circuit.ry(0.3, b)
+		circuit.cx(a, b)
+		circuit.ry(-0.3, b)
+		circuit.cx(b, a)
+	if barriers:
+		circuit.barrier([0, 1])
+	circuit.measure(range(4), range(4))
+	return circuit
+
+
+@pytest.mark.parametrize("native", [None, RESTRICTED])
+def test_barriers_are_dropped_and_change_nothing_else(native):
+	# Rigetti's compiler on Braket failed a 10-qubit program with a
+	# full-width barrier before each of its 16 Givens rotations ("Error
+	# occurred during compilation") and ran it once the barriers were removed
+	# (Cepheus-1-108Q, 2026-11-09). Braket compiles and routes the program
+	# itself, so a barrier has nothing to say there: the transcode drops
+	# them and writes the program the barrier-free circuit gives, with the
+	# same measurement map, whether the gates are renamed or decomposed.
+	program, measurement = to_braket_qasm3(
+		_dimer_like(True), _backend(BROAD, native=native))
+	expected, expected_measurement = to_braket_qasm3(
+		_dimer_like(False), _backend(BROAD, native=native))
+
+	assert "barrier" not in program
+	assert program == expected
+	assert measurement == expected_measurement
+	assert measurement["num_clbits"] == 4
+	assert sorted(measurement["map"]) == [(0, 0), (1, 1), (2, 2), (3, 3)]
+	assert _measure_lines(program) == [
+		"c[0] = measure q[0];", "c[1] = measure q[1];",
+		"c[2] = measure q[2];", "c[3] = measure q[3];"]
+
+
+def test_a_qubit_only_barriers_touch_is_idle():
+	# A full-width barrier reaches every qubit, so with the barriers kept an
+	# otherwise unused qubit stayed in the program. Dropped, it is idle and
+	# trimmed like any other, and the measurement map is unchanged.
+	program, measurement = to_braket_qasm3(
+		_dimer_like(True, idle=True), _backend(BROAD))
+
+	assert "qubit[4] q;" in program
+	assert "barrier" not in program
+	assert measurement["num_clbits"] == 4
+	assert sorted(measurement["map"]) == [(0, 0), (1, 1), (2, 2), (3, 3)]
