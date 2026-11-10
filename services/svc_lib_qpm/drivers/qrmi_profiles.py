@@ -836,8 +836,9 @@ class PasqalQrmiProfile(QrmiProfile):
 		if token:
 			project = (credential.get("project_id")
 				or driver._descriptor.get("project_id"))
-			url = (credential.get("url") or os.environ.get("QFW_QC_URL")
-				or device_url)
+			url = resolve_login(
+				self._descriptor, credential, self.provider,
+				lambda login: False, "")["base_url"] or device_url
 			return {
 				PASQAL_CLOUD_TOKEN: token,
 				PASQAL_CLOUD_PROJECT: str(project) if project else None,
