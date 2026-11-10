@@ -393,19 +393,19 @@ class PasqalQdmiProfile(QdmiProfile):
 		if resource_type and resource_type != "PasqalCloud":
 			raise DEFwExecutionError(
 				f"Pasqal QDMI cannot serve resource-type {resource_type!r}; use PasqalCloud")
-		credential = dict(credential or {})
-		backend = (credential.get("provider_device_id")
-			or self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
+		login = resolve_login(
+			self._descriptor, credential, self.provider,
+			lambda login: False, "", extras=("project_id",))
+		backend = login["provider_device_id"]
 		if not backend:
 			raise DEFwExecutionError(
 				"a Pasqal device needs its backend type (e.g. EMU_FREE) "
 				"as provider-device-id in device-access config")
-		project = credential.get("project_id") or self._descriptor.get("project_id")
+		project = login["project_id"] or self._descriptor.get("project_id")
 		return {
 			"qdmi_device_id": self._descriptor.get("qdmi_device_id") or self.DEFAULT_QDMI_DEVICE_ID,
-			"base_url": credential.get("url") or os.environ.get("QFW_QC_URL") or self._descriptor.get("url"),
-			"token": credential.get("api_key") or credential.get("token") or os.environ.get("QFW_API_KEY"),
+			"base_url": login["base_url"] or self._descriptor.get("url"),
+			"token": login["token"],
 			"custom1": str(backend).upper(),
 			"custom3": str(project) if project else None,
 		}

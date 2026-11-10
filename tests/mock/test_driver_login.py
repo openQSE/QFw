@@ -90,3 +90,29 @@ def test_a_failed_lookup_is_reported_with_the_callers_words(monkeypatch):
 
 	with pytest.raises(DEFwExecutionError, match="cannot log in: no entry"):
 		resolve_login({}, {}, "iqm", lookup_unless_complete, "cannot log in")
+
+
+def test_a_caller_that_never_looks_up_never_reads_the_entry(monkeypatch):
+	calls = entry_lookup(monkeypatch, {"url": "https://entry.example.org"})
+
+	login = resolve_login(
+		{}, {}, "pasqal", lambda login: False, "failed")
+
+	assert login["base_url"] is None
+	assert calls == []
+
+
+def test_the_pasqal_qdmi_profile_never_reads_the_entry(monkeypatch):
+	from svc_lib_qpm.drivers.qdmi_profiles import PasqalQdmiProfile
+	calls = entry_lookup(monkeypatch, {"url": "https://entry.example.org"})
+	monkeypatch.setenv("QFW_QC_URL", "https://env.example.org")
+	profile = PasqalQdmiProfile({
+		"provider_device_id": "emu_free", "project_id": "device-project"})
+
+	access = profile.access({"api_key": "cred-token", "project_id": "mine"})
+
+	assert access["base_url"] == "https://env.example.org"
+	assert access["token"] == "cred-token"
+	assert access["custom1"] == "EMU_FREE"
+	assert access["custom3"] == "mine"
+	assert calls == []
