@@ -16,10 +16,10 @@
 
 from defw_exception import DEFwExecutionError
 
-# Measurement and barrier are output/directive syntax, not gates to check
-# against the device's vocabulary. Reset needs explicit device support, just
-# like a gate. Barriers are dropped before the program is written, see
-# to_braket_qasm3.
+# Measurement and barrier are output/directive syntax. Reset needs explicit
+# device support, just like a gate. Barriers are kept: Braket's compilers do
+# not reorder or merge gates across them, so dropping one can change what
+# runs.
 DIRECTIVES = frozenset({"barrier", "measure"})
 
 # The technology family of a Braket device, from the vendor segment of its
@@ -88,7 +88,6 @@ def to_braket_qasm3(circuit, backend):
 	try:
 		from qiskit.circuit import ClassicalRegister, QuantumCircuit, QuantumRegister
 		from qiskit.converters import circuit_to_dag, dag_to_circuit
-		from qiskit.transpiler.passes import RemoveBarriers
 		from mqt.core.qdmi import ProgramFormat
 	except ImportError as exc:
 		raise DEFwExecutionError(
@@ -126,17 +125,6 @@ def to_braket_qasm3(circuit, backend):
 			raise DEFwExecutionError(
 				"Braket's legacy QDMI results require terminal measurements")
 
-	# Braket compiles and routes a non-verbatim program itself, so a barrier
-	# can neither pin a layout nor hold gates apart on the device: it carries
-	# no semantics for a Braket task, but it can still sink one. Rigetti's
-	# compiler rejected a 10-qubit program with a full-width barrier before
-	# each of its 16 Givens rotations (the task FAILED after about 14 s with
-	# "Error occurred during compilation. Please reach out to AWS Customer
-	# Support or on AWS re:Post.") and compiled and ran the same program once
-	# the barriers were removed (Cepheus-1-108Q, 2026-11-09). Drop them here,
-	# so every client's circuit arrives without them.
-	circuit = RemoveBarriers()(circuit)
-
 	if unaccepted(circuit):
 		circuit = _decompose(circuit, accepted, backend)
 		if missing := unaccepted(circuit):
@@ -162,21 +150,22 @@ def to_braket_qasm3(circuit, backend):
 				(qubits[0], trimmed.find_bit(instruction.clbits[0]).index))
 			measured.add(qubits[0])
 			continue
-		after = sorted(measured.intersection(qubits))
-		if after:
-			raise DEFwExecutionError(
-				"Braket takes terminal measurements only: "
-				f"{name} on qubit(s) {after} follows their measurement")
-		if instruction.clbits:
-			raise DEFwExecutionError(
-				f"{name} reads classical bits, which a Braket program "
-				"cannot do")
-		# The barriers are gone, so what is left is a gate to rename.
+		if name.lower() != "barrier":
+			after = sorted(measured.intersection(qubits))
+			if after:
+				raise DEFwExecutionError(
+					"Braket takes terminal measurements only: "
+					f"{name} on qubit(s) {after} follows their measurement")
+			if instruction.clbits:
+				raise DEFwExecutionError(
+					f"{name} reads classical bits, which a Braket program "
+					"cannot do")
 		operation = instruction.operation
-		new_name = braket_name(name)
-		used.add(new_name)
-		if new_name != name:
-			operation = operation.copy(name=new_name)
+		if name.lower() not in DIRECTIVES:
+			new_name = braket_name(name)
+			used.add(new_name)
+			if new_name != name:
+				operation = operation.copy(name=new_name)
 		operations.append((operation, qubits))
 
 	program_circuit = QuantumCircuit()
