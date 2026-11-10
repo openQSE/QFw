@@ -335,6 +335,14 @@ if (( ${#_qfw_libfabric_lib_dirs[@]} > 0 )); then
 	unset _qfw_libfabric_dir
 fi
 unset _qfw_libfabric_lib_dirs
+_qfw_python_lib_dirs=(@QFW_PYTHON_LIB_DIRS_SHELL@)
+if (( ${#_qfw_python_lib_dirs[@]} > 0 )); then
+	for _qfw_python_dir in "${_qfw_python_lib_dirs[@]}"; do
+		_qfw_prepend_path LD_LIBRARY_PATH "${_qfw_python_dir}"
+	done
+	unset _qfw_python_dir
+fi
+unset _qfw_python_lib_dirs
 if [[ "${_qfw_script_prefix}" == "${_qfw_cmake_generated_prefix}" ]]; then
 	_qfw_defw_runtime="$(_qfw_resolve_script_dir \
 		"${_qfw_script_prefix}/../DEFw/runtime/src/cdefw_global.py")"
