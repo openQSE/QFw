@@ -2,6 +2,7 @@
 # Imports stay lazy so services can start without a live device or credentials.
 
 from . import qdmi_normalize
+from .login import resolve_login
 from defw_exception import DEFwExecutionError
 import os
 
@@ -149,40 +150,15 @@ class IqmQdmiProfile(QdmiProfile):
 		# anything else would open the session as the service's account.
 		# Then the env vars the native svc_iqm_qpm honors, then the shared
 		# device-access config, resolved for the credential's user.
-		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", DEFAULT_PROVIDER)
-		device_id = credential.get("device_id") or self._descriptor.get("id")
-		provider_device_id = (
-			credential.get("provider_device_id")
-			or credential.get("quantum_computer")
-			or self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
-		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
-		token = (
-			credential.get("api_key")
-			or credential.get("token")
-			or os.environ.get("QFW_API_KEY"))
-		if not (base_url and token):
-			try:
-				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(
-					provider=provider,
-					device_id=device_id,
-					user=credential.get("user"),
-					credential_hint=credential.get("credential_hint"),
-					credential_handle=credential.get("credential_handle"))
-			except Exception as exc:
-				raise DEFwExecutionError(
-					"QDMI driver could not resolve device access for "
-					f"provider {provider!r}: set QFW_QC_URL/QFW_API_KEY or "
-					f"configure device access: {exc}") from exc
-			base_url = base_url or cfg.get("url")
-			token = token or cfg.get("api_key")
-			device_id = device_id or cfg.get("device_id")
-			provider_device_id = (
-				provider_device_id
-				or cfg.get("provider_device_id")
-				or cfg.get("quantum_computer"))
+		login = resolve_login(
+			self._descriptor, credential, provider,
+			lambda login: not (login["base_url"] and login["token"]),
+			"QDMI driver could not resolve device access for provider "
+			f"{provider!r}: set QFW_QC_URL/QFW_API_KEY or configure device "
+			"access")
+		base_url = login["base_url"]
+		token = login["token"]
 		# The IQM QDMI library refuses to initialize a device session without a
 		# base URL + token, and every device-property query then fails with a
 		# bad-session-state error. Catch the missing credentials here so the
@@ -202,7 +178,7 @@ class IqmQdmiProfile(QdmiProfile):
 		return {
 			"base_url": base_url,
 			"token": token,
-			"qc_alias": provider_device_id or device_id,
+			"qc_alias": login["provider_device_id"] or login["device_id"],
 		}
 
 	def technology(self):
