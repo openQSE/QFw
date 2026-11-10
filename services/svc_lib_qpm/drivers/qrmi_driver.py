@@ -23,7 +23,7 @@
 # composite with an embedded qhw device). Circuit execution uses QRMI's task
 # lifecycle and returns normalized qhw results.
 
-from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
+from .base_driver import (BaseDriver, JobRecords, Sessions, next_poll_wait,
 		poll_schedule, reservation_cache_key)
 from .login import resolve_login
 from .qrmi_profiles import (DEFAULT_JOB_TIMEOUT_SECONDS, JOB_TIMEOUT_KEY,
@@ -246,9 +246,9 @@ class QrmiDriver(BaseDriver):
 		# binding/creds and, later, dynamic capability discovery.
 		self._descriptor = descriptor or {}
 		self._qrmi = None
-		self._resource_objs = {}
-		self._resource_locks = {}
-		self._resource_locks_guard = threading.Lock()
+		self._sessions = Sessions()
+		self._resource_objs = self._sessions.opened
+		self._resource_locks = self._sessions.locks
 		self._target_cache = {}
 		self._jobs = JobRecords("QRMI")
 		self._profile = profile_for(self._descriptor)
@@ -487,17 +487,6 @@ class QrmiDriver(BaseDriver):
 			raise self._missing_settings_error(backend, missing, kind=kind)
 		return config
 
-	def _resource_lock(self, cache_key):
-		# One construction lock per credential. Two reservations have nothing
-		# to serialize once the process environment is out of the picture, but
-		# two threads sharing a credential must still open one resource
-		# between them rather than each building its own: a QRMI resource
-		# holds its own runtime threads (four each on qrmi 0.26.0) until it
-		# is dropped.
-		with self._resource_locks_guard:
-			return self._resource_locks.setdefault(
-				cache_key, threading.Lock())
-
 	def _open_resource(self, open_resource, type_name, alias):
 		try:
 			return open_resource()
@@ -540,63 +529,31 @@ class QrmiDriver(BaseDriver):
 				type_name, alias, credential=credential)
 
 		if config is not None:
-			with self._resource_lock(cache_key):
-				# Another thread may have opened this very resource while this
-				# one waited, so look again before building a second.
-				cached = self._resource_objs.get(cache_key)
-				if cached is not None:
-					return cached
-				resource_obj = self._open_resource(
-					lambda: qrmi.QuantumResource.from_config(
-						alias, resource_type, config),
-					type_name, alias)
-				self._resource_objs[cache_key] = resource_obj
+			resource_obj = self._sessions.open(cache_key, lambda: self._open_resource(
+				lambda: qrmi.QuantumResource.from_config(
+					alias, resource_type, config),
+				type_name, alias))
 		else:
-			with RESOURCE_ENV_LOCK:
-				cached = self._resource_objs.get(cache_key)
-				if cached is not None:
-					return cached
+			def build():
 				self._ensure_resource_env(
 					type_name, alias, credential=credential)
-				resource_obj = self._open_resource(
+				return self._open_resource(
 					lambda: qrmi.QuantumResource(alias, resource_type),
 					type_name, alias)
-				self._resource_objs[cache_key] = resource_obj
+
+			with RESOURCE_ENV_LOCK:
+				resource_obj = self._sessions.open(cache_key, build)
 		logging.debug(
 			"shim: QRMI resource opened (%s, %s)", type_name, alias)
 		return resource_obj
-
-	def _credential_cache_key(self, credential=None):
-		# A reservation's resource is its own, as the native IQM QPM keys its
-		# clients, so evict_reservation can drop it when the reservation
-		# ends. A credential from outside a reservation is keyed by identity.
-		credential = dict(credential or {})
-		if not credential:
-			return ("default",)
-		reservation_id = credential.get("reservation_id")
-		if reservation_id is not None:
-			return reservation_cache_key(reservation_id)
-		return (
-			credential.get("url"),
-			credential.get("provider_device_id"),
-			credential.get("device_id"),
-			credential.get("user"),
-			credential.get("api_key") or credential.get("token"),
-			credential.get("service_crn"),
-			credential.get("project_id"),
-			credential.get("aws_access_key_id"),
-		)
 
 	def evict_reservation(self, reservation_id):
 		# The reservation has ended: drop its resource and target, so the
 		# token it opened with goes too, and so do the resource's runtime
 		# threads.
 		cache_key = reservation_cache_key(reservation_id)
-		with self._resource_lock(cache_key):
-			resource = self._resource_objs.pop(cache_key, None)
-			target = self._target_cache.pop(cache_key, None)
-		with self._resource_locks_guard:
-			self._resource_locks.pop(cache_key, None)
+		resource = self._sessions.drop(cache_key)
+		target = self._target_cache.pop(cache_key, None)
 		if resource is not None:
 			logging.debug(
 				"shim: QRMI resource for reservation %s dropped",
