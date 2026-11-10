@@ -1,5 +1,3 @@
-# The login both drivers open a provider resource with.
-
 import pathlib
 import sys
 

@@ -1,5 +1,3 @@
-# Which QRMI profile serves a descriptor, and which serves a resource type.
-
 import pathlib
 import sys
 

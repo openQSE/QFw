@@ -1,15 +1,9 @@
-# The login a driver opens a provider resource with, shared by QRMI and QDMI.
-
 from defw_exception import DEFwExecutionError
 import os
 
 
 def resolve_login(descriptor, credential, provider, needs_lookup, failure,
 		extras=()):
-	# In order: the reservation's credential, QFW_QC_URL/QFW_API_KEY, then
-	# the user's device-access entry, looked up only when needs_lookup says
-	# the first two left something out. extras are keys taken from the
-	# credential, else from the entry.
 	credential = dict(credential or {})
 	login = {
 		"device_id": credential.get("device_id") or descriptor.get("id"),

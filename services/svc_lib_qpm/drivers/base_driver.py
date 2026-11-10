@@ -104,11 +104,7 @@ class JobRecords:
 
 
 class Sessions:
-	# What a driver has open for a login: a QRMI resource, a QDMI session. It
-	# carries the token it opened with, so one is never shared between logins
-	# and is dropped when its reservation ends. Opening takes a lock per
-	# login: two threads sharing one must open a single session between them,
-	# and two logins have nothing to serialize.
+	# One lock per login: threads sharing a login open one session, and other logins do not wait.
 	def __init__(self):
 		self.opened = {}
 		self.locks = {}
@@ -116,10 +112,6 @@ class Sessions:
 
 	@staticmethod
 	def key(credential=None):
-		# A reservation's session is its own, as the native IQM QPM keys its
-		# clients, so it can be dropped when the reservation ends. A
-		# credential from outside a reservation is keyed by identity, and a
-		# call with no credential shares the service's own session.
 		credential = dict(credential or {})
 		if not credential:
 			return ("default",)

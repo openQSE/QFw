@@ -608,9 +608,7 @@ class QrmiDriver(BaseDriver):
 		return self._profile.run_circuit(self, source)
 
 	def _vendor_timing(self, job_id, credential=None):
-		# The provider's own account of the job for the telemetry, behind
-		# QFW_TELEMETRY_VENDOR because it is one more request per job. Best
-		# effort, like the logs.
+		# Behind QFW_TELEMETRY_VENDOR because it is one more request per job.
 		if not instrumentation.vendor_enabled():
 			return {}
 		phases = self._profile.vendor_timing(

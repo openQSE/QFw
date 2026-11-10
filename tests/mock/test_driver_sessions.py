@@ -1,5 +1,3 @@
-# The sessions both drivers keep open per login.
-
 import pathlib
 import sys
 import threading

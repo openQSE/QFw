@@ -1,8 +1,3 @@
-# What differs per provider in QrmiDriver. The driver owns the QRMI resource
-# and its job lifecycle; a profile owns what the provider's device reports and
-# how a circuit reaches it. Imports stay lazy so services can start without
-# the provider's libraries.
-
 from .base_driver import pasqal_backend_info
 from .login import resolve_login
 from .provider_profile import ProviderProfile
@@ -113,12 +108,6 @@ class QrmiProfile(ProviderProfile):
 	capabilities = frozenset()
 
 	def access(self, credential=None):
-		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
-		# env vars the native svc_iqm_qpm uses, then fall back to the shared
-		# device-access config (util.device_access).
-		# The IBM service CRN and the Pasqal project are returned too, from the
-		# credential or the user's credential DB entry, when either names one.
-		# See _ensure_ibm_env and _pasqal_cloud_settings.
 		provider = self._descriptor.get("provider", "iqm")
 		login = resolve_login(
 			self._descriptor, credential, provider,
@@ -150,7 +139,6 @@ class QrmiProfile(ProviderProfile):
 		return call in driver_capabilities
 
 	def is_complete_target(self, target_data):
-		# Whether a target() payload is whole enough to cache.
 		return True
 
 	def device_info(self, driver):
@@ -172,19 +160,12 @@ class QrmiProfile(ProviderProfile):
 		raise NotImplementedError
 
 	def vendor_timing(self, driver, job_id, credential=None):
-		# The provider's own account of the job, or {} when it has none.
 		return {}
 
 	def resource_settings(self, driver, type_name, backend, credential=None):
-		# (settings, required, kind) QRMI opens a resource of this type with,
-		# or None when the profile resolves nothing for the type and the
-		# environment already carries it, from the SPANK plugin or the
-		# operator.
 		return None
 
 	def ensure_env(self, driver, type_name, alias, credential=None):
-		# Write those settings into the process environment, for a qrmi with
-		# no from_config().
 		return None
 
 
@@ -261,9 +242,7 @@ class IqmQrmiProfile(QrmiProfile):
 			driver._ensure_iqm_isa_env(alias, credential=credential)
 
 	def vendor_timing(self, driver, job_id, credential=None):
-		# QRMI returns the measurements alone from task_result, and the job's
-		# timeline, the server's timestamp per phase, only as the text of
-		# task_logs, which util.iqm_timeline reads.
+		# task_logs is the only place QRMI reports the job's timeline.
 		from util.iqm_timeline import durations_from_task_logs
 		return durations_from_task_logs(
 			driver._task_logs(job_id, credential=credential))
@@ -401,8 +380,7 @@ class IbmQrmiProfile(QrmiProfile):
 	resource_types = tuple(IBM_RESOURCE_ENV_KINDS)
 
 	def is_complete_target(self, target_data):
-		# IBM target() returns null for configuration or properties on
-		# failure, and a payload cached then would stick after IBM recovers.
+		# IBM returns null configuration or properties on failure; caching that would stick after it recovers.
 		return (
 			isinstance(target_data, dict)
 			and target_data.get("configuration") is not None
@@ -754,8 +732,7 @@ class IbmQrmiProfile(QrmiProfile):
 class PasqalQrmiProfile(QrmiProfile):
 	provider = "pasqal"
 	resource_types = ("PasqalCloud", "PasqalLocal")
-	# No qhw normalizer reads a Pulser device, so the qhw introspection calls
-	# are a gap for it rather than an IQM parse of the wrong payload.
+	# No qhw normalizer reads a Pulser device.
 	capabilities = frozenset({
 		"get_backend_info",
 		"run_circuit",
@@ -767,11 +744,7 @@ class PasqalQrmiProfile(QrmiProfile):
 		return call in self.capabilities
 
 	def backend_info(self, driver, credential=None):
-		# target() is Pasqal Cloud's device-spec entries, read for each call
-		# rather than through the target cache, so a client builds against the
-		# current calibration. An emulator's are public; a QPU's need a login,
-		# the reservation's credential when the client names its reservation
-		# and the service's otherwise (_pasqal_cloud_settings).
+		# Read per call, not through the target cache, so a client builds against the current calibration.
 		try:
 			entries = json.loads(
 				driver._qpu(credential=credential).target().value)
@@ -932,16 +905,11 @@ PROFILES = {
 
 
 def profile_for(descriptor):
-	# A provider QRMI has no profile for takes the IQM one, as the driver
-	# always has.
 	provider = str((descriptor or {}).get("provider") or "iqm").lower()
 	return PROFILES.get(provider, IqmQrmiProfile)(descriptor)
 
 
 def profile_for_resource_type(type_name, descriptor):
-	# The profile that resolves the settings a resource of this type opens
-	# with, whichever provider the descriptor names. None for a type no
-	# profile serves.
 	for profile in PROFILES.values():
 		if type_name in profile.resource_types:
 			return profile(descriptor)
