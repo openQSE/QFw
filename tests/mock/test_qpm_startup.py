@@ -1,5 +1,36 @@
 from types import SimpleNamespace
 
+import importlib
+import threading
+
+import pytest
+
+
+@pytest.mark.parametrize("module_name,provider,imports_qiskit", [
+	("svc_iqm_qpm", "iqm", True),
+	("svc_lib_qpm", "iqm", True),
+	("svc_lib_qpm", "pasqal", False),
+])
+def test_qiskit_initializes_before_service_workers(
+		monkeypatch, module_name, provider, imports_qiskit):
+	service = importlib.import_module(module_name)
+	events = []
+
+	def load_qiskit():
+		assert threading.current_thread() is threading.main_thread()
+		events.append("qiskit")
+
+	monkeypatch.setattr(service, "qiskit_circuit_formats", load_qiskit)
+	monkeypatch.setattr(service.qpm_startup, "initialize_qpm_service",
+		lambda *args: events.append("workers"))
+	if module_name == "svc_lib_qpm":
+		from svc_lib_qpm import descriptor
+		monkeypatch.setattr(descriptor, "resolve_descriptor",
+			lambda: {"provider": provider})
+
+	service.initialize()
+	assert events == (["qiskit", "workers"] if imports_qiskit else ["workers"])
+
 
 def site_qpm_record():
 	return {
