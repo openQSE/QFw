@@ -224,13 +224,24 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 	try:
 		index_to_name = None
 		restrict_to_qubits = None
+		initial_layout = None
 		if mapping:
 			index_to_name = logical_to_physical_qubits(
 				qiskit_circuit, backend.architecture, mapping)
+			resonators = backend.architecture.computational_resonators
+			# A star device couples its qubits only through its resonators.
+			index_to_name.update({
+				len(index_to_name) + offset: resonator
+				for offset, resonator in enumerate(resonators)})
 			restrict_to_qubits = list(index_to_name.values())
+			# Pinned only for a star: a crystal device lets the transpiler
+			# pick the order within the mapped qubits, which can save a SWAP.
+			if resonators:
+				initial_layout = list(range(qiskit_circuit.num_qubits))
 		transpiled = transpile_to_IQM(
 			qiskit_circuit,
 			backend,
+			initial_layout=initial_layout,
 			restrict_to_qubits=restrict_to_qubits,
 		)
 		# Naming the qubits is the part that goes wrong quietly. A restricted
@@ -243,7 +254,7 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 		if index_to_name is None:
 			index_to_name = {
 				index: backend.index_to_qubit_name(index)
-				for index in range(backend.num_qubits)
+				for index in range(transpiled.num_qubits)
 			}
 		instructions = tuple(serialize_instructions(
 			transpiled, qubit_index_to_name=index_to_name))
