@@ -495,23 +495,34 @@ class QrmiDriver(BaseDriver):
 				type_name, alias, credential=credential)
 
 		if config is not None:
-			resource_obj = self._sessions.open(cache_key, lambda: self._open_resource(
-				lambda: qrmi.QuantumResource.from_config(
-					alias, resource_type, config),
-				type_name, alias))
+			resource_obj = self._open_from_config(
+				cache_key, qrmi, resource_type, type_name, alias, config)
 		else:
-			def build():
-				self._ensure_resource_env(
-					type_name, alias, credential=credential)
-				return self._open_resource(
-					lambda: qrmi.QuantumResource(alias, resource_type),
-					type_name, alias)
-
-			with RESOURCE_ENV_LOCK:
-				resource_obj = self._sessions.open(cache_key, build)
+			resource_obj = self._open_from_environment(
+				cache_key, qrmi, resource_type, type_name, alias, credential)
 		logging.debug(
 			"shim: QRMI resource opened (%s, %s)", type_name, alias)
 		return resource_obj
+
+	def _open_from_config(
+			self, cache_key, qrmi, resource_type, type_name, alias, config):
+		return self._sessions.open(cache_key, lambda: self._open_resource(
+			lambda: qrmi.QuantumResource.from_config(
+				alias, resource_type, config),
+			type_name, alias))
+
+	def _open_from_environment(
+			self, cache_key, qrmi, resource_type, type_name, alias,
+			credential):
+		def build():
+			self._ensure_resource_env(
+				type_name, alias, credential=credential)
+			return self._open_resource(
+				lambda: qrmi.QuantumResource(alias, resource_type),
+				type_name, alias)
+
+		with RESOURCE_ENV_LOCK:
+			return self._sessions.open(cache_key, build)
 
 	def evict_reservation(self, reservation_id):
 		# The reservation has ended: drop its resource and target, so the
