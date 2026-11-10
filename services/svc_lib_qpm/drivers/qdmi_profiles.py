@@ -3,6 +3,7 @@
 
 from . import qdmi_normalize
 from .login import resolve_login
+from .provider_profile import ProviderProfile
 from defw_exception import DEFwExecutionError
 import os
 
@@ -58,9 +59,7 @@ def iqm_architecture(topology, calibration_set_id):
 	}
 
 
-class QdmiProfile:
-	# The descriptor provider this profile serves.
-	provider = None
+class QdmiProfile(ProviderProfile):
 	# The package that supplies the device library, named in import errors.
 	requires = "a QDMI device library"
 	# The QDMI device-property CUSTOM slot that carries the provider's
@@ -68,17 +67,6 @@ class QdmiProfile:
 	# name, or None when the provider publishes none. qdmi_normalize reads
 	# it; a wrong slot would read some other vendor-defined value as an id.
 	calibration_set_slot = None
-
-	def __init__(self, descriptor=None):
-		self._descriptor = dict(descriptor or {})
-
-	def access(self, credential=None):
-		"""The settings this resource's session opens with (a dict).
-
-		credential is the reservation's bound provider credential, the
-		circuit's provider_credential, or None for a call made outside a
-		reservation."""
-		raise NotImplementedError
 
 	def open_backend(self, access):
 		"""Open the provider's MQT Core QDMI backend."""
@@ -130,9 +118,6 @@ class QdmiProfile:
 		# bits are ordered. Identity where they already agree.
 		return counts
 
-	def technology(self):
-		# The qhw-device-v1 technology family, or None to leave it unset.
-		return None
 
 
 class IqmQdmiProfile(QdmiProfile):
