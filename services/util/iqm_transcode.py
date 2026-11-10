@@ -228,13 +228,16 @@ def transpile_qiskit_to_iqm(circuit, client=None, calibration_set_id=None,
 		if mapping:
 			index_to_name = logical_to_physical_qubits(
 				qiskit_circuit, backend.architecture, mapping)
+			resonators = backend.architecture.computational_resonators
 			# A star device couples its qubits only through its resonators.
 			index_to_name.update({
 				len(index_to_name) + offset: resonator
-				for offset, resonator in enumerate(
-					backend.architecture.computational_resonators)})
+				for offset, resonator in enumerate(resonators)})
 			restrict_to_qubits = list(index_to_name.values())
-			initial_layout = list(range(qiskit_circuit.num_qubits))
+			# Pinned only for a star: a crystal device lets the transpiler
+			# pick the order within the mapped qubits, which can save a SWAP.
+			if resonators:
+				initial_layout = list(range(qiskit_circuit.num_qubits))
 		transpiled = transpile_to_IQM(
 			qiskit_circuit,
 			backend,
