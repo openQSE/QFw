@@ -255,7 +255,7 @@ qfw_example_setup_site_services() {
 		fi
 		setup_args+=(--runtime-config "${runtime_config}")
 	fi
-	qfw_example_setup "${setup_args[@]}"
+	qfw_example_setup ${setup_args[@]+"${setup_args[@]}"}
 }
 
 qfw_example_service_for_backend() {
@@ -294,7 +294,7 @@ qfw_example_setup_backend_service() {
 				QFW_EXAMPLE_SITE_CONFIG="${site_config}"
 				setup_args+=(--site-config "${site_config}")
 			fi
-			qfw_example_setup "${setup_args[@]}"
+			qfw_example_setup ${setup_args[@]+"${setup_args[@]}"}
 			;;
 		site)
 			qfw_example_setup_site_services
@@ -415,7 +415,7 @@ qfw_example_teardown() {
 		QFW_EXAMPLE_TEARDOWN_DONE=1
 		qfw_example_archive_runtime_logs
 		qfw_example_teardown_args
-		qfw-teardown "${QFW_EXAMPLE_TEARDOWN_ARGS[@]}"
+		qfw-teardown ${QFW_EXAMPLE_TEARDOWN_ARGS[@]+"${QFW_EXAMPLE_TEARDOWN_ARGS[@]}"}
 	fi
 }
 
@@ -435,7 +435,7 @@ qfw_example_finish() {
 		QFW_EXAMPLE_TEARDOWN_DONE=1
 		qfw_example_archive_runtime_logs || teardown_rc=$?
 		qfw_example_teardown_args
-		qfw-teardown "${QFW_EXAMPLE_TEARDOWN_ARGS[@]}" || teardown_rc=$?
+		qfw-teardown ${QFW_EXAMPLE_TEARDOWN_ARGS[@]+"${QFW_EXAMPLE_TEARDOWN_ARGS[@]}"} || teardown_rc=$?
 	fi
 	if [[ -n "${QFW_EXAMPLE_RUNTIME_CONFIG:-}" &&
 	      -f "${QFW_EXAMPLE_RUNTIME_CONFIG}" ]]; then
@@ -468,7 +468,7 @@ qfw_example_emit() {
 	local teardown_rc="${5:-0}"
 	python3 - "$event" "$status" "$rc" "$duration" "$teardown_rc" \
 		"${QFW_EXAMPLE_RESULT_FILE:-}" "${QFW_EXAMPLE_NAME:-unknown}" \
-		"${QFW_EXAMPLE_ARGS[@]}" <<'PY'
+		${QFW_EXAMPLE_ARGS[@]+"${QFW_EXAMPLE_ARGS[@]}"} <<'PY'
 import json
 import os
 import sys
