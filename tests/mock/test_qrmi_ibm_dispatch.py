@@ -31,6 +31,7 @@ if SERVICES not in sys.path:
 
 from defw_exception import DEFwExecutionError  # noqa: E402
 import svc_lib_qpm.drivers.qrmi_driver as qd   # noqa: E402
+import svc_lib_qpm.drivers.qrmi_profiles as qrmi_profiles   # noqa: E402
 from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 
 
@@ -96,7 +97,7 @@ def test_num_shots_prefers_num_shots_over_shots():
 
 
 def test_num_shots_uses_default_when_absent():
-	assert qd.num_shots({}) == qd.DEFAULT_SHOTS
+	assert qd.num_shots({}) == qrmi_profiles.DEFAULT_SHOTS
 
 
 def test_num_shots_accepts_custom_default():
@@ -316,16 +317,17 @@ def test_a_failed_refresh_keeps_the_last_good_target(monkeypatch, caplog):
 
 
 def test_a_refresh_failing_as_any_defw_error_keeps_the_last_good_target(
-		monkeypatch):
+		monkeypatch, caplog):
 	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
-	driver = _expired_driver(monkeypatch, "iqm", good, None)
 
 	def not_ready(credential=None):
 		raise qd.DEFwNotReady("device is busy")
 
-	driver._read_target = not_ready
+	driver = _expired_driver(monkeypatch, "iqm", good, not_ready)
 
-	assert driver._target() == good
+	with caplog.at_level("WARNING"):
+		assert driver._target() == good
+	assert "device is busy" in caplog.text
 
 
 def test_an_incomplete_ibm_refresh_keeps_the_last_good_target(monkeypatch):
@@ -398,7 +400,7 @@ def test_an_iqm_job_pins_the_calibration_set_read_after_the_ttl(monkeypatch):
 	driver._build_iqmjson = stop
 
 	with pytest.raises(Stop):
-		driver._run_iqm_circuit(types.SimpleNamespace(
+		driver._profile._run_iqm_circuit(driver, types.SimpleNamespace(
 			info={"num_shots": 1}, provider_credential=None))
 
 	assert pinned == ["cal-2"]
