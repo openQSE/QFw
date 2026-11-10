@@ -26,6 +26,7 @@
 from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
 		pasqal_backend_info, poll_schedule, reservation_cache_key)
 from .login import resolve_login
+from .qrmi_profiles import profile_for
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
 from util import instrumentation
@@ -104,17 +105,6 @@ PASQAL_CONFIG_ROOT = "PASQAL_CONFIG_ROOT"
 PASQAL_LOGIN = (
 	"QRMI_PASQAL_CLOUD_CLIENT_ID", "QRMI_PASQAL_CLOUD_CLIENT_SECRET",
 	PASQAL_CONFIG_ROOT, "PASQAL_USERNAME", "PASQAL_PASSWORD")
-
-# A Pasqal resource serves execution, and get_backend_info hands back the
-# Pulser device its target() carries, which a Pulser client builds sequences
-# against. No qhw normalizer reads a Pulser device, so the qhw introspection
-# calls are a gap for it rather than an IQM parse of the wrong payload.
-PASQAL_CAPABILITIES = frozenset({
-	"get_backend_info",
-	"run_circuit",
-	"get_task_timing",
-	"get_task_metadata",
-})
 
 # IBM Cloud's IAM endpoint. QRMI trades the API key for a token there, with
 # grant_type urn:ibm:params:oauth:grant-type:apikey against /identity/token,
@@ -355,11 +345,10 @@ class QrmiDriver(BaseDriver):
 		self._resource_locks_guard = threading.Lock()
 		self._target_cache = {}
 		self._jobs = JobRecords("QRMI")
+		self._profile = profile_for(self._descriptor)
 
 	def implements(self, call):
-		if self._provider() == "pasqal":
-			return call in PASQAL_CAPABILITIES
-		return super().implements(call)
+		return self._profile.serves(call, self.CAPABILITIES)
 
 	def _resource(self):
 		# Lazy import so the service/Frontend construct and route even where
@@ -1008,17 +997,7 @@ class QrmiDriver(BaseDriver):
 				raise self._qrmi_error(
 					exc, "failed to read QRMI target()") from exc
 
-			# IBM target() returns null for configuration or properties on failure.
-			# To avoid caching a failed or half-failed payload (which would stick
-			# in the cache after IBM recovers), do not cache if either is None.
-			if self._provider() == "ibm":
-				if (
-					isinstance(target_data, dict)
-					and target_data.get("configuration") is not None
-					and target_data.get("properties") is not None
-				):
-					self._target_cache[cache_key] = target_data
-			else:
+			if self._profile.is_complete_target(target_data):
 				self._target_cache[cache_key] = target_data
 			return target_data
 		return self._target_cache[cache_key]
@@ -1060,123 +1039,19 @@ class QrmiDriver(BaseDriver):
 	# --- introspection facet: reuse qhw-iqm / qhw-ibm on QRMI's raw data -
 
 	def get_device_info(self):
-		if self._provider() == "ibm":
-			from qhw_ibm import normalize_device
-			target_config_json = self._target().get("configuration") or {}
-			if not target_config_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			return normalize_device(target_config_json, device_id=self._device_id())
-		from qhw_iqm import normalize_device
-		return normalize_device(self._arch_raw(), device_id=self._device_id())
+		return self._profile.device_info(self)
 
 	def get_coupling_graph(self, calibration_set_id=None):
-		if self._provider() == "ibm":
-			from qhw_ibm import normalize_coupling
-			target_config_json = self._target().get("configuration") or {}
-			if not target_config_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			return normalize_coupling(target_config_json, device_id=self._device_id())
-		from qhw_iqm import normalize_coupling
-		return normalize_coupling(self._arch_raw(), device_id=self._device_id())
+		return self._profile.coupling_graph(self)
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
-		if self._provider() == "ibm":
-			# The calibration normalizer reads the properties sub-dict
-			# (qubits, gates, last_update_date).
-			from qhw_ibm import normalize_calibration
-			target_props_json = self._target().get("properties") or {}
-			if not target_props_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			return normalize_calibration(target_props_json, device_id=self._device_id())
-		# target() carries the IQM calibration_set + quality_metrics; feed them
-		# (with the dynamic architecture) to qhw-iqm — the same normalizer the
-		# native svc_iqm_qpm path uses — to build a qhw-calibration-v1 record.
-		# Selecting a specific calibration_set_id is a follow-up; this returns
-		# the resource's current/default calibration.
-		from qhw_iqm import normalize_calibration
-		target = self._target()
-		raw = {
-			"dynamic_architecture":
-				target.get("dynamic_quantum_architecture") or {},
-			"calibration_set": target.get("calibration_set") or {},
-			"quality_metric_set": target.get("quality_metrics") or {},
-		}
-		return normalize_calibration(raw, device_id=self._device_id())
+		return self._profile.calibration_snapshot(self)
 
 	def get_dynamic_backend_info(self, calibration_set_id=None):
-		if self._provider() == "ibm":
-			# IBM target() has no live dynamic state; configuration and
-			# properties are static snapshots with no calibration_set_id or
-			# active qubit list equivalent.
-			return {
-				"backend": "ibm",
-				"metadata_supported": False,
-				"dynamic_architecture": {},
-			}
-		# The dynamic architecture as-is, matching the native svc_iqm_qpm shape
-		# (a provider dict, not a qhw record).
-		return {
-			"backend": self._descriptor.get("provider", "iqm"),
-			"metadata_supported": True,
-			"dynamic_architecture":
-				self._target().get("dynamic_quantum_architecture") or {},
-		}
+		return self._profile.dynamic_backend_info(self)
 
 	def get_backend_info(self, credential=None):
-		if self._provider() == "pasqal":
-			# target() is Pasqal Cloud's device-spec entries, read for each
-			# call rather than through the target cache, so a client builds
-			# against the current calibration. An emulator's are public; a
-			# QPU's need a login, the reservation's credential when the
-			# client names its reservation and the service's otherwise
-			# (_pasqal_cloud_settings).
-			try:
-				entries = json.loads(
-					self._qpu(credential=credential).target().value)
-			except Exception as exc:
-				raise self._qrmi_error(
-					exc, "failed to read QRMI target()") from exc
-			return pasqal_backend_info(
-				str(self._qc_alias(credential=credential) or "").split(",")[0],
-				entries)
-		if self._provider() == "ibm":
-			from qhw_ibm import normalize_device
-			target = self._target(credential=credential)
-			target_config_json = target.get("configuration") or {}
-			if not target_config_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			qhw_device = normalize_device(target_config_json, device_id=self._device_id())
-			qubits_len = len(qhw_device.get("qubits", []))
-			n_qubits = target_config_json.get("n_qubits", qubits_len)
-			# The raw configuration and properties together are what
-			# _build_backend_target converts to the ISA target, so a client
-			# that builds its own target gets both here.
-			return {
-				"backend": "ibm",
-				"metadata_supported": True,
-				"static_architecture": target_config_json,
-				"backend_properties": target.get("properties") or None,
-				"active_qubits": list(range(n_qubits)),
-				"calibration_set_id": None,
-				"qhw_device": qhw_device,
-			}
-
-		# Native composite shape (mirrors svc_iqm_qpm.get_backend_info): the
-		# provider fields plus an embedded qhw device record. The static
-		# architecture is empty against QRMI older than 0.22.0, which did not
-		# report it at all.
-		from qhw_iqm import normalize_device
-		target = self._target(credential=credential)
-		dynamic = target.get("dynamic_quantum_architecture") or {}
-		return {
-			"backend": self._descriptor.get("provider", "iqm"),
-			"metadata_supported": True,
-			"static_architecture": self._static_arch(target),
-			"active_qubits": dynamic.get("qubits") or [],
-			"calibration_set_id": dynamic.get("calibration_set_id"),
-			"qhw_device": normalize_device(
-					self._arch_raw(credential), device_id=self._device_id()),
-		}
+		return self._profile.backend_info(self, credential=credential)
 
 	# --- execution: OpenQASM/QPY -> QRMI task lifecycle ----------------------
 
@@ -1187,12 +1062,7 @@ class QrmiDriver(BaseDriver):
 		# and normalize the counts to qhw-result-v1 (the same normalizer the
 		# native svc_iqm_qpm path uses). QRMI-for-IQM has no acquire/release, so
 		# there is no reservation step.
-		provider = self._provider()
-		if provider == "ibm":
-			return self._run_ibm_circuit(source)
-		if provider == "pasqal":
-			return self._run_pasqal_sequence(source)
-		return self._run_iqm_circuit(source)
+		return self._profile.run_circuit(self, source)
 
 	def _run_ibm_circuit(self, source):
 		# Lifecycle: build backend target -> build Qiskit SamplerV2 payload ->
@@ -1235,15 +1105,12 @@ class QrmiDriver(BaseDriver):
 
 	def _vendor_timing(self, job_id, credential=None):
 		# The provider's own account of the job for the telemetry, behind
-		# QFW_TELEMETRY_VENDOR because it is one more request per job. IQM
-		# only: QRMI returns the measurements alone from task_result, and the
-		# job's timeline, the server's timestamp per phase, only as the text
-		# of task_logs, which util.iqm_timeline reads. Best effort, like the logs.
-		if not instrumentation.vendor_enabled() or self._provider() != "iqm":
+		# QFW_TELEMETRY_VENDOR because it is one more request per job. Best
+		# effort, like the logs.
+		if not instrumentation.vendor_enabled():
 			return {}
-		from util.iqm_timeline import durations_from_task_logs
-		phases = durations_from_task_logs(
-			self._task_logs(job_id, credential=credential))
+		phases = self._profile.vendor_timing(
+			self, job_id, credential=credential)
 		if phases:
 			instrumentation.record_vendor_timing(phases)
 		return phases
