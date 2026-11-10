@@ -289,9 +289,9 @@ also accepts the broader `supportedOperations` vocabulary. QFw exports those
 gates directly because the adapter's serializer uses only native operations.
 Unsupported gates are decomposed without a coupling map because Amazon Braket
 compiles and routes the program. Anything still unexpressible fails before a
-task is created. Barriers are dropped: they carry no meaning in a program
-Braket compiles and routes itself, and Rigetti's compiler has rejected
-programs that kept them.
+task is created. Barriers are passed through. Braket's compilers keep gates
+from moving or merging across them, so a client whose barriers only mark
+structure should remove them itself.
 
 Amazon Braket backends can order result columns by qubit index or classical
 register. QFw emits terminal measurements in ascending qubit order into a
