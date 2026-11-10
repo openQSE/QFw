@@ -25,6 +25,7 @@
 
 from .base_driver import (BaseDriver, JobRecords, Sessions, next_poll_wait,
 		poll_schedule, reservation_cache_key)
+from .login import resolve_login
 from .qrmi_profiles import (DEFAULT_JOB_TIMEOUT_SECONDS, JOB_TIMEOUT_KEY,
 		PASQAL_CONFIG_ROOT,
 		PROFILES, num_shots,
@@ -306,12 +307,9 @@ class QrmiDriver(BaseDriver):
 			self, iqm_circuit, shots, calibration_set_id)
 
 	def _qc_alias(self, credential=None):
-		credential = dict(credential or {})
-		value = (
-			credential.get("provider_device_id")
-			or credential.get("quantum_computer")
-			or self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
+		value = resolve_login(
+			self._descriptor, credential, self._provider(),
+			lambda login: False, "")["provider_device_id"]
 		if value:
 			return value
 		try:
