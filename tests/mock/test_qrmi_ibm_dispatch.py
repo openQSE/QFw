@@ -250,6 +250,200 @@ def test_target_caches_iqm_payload_regardless_of_content():
 	assert call_count[0] == 1, "IQM payload must be cached even without IBM keys"
 
 
+def _counting_target_driver(monkeypatch, ttl=None):
+	if ttl is None:
+		monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
+	else:
+		monkeypatch.setenv(qd.TARGET_TTL_ENV, ttl)
+	driver = _driver(provider="iqm")
+	call_count = [0]
+
+	def _qpu(credential=None):
+		call_count[0] += 1
+		return _qpu_returning({"dynamic_quantum_architecture": {}})
+
+	driver._qpu = _qpu
+	return driver, call_count
+
+
+def test_target_is_read_again_once_its_entry_expires(monkeypatch):
+	driver, call_count = _counting_target_driver(monkeypatch)
+	clock = [1000.0]
+	monkeypatch.setattr(qd.time, "monotonic", lambda: clock[0])
+
+	driver._target()
+	clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS - 1
+	driver._target()
+	assert call_count[0] == 1
+
+	clock[0] += 1
+	driver._target()
+	assert call_count[0] == 2
+
+
+def test_target_ttl_of_zero_reads_the_device_every_time(monkeypatch):
+	driver, call_count = _counting_target_driver(monkeypatch, ttl="0")
+
+	driver._target()
+	driver._target()
+
+	assert call_count[0] == 2
+
+
+def _expired_driver(monkeypatch, provider, first, refresh):
+	monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
+	driver = _driver(provider=provider)
+	clock = [1000.0]
+	monkeypatch.setattr(qd.time, "monotonic", lambda: clock[0])
+	driver._qpu = lambda credential=None: _qpu_returning(first)
+	driver._target()
+	clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
+	driver._qpu = refresh
+	driver.clock = clock
+	return driver
+
+
+def test_a_failed_refresh_keeps_the_last_good_target(monkeypatch, caplog):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+
+	def refresh(credential=None):
+		raise RuntimeError("device unreachable")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, refresh)
+
+	with caplog.at_level("WARNING"):
+		assert driver._target() == good
+	assert "device unreachable" in caplog.text
+
+
+def test_a_refresh_failing_as_any_defw_error_keeps_the_last_good_target(
+		monkeypatch, caplog):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+
+	def not_ready(credential=None):
+		raise qd.DEFwNotReady("device is busy")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, not_ready)
+
+	with caplog.at_level("WARNING"):
+		assert driver._target() == good
+	assert "device is busy" in caplog.text
+
+
+def test_an_incomplete_ibm_refresh_keeps_the_last_good_target(monkeypatch):
+	good = {"configuration": {"n_qubits": 5}, "properties": {"qubits": []}}
+	partial = {"configuration": {"n_qubits": 5}, "properties": None}
+	driver = _expired_driver(
+		monkeypatch, "ibm", good,
+		lambda credential=None: _qpu_returning(partial))
+
+	assert driver._target() == good
+
+
+def test_a_refresh_after_a_failure_replaces_the_target(monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	newer = {"dynamic_quantum_architecture": {"qubits": ["QB2"]}}
+
+	def refresh(credential=None):
+		raise RuntimeError("device unreachable")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, refresh)
+	driver._target()
+	driver._qpu = lambda credential=None: _qpu_returning(newer)
+
+	assert driver._target() == good
+	driver.clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
+	assert driver._target() == newer
+
+
+def test_a_reservation_ending_during_a_failed_refresh_still_serves_the_target(
+		monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	driver = _expired_driver(monkeypatch, "iqm", good, None)
+	cache_key = driver._credential_cache_key(None)
+
+	def evicted_while_reading(credential=None):
+		driver._target_cache.pop(cache_key)
+		driver._target_fetched_at.pop(cache_key)
+		raise RuntimeError("device unreachable")
+
+	driver._qpu = evicted_while_reading
+
+	assert driver._target() == good
+	assert cache_key not in driver._target_retry_after
+
+
+def test_an_iqm_job_pins_the_calibration_set_read_after_the_ttl(monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+
+	class Stop(Exception):
+		pass
+
+	pinned = []
+
+	def stop(iqm_circuit, shots, calibration_set_id):
+		pinned.append(calibration_set_id)
+		raise Stop()
+
+	recalibrated = {"dynamic_quantum_architecture": {
+		"calibration_set_id": "cal-2"}}
+	driver = _expired_driver(
+		monkeypatch, "iqm",
+		{"dynamic_quantum_architecture": {"calibration_set_id": "cal-1"}},
+		lambda credential=None: _qpu_returning(recalibrated))
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "circuit")
+	monkeypatch.setattr(
+		iqm_transcode, "build_iqm_circuit",
+		lambda circuit, dynamic, mapping: circuit)
+	driver._resource = lambda: object()
+	driver._build_iqmjson = stop
+
+	with pytest.raises(Stop):
+		driver._profile._run_iqm_circuit(driver, types.SimpleNamespace(
+			info={"num_shots": 1}, provider_credential=None))
+
+	assert pinned == ["cal-2"]
+
+
+def test_a_device_that_stays_down_is_asked_once_per_ttl(monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	attempts = []
+
+	def refresh(credential=None):
+		attempts.append(credential)
+		raise RuntimeError("device unreachable")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, refresh)
+	for _ in range(3):
+		driver._target()
+	assert len(attempts) == 1
+
+	driver.clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
+	driver._target()
+	assert len(attempts) == 2
+
+
+def test_a_failed_first_read_still_raises(monkeypatch):
+	monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
+	driver = _driver(provider="iqm")
+
+	def refused(credential=None):
+		raise RuntimeError("device unreachable")
+
+	driver._qpu = refused
+
+	with pytest.raises(DEFwExecutionError, match="target"):
+		driver._target()
+
+
+def test_target_ttl_must_be_a_whole_number(monkeypatch):
+	monkeypatch.setenv(qd.TARGET_TTL_ENV, "soon")
+
+	with pytest.raises(DEFwExecutionError, match=qd.TARGET_TTL_ENV):
+		qd.target_ttl_seconds()
+
+
 # ===========================================================================
 # IBM introspection dispatch
 # ===========================================================================
