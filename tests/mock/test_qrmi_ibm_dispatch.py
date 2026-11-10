@@ -31,6 +31,7 @@ if SERVICES not in sys.path:
 
 from defw_exception import DEFwExecutionError  # noqa: E402
 import svc_lib_qpm.drivers.qrmi_driver as qd   # noqa: E402
+import svc_lib_qpm.drivers.qrmi_profiles as qrmi_profiles   # noqa: E402
 from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 
 
@@ -96,7 +97,7 @@ def test_num_shots_prefers_num_shots_over_shots():
 
 
 def test_num_shots_uses_default_when_absent():
-	assert qd.num_shots({}) == qd.DEFAULT_SHOTS
+	assert qd.num_shots({}) == qrmi_profiles.DEFAULT_SHOTS
 
 
 def test_num_shots_accepts_custom_default():

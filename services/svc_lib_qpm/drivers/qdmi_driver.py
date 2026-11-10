@@ -6,7 +6,7 @@
 # The dynamic backend info, raw IQM architecture data, stays with QRMI; the
 # backend-info composite is served here from the device topology.
 
-from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
+from .base_driver import (BaseDriver, JobRecords, Sessions, next_poll_wait,
 		poll_schedule, reservation_cache_key)
 from .qdmi_profiles import profile_for
 from . import qdmi_normalize
@@ -15,7 +15,6 @@ from util import instrumentation
 import json
 import logging
 import sys
-import threading
 import time
 
 
@@ -52,8 +51,8 @@ class QdmiDriver(BaseDriver):
 		# A session carries the token it opened with, so a circuit must never
 		# run on one opened for another user, and it is dropped when its
 		# reservation ends (evict_reservation).
-		self._backends = {}
-		self._backends_lock = threading.Lock()
+		self._sessions = Sessions()
+		self._backends = self._sessions.opened
 		self._jobs = JobRecords("QDMI")
 
 	# --- QDMI session / device binding -------------------------------
@@ -66,35 +65,11 @@ class QdmiDriver(BaseDriver):
 		# and Pasqal a backend type with native service-account authentication.
 		return self._profile.access(credential)
 
-	@staticmethod
-	def _credential_cache_key(credential=None):
-		# Keyed as QrmiDriver._credential_cache_key keys its resources: a
-		# reservation's session is its own, a credential from outside a
-		# reservation is keyed by identity, and a call with no credential
-		# shares the service's own session.
-		credential = dict(credential or {})
-		if not credential:
-			return ("default",)
-		reservation_id = credential.get("reservation_id")
-		if reservation_id is not None:
-			return reservation_cache_key(reservation_id)
-		return (
-			credential.get("url"),
-			credential.get("provider_device_id"),
-			credential.get("device_id"),
-			credential.get("user"),
-			credential.get("api_key") or credential.get("token"),
-			credential.get("service_crn"),
-			credential.get("project_id"),
-		)
-
 	def evict_reservation(self, reservation_id):
 		# The reservation has ended: drop its session, and the token it
 		# opened with goes too. A QDMI Device has no close(), and its
 		# session ends when the last reference goes.
-		with self._backends_lock:
-			backend = self._backends.pop(
-				reservation_cache_key(reservation_id), None)
+		backend = self._sessions.drop(reservation_cache_key(reservation_id))
 		if backend is None:
 			return False
 		close = getattr(backend.device, "close", None)
@@ -107,28 +82,24 @@ class QdmiDriver(BaseDriver):
 	def _backend(self, credential=None):
 		# The provider adapter owns registration and session parameters.
 		# Keep one adapter per reservation, never one shared user session.
-		cache_key = self._credential_cache_key(credential)
-		backend = self._backends.get(cache_key)
-		if backend is not None:
-			return backend
-		with self._backends_lock:
-			backend = self._backends.get(cache_key)
-			if backend is not None:
-				return backend
-			access = self._access(credential)
-			try:
-				backend = self._profile.open_backend(access)
-			except ImportError as exc:
-				raise DEFwExecutionError(
-					f"QDMI provider {self._profile.provider!r} needs "
-					f"{self._profile.requires}; install the package set in "
-					f"setup/qdmi-requirements.txt: {exc}") from exc
-			except Exception as exc:
-				raise DEFwExecutionError(
-					"failed to open the QDMI backend for provider "
-					f"{self._profile.provider!r} ({self._profile.requires}). "
-					f"{exc}") from exc
-			self._backends[cache_key] = backend
+		return self._sessions.open(
+			self._credential_cache_key(credential),
+			lambda: self._open_backend(credential))
+
+	def _open_backend(self, credential):
+		access = self._access(credential)
+		try:
+			backend = self._profile.open_backend(access)
+		except ImportError as exc:
+			raise DEFwExecutionError(
+				f"QDMI provider {self._profile.provider!r} needs "
+				f"{self._profile.requires}; install the package set in "
+				f"setup/qdmi-requirements.txt: {exc}") from exc
+		except Exception as exc:
+			raise DEFwExecutionError(
+				"failed to open the QDMI backend for provider "
+				f"{self._profile.provider!r} ({self._profile.requires}). "
+				f"{exc}") from exc
 		logging.debug("shim: QDMI backend opened (%s)",
 				self._profile.describe(access))
 		return backend
