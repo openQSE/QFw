@@ -34,7 +34,7 @@ def test_repeated_backend_construction_keeps_separate_sessions(monkeypatch, prov
 			device_id="amazon.braket.default",
 			device_arn="arn:aws:braket:::device/quantum-simulator/amazon/sv1",
 			region=None, reservation_arn=None) for _ in range(3)]
-		assert all(kwargs["custom2"] is None and kwargs["custom3"] is None
+		assert all(kwargs.get("custom2") is None and kwargs.get("custom3") is None
 			for _, kwargs in opened)
 	elif provider == "ibm":
 		monkeypatch.setenv("IBM_QUANTUM_API_KEY", "ambient-key")

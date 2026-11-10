@@ -193,7 +193,7 @@ PY
 ```
 
 This is the same packaged adapter QFw's Braket profile opens the device
-with (`amazon-braket-qdmi[qiskit]`, MQT Core 4.1).
+with (`amazon-braket-qdmi[qiskit]`, MQT Core 4.2).
 
 `Status.IDLE` means the device is inside an execution window with fewer
 than five tasks queued. `Status.BUSY` means a longer queue or a closed

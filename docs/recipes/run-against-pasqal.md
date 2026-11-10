@@ -3,7 +3,7 @@
 Pasqal accepts native Pulser sequences. It does not compile Qiskit gate
 circuits into pulses. Use Python 3.11 or newer and install the released
 packages from `setup/qdmi-requirements.txt`, which pins
-[`pasqal-qdmi[mqt-core,pulser]==1.1.0`](https://pypi.org/project/pasqal-qdmi/1.1.0/).
+[`pasqal-qdmi[mqt-core,pulser]==1.2.0`](https://pypi.org/project/pasqal-qdmi/1.2.0/).
 
 The provider's `pulser` extra installs Pulser for sequence serialization.
 The existing `qfw_pulser.sh --libs qdmi` example
