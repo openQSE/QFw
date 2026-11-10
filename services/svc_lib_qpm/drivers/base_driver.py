@@ -103,6 +103,55 @@ class JobRecords:
 		return job
 
 
+class Sessions:
+	# One lock per login: threads sharing a login open one session, and other logins do not wait.
+	def __init__(self):
+		self.opened = {}
+		self.locks = {}
+		self._locks_guard = threading.Lock()
+
+	@staticmethod
+	def key(credential=None):
+		credential = dict(credential or {})
+		if not credential:
+			return ("default",)
+		reservation_id = credential.get("reservation_id")
+		if reservation_id is not None:
+			return reservation_cache_key(reservation_id)
+		return (
+			credential.get("url"),
+			credential.get("provider_device_id"),
+			credential.get("device_id"),
+			credential.get("user"),
+			credential.get("api_key") or credential.get("token"),
+			credential.get("service_crn"),
+			credential.get("project_id"),
+			credential.get("aws_access_key_id"),
+		)
+
+	def lock(self, key):
+		with self._locks_guard:
+			return self.locks.setdefault(key, threading.Lock())
+
+	def open(self, key, build):
+		session = self.opened.get(key)
+		if session is not None:
+			return session
+		with self.lock(key):
+			session = self.opened.get(key)
+			if session is None:
+				session = build()
+				self.opened[key] = session
+		return session
+
+	def drop(self, key):
+		with self.lock(key):
+			session = self.opened.pop(key, None)
+		with self._locks_guard:
+			self.locks.pop(key, None)
+		return session
+
+
 class BaseDriver:
 	# Subclasses set `name` (the library key used for routing/preference) and
 	# `CAPABILITIES` (the subset of contract calls they cover).
@@ -111,6 +160,9 @@ class BaseDriver:
 
 	def implements(self, call):
 		return call in self.CAPABILITIES
+
+	def _credential_cache_key(self, credential=None):
+		return Sessions.key(credential)
 
 	def evict_reservation(self, reservation_id):
 		# Drop what this driver opened for a reservation that has ended. The

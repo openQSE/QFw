@@ -23,6 +23,7 @@ if SERVICES not in sys.path:
 
 from defw_exception import DEFwExecutionError  # noqa: E402
 from svc_lib_qpm.drivers import qrmi_driver as qd  # noqa: E402
+from svc_lib_qpm.drivers import qrmi_profiles  # noqa: E402
 from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 
 
@@ -78,7 +79,7 @@ def test_populates_the_qrs_family(monkeypatch):
 	assert os.environ["ibm_torino_QRMI_IBM_QRS_SERVICE_CRN"] == \
 		"crn:v1:bluemix:public:x"
 	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT"] == \
-		qd.IBM_DEFAULT_IAM_ENDPOINT
+		qrmi_profiles.IBM_DEFAULT_IAM_ENDPOINT
 
 
 def test_each_service_gets_its_own_family(monkeypatch):
@@ -345,7 +346,7 @@ def test_device_without_an_iam_endpoint_uses_the_public_one():
 	_driver(service_crn="crn:from-device")._ensure_ibm_env(
 		"QRS", "ibm_torino")
 	assert os.environ["ibm_torino_QRMI_IBM_QRS_IAM_ENDPOINT"] == \
-		qd.IBM_DEFAULT_IAM_ENDPOINT
+		qrmi_profiles.IBM_DEFAULT_IAM_ENDPOINT
 
 
 def test_environment_overrides_the_device(monkeypatch):

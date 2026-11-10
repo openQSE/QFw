@@ -17,7 +17,9 @@
 from defw_exception import DEFwExecutionError
 
 # Measurement and barrier are output/directive syntax. Reset needs explicit
-# device support, just like a gate.
+# device support, just like a gate. Barriers are kept: Braket's compilers do
+# not reorder or merge gates across them, so dropping one can change what
+# runs.
 DIRECTIVES = frozenset({"barrier", "measure"})
 
 # The technology family of a Braket device, from the vendor segment of its
