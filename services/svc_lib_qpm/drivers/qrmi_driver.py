@@ -25,10 +25,9 @@
 
 from .base_driver import (BaseDriver, JobRecords, Sessions, next_poll_wait,
 		poll_schedule, reservation_cache_key)
-from .login import resolve_login
 from .qrmi_profiles import (DEFAULT_JOB_TIMEOUT_SECONDS, JOB_TIMEOUT_KEY,
 		PASQAL_CONFIG_ROOT,
-		OBJECT_STORAGE_SECRET_KEYS, PROFILES, num_shots,
+		PROFILES, num_shots,
 		profile_for, profile_for_resource_type)
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
@@ -325,38 +324,7 @@ class QrmiDriver(BaseDriver):
 			or self._descriptor.get("id"))
 
 	def _access(self, credential=None):
-		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
-		# env vars the native svc_iqm_qpm uses, then fall back to the shared
-		# device-access config (util.device_access). Mirrors QdmiDriver._access.
-		# The IBM service CRN and the Pasqal project are returned too, from the
-		# credential or the user's credential DB entry, when either names one.
-		# See _ensure_ibm_env and _pasqal_cloud_settings.
-		provider = self._descriptor.get("provider", "iqm")
-		login = resolve_login(
-			self._descriptor, credential, provider,
-			lambda login: not (login["base_url"] and login["token"]),
-			"QRMI driver could not resolve device access for provider "
-			f"{provider!r}: set QFW_QC_URL/QFW_API_KEY or configure device "
-			"access",
-			extras=("service_crn", "project_id") + OBJECT_STORAGE_SECRET_KEYS)
-		# Strip trailing slashes: QRMI's IQM client builds URLs as
-		# f"{endpoint}/api/v1/...", so a configured base URL ending in "/"
-		# yields "//api/v1/..." which the IQM server rejects (empty target).
-		base_url = login["base_url"]
-		if base_url:
-			base_url = base_url.rstrip("/")
-		resolved = {
-			"base_url": base_url,
-			"token": login["token"],
-			"provider_device_id": login["provider_device_id"],
-			"quantum_computer": login["provider_device_id"],
-			"service_crn": login["service_crn"],
-			"project_id": login["project_id"],
-		}
-		resolved.update({
-			key: login[key] for key in OBJECT_STORAGE_SECRET_KEYS
-			if login[key]})
-		return resolved
+		return self._profile.access(credential)
 
 	def _resource_type(self, qrmi):
 		# Resolve the ResourceType this descriptor should open. Returns the
