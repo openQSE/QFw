@@ -514,15 +514,17 @@ class QrmiDriver(BaseDriver):
 	def _open_from_environment(
 			self, cache_key, qrmi, resource_type, type_name, alias,
 			credential):
-		def build():
-			self._ensure_resource_env(
-				type_name, alias, credential=credential)
-			return self._open_resource(
-				lambda: qrmi.QuantumResource(alias, resource_type),
-				type_name, alias)
-
 		with RESOURCE_ENV_LOCK:
-			return self._sessions.open(cache_key, build)
+			return self._sessions.open(
+				cache_key, lambda: self._open_with_environment(
+					qrmi, resource_type, type_name, alias, credential))
+
+	def _open_with_environment(
+			self, qrmi, resource_type, type_name, alias, credential):
+		self._ensure_resource_env(type_name, alias, credential=credential)
+		return self._open_resource(
+			lambda: qrmi.QuantumResource(alias, resource_type),
+			type_name, alias)
 
 	def evict_reservation(self, reservation_id):
 		# The reservation has ended: drop its resource and target, so the

@@ -82,26 +82,27 @@ class QdmiDriver(BaseDriver):
 	def _backend(self, credential=None):
 		# The provider adapter owns registration and session parameters.
 		# Keep one adapter per reservation, never one shared user session.
-		def build():
-			access = self._access(credential)
-			try:
-				backend = self._profile.open_backend(access)
-			except ImportError as exc:
-				raise DEFwExecutionError(
-					f"QDMI provider {self._profile.provider!r} needs "
-					f"{self._profile.requires}; install the package set in "
-					f"setup/qdmi-requirements.txt: {exc}") from exc
-			except Exception as exc:
-				raise DEFwExecutionError(
-					"failed to open the QDMI backend for provider "
-					f"{self._profile.provider!r} ({self._profile.requires}). "
-					f"{exc}") from exc
-			logging.debug("shim: QDMI backend opened (%s)",
-					self._profile.describe(access))
-			return backend
-
 		return self._sessions.open(
-			self._credential_cache_key(credential), build)
+			self._credential_cache_key(credential),
+			lambda: self._open_backend(credential))
+
+	def _open_backend(self, credential):
+		access = self._access(credential)
+		try:
+			backend = self._profile.open_backend(access)
+		except ImportError as exc:
+			raise DEFwExecutionError(
+				f"QDMI provider {self._profile.provider!r} needs "
+				f"{self._profile.requires}; install the package set in "
+				f"setup/qdmi-requirements.txt: {exc}") from exc
+		except Exception as exc:
+			raise DEFwExecutionError(
+				"failed to open the QDMI backend for provider "
+				f"{self._profile.provider!r} ({self._profile.requires}). "
+				f"{exc}") from exc
+		logging.debug("shim: QDMI backend opened (%s)",
+				self._profile.describe(access))
+		return backend
 
 	def _device(self, credential=None):
 		return self._backend(credential).device
