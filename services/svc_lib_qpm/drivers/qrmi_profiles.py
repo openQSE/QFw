@@ -65,6 +65,7 @@ DEFAULT_JOB_TIMEOUT_SECONDS = 300
 
 DEFAULT_SHOTS = 1024
 
+
 def num_shots(info: dict, default: int = DEFAULT_SHOTS) -> int:
 	"""Return the shot count from a circuit info dict.
 

@@ -119,7 +119,6 @@ class QdmiProfile(ProviderProfile):
 		return counts
 
 
-
 class IqmQdmiProfile(QdmiProfile):
 	provider = "iqm"
 	requires = "iqm-qdmi"
