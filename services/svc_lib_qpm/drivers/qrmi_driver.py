@@ -26,7 +26,8 @@
 from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
 		poll_schedule, reservation_cache_key)
 from .login import resolve_login
-from .qrmi_profiles import profile_for
+from .qrmi_profiles import (PROFILES, profile_for,
+		profile_for_resource_type)
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
 from util import instrumentation
@@ -83,13 +84,6 @@ import time
 # Names are resolved against the installed qrmi at call time rather than
 # imported, so a qrmi that does not carry one of these reports it as an
 # unknown type instead of failing at import.
-# QRMI names each IBM service's variables after the service, so the resource
-# type selects the family: {backend}_QRMI_IBM_<kind>_ENDPOINT and friends.
-IBM_RESOURCE_ENV_KINDS = {
-	"IBMQiskitRuntimeService": "QRS",
-	"IBMQuantumComputeService": "QCS",
-	"IBMQuantumSystem": "QS",
-}
 
 # QRMI's Pasqal Cloud resource reads a token and the project its jobs are
 # billed to, as {backend}_QRMI_PASQAL_CLOUD_*, and takes the API base URL as
@@ -175,10 +169,7 @@ DEFAULT_JOB_TIMEOUT_SECONDS = 300
 RESOURCE_ENV_LOCK = threading.Lock()
 
 PROVIDER_RESOURCE_TYPES = {
-	"iqm": ("IQMServer",),
-	"ibm": ("IBMQiskitRuntimeService", "IBMQuantumComputeService",
-		"IBMQuantumSystem"),
-	"pasqal": ("PasqalCloud", "PasqalLocal"),
+	**{name: profile.resource_types for name, profile in PROFILES.items()},
 	"alicebob": ("AliceBobFelis",),
 }
 
@@ -516,20 +507,10 @@ class QrmiDriver(BaseDriver):
 		# the families we can resolve; PasqalLocal and Alice & Bob have no
 		# device-access mapping yet and rely on the environment already
 		# carrying theirs, from the SPANK plugin or the operator.
-		if type_name == "IQMServer":
-			self._ensure_iqm_isa_env(alias, credential=credential)
-			return
-		if type_name == "PasqalCloud":
-			# Such a qrmi also reads $HOME/.pasqal/config and the unprefixed
-			# PASQAL_USERNAME, whoever's they are, beside a user's token.
-			raise DEFwExecutionError(
-				"the shim opens Pasqal Cloud resources with "
-				"QuantumResource.from_config(), which keeps a user's token "
-				"apart from the service's login; install qrmi 0.25.0 or "
-				"later")
-		kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
-		if kind:
-			self._ensure_ibm_env(kind, alias, credential=credential)
+		profile = profile_for_resource_type(type_name, self._descriptor)
+		if profile:
+			profile.ensure_env(
+				self, type_name, alias, credential=credential)
 
 	def _write_settings_env(self, backend, settings):
 		# Settings are named without the resource prefix, because that is the
@@ -835,20 +816,12 @@ class QrmiDriver(BaseDriver):
 		# working, and keeps "what the operator or SPANK set wins" true for
 		# the settings that are filled in rather than replaced.
 		backend = alias.split(",")[0]
-		kind = None
-		if type_name == "IQMServer":
-			settings, required = self._iqm_isa_settings(
-				backend, credential=credential)
-		elif type_name == "PasqalCloud":
-			kind = "PASQAL"
-			settings, required = self._pasqal_cloud_settings(
-				backend, credential=credential)
-		else:
-			kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
-			if not kind:
-				return None
-			settings, required = self._ibm_settings(
-				kind, backend, credential=credential)
+		profile = profile_for_resource_type(type_name, self._descriptor)
+		resolved = profile and profile.resource_settings(
+			self, type_name, backend, credential=credential)
+		if resolved is None:
+			return None
+		settings, required, kind = resolved
 
 		prefix = f"{backend}_"
 		config = {

@@ -8,8 +8,18 @@ from defw_exception import DEFwExecutionError
 import json
 
 
+# QRMI names each IBM service's variables after the service, so the resource
+# type selects the family: {backend}_QRMI_IBM_<kind>_ENDPOINT and friends.
+IBM_RESOURCE_ENV_KINDS = {
+	"IBMQiskitRuntimeService": "QRS",
+	"IBMQuantumComputeService": "QCS",
+	"IBMQuantumSystem": "QS",
+}
+
+
 class QrmiProfile:
 	provider = None
+	resource_types = ()
 	capabilities = frozenset()
 
 	def __init__(self, descriptor=None):
@@ -44,9 +54,22 @@ class QrmiProfile:
 		# The provider's own account of the job, or {} when it has none.
 		return {}
 
+	def resource_settings(self, driver, type_name, backend, credential=None):
+		# (settings, required, kind) QRMI opens a resource of this type with,
+		# or None when the profile resolves nothing for the type and the
+		# environment already carries it, from the SPANK plugin or the
+		# operator.
+		return None
+
+	def ensure_env(self, driver, type_name, alias, credential=None):
+		# Write those settings into the process environment, for a qrmi with
+		# no from_config().
+		return None
+
 
 class IqmQrmiProfile(QrmiProfile):
 	provider = "iqm"
+	resource_types = ("IQMServer",)
 
 	def device_info(self, driver):
 		from qhw_iqm import normalize_device
@@ -105,6 +128,17 @@ class IqmQrmiProfile(QrmiProfile):
 	def run_circuit(self, driver, source):
 		return driver._run_iqm_circuit(source)
 
+	def resource_settings(self, driver, type_name, backend, credential=None):
+		if type_name != "IQMServer":
+			return None
+		settings, required = driver._iqm_isa_settings(
+			backend, credential=credential)
+		return settings, required, None
+
+	def ensure_env(self, driver, type_name, alias, credential=None):
+		if type_name == "IQMServer":
+			driver._ensure_iqm_isa_env(alias, credential=credential)
+
 	def vendor_timing(self, driver, job_id, credential=None):
 		# QRMI returns the measurements alone from task_result, and the job's
 		# timeline, the server's timestamp per phase, only as the text of
@@ -116,6 +150,7 @@ class IqmQrmiProfile(QrmiProfile):
 
 class IbmQrmiProfile(QrmiProfile):
 	provider = "ibm"
+	resource_types = tuple(IBM_RESOURCE_ENV_KINDS)
 
 	def is_complete_target(self, target_data):
 		# IBM target() returns null for configuration or properties on
@@ -188,9 +223,23 @@ class IbmQrmiProfile(QrmiProfile):
 	def run_circuit(self, driver, source):
 		return driver._run_ibm_circuit(source)
 
+	def resource_settings(self, driver, type_name, backend, credential=None):
+		kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
+		if not kind:
+			return None
+		settings, required = driver._ibm_settings(
+			kind, backend, credential=credential)
+		return settings, required, kind
+
+	def ensure_env(self, driver, type_name, alias, credential=None):
+		kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
+		if kind:
+			driver._ensure_ibm_env(kind, alias, credential=credential)
+
 
 class PasqalQrmiProfile(QrmiProfile):
 	provider = "pasqal"
+	resource_types = ("PasqalCloud", "PasqalLocal")
 	# No qhw normalizer reads a Pulser device, so the qhw introspection calls
 	# are a gap for it rather than an IQM parse of the wrong payload.
 	capabilities = frozenset({
@@ -222,6 +271,23 @@ class PasqalQrmiProfile(QrmiProfile):
 	def run_circuit(self, driver, source):
 		return driver._run_pasqal_sequence(source)
 
+	def resource_settings(self, driver, type_name, backend, credential=None):
+		if type_name != "PasqalCloud":
+			return None
+		settings, required = driver._pasqal_cloud_settings(
+			backend, credential=credential)
+		return settings, required, "PASQAL"
+
+	def ensure_env(self, driver, type_name, alias, credential=None):
+		if type_name == "PasqalCloud":
+			# Such a qrmi also reads $HOME/.pasqal/config and the unprefixed
+			# PASQAL_USERNAME, whoever's they are, beside a user's token.
+			raise DEFwExecutionError(
+				"the shim opens Pasqal Cloud resources with "
+				"QuantumResource.from_config(), which keeps a user's token "
+				"apart from the service's login; install qrmi 0.25.0 or "
+				"later")
+
 
 PROFILES = {
 	profile.provider: profile
@@ -233,3 +299,13 @@ def profile_for(descriptor):
 	# always has.
 	provider = str((descriptor or {}).get("provider") or "iqm").lower()
 	return PROFILES.get(provider, IqmQrmiProfile)(descriptor)
+
+
+def profile_for_resource_type(type_name, descriptor):
+	# The profile that resolves the settings a resource of this type opens
+	# with, whichever provider the descriptor names. None for a type no
+	# profile serves.
+	for profile in PROFILES.values():
+		if type_name in profile.resource_types:
+			return profile(descriptor)
+	return None
