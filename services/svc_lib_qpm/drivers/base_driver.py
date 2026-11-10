@@ -104,7 +104,9 @@ class JobRecords:
 
 
 class Sessions:
-	# One lock per login: threads sharing a login open one session, and other logins do not wait.
+	# One lock per login: threads sharing a login open one session, and other
+	# logins do not wait. The one session matters because a QRMI resource keeps
+	# its own runtime threads (four each on qrmi 0.26.0) until it is dropped.
 	def __init__(self):
 		self.opened = {}
 		self.locks = {}

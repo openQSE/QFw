@@ -745,7 +745,10 @@ class PasqalQrmiProfile(QrmiProfile):
 		return call in self.capabilities
 
 	def backend_info(self, driver, credential=None):
-		# Read per call, not through the target cache, so a client builds against the current calibration.
+		# Read per call, not through the target cache, so a client builds
+		# against the current calibration. An emulator's specs are public. A
+		# QPU's need a login: the reservation's credential when the client
+		# names its reservation, the service's otherwise.
 		try:
 			entries = json.loads(
 				driver._qpu(credential=credential).target().value)
