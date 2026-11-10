@@ -25,6 +25,7 @@
 
 from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
 		pasqal_backend_info, poll_schedule, reservation_cache_key)
+from .login import resolve_login
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
 from util import instrumentation
@@ -420,63 +421,31 @@ class QrmiDriver(BaseDriver):
 		# The IBM service CRN and the Pasqal project are returned too, from the
 		# credential or the user's credential DB entry, when either names one.
 		# See _ensure_ibm_env and _pasqal_cloud_settings.
-		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", "iqm")
-		service_crn = credential.get("service_crn")
-		project_id = credential.get("project_id")
-		object_storage = {
-			key: credential[key] for key in OBJECT_STORAGE_SECRET_KEYS
-			if credential.get(key)}
-		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
-		token = (
-			credential.get("api_key") or
-			credential.get("token") or
-			os.environ.get("QFW_API_KEY"))
-		provider_device_id = (
-			credential.get("provider_device_id")
-			or credential.get("quantum_computer")
-			or self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
-		if not (base_url and token):
-			try:
-				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(
-					provider=provider,
-					device_id=(credential.get("device_id")
-						or self._descriptor.get("id")),
-					user=credential.get("user"),
-					credential_hint=credential.get("credential_hint"),
-					credential_handle=credential.get("credential_handle"))
-			except Exception as exc:
-				raise DEFwExecutionError(
-					"QRMI driver could not resolve device access for "
-					f"provider {provider!r}: set QFW_QC_URL/QFW_API_KEY or "
-					f"configure device access: {exc}") from exc
-			base_url = base_url or cfg.get("url")
-			token = token or cfg.get("api_key")
-			service_crn = service_crn or cfg.get("service_crn")
-			project_id = project_id or cfg.get("project_id")
-			for key in OBJECT_STORAGE_SECRET_KEYS:
-				if not object_storage.get(key) and cfg.get(key):
-					object_storage[key] = cfg[key]
-			provider_device_id = (
-				provider_device_id
-				or cfg.get("provider_device_id")
-				or cfg.get("quantum_computer"))
+		login = resolve_login(
+			self._descriptor, credential, provider,
+			lambda login: not (login["base_url"] and login["token"]),
+			"QRMI driver could not resolve device access for provider "
+			f"{provider!r}: set QFW_QC_URL/QFW_API_KEY or configure device "
+			"access",
+			extras=("service_crn", "project_id") + OBJECT_STORAGE_SECRET_KEYS)
 		# Strip trailing slashes: QRMI's IQM client builds URLs as
 		# f"{endpoint}/api/v1/...", so a configured base URL ending in "/"
 		# yields "//api/v1/..." which the IQM server rejects (empty target).
+		base_url = login["base_url"]
 		if base_url:
 			base_url = base_url.rstrip("/")
 		resolved = {
 			"base_url": base_url,
-			"token": token,
-			"provider_device_id": provider_device_id,
-			"quantum_computer": provider_device_id,
-			"service_crn": service_crn,
-			"project_id": project_id,
+			"token": login["token"],
+			"provider_device_id": login["provider_device_id"],
+			"quantum_computer": login["provider_device_id"],
+			"service_crn": login["service_crn"],
+			"project_id": login["project_id"],
 		}
-		resolved.update(object_storage)
+		resolved.update({
+			key: login[key] for key in OBJECT_STORAGE_SECRET_KEYS
+			if login[key]})
 		return resolved
 
 	def _iqm_isa_settings(self, backend, credential=None):
