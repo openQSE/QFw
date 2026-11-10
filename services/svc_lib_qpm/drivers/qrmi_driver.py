@@ -24,7 +24,7 @@
 # lifecycle and returns normalized qhw results.
 
 from .base_driver import (BaseDriver, JobRecords, next_poll_wait,
-		pasqal_backend_info, poll_schedule, reservation_cache_key)
+		poll_schedule, reservation_cache_key)
 from .login import resolve_login
 from .qrmi_profiles import profile_for
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
