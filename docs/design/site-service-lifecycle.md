@@ -26,10 +26,14 @@ started on another node. Applications and administrators use only the public
 lifecycle commands above.
 
 Inside a Slurm allocation, each service, the directory service and the PRTE DVM
-runs in the foreground of its own `srun --overlap` step. Slurm with
-`proctrack/cgroup` ends every process of a step when the step ends, so a step
-lasts as long as its service. Teardown stops the service and then ends the
-step. `step.log` beside the component's pid file holds the step's output.
+run in the foreground of their own `srun --overlap --mem=0` step, which needs
+Slurm 20.11 or newer. `--mem=0` keeps a step from holding the job's memory
+away from later steps. Slurm with `proctrack/cgroup` ends every process of a
+step when the step ends, so a step lasts as long as its service. Teardown
+stops the service and then ends the step. `step.log` beside the component's
+pid file holds the step's output, and a start-up timeout quotes its last
+lines. `qfw-teardown` removes the run directory, logs included, unless it is
+given `--keep-run-dir`.
 
 ## Application Runtime Directory
 
