@@ -149,11 +149,12 @@ def _circuit(service, monkeypatch, seed=None, **aer):
 def test_the_runner_gets_the_settings(service, monkeypatch):
 	circuit = _circuit(
 		service, monkeypatch, mode="noisy", device="GPU",
-		**{"target-gpus": [0, 1]})
+		method="matrix_product_state", **{"target-gpus": [0, 1]})
 
 	command = QRC(start=False).form_cmd(circuit, "c.qasm")
 
 	assert "--mode noisy" in command
+	assert "--method matrix_product_state" in command
 	assert "--device GPU" in command
 	assert "--target-gpus 0 1" in command
 	assert "--device-id" in command

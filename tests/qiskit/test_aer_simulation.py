@@ -122,3 +122,32 @@ def test_a_gpu_the_host_lacks_fails_rather_than_runs_on_the_cpu(bell_on_fez):
 	with pytest.raises(Exception, match="GPU"):
 		circuit_runner.sample_counts(
 			qasm2.dumps(bell_on_fez), 10, mode="ideal", device="GPU")
+
+
+def _ghz(width):
+	circuit = QuantumCircuit(width)
+	circuit.h(0)
+	for qubit in range(width - 1):
+		circuit.cx(qubit, qubit + 1)
+	circuit.measure_all()
+	return qasm2.dumps(circuit)
+
+
+def test_the_method_setting_reaches_aer():
+	sim = circuit_runner.simulator(method="matrix_product_state")
+
+	assert sim.options.method == "matrix_product_state"
+
+
+def test_matrix_product_state_runs_a_circuit_too_wide_for_statevector():
+	qasm = _ghz(44)
+	with pytest.raises(Exception, match="(?i)memory|insufficient"):
+		circuit_runner.sample_counts(
+			qasm, 10, mode="ideal", method="statevector", max_memory_mb=1024)
+
+	counts = circuit_runner.sample_counts(
+		qasm, 100, seed=1, mode="ideal", method="matrix_product_state",
+		max_memory_mb=1024)
+
+	assert set(counts) <= {"0" * 44, "1" * 44}
+	assert sum(counts.values()) == 100
