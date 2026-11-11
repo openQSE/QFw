@@ -1,6 +1,3 @@
-# The calibrated proxy sampler (util.proxy_sampler), ported from SPAARQ-IQ's
-# tests/execution/test_proxy.py. It needs real numpy, Qiskit and Qiskit Aer.
-
 from collections import OrderedDict
 
 import numpy as np
@@ -66,13 +63,15 @@ def test_proxy_agrees_with_aer_noisy_simulation_on_a_small_circuit(device):
 	exact = _probabilities(
 		AerSimulator.from_backend(device).run(isa, shots=SHOTS, seed_simulator=2).result().get_counts())
 
-	# Z-parity expectations of single qubits and neighbouring pairs, in standard errors.
-	def expectation(distribution, qubits):
+	def z_parity(distribution, qubits):
 		return sum(p * (-1) ** sum(int(word[-1 - q]) for q in qubits) for word, p in distribution.items())
 
-	for qubits in [(q,) for q in range(width)] + [(q, q + 1) for q in range(width - 1)]:
-		difference = abs(expectation(proxy, qubits) - expectation(exact, qubits))
-		assert difference < 4 * np.sqrt(2 / SHOTS) + 0.01, qubits
+	single_qubits = [(q,) for q in range(width)]
+	neighbouring_pairs = [(q, q + 1) for q in range(width - 1)]
+	four_standard_errors = 4 * np.sqrt(2 / SHOTS)
+	for qubits in single_qubits + neighbouring_pairs:
+		difference = abs(z_parity(proxy, qubits) - z_parity(exact, qubits))
+		assert difference < four_standard_errors + 0.01, qubits
 
 
 def test_the_same_seed_draws_the_same_bits_and_another_seed_does_not(device):
@@ -188,10 +187,13 @@ def test_sample_bases_measures_one_state_in_several_bases(device):
 
 	assert [bits.shape for bits, _ in records] == [(4000, 2)] * 3
 	zz, xx, yy = (bits for bits, _ in records)
-	# The Bell pair is perfectly correlated in ZZ and XX, anticorrelated in YY, up to device noise.
-	assert (zz[:, 0] == zz[:, 1]).mean() > 0.9
-	assert (xx[:, 0] == xx[:, 1]).mean() > 0.9
-	assert (yy[:, 0] != yy[:, 1]).mean() > 0.9
+
+	def agreement(bits):
+		return (bits[:, 0] == bits[:, 1]).mean()
+
+	assert agreement(zz) > 0.9
+	assert agreement(xx) > 0.9
+	assert 1 - agreement(yy) > 0.9
 	assert all(diagnostics["ideal"] == "statevector-bases" for _, diagnostics in records)
 
 

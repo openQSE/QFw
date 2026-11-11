@@ -14,13 +14,11 @@ BASIS_LETTERS = frozenset("XYZ")
 
 
 def seeded_generators(seed):
-	"""The ideal-draw and noise generators of a job's seed, so one seed fixes both."""
 	ideal, noise = np.random.SeedSequence(seed).spawn(2)
 	return np.random.default_rng(ideal), np.random.default_rng(noise)
 
 
 def check_bases(request):
-	"""The (physical qubits, bases, shots per basis) of a bases request, validated."""
 	physical = [int(qubit) for qubit in request["physical"]]
 	bases = [str(basis).upper() for basis in request["bases"]]
 	shots = [int(count) for count in request["shots"]]
@@ -35,20 +33,12 @@ def check_bases(request):
 
 
 class QRC(ThreadedQRC):
-	"""Runs each job in a thread of the QPM process with the proxy sampler.
-
-	The threading, completion queue and event push are the fake IQM QRC's. A
-	job the sampler refuses, such as a circuit beyond the memory limit, fails
-	with the error's type and message in its result.
-	"""
-
 	def __init__(self, sampler, target_id, start=True):
 		super().__init__(start=start, target_id=target_id)
 		self.sampler = sampler
 		self._sampling_lock = threading.Lock()
 
 	def sample_job(self, info):
-		"""The result payload of one job: a bases job when info["bases"] is set, else one circuit's counts."""
 		ideal_rng, noise_rng = seeded_generators(info.get("seed_simulator"))
 		circuit = load_circuit(*circuit_payload(info))
 		with self._sampling_lock:

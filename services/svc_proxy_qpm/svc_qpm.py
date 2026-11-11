@@ -16,7 +16,6 @@ MAX_PROXY_SHOTS = 1_000_000
 
 
 def max_memory_mb():
-	"""The ideal source's memory limit in MiB: the service setting, QFW_PROXY_MAX_MEMORY_MB."""
 	return int(os.environ.get(MEMORY_LIMIT_ENV) or DEFAULT_MAX_MEMORY_MB)
 
 
@@ -52,8 +51,6 @@ class QPM(UTIL_QPM):
 			"num_qubits": self.num_qubits,
 			"max_shots": MAX_PROXY_SHOTS,
 			"max_memory_mb": self.max_memory_mb,
-			# A job may carry info["logical_circuit"] and, as info["bases"],
-			# ask for one record per Pauli basis of one prepared state.
 			"logical_circuit": True,
 			"bases_jobs": True,
 		})

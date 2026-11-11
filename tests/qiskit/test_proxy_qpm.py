@@ -1,10 +1,3 @@
-# The proxy QPM (svc_proxy_qpm) end to end in one process: selection, directory
-# properties, the telemetry record, and jobs through the QPM's own async_run
-# with a stand-in admission and scheduler. Needs real numpy, Qiskit and Aer.
-#
-# The service modules import DEFw, which the mock tier's conftest stubs. It is
-# imported after the real numpy and Qiskit, so it leaves them alone.
-
 import time
 
 import numpy as np
@@ -149,9 +142,9 @@ def test_a_logical_circuit_travels_beside_the_compiled_one(qpm):
 	completion = _run(qpm, info)
 
 	assert completion["outcome"] == "COMPLETED"
-	# The logical circuit is an X on one qubit: its ideal outcome is 001, up to readout error.
 	counts = completion["result"]["counts"]
-	assert max(counts, key=counts.get) == "001"
+	x_on_qubit_zero = "001"
+	assert max(counts, key=counts.get) == x_on_qubit_zero
 
 
 def test_the_client_sends_the_logical_circuit_from_the_circuit_metadata(qpm):

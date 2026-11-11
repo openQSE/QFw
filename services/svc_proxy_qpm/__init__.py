@@ -8,8 +8,6 @@ from util.circuit_payload import qiskit_circuit_formats
 SERVICE_NAME = 'QPM'
 SERVICE_DESC = 'Calibrated Pauli-frame proxy sampler QPM for circuits too wide for noisy simulation'
 
-# The emulated device is the service's device-id, a qiskit-ibm-runtime
-# fake_provider class name such as FakeFez.
 _device = os.environ.get('QFW_QPU_DEVICE_ID') or DEFAULT_EMULATED_DEVICE
 
 svc_info = {
@@ -33,10 +31,12 @@ svc_info = {
 service_classes = [QPM]
 
 
-def initialize():
-	# Qiskit's mimalloc must first load on the persistent startup thread
-	# before registration/RPC workers can import it (QFw #179).
+def import_qiskit_on_the_startup_thread():
 	qiskit_circuit_formats()
+
+
+def initialize():
+	import_qiskit_on_the_startup_thread()
 	qpm_startup.initialize_qpm_service(
 		defw,
 		"Proxy QPM Initialized Successfully",
