@@ -109,6 +109,7 @@ foreach(command_name
 			qfw-setup
 			qfw-status
 			qfw-srun
+			qfw-target
 			qfw-teardown
 			qfw-dir-svc
 			qfw-qpm-svc)
@@ -140,6 +141,7 @@ foreach(man_page
 		man1/qfw-setup.1
 		man1/qfw-srun.1
 		man1/qfw-status.1
+		man1/qfw-target.1
 		man1/qfw-teardown.1
 		man5/qfw-runtime.yaml.5
 		man5/qfw-services.yaml.5
