@@ -629,12 +629,15 @@ The `aer` service reads its own `aer` block:
 | `max-memory-mb` | Aer's memory limit; 0 lets Aer decide. | `0` |
 | `target-gpus` | The GPU ids to use, with `device: GPU`. | all |
 | `num-qubits` | The width when there is no `device-id`. | none |
+| `mps-max-bond-dimension` | Aer's `matrix_product_state_max_bond_dimension`, with `method: matrix_product_state`. | Aer's |
+| `mps-truncation-threshold` | Aer's `matrix_product_state_truncation_threshold`, with `method: matrix_product_state`. | Aer's |
 
 `device-id` names a `qiskit-ibm-runtime` `fake_provider` class, such as
 `FakeFez`, or a JSON file `{"configuration": ..., "properties": ...}` of raw IBM
 records. With one, the service describes that device and clients transpile for
 it, in either mode. The service publishes `aer_mode`, `aer_device` and
-`aer_method` in its properties. It refuses to start when `device: GPU` is set
+`aer_method` in its properties, and `aer_mps_max_bond_dimension` and
+`aer_mps_truncation_threshold` when they are set. It refuses to start when `device: GPU` is set
 and its host's Aer has no GPU, and a circuit runner without one fails rather
 than run on the CPU.
 
