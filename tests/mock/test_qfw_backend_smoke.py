@@ -500,6 +500,7 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 				"num_shots": 12,
 				"compiler": "staq",
 				"qubit_mapping": {"0": "QB7"},
+				"seed_simulator": 34,
 				"reservation_id": 1,
 			}
 		]
@@ -576,6 +577,14 @@ def _backend_with_qpm_properties(monkeypatch, properties):
 	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
 	monkeypatch.delenv(qfw_simulator.SHIM_LIB_ENV, raising=False)
 	return qfw_simulator.QFwBackend()
+
+
+def test_backend_run_leaves_the_simulator_seed_unset_by_default(monkeypatch):
+	backend = _backend_with_qpm_properties(monkeypatch, {"provider": "aer"})
+
+	job = backend.run(FakeCircuit(2, name="unseeded"))
+
+	assert job.options["seed_simulator"] is None
 
 
 def test_backend_run_names_the_shim_library(monkeypatch):

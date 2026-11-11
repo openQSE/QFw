@@ -39,6 +39,7 @@ QPM_STATUS_CHECK_INTERVAL_SEC = 60
 QFW_INFO_PASSTHROUGH_OPTIONS = (
 	"param_values",
 	"compilation_options",
+	"seed_simulator",
 )
 
 

@@ -322,7 +322,7 @@ class QFwBackend(BackendV2):
 		return Options(
 			shots=1024,
 			seed=334,
-			seed_simulator=334,
+			seed_simulator=None,
 			reservation_id=None,
 			token=None,
 			timeout=None,
