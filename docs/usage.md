@@ -540,13 +540,6 @@ mpi-launch:
   allow-run-as-root: auto
   export-env:
     - LD_LIBRARY_PATH
-  bind-to: core
-  map-by: ppr:1:l3cache
-  mca:
-    btl: ^tcp,ofi,vader,openib
-    pml: ^ucx
-    mtl: ofi
-    opal_common_ofi_provider_include: shm+cxi:linkx
 
 services:
   - name: nwqsim
@@ -604,6 +597,35 @@ placement, assigned-host fields, ports, and device ID. Simulator launch code
 also consumes `provider-launch.wrapper`. The packaged `agent-prefix` and
 `provider-launch.type` fields are reserved metadata and do not currently alter
 launch behavior.
+
+The default `mpi-launch` block sets no transport or placement, so Open MPI
+chooses its own. A site that needs its own settings copies this manifest, edits
+`mpi-launch`, and names the copy in the runtime file:
+
+```yaml
+local-services:
+  service-manifest: /path/to/site-local-services.yaml
+```
+
+QFw passes each `mca` entry to `mpirun` as `--mca`, which takes precedence over
+`OMPI_MCA_*` variables. Frontier, on HPE Slingshot, uses:
+
+```yaml
+mpi-launch:
+  launcher: mpirun
+  allow-run-as-root: auto
+  export-env:
+    - LD_LIBRARY_PATH
+  bind-to: core
+  map-by: ppr:1:l3cache
+  mca:
+    btl: ^tcp,ofi,vader,openib
+    pml: ^ucx
+    mtl: ofi
+    opal_common_ofi_provider_include: shm+cxi:linkx
+```
+
+`mpi-launch` also takes `extra-args`, a list added to every `mpirun` command.
 
 </details>
 
