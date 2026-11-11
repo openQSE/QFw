@@ -1181,6 +1181,29 @@ library (`lib`) and reservation token filled in. A workflow that plans its
 layout before it submits reads them in the reserved job it submits from, since
 they describe the QPM the reservation names.
 
+#### Proxy Sampler
+
+`QFwBackend(provider="proxy")` samples circuits too wide for statevector or
+density-matrix noisy simulation (50 to 100 qubits). Each shot's ideal outcome
+comes from an efficient source (outcomes recorded on the circuit, ffsim, Pauli
+rotation programs, then Aer statevector and matrix product state), and the
+device's calibrated Pauli-frame gate and idle errors and asymmetric readout
+error are applied on top. One service emulates one device, named by its
+`device-id`, a `qiskit_ibm_runtime.fake_provider` class such as `FakeFez`
+(`proxy-fez` in the local manifest). Its telemetry is the IBM
+`static_architecture` and `backend_properties`, so `backend.target` is the
+device. A qubit with no published T1 or T2 gets the maximum idle error.
+
+| Setting or option | Effect |
+| --- | --- |
+| `QFW_PROXY_MAX_MEMORY_MB` (default 4096) | Memory limit of the ideal source. A circuit no source holds within it fails with `AerMemoryRefused` in the circuit's error; there is no other fallback |
+| `seed_simulator` run option | Fixes the ideal draws and the noise draws together |
+| `circuit.metadata["qfw_logical_circuit"] = logical` | The pre-compilation circuit. The ideal outcomes come from it and the noise from the compiled circuit. It is sent beside the circuit as `info["logical_circuit"]`, in the same `{format, data}` envelope as `info["circuit"]` |
+| `backend.run(state, bases={"physical": [...], "bases": ["XZ", ...], "shots": [...]})` | One record per basis from one prepared state, in the result's `metadata["bases"]` |
+
+The error budget of each circuit (`fidelity`, `events_per_shot`, `gates_2q`,
+the ideal source used) is in the result's `metadata["diagnostics"]`.
+
 #### Application Output
 
 Applications write normal results to standard output and errors to standard

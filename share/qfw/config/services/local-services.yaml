@@ -61,6 +61,18 @@ services:
     provider-launch:
       type: internal
 
+  - name: proxy-fez
+    credential-mode: no-secret
+    module: svc_proxy_qpm
+    load-modules: svc_proxy_qpm,api_launcher
+    agent-prefix: qpm_proxy
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: FakeFez
+    provider-launch:
+      type: internal
+
   - name: backline-local
     credential-mode: no-secret
     module: svc_backline_qpm
