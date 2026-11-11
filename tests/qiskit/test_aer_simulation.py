@@ -1,6 +1,3 @@
-# The Aer QPM's device and sampling against the real qiskit-ibm-runtime
-# FakeFez and qiskit-aer: the target a client builds from the service's
-# telemetry, the seeded draws, the noise in them, and the noiseless mode.
 import importlib.util
 import math
 import pathlib
@@ -53,7 +50,7 @@ def _odd_parity(counts):
 
 
 def test_target_from_telemetry_is_the_fake_backends_target(fez):
-	configuration, properties = device.load_device_records("FakeFez")
+	configuration, properties = device.ibm_device_records("FakeFez")
 	telemetry = {
 		"backend": "fez-noisy", "metadata_supported": True,
 		"static_architecture": configuration, "backend_properties": properties}
@@ -90,9 +87,9 @@ def test_bell_samples_carry_the_devices_noise(fez, bell_on_fez):
 		AerSimulator.from_backend(fez).run(
 			bell_on_fez, shots=SHOTS, seed_simulator=12).result().get_counts())
 
-	# Two independent samples of SHOTS draws each.
-	sigma = math.sqrt(2 * reference * (1 - reference) / SHOTS)
-	assert abs(emulated - reference) < 3 * sigma
+	sigma_of_two_independent_samples = math.sqrt(
+		2 * reference * (1 - reference) / SHOTS)
+	assert abs(emulated - reference) < 3 * sigma_of_two_independent_samples
 	assert emulated > 0
 	assert emulated > 3 * math.sqrt(emulated * (1 - emulated) / SHOTS)
 
@@ -134,7 +131,7 @@ def _ghz(width):
 
 
 def test_the_method_setting_reaches_aer():
-	sim = circuit_runner.simulator(method="matrix_product_state")
+	sim = circuit_runner.aer_simulator(method="matrix_product_state")
 
 	assert sim.options.method == "matrix_product_state"
 

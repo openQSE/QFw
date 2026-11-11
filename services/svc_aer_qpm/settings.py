@@ -16,8 +16,7 @@ class AerSettings:
 	num_qubits: int = None
 
 
-def aer_settings(entry):
-	"""The `aer` block of the service's entry in the services file."""
+def aer_settings_from_service_entry(entry):
 	block = dict(entry.get("aer") or {})
 	unknown = set(block) - {
 		"mode", "device", "method", "max-memory-mb", "target-gpus",

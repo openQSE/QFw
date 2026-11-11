@@ -2,10 +2,8 @@ import json
 import os
 
 
-def load_device_records(spec):
-	"""The raw IBM BackendConfiguration and BackendProperties dicts of the
-	device named by spec: a qiskit-ibm-runtime fake_provider class name, or
-	the path of a JSON file {"configuration": {...}, "properties": {...}}."""
+def ibm_device_records(fake_backend_name_or_records_file):
+	spec = fake_backend_name_or_records_file
 	if spec.endswith(".json") or os.path.sep in spec:
 		with open(spec, encoding="utf-8") as stream:
 			records = json.load(stream)
@@ -28,9 +26,7 @@ def _load_json(directory, filename):
 		return json.load(stream)
 
 
-def calibrated_backend(configuration, properties):
-	"""A qiskit-ibm-runtime fake backend built from raw records, so that
-	AerSimulator.from_backend reads it as it reads FakeFez()."""
+def fake_backend_from_ibm_records(configuration, properties):
 	from qiskit_ibm_runtime.fake_provider.fake_backend import FakeBackendV2
 	from qiskit_ibm_runtime.utils.backend_decoder import (
 		decode_backend_configuration, properties_from_server_data)

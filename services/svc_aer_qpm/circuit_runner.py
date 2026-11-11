@@ -4,37 +4,28 @@ import json
 import qiskit.qasm2
 from qiskit_aer import AerSimulator
 
-from device import calibrated_backend, load_device_records
+from device import fake_backend_from_ibm_records, ibm_device_records
 
 
-def simulator(mode="ideal", device_id=None, device="CPU", method="automatic",
-	      max_memory_mb=0, target_gpus=()):
-	"""Aer as the service is set up: noiseless, or under device_id's noise.
-
-	Aer refuses a device it does not have; nothing falls back to the CPU.
-	"""
+def aer_simulator(mode="ideal", device_id=None, device="CPU",
+		  method="automatic", max_memory_mb=0, target_gpus=()):
 	options = {"method": method, "device": device,
 		   "max_memory_mb": max_memory_mb}
 	if target_gpus:
 		options["target_gpus"] = list(target_gpus)
 	if mode == "noisy":
-		backend = calibrated_backend(*load_device_records(device_id))
+		backend = fake_backend_from_ibm_records(*ibm_device_records(device_id))
 		return AerSimulator.from_backend(backend, **options)
 	return AerSimulator(**options)
 
 
 def sample_counts(qasm, shots, seed=None, **settings):
-	"""The counts of the OpenQASM 2 circuit.
-
-	Fails with Aer's own error when the circuit does not fit the method and
-	max_memory_mb; no other method is tried.
-	"""
 	run_options = {"shots": shots}
 	if seed is not None:
 		run_options["seed_simulator"] = seed
 	circuit = qiskit.qasm2.loads(
 		qasm, custom_instructions=qiskit.qasm2.LEGACY_CUSTOM_INSTRUCTIONS)
-	result = simulator(**settings).run(circuit, **run_options).result()
+	result = aer_simulator(**settings).run(circuit, **run_options).result()
 	if not result.success:
 		raise RuntimeError(result.status)
 	return result.get_counts()

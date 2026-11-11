@@ -52,8 +52,7 @@ def backend_config(backend, config=None):
 	return {}
 
 
-def service_entry(config=None):
-	"""The running QPM's own entry in the services file."""
+def this_service_entry(config=None):
 	if config is None:
 		config = load_service_config()
 	name = (os.environ.get('QFW_QPM_SERVICE_NAME')

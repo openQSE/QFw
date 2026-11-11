@@ -2,10 +2,10 @@ import logging
 import os
 
 from defw_exception import DEFwExecutionError
-from .device import load_device_records
-from .settings import aer_settings
+from .device import ibm_device_records
+from .settings import aer_settings_from_service_entry
 from .svc_qrc import QRC
-from util.mpi import service_entry
+from util.mpi import this_service_entry
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.qpm.util_qpm import UTIL_QPM
 
@@ -20,16 +20,8 @@ def available_devices():
 
 
 class QPM(UTIL_QPM):
-	"""Qiskit Aer, set up by the `aer` block of the service's entry: noiseless
-	(`mode: ideal`), or emulating the device named by device-id under its
-	noise (`mode: noisy`), on the CPU or the GPU. device-id is a
-	qiskit-ibm-runtime fake_provider class name or a calibration file. A qubit
-	whose T1/T2 the device does not publish gets no thermal relaxation, from
-	Aer's NoiseModel.from_backend; its gate and readout errors still apply.
-	"""
-
 	def __init__(self, start=True):
-		self.settings = aer_settings(service_entry())
+		self.settings = aer_settings_from_service_entry(this_service_entry())
 		self.device = os.environ.get(DEVICE_ENV, "").strip() or None
 		if self.settings.mode == "noisy" and not self.device:
 			raise DEFwExecutionError(
@@ -40,7 +32,7 @@ class QPM(UTIL_QPM):
 				f"offers {', '.join(available_devices())}")
 		self.configuration = self.properties = None
 		if self.device:
-			self.configuration, self.properties = load_device_records(
+			self.configuration, self.properties = ibm_device_records(
 				self.device)
 			self.num_qubits = int(self.configuration["n_qubits"])
 		elif self.settings.num_qubits:
@@ -56,8 +48,9 @@ class QPM(UTIL_QPM):
 
 	@property
 	def backend_name(self):
-		# One per service, so a driver that reserves by backend tells two
-		# services emulating the same device apart.
+		return self.backend_name_per_service()
+
+	def backend_name_per_service(self):
 		return os.environ.get(SERVICE_ID_ENV) or self.device or "aer"
 
 	def query(self):

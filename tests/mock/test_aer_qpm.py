@@ -7,7 +7,7 @@ from api_qpm_common import QPMType
 from defw_exception import DEFwError, DEFwExecutionError
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider
 import svc_aer_qpm.svc_qpm as svc_qpm
-from svc_aer_qpm.settings import aer_settings
+from svc_aer_qpm.settings import aer_settings_from_service_entry
 from svc_aer_qpm.svc_qpm import QPM
 from svc_aer_qpm.svc_qrc import QRC
 
@@ -47,7 +47,7 @@ def test_selection_types_the_provider_as_a_simulator():
 
 
 def test_settings_default_to_ideal_on_the_cpu():
-	settings = aer_settings({})
+	settings = aer_settings_from_service_entry({})
 
 	assert (settings.mode, settings.device, settings.method) == (
 		"ideal", "CPU", "automatic")
@@ -61,7 +61,7 @@ def test_settings_default_to_ideal_on_the_cpu():
 ])
 def test_settings_refuse_what_aer_cannot_run(aer, refusal):
 	with pytest.raises(DEFwExecutionError, match=refusal):
-		aer_settings({"aer": aer})
+		aer_settings_from_service_entry({"aer": aer})
 
 
 def test_noisy_mode_needs_a_device_to_emulate(service):

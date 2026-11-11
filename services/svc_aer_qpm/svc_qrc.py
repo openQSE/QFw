@@ -7,6 +7,7 @@ from util.mpi import build_mpi_command_string
 from util.qpm.util_qrc import UTIL_QRC
 
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+AER_RANKS = 1
 CIRCUIT_RUNNER = os.path.join(SERVICE_DIR, "circuit_runner.py")
 
 
@@ -46,9 +47,7 @@ class QRC(UTIL_QRC):
 		return build_mpi_command_string(
 			sys.executable,
 			executable_args=executable_args,
-			# The pip wheels of qiskit-aer are not built with MPI, so every
-			# further rank would run the whole circuit again.
-			np=1,
+			np=AER_RANKS,
 			hosts=info.get("hosts", None),
 			dvm_uri=dvm
 		)
