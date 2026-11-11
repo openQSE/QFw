@@ -204,3 +204,60 @@ def test_measured_map_and_active_qubits_ignore_idle_wires():
 	assert measured_map(circuit) == [(3, 1)]
 	compact, active = on_active_qubits(circuit)
 	assert active == [3] and compact.num_qubits == 1
+
+
+def _proxy_matched_pauli_noise(device, isa):
+	from qiskit_aer.noise import NoiseModel, ReadoutError, pauli_error
+
+	from util.proxy_sampler.calibration import PROCESS_PER_AVERAGE
+
+	model = NoiseModel(basis_gates=device.configuration().basis_gates)
+	used = {(i.operation.name, tuple(isa.find_bit(q).index for q in i.qubits)) for i in isa.data}
+	for name, qargs in used:
+		properties = device.target[name].get(qargs) if name in ("sx", "x", "cz") else None
+		if properties is None or not properties.error:
+			continue
+		k = len(qargs)
+		probability = PROCESS_PER_AVERAGE[k] * properties.error
+		paulis = ["".join("IXYZ"[i] for i in index) for index in np.ndindex(*(4,) * k)][1:]
+		model.add_quantum_error(pauli_error(
+			[("I" * k, 1 - probability)] + [(p, probability / len(paulis)) for p in paulis]), name, list(qargs))
+	readout = device.properties()
+	for qubit in {isa.find_bit(i.qubits[0]).index for i in isa.data if i.operation.name == "measure"}:
+		p10 = readout.qubit_property(qubit, "prob_meas1_prep0")[0]
+		p01 = readout.qubit_property(qubit, "prob_meas0_prep1")[0]
+		model.add_readout_error(ReadoutError([[1 - p10, p10], [p01, 1 - p01]]), [qubit])
+	return model
+
+
+def _mirror(width, rounds):
+	forward = QuantumCircuit(width)
+	forward.h(0)
+	for qubit in range(width - 1):
+		forward.cx(qubit, qubit + 1)
+	forward.s(range(width))
+	forward.h(range(width))
+	circuit = QuantumCircuit(width, width)
+	for _ in range(rounds):
+		circuit.compose(forward, inplace=True)
+		circuit.barrier()
+		circuit.compose(forward.inverse(), inplace=True)
+		circuit.barrier()
+	circuit.measure(range(width), range(width))
+	return circuit
+
+
+def test_a_clifford_circuit_follows_its_noisy_distribution_under_the_proxy_noise_model(device):
+	width = 4
+	isa = transpile(_mirror(width, rounds=2), device, initial_layout=list(range(width)),
+					seed_transpiler=1, optimization_level=0)
+	density_matrix_shots = 400_000
+	exact = _probabilities(AerSimulator(
+		method="density_matrix", noise_model=_proxy_matched_pauli_noise(device, isa)).run(
+		isa, shots=density_matrix_shots, seed_simulator=3).result().get_counts())
+
+	bits, _ = ProxySampler(device, max_memory_mb=MEMORY_MB).sample(isa, SHOTS, np.random.default_rng(4))
+	proxy = _probabilities(counts_of(bits))
+
+	total_variation = 0.5 * sum(abs(proxy.get(k, 0) - exact.get(k, 0)) for k in set(proxy) | set(exact))
+	assert total_variation < 0.01
