@@ -323,6 +323,45 @@ def test_run_discovery_outside_slurm_uses_a_run_from_outside_slurm(
     assert qfw_config.current_run_dir().resolve() == other
 
 
+def test_service_launcher_names_the_manifest_entry(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "site-services.yaml"
+    manifest_path.write_text(
+        "services:\n"
+        "  - name: aer\n"
+        "    module: svc_aer_qpm\n"
+        "    credential-mode: no-secret\n",
+        encoding="utf-8",
+    )
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(
+        "directory-service:\n"
+        "  endpoint: slurmctld:8090\n"
+        "service:\n"
+        f"  manifest: {manifest_path}\n",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_start(name, env, *args):
+        captured["env"] = dict(env)
+        return 0
+
+    _set_environment(monkeypatch, DEFW_IMPORT_PLACEHOLDERS, CALLER_SETTINGS,
+                     {"QFW_SERVICE_SCOPE": "site"})
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", fake_start)
+
+    assert process_launcher.start_qpm([
+        "--service-id", "aer-0123abcd",
+        "--manifest-service-name", "aer",
+        "--site-config", str(site_path),
+        "--run-dir", str(tmp_path / "run"),
+        "--operation-mode", "long-running",
+    ]) == 0
+    assert captured["env"]["QFW_QPM_SERVICE_ID"] == "aer-0123abcd"
+    assert captured["env"]["QFW_QPM_SERVICE_NAME"] == "aer"
+
+
 def test_service_launcher_ignores_defw_placeholders(tmp_path, monkeypatch):
     manifest_path = tmp_path / "site-services.yaml"
     manifest_path.write_text(

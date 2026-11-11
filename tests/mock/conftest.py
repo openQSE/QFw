@@ -4,6 +4,7 @@ import sys
 import types
 import logging
 import ast
+import json
 import os
 import threading
 
@@ -103,6 +104,10 @@ def _install_yaml_stub():
 		text = str(data or "")
 		if not text.strip():
 			return {}
+		try:
+			return json.loads(text)
+		except ValueError:
+			pass
 		try:
 			return ast.literal_eval(text)
 		except (SyntaxError, ValueError):
