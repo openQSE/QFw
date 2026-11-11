@@ -1,0 +1,124 @@
+# The Aer QPM's device and sampling against the real qiskit-ibm-runtime
+# FakeFez and qiskit-aer: the target a client builds from the service's
+# telemetry, the seeded draws, the noise in them, and the noiseless mode.
+import importlib.util
+import math
+import pathlib
+import sys
+
+import pytest
+from qiskit import QuantumCircuit, qasm2, transpile
+
+pytest.importorskip("qiskit_aer")
+fake_provider = pytest.importorskip("qiskit_ibm_runtime.fake_provider")
+from qiskit_aer import AerSimulator  # noqa: E402
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+SERVICE_DIR = REPO_ROOT / "services" / "svc_aer_qpm"
+SHOTS = 10_000
+NOISY_FEZ = {"mode": "noisy", "device_id": "FakeFez"}
+
+
+def _load(name, path):
+	spec = importlib.util.spec_from_file_location(name, path)
+	module = importlib.util.module_from_spec(spec)
+	sys.modules[name] = module
+	spec.loader.exec_module(module)
+	return module
+
+
+qfw_target = _load("qfw_target", REPO_ROOT / "backends" / "qfw_qiskit" / "qfw_target.py")
+sys.path.insert(0, str(SERVICE_DIR))
+import circuit_runner  # noqa: E402
+import device  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def fez():
+	return fake_provider.FakeFez()
+
+
+@pytest.fixture(scope="module")
+def bell_on_fez(fez):
+	circuit = QuantumCircuit(2, 2)
+	circuit.h(0)
+	circuit.cx(0, 1)
+	circuit.measure([0, 1], [0, 1])
+	return transpile(
+		circuit, target=fez.target, initial_layout=[0, 1], seed_transpiler=1)
+
+
+def _odd_parity(counts):
+	return (counts.get("01", 0) + counts.get("10", 0)) / sum(counts.values())
+
+
+def test_target_from_telemetry_is_the_fake_backends_target(fez):
+	configuration, properties = device.load_device_records("FakeFez")
+	telemetry = {
+		"backend": "fez-noisy", "metadata_supported": True,
+		"static_architecture": configuration, "backend_properties": properties}
+
+	target = qfw_target.build_device_target(telemetry)
+
+	assert target.num_qubits == fez.target.num_qubits
+	assert sorted(target.build_coupling_map().get_edges()) == sorted(
+		fez.target.build_coupling_map().get_edges())
+	assert set(target.operation_names) == set(fez.target.operation_names)
+	for qargs in [(0, 1), (1, 2)]:
+		assert target["cz"][qargs].error == fez.target["cz"][qargs].error
+	assert target["sx"][(0,)].error == fez.target["sx"][(0,)].error
+	assert target.qubit_properties[0].t1 == fez.target.qubit_properties[0].t1
+
+
+def test_the_same_seed_gives_the_same_counts(bell_on_fez):
+	qasm = qasm2.dumps(bell_on_fez)
+
+	first = circuit_runner.sample_counts(qasm, SHOTS, seed=5, **NOISY_FEZ)
+	again = circuit_runner.sample_counts(qasm, SHOTS, seed=5, **NOISY_FEZ)
+	other = circuit_runner.sample_counts(qasm, SHOTS, seed=6, **NOISY_FEZ)
+
+	assert first == again
+	assert first != other
+
+
+def test_bell_samples_carry_the_devices_noise(fez, bell_on_fez):
+	qasm = qasm2.dumps(bell_on_fez)
+
+	emulated = _odd_parity(
+		circuit_runner.sample_counts(qasm, SHOTS, seed=11, **NOISY_FEZ))
+	reference = _odd_parity(
+		AerSimulator.from_backend(fez).run(
+			bell_on_fez, shots=SHOTS, seed_simulator=12).result().get_counts())
+
+	# Two independent samples of SHOTS draws each.
+	sigma = math.sqrt(2 * reference * (1 - reference) / SHOTS)
+	assert abs(emulated - reference) < 3 * sigma
+	assert emulated > 0
+	assert emulated > 3 * math.sqrt(emulated * (1 - emulated) / SHOTS)
+
+
+def test_a_circuit_too_large_for_the_memory_limit_fails_in_aer(fez):
+	circuit = QuantumCircuit(30, 30)
+	circuit.h(range(30))
+	circuit.measure(range(30), range(30))
+
+	with pytest.raises(Exception, match="(?i)memory"):
+		circuit_runner.sample_counts(
+			qasm2.dumps(transpile(circuit, target=fez.target, seed_transpiler=1)),
+			10, method="statevector", max_memory_mb=1, **NOISY_FEZ)
+
+
+def test_ideal_mode_samples_without_noise(bell_on_fez):
+	counts = circuit_runner.sample_counts(
+		qasm2.dumps(bell_on_fez), SHOTS, seed=3, mode="ideal")
+
+	assert set(counts) <= {"00", "11"}
+	assert _odd_parity(counts) == 0
+
+
+@pytest.mark.skipif(
+	"GPU" in AerSimulator().available_devices(), reason="this host has a GPU")
+def test_a_gpu_the_host_lacks_fails_rather_than_runs_on_the_cpu(bell_on_fez):
+	with pytest.raises(Exception, match="GPU"):
+		circuit_runner.sample_counts(
+			qasm2.dumps(bell_on_fez), 10, mode="ideal", device="GPU")
