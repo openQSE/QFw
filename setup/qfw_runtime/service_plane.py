@@ -1210,7 +1210,10 @@ def _launch(record, node, command, detach_flag, env, allocation, ready,
         _wait_for(ready, timeout, description)
         return
     step_log = Path(record["pid_file"]).with_name("step.log")
-    step = _start_step(_node_launch(node, command, allocation), env, step_log)
+    cpus = _job_cpus_on(node, allocation)
+    step_options = [f"--cpus-per-task={cpus}"] if cpus else []
+    step = _start_step(
+        _node_launch(node, command, allocation, step_options), env, step_log)
     _STEPS[step.pid] = step
     record["step"] = {
         "pid": step.pid,
@@ -1301,21 +1304,46 @@ def _run_on_node(node, command, env, allocation, check=True):
     return result
 
 
-def _node_launch(node, command, allocation):
+def _node_launch(node, command, allocation, step_options=()):
     launch = list(command)
     mode = allocation.get("mode")
     if mode == "heterogeneous":
         group = _group_for_node(node, allocation)
         launch = [
             "srun", f"--het-group={group}", "--overlap", "--nodes=1",
-            "--ntasks=1", "--nodelist", str(node), *launch,
+            "--ntasks=1", "--nodelist", str(node), *step_options, *launch,
         ]
     elif mode == "slurm":
         launch = [
             "srun", "--overlap", "--nodes=1", "--ntasks=1",
-            "--nodelist", str(node), *launch,
+            "--nodelist", str(node), *step_options, *launch,
         ]
     return launch
+
+
+def _job_cpus_on(node, allocation):
+    if allocation.get("mode") == "heterogeneous":
+        group = _group_for_node(node, allocation)
+        counts = os.environ.get(f"SLURM_JOB_CPUS_PER_NODE_HET_GROUP_{group}")
+        nodes = allocation.get(f"group{group}", [])
+    else:
+        counts = os.environ.get("SLURM_JOB_CPUS_PER_NODE")
+        nodes = allocation.get("group0", [])
+    per_node = _expand_cpu_counts(counts)
+    if per_node is None or len(per_node) != len(nodes) or node not in nodes:
+        return None
+    return per_node[nodes.index(node)]
+
+
+def _expand_cpu_counts(value):
+    counts = []
+    for item in str(value or "").split(","):
+        count, _, repeat = item.strip().partition("(x")
+        try:
+            counts.extend([int(count)] * (int(repeat.rstrip(")")) if repeat else 1))
+        except ValueError:
+            return None
+    return counts or None
 
 
 def _group_for_node(node, allocation):
