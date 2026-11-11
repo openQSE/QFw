@@ -87,7 +87,7 @@ class ProxySampler:
 	def __post_init__(self) -> None:
 		self._aer = AerStatevectors(self._states, STATE_CACHE_SIZE, self.max_memory_mb, self.stats)
 		rotations = RotationPrograms(self._aer, self._states, STATE_CACHE_SIZE, self.max_memory_mb, self.stats)
-		self._ideal = KnownOutcomes(FfsimStates(rotations, self._ffsim, STATE_CACHE_SIZE, self.stats))
+		self._ideal = KnownOutcomes(FfsimStates(rotations, self._ffsim, STATE_CACHE_SIZE, self.max_memory_mb, self.stats))
 
 	def __str__(self) -> str:
 		return (f"ProxySampler(backend={self.backend!r}, max_memory_mb={self.max_memory_mb}, "

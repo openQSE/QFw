@@ -14,7 +14,7 @@ from qiskit_ibm_runtime.fake_provider import FakeFez  # noqa: E402
 
 from util.proxy_sampler import ideal_sources  # noqa: E402
 from util.proxy_sampler.counts import counts_of  # noqa: E402
-from util.proxy_sampler.errors import AerMemoryRefused  # noqa: E402
+from util.proxy_sampler.errors import AerMemoryRefused, FfsimMemoryRefused  # noqa: E402
 from util.proxy_sampler.ideal_sources import (  # noqa: E402
 	AerStatevectors, IdealDraw, measured_map, on_active_qubits)
 from util.proxy_sampler.rotation_states import (  # noqa: E402
@@ -175,6 +175,37 @@ def test_spinless_ffsim_circuit_samples_its_occupied_orbitals(device):
 		isa, 50, np.random.default_rng(0), logical=logical)
 	assert diagnostics["ideal"] == "ffsim"
 	assert (bits.mean(axis=0).round() == [1, 1, 0]).all()
+
+
+def _hartree_fock(norb, nelec):
+	ffsim = pytest.importorskip("ffsim")
+	from qiskit import QuantumRegister
+
+	register = QuantumRegister(2 * norb)
+	logical = QuantumCircuit(register)
+	logical.append(ffsim.qiskit.PrepareHartreeFockJW(norb, nelec), register)
+	logical.measure_all()
+	return logical
+
+
+def _ffsim_source(max_memory_mb):
+	return ideal_sources.FfsimStates(ideal_sources.IdealSource(None), OrderedDict(), 2, max_memory_mb, {"ffsim": 0})
+
+
+def _draw(logical):
+	return IdealDraw.of(logical, logical, 10, np.random.default_rng(0))
+
+
+def test_an_ffsim_state_beyond_the_memory_limit_is_refused_by_name():
+	with pytest.raises(FfsimMemoryRefused, match=r"12 orbitals and \(6, 6\) electrons needs 14 MiB, over its 8 MiB"):
+		_ffsim_source(8).outcomes(_draw(_hartree_fock(12, (6, 6))))
+
+
+def test_cached_ffsim_states_make_room_for_a_new_one_within_the_memory_limit():
+	source = _ffsim_source(20)
+	source.outcomes(_draw(_hartree_fock(12, (6, 6))))
+	source.outcomes(_draw(_hartree_fock(12, (5, 7))))
+	assert [state.nelec for state in source.states.values()] == [(5, 7)]
 
 
 def test_sample_bases_measures_one_state_in_several_bases(device):

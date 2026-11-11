@@ -8,9 +8,11 @@ from typing import Any, TypeVar
 import numpy as np
 from numpy.typing import NDArray
 from qiskit import QuantumCircuit
+from qiskit.circuit.library import XGate
+from qiskit.converters import circuit_to_dag
 
 from .circuits import active_qubits, circuit_digest
-from .errors import AerMemoryRefused
+from .errors import AerMemoryRefused, FfsimMemoryRefused
 from .gates import BARRIER_DELAY, FFSIM_GATES
 from .pauli_frames import Bits, Floats
 from .rotation_states import (
@@ -63,6 +65,8 @@ def born_probabilities(amplitudes: Amplitudes) -> Floats:
 
 
 MPS = "matrix_product_state"
+MIB = 1 << 20
+AMPLITUDE_BYTES = np.dtype(np.complex128).itemsize
 
 
 def _is_ffsim_native(circuit: Any) -> bool:
@@ -81,6 +85,21 @@ def _mid_circuit_measure(circuit: Any) -> bool:
 			return True
 	return any(i.operation.name in ("if_else", "reset", "while_loop", "for_loop", "switch_case")
 			   for i in circuit.data)
+
+
+def _fermion_space(logical: Any) -> tuple[int, int | tuple[int, int]]:
+	import ffsim
+
+	first = logical.data[0].operation if logical.data else None
+	if isinstance(first, (ffsim.qiskit.PrepareHartreeFockJW, ffsim.qiskit.PrepareHartreeFockSpinlessJW)):
+		return first.norb, first.nelec
+	if isinstance(first, ffsim.qiskit.PrepareSlaterDeterminantJW):
+		occupied_alpha, occupied_beta = first.occupied_orbitals
+		return first.norb, (len(occupied_alpha), len(occupied_beta))
+	if isinstance(first, ffsim.qiskit.PrepareSlaterDeterminantSpinlessJW):
+		return first.norb, len(first.occupied_orbitals)
+	front = circuit_to_dag(logical).front_layer()
+	return logical.num_qubits, sum(isinstance(node.op, XGate) for node in front)
 
 
 def _occupation_words(norb: int, nelec: int | tuple[int, int], picks: Ints) -> Ints:
@@ -148,10 +167,11 @@ class KnownOutcomes(IdealSource):
 
 
 class FfsimStates(IdealSource):
-	def __init__(self, successor: IdealSource, states: OrderedDict[str, Any], cache_limit: int,
+	def __init__(self, successor: IdealSource, states: OrderedDict[str, Any], cache_limit: int, max_memory_mb: int,
 				 stats: dict[str, int]) -> None:
 		super().__init__(successor)
 		self.states, self.cache_limit, self.stats = states, cache_limit, stats
+		self.max_memory_mb = max_memory_mb
 
 	def outcomes(self, draw: IdealDraw) -> tuple[Bits, str]:
 		if draw.logical is None or not _is_ffsim_native(draw.logical):
@@ -169,13 +189,26 @@ class FfsimStates(IdealSource):
 
 		key = circuit_digest(logical)
 		state = self.states.get(key)
-		if state is None:
-			try:
-				state = ffsim.qiskit.final_state_vector(logical.remove_final_measurements(inplace=False))
-			except Exception:  # noqa: BLE001
-				return None
-			remember(self.states, key, state, self.cache_limit)
+		if state is not None:
+			return state
+		self._make_room(logical)
+		try:
+			state = ffsim.qiskit.final_state_vector(logical.remove_final_measurements(inplace=False))
+		except Exception:  # noqa: BLE001
+			return None
+		remember(self.states, key, state, self.cache_limit)
 		return state
+
+	def _make_room(self, logical: Any) -> None:
+		import ffsim
+
+		norb, nelec = _fermion_space(logical)
+		needed = ffsim.dim(norb, nelec) * AMPLITUDE_BYTES
+		limit = self.max_memory_mb * MIB
+		if needed > limit:
+			raise FfsimMemoryRefused(f"{norb} orbitals and {nelec} electrons", -(-needed // MIB), self.max_memory_mb)
+		while self.states and needed + sum(state.vec.nbytes for state in self.states.values()) > limit:
+			self.states.popitem(last=False)
 
 
 class RotationPrograms(IdealSource):
