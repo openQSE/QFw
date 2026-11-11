@@ -1,5 +1,7 @@
 import argparse
 import json
+import sys
+import traceback
 
 import qiskit.qasm2
 from qiskit_aer import AerSimulator
@@ -61,14 +63,23 @@ def main():
 	args = parser.parse_args()
 	with open(args.qasm_file, encoding="utf-8") as stream:
 		qasm = stream.read()
-	result = sample(
-		qasm, args.shots, args.seed, mode=args.mode, device_id=args.device_id,
-		device=args.device, method=args.method,
-		max_memory_mb=args.max_memory_mb, target_gpus=args.target_gpus,
-		mps_max_bond_dimension=args.mps_max_bond_dimension,
-		mps_truncation_threshold=args.mps_truncation_threshold,
-		mps_log_data=args.mps_log_data)
+	try:
+		result = sample(
+			qasm, args.shots, args.seed, mode=args.mode,
+			device_id=args.device_id, device=args.device, method=args.method,
+			max_memory_mb=args.max_memory_mb, target_gpus=args.target_gpus,
+			mps_max_bond_dimension=args.mps_max_bond_dimension,
+			mps_truncation_threshold=args.mps_truncation_threshold,
+			mps_log_data=args.mps_log_data)
+	except Exception as error:
+		print(f"aer: {one_line(error)}", flush=True)
+		traceback.print_exc()
+		sys.exit(1)
 	print(json.dumps(result, default=str))
+
+
+def one_line(error):
+	return " ".join(f"{type(error).__name__}: {error}".split())
 
 
 if __name__ == "__main__":

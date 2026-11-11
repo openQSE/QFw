@@ -2,6 +2,7 @@ import importlib.util
 import json
 import math
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -112,6 +113,24 @@ def test_ideal_mode_samples_without_noise(bell_on_fez):
 
 	assert set(counts) <= {"00", "11"}
 	assert _odd_parity(counts) == 0
+
+
+def test_a_circuit_aer_refuses_fails_with_the_reason_first(tmp_path):
+	circuit = QuantumCircuit(2, 2)
+	circuit.h(0)
+	circuit.cx(0, 1)
+	circuit.measure([0, 1], [0, 1])
+	qasm = tmp_path / "ghz.qasm"
+	qasm.write_text(qasm2.dumps(circuit))
+
+	run = subprocess.run(
+		[sys.executable, str(SERVICE_DIR / "circuit_runner.py"),
+		 "--qasm-file", str(qasm), "--shots", "10",
+		 "--mode", "noisy", "--device-id", "FakeFez"],
+		capture_output=True, text=True, cwd=SERVICE_DIR)
+
+	assert run.returncode == 1
+	assert run.stdout.splitlines()[0] == "aer: AerError: 'unknown instruction: h'"
 
 
 @pytest.mark.skipif(
