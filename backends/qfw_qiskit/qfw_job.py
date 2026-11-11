@@ -42,6 +42,8 @@ QFW_INFO_PASSTHROUGH_OPTIONS = (
 	"seed_simulator",
 )
 
+RESULT_METADATA_KEYS = ("qhw_result", "diagnostics")
+
 
 def normalize_param_values(param_values):
 	"""Key circuit parameter values by parameter name.
@@ -419,9 +421,9 @@ class QFwJob(Job):
 
 	def _result_metadata(self, output):
 		metadata = {}
-		qhw_result = output.get("qhw_result")
-		if isinstance(qhw_result, dict):
-			metadata["qhw_result"] = qhw_result
+		for key in RESULT_METADATA_KEYS:
+			if isinstance(output.get(key), (dict, list)):
+				metadata[key] = output[key]
 		return metadata
 
 	def _raise_for_failed_results(self, qpm_results):

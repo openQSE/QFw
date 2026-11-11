@@ -3,12 +3,23 @@ import os
 import sys
 
 from defw_exception import DEFwError, DEFwExecutionError
-from util.mpi import build_mpi_command_string
+from util.mpi import build_mpi_command_string, mpi_launch_config
 from util.qpm.util_qrc import UTIL_QRC
 
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 AER_RANKS = 1
+THREAD_COUNT_ENV = "OMP_NUM_THREADS"
 CIRCUIT_RUNNER = os.path.join(SERVICE_DIR, "circuit_runner.py")
+
+
+def one_rank_on_all_cores(mpi_launch):
+	args = []
+	if not mpi_launch.get("bind-to"):
+		args.extend(["--bind-to", "none"])
+	exported = mpi_launch.get("export-env") or []
+	if os.environ.get(THREAD_COUNT_ENV) and THREAD_COUNT_ENV not in exported:
+		args.extend(["-x", THREAD_COUNT_ENV])
+	return args
 
 
 class QRC(UTIL_QRC):
@@ -17,7 +28,9 @@ class QRC(UTIL_QRC):
 		if not lines:
 			raise DEFwError({"Error": "Empty output!"})
 		try:
-			return json.loads(lines[-1])["counts"]
+			result = json.loads(lines[-1])
+			return {"counts": result["counts"],
+				"diagnostics": result.get("diagnostics", {})}
 		except (ValueError, KeyError) as e:
 			raise DEFwError({"Error": f"Could not parse result: {e}"})
 
@@ -44,6 +57,8 @@ class QRC(UTIL_QRC):
 		for name in ("mps_max_bond_dimension", "mps_truncation_threshold"):
 			if aer.get(name) is not None:
 				executable_args.extend(['--' + name.replace('_', '-'), aer[name]])
+		if aer.get("mps_log_data"):
+			executable_args.append('--mps-log-data')
 		if info.get("seed_simulator") is not None:
 			executable_args.extend(['--seed', info["seed_simulator"]])
 
@@ -52,7 +67,8 @@ class QRC(UTIL_QRC):
 			executable_args=executable_args,
 			np=AER_RANKS,
 			hosts=info.get("hosts", None),
-			dvm_uri=dvm
+			dvm_uri=dvm,
+			extra_mpi_args=one_rank_on_all_cores(mpi_launch_config()),
 		)
 
 	def test(self):

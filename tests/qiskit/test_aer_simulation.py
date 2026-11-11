@@ -157,7 +157,23 @@ def test_a_bond_dimension_of_one_keeps_one_branch_of_a_ghz_state(
 
 	circuit_runner.main()
 
-	assert json.loads(capsys.readouterr().out) == {"counts": {"0000": 200}}
+	assert json.loads(capsys.readouterr().out)["counts"] == {"0000": 200}
+
+
+def test_the_runner_returns_the_mps_truncation_when_asked(
+		tmp_path, monkeypatch, capsys):
+	qasm_file = tmp_path / "ghz.qasm"
+	qasm_file.write_text(_ghz(4))
+	monkeypatch.setattr(sys, "argv", [
+		"circuit_runner", "--qasm-file", str(qasm_file), "--shots", "10",
+		"--method", "matrix_product_state", "--mps-max-bond-dimension", "1",
+		"--mps-log-data"])
+
+	circuit_runner.main()
+
+	diagnostics = json.loads(capsys.readouterr().out)["diagnostics"]
+	assert "discarded_value=0.5" in diagnostics["MPS_log_data"]
+	assert diagnostics["matrix_product_state_max_bond_dimension"] == 1
 
 
 def test_matrix_product_state_runs_a_circuit_too_wide_for_statevector():

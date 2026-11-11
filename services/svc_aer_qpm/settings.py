@@ -5,7 +5,7 @@ from defw_exception import DEFwExecutionError
 MODES = ("ideal", "noisy")
 DEVICES = ("CPU", "GPU")
 MPS = "matrix_product_state"
-MPS_KEYS = ("mps-max-bond-dimension", "mps-truncation-threshold")
+MPS_KEYS = ("mps-max-bond-dimension", "mps-truncation-threshold", "mps-log-data")
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class AerSettings:
 	num_qubits: int = None
 	mps_max_bond_dimension: int = None
 	mps_truncation_threshold: float = None
+	mps_log_data: bool = False
 
 
 def aer_settings_from_service_entry(entry):
@@ -56,4 +57,5 @@ def aer_settings_from_service_entry(entry):
 		num_qubits=None if num_qubits is None else int(num_qubits),
 		mps_max_bond_dimension=None if bond_dimension is None else int(bond_dimension),
 		mps_truncation_threshold=None if truncation_threshold is None
-		else float(truncation_threshold))
+		else float(truncation_threshold),
+		mps_log_data=bool(block.get("mps-log-data", False)))

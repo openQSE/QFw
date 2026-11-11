@@ -24,12 +24,13 @@ def service(tmp_path, monkeypatch):
 	monkeypatch.delenv("QFW_QPU_DEVICE_ID", raising=False)
 	monkeypatch.setattr(svc_qpm, "available_devices", lambda: ("CPU",))
 
-	def configure(device_file=False, **aer):
+	def configure(device_file=False, mpi_launch=None, **aer):
 		entry = {"name": "aer", "module": "svc_aer_qpm"}
 		if aer:
 			entry["aer"] = aer
 		path = tmp_path / "services.yaml"
-		path.write_text(json.dumps({"mpi-launch": {}, "services": [entry]}))
+		path.write_text(json.dumps(
+			{"mpi-launch": mpi_launch or {}, "services": [entry]}))
 		monkeypatch.setenv("QFW_SERVICE_CONFIG", str(path))
 		if device_file:
 			records = tmp_path / "tiny.json"
@@ -61,6 +62,7 @@ def test_settings_default_to_ideal_on_the_cpu():
 	({"mps-max-bond-dimension": 64}, "needs method: matrix_product_state"),
 	({"method": "statevector", "mps-truncation-threshold": 1e-10},
 	 "needs method: matrix_product_state"),
+	({"mps-log-data": True}, "needs method: matrix_product_state"),
 ])
 def test_settings_refuse_what_aer_cannot_run(aer, refusal):
 	with pytest.raises(DEFwExecutionError, match=refusal):
@@ -113,7 +115,7 @@ def test_the_settings_are_published(service, monkeypatch):
 
 MPS_SETTINGS = {
 	"method": "matrix_product_state", "mps-max-bond-dimension": 64,
-	"mps-truncation-threshold": 1e-10}
+	"mps-truncation-threshold": 1e-10, "mps-log-data": True}
 
 
 def test_the_mps_settings_are_published(service, monkeypatch):
@@ -128,6 +130,7 @@ def test_the_mps_settings_are_published(service, monkeypatch):
 
 	assert published["aer_mps_max_bond_dimension"] == 64
 	assert published["aer_mps_truncation_threshold"] == 1e-10
+	assert published["aer_mps_log_data"] is True
 
 
 def test_telemetry_publishes_the_device_records(service):
@@ -160,9 +163,9 @@ def test_services_emulating_one_device_have_their_own_backend_names(
 	assert names == {"tiny-a", "tiny-b"}
 
 
-def _circuit(service, monkeypatch, seed=None, **aer):
+def _circuit(service, monkeypatch, seed=None, mpi_launch=None, **aer):
 	monkeypatch.setattr(svc_qpm, "available_devices", lambda: ("CPU", "GPU"))
-	service(device_file=True, **aer)
+	service(device_file=True, mpi_launch=mpi_launch, **aer)
 	info = QPM(start=False).prepare_circuit(
 		{"num_shots": 100, "np": 1, "seed_simulator": seed})
 	return types.SimpleNamespace(info=info)
@@ -188,6 +191,7 @@ def test_the_runner_gets_the_mps_settings(service, monkeypatch):
 
 	assert "--mps-max-bond-dimension 64" in command
 	assert "--mps-truncation-threshold 1e-10" in command
+	assert "--mps-log-data" in command
 
 
 def test_the_runner_leaves_the_mps_settings_to_aer_by_default(
@@ -208,6 +212,29 @@ def test_the_runner_runs_on_one_rank_whatever_the_circuit_asks(
 	assert "--np 1 " in command
 
 
+def test_the_runner_is_unbound_and_gets_the_thread_count(
+		service, monkeypatch):
+	monkeypatch.setenv("OMP_NUM_THREADS", "64")
+
+	command = QRC(start=False).form_cmd(
+		_circuit(service, monkeypatch), "c.qasm")
+
+	assert "--bind-to none" in command
+	assert "-x OMP_NUM_THREADS" in command
+
+
+def test_the_sites_binding_and_exports_are_kept(service, monkeypatch):
+	monkeypatch.setenv("OMP_NUM_THREADS", "64")
+	mpi_launch = {"bind-to": "socket", "export-env": ["OMP_NUM_THREADS"]}
+
+	command = QRC(start=False).form_cmd(
+		_circuit(service, monkeypatch, mpi_launch=mpi_launch), "c.qasm")
+
+	assert "--bind-to none" not in command
+	assert "--bind-to socket" in command
+	assert command.count("-x OMP_NUM_THREADS") == 1
+
+
 def test_the_runner_gets_the_job_seed(service, monkeypatch):
 	command = QRC(start=False).form_cmd(
 		_circuit(service, monkeypatch, seed=7), "c.qasm")
@@ -226,6 +253,7 @@ def test_the_runner_counts_are_the_result():
 	qrc = QRC(start=False)
 
 	assert qrc.parse_result(
-		b'warning\n{"counts": {"00": 60, "11": 40}}\n') == {"00": 60, "11": 40}
+		b'warning\n{"counts": {"00": 60, "11": 40}, "diagnostics": {"method": "mps"}}\n'
+	) == {"counts": {"00": 60, "11": 40}, "diagnostics": {"method": "mps"}}
 	with pytest.raises(DEFwError):
 		qrc.parse_result(b"Traceback")

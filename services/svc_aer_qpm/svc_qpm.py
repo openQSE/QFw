@@ -93,6 +93,7 @@ class QPM(UTIL_QPM):
 		return {name: value for name, value in (
 			("mps_max_bond_dimension", self.settings.mps_max_bond_dimension),
 			("mps_truncation_threshold", self.settings.mps_truncation_threshold),
+			("mps_log_data", self.settings.mps_log_data or None),
 		) if value is not None}
 
 	def get_backend_info(self, lib=None, token=None, reservation_id=None):

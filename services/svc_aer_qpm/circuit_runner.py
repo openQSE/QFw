@@ -9,7 +9,8 @@ from device import fake_backend_from_ibm_records, ibm_device_records
 
 def aer_simulator(mode="ideal", device_id=None, device="CPU",
 		  method="automatic", max_memory_mb=0, target_gpus=(),
-		  mps_max_bond_dimension=None, mps_truncation_threshold=None):
+		  mps_max_bond_dimension=None, mps_truncation_threshold=None,
+		  mps_log_data=False):
 	options = {"method": method, "device": device,
 		   "max_memory_mb": max_memory_mb}
 	if target_gpus:
@@ -18,6 +19,8 @@ def aer_simulator(mode="ideal", device_id=None, device="CPU",
 		options["matrix_product_state_max_bond_dimension"] = mps_max_bond_dimension
 	if mps_truncation_threshold is not None:
 		options["matrix_product_state_truncation_threshold"] = mps_truncation_threshold
+	if mps_log_data:
+		options["mps_log_data"] = True
 	if mode == "noisy":
 		backend = fake_backend_from_ibm_records(*ibm_device_records(device_id))
 		return AerSimulator.from_backend(backend, **options)
@@ -25,6 +28,10 @@ def aer_simulator(mode="ideal", device_id=None, device="CPU",
 
 
 def sample_counts(qasm, shots, seed=None, **settings):
+	return sample(qasm, shots, seed, **settings)["counts"]
+
+
+def sample(qasm, shots, seed=None, **settings):
 	run_options = {"shots": shots}
 	if seed is not None:
 		run_options["seed_simulator"] = seed
@@ -33,7 +40,8 @@ def sample_counts(qasm, shots, seed=None, **settings):
 	result = aer_simulator(**settings).run(circuit, **run_options).result()
 	if not result.success:
 		raise RuntimeError(result.status)
-	return result.get_counts()
+	return {"counts": result.get_counts(),
+		"diagnostics": result.results[0].metadata}
 
 
 def main():
@@ -49,16 +57,18 @@ def main():
 	parser.add_argument("--target-gpus", type=int, nargs="*", default=())
 	parser.add_argument("--mps-max-bond-dimension", type=int)
 	parser.add_argument("--mps-truncation-threshold", type=float)
+	parser.add_argument("--mps-log-data", action="store_true")
 	args = parser.parse_args()
 	with open(args.qasm_file, encoding="utf-8") as stream:
 		qasm = stream.read()
-	counts = sample_counts(
+	result = sample(
 		qasm, args.shots, args.seed, mode=args.mode, device_id=args.device_id,
 		device=args.device, method=args.method,
 		max_memory_mb=args.max_memory_mb, target_gpus=args.target_gpus,
 		mps_max_bond_dimension=args.mps_max_bond_dimension,
-		mps_truncation_threshold=args.mps_truncation_threshold)
-	print(json.dumps({"counts": counts}))
+		mps_truncation_threshold=args.mps_truncation_threshold,
+		mps_log_data=args.mps_log_data)
+	print(json.dumps(result, default=str))
 
 
 if __name__ == "__main__":
