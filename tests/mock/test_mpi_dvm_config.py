@@ -1,6 +1,6 @@
 import pathlib
 
-from util.mpi import build_mpi_command
+from util.mpi import build_mpi_command, load_service_config
 
 
 def test_explicit_empty_dvm_disables_environment_dvm(monkeypatch):
@@ -90,8 +90,6 @@ mpi-launch:
 
 
 def test_the_installed_local_manifest_leaves_transport_and_placement_to_open_mpi():
-	from util.mpi import load_service_config
-
 	command = build_mpi_command(
 		"simulator", np=2, dvm_uri="",
 		config=load_service_config(str(LOCAL_SERVICES)))
@@ -100,8 +98,6 @@ def test_the_installed_local_manifest_leaves_transport_and_placement_to_open_mpi
 
 
 def test_a_site_manifest_sets_transport_and_placement(tmp_path):
-	from util.mpi import load_service_config
-
 	site_manifest = tmp_path / "site-local-services.yaml"
 	site_manifest.write_text(SITE_TRANSPORT_AND_PLACEMENT, encoding="utf-8")
 
@@ -110,6 +106,7 @@ def test_a_site_manifest_sets_transport_and_placement(tmp_path):
 		config=load_service_config(str(site_manifest)))
 
 	assert command[command.index("--map-by") + 1] == "ppr:1:node"
+	assert command[command.index("--bind-to") + 1] == "core"
 	assert ["--mca", "btl", "self,sm"] == command[
 		command.index("btl") - 1:command.index("btl") + 2]
 	assert ["--mca", "pml", "ob1"] == command[
