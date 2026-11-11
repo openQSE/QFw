@@ -58,6 +58,9 @@ def test_settings_default_to_ideal_on_the_cpu():
 	({"device": "TPU"}, "aer device"),
 	({"target-gpus": [0]}, "target-gpus"),
 	({"shots": 10}, "unknown aer settings"),
+	({"mps-max-bond-dimension": 64}, "needs method: matrix_product_state"),
+	({"method": "statevector", "mps-truncation-threshold": 1e-10},
+	 "needs method: matrix_product_state"),
 ])
 def test_settings_refuse_what_aer_cannot_run(aer, refusal):
 	with pytest.raises(DEFwExecutionError, match=refusal):
@@ -106,6 +109,25 @@ def test_the_settings_are_published(service, monkeypatch):
 	assert (published["aer_mode"], published["aer_device"],
 		published["aer_method"]) == ("noisy", "CPU", "statevector")
 	assert published["num_qubits"] == 2
+
+
+MPS_SETTINGS = {
+	"method": "matrix_product_state", "mps-max-bond-dimension": 64,
+	"mps-truncation-threshold": 1e-10}
+
+
+def test_the_mps_settings_are_published(service, monkeypatch):
+	service(device_file=True, mode="noisy", **MPS_SETTINGS)
+	published = {}
+	qpm = QPM(start=False)
+	monkeypatch.setattr(
+		qpm, "query_helper",
+		lambda *args, properties: published.update(properties))
+
+	qpm.query()
+
+	assert published["aer_mps_max_bond_dimension"] == 64
+	assert published["aer_mps_truncation_threshold"] == 1e-10
 
 
 def test_telemetry_publishes_the_device_records(service):
@@ -158,6 +180,22 @@ def test_the_runner_gets_the_settings(service, monkeypatch):
 	assert "--device GPU" in command
 	assert "--target-gpus 0 1" in command
 	assert "--device-id" in command
+
+
+def test_the_runner_gets_the_mps_settings(service, monkeypatch):
+	command = QRC(start=False).form_cmd(
+		_circuit(service, monkeypatch, mode="noisy", **MPS_SETTINGS), "c.qasm")
+
+	assert "--mps-max-bond-dimension 64" in command
+	assert "--mps-truncation-threshold 1e-10" in command
+
+
+def test_the_runner_leaves_the_mps_settings_to_aer_by_default(
+		service, monkeypatch):
+	command = QRC(start=False).form_cmd(
+		_circuit(service, monkeypatch, method="matrix_product_state"), "c.qasm")
+
+	assert "--mps-" not in command
 
 
 def test_the_runner_runs_on_one_rank_whatever_the_circuit_asks(

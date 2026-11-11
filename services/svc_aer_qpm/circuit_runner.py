@@ -8,11 +8,16 @@ from device import fake_backend_from_ibm_records, ibm_device_records
 
 
 def aer_simulator(mode="ideal", device_id=None, device="CPU",
-		  method="automatic", max_memory_mb=0, target_gpus=()):
+		  method="automatic", max_memory_mb=0, target_gpus=(),
+		  mps_max_bond_dimension=None, mps_truncation_threshold=None):
 	options = {"method": method, "device": device,
 		   "max_memory_mb": max_memory_mb}
 	if target_gpus:
 		options["target_gpus"] = list(target_gpus)
+	if mps_max_bond_dimension is not None:
+		options["matrix_product_state_max_bond_dimension"] = mps_max_bond_dimension
+	if mps_truncation_threshold is not None:
+		options["matrix_product_state_truncation_threshold"] = mps_truncation_threshold
 	if mode == "noisy":
 		backend = fake_backend_from_ibm_records(*ibm_device_records(device_id))
 		return AerSimulator.from_backend(backend, **options)
@@ -42,13 +47,17 @@ def main():
 	parser.add_argument("--method", default="automatic")
 	parser.add_argument("--max-memory-mb", type=int, default=0)
 	parser.add_argument("--target-gpus", type=int, nargs="*", default=())
+	parser.add_argument("--mps-max-bond-dimension", type=int)
+	parser.add_argument("--mps-truncation-threshold", type=float)
 	args = parser.parse_args()
 	with open(args.qasm_file, encoding="utf-8") as stream:
 		qasm = stream.read()
 	counts = sample_counts(
 		qasm, args.shots, args.seed, mode=args.mode, device_id=args.device_id,
 		device=args.device, method=args.method,
-		max_memory_mb=args.max_memory_mb, target_gpus=args.target_gpus)
+		max_memory_mb=args.max_memory_mb, target_gpus=args.target_gpus,
+		mps_max_bond_dimension=args.mps_max_bond_dimension,
+		mps_truncation_threshold=args.mps_truncation_threshold)
 	print(json.dumps({"counts": counts}))
 
 

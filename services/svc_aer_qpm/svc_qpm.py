@@ -64,6 +64,8 @@ class QPM(UTIL_QPM):
 			"aer_device": self.settings.device,
 			"aer_method": self.settings.method,
 		})
+		for name, value in self.mps_settings().items():
+			properties[f"aer_{name}"] = value
 		if self.device:
 			properties["device_id"] = self.device
 		info = self.query_helper(
@@ -83,8 +85,15 @@ class QPM(UTIL_QPM):
 			"method": self.settings.method,
 			"max_memory_mb": self.settings.max_memory_mb,
 			"target_gpus": list(self.settings.target_gpus),
+			**self.mps_settings(),
 		}
 		return info
+
+	def mps_settings(self):
+		return {name: value for name, value in (
+			("mps_max_bond_dimension", self.settings.mps_max_bond_dimension),
+			("mps_truncation_threshold", self.settings.mps_truncation_threshold),
+		) if value is not None}
 
 	def get_backend_info(self, lib=None, token=None, reservation_id=None):
 		if not self.device:

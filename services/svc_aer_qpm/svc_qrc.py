@@ -41,6 +41,9 @@ class QRC(UTIL_QRC):
 			executable_args.extend(['--device-id', aer["device_id"]])
 		if aer.get("target_gpus"):
 			executable_args.extend(['--target-gpus', *aer["target_gpus"]])
+		for name in ("mps_max_bond_dimension", "mps_truncation_threshold"):
+			if aer.get(name) is not None:
+				executable_args.extend(['--' + name.replace('_', '-'), aer[name]])
 		if info.get("seed_simulator") is not None:
 			executable_args.extend(['--seed', info["seed_simulator"]])
 

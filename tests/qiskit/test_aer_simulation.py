@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import math
 import pathlib
 import sys
@@ -134,6 +135,29 @@ def test_the_method_setting_reaches_aer():
 	sim = circuit_runner.aer_simulator(method="matrix_product_state")
 
 	assert sim.options.method == "matrix_product_state"
+
+
+def test_the_mps_settings_reach_aer():
+	sim = circuit_runner.aer_simulator(
+		method="matrix_product_state", mps_max_bond_dimension=64,
+		mps_truncation_threshold=1e-10)
+
+	assert sim.options.matrix_product_state_max_bond_dimension == 64
+	assert sim.options.matrix_product_state_truncation_threshold == 1e-10
+
+
+def test_a_bond_dimension_of_one_keeps_one_branch_of_a_ghz_state(
+		tmp_path, monkeypatch, capsys):
+	qasm_file = tmp_path / "ghz.qasm"
+	qasm_file.write_text(_ghz(4))
+	monkeypatch.setattr(sys, "argv", [
+		"circuit_runner", "--qasm-file", str(qasm_file), "--shots", "200",
+		"--seed", "1", "--method", "matrix_product_state",
+		"--mps-max-bond-dimension", "1"])
+
+	circuit_runner.main()
+
+	assert json.loads(capsys.readouterr().out) == {"counts": {"0000": 200}}
 
 
 def test_matrix_product_state_runs_a_circuit_too_wide_for_statevector():
