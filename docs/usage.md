@@ -1183,12 +1183,11 @@ they describe the QPM the reservation names.
 
 #### Proxy Sampler
 
-`QFwBackend(provider="proxy")` samples circuits too wide for statevector or
-density-matrix noisy simulation (50 to 100 qubits). Each shot's ideal outcome
-comes from an efficient source (outcomes recorded on the circuit, ffsim, Pauli
-rotation programs, then Aer statevector and matrix product state), and the
-device's calibrated Pauli-frame gate and idle errors and asymmetric readout
-error are applied on top. One service emulates one device, named by its
+`QFwBackend(provider="proxy")` samples noisy circuits too wide for
+density-matrix or noisy statevector simulation. Each shot's ideal outcome comes
+from the first source that can produce it: outcomes recorded on the circuit,
+ffsim, Pauli rotation programs, then Aer statevector and matrix product state.
+The device's calibrated noise is applied on top. One service emulates one device, named by its
 `device-id`, a `qiskit_ibm_runtime.fake_provider` class such as `FakeFez`
 (`proxy-fez` in the local manifest). Its telemetry is the IBM
 `static_architecture` and `backend_properties`, so `backend.target` is the
@@ -1196,13 +1195,34 @@ device. A qubit with no published T1 or T2 gets the maximum idle error.
 
 | Setting or option | Effect |
 | --- | --- |
-| `QFW_PROXY_MAX_MEMORY_MB` (default 4096) | Memory limit of the ideal source. A circuit no source holds within it fails with `AerMemoryRefused` in the circuit's error; there is no other fallback |
+| `QFW_PROXY_MAX_MEMORY_MB` (default 4096) | Memory limit of the Aer sources. A circuit Aer cannot hold within it fails with `AerMemoryRefused` in the circuit's error. ffsim's state vector is not limited |
 | `seed_simulator` run option | Fixes the ideal draws and the noise draws together |
 | `circuit.metadata["qfw_logical_circuit"] = logical` | The pre-compilation circuit. The ideal outcomes come from it and the noise from the compiled circuit. It is sent beside the circuit as `info["logical_circuit"]`, in the same `{format, data}` envelope as `info["circuit"]` |
 | `backend.run(state, bases={"physical": [...], "bases": ["XZ", ...], "shots": [...]})` | One record per basis from one prepared state, in the result's `metadata["bases"]` |
 
 The error budget of each circuit (`fidelity`, `events_per_shot`, `gates_2q`,
 the ideal source used) is in the result's `metadata["diagnostics"]`.
+
+A noisy shot is its ideal outcome with the X part of a Pauli frame applied,
+the frame carried from each error to the measurement, as in Stim's frame
+sampling ([Gidney 2021](https://doi.org/10.22331/q-2021-07-06-497)):
+
+| Error | Model |
+| --- | --- |
+| Gate | A uniformly random non-identity Pauli with probability (d + 1)/d times the calibrated average gate error |
+| Idle (`delay` only) | The Pauli-twirled T1 and T2 channel. Gaps in an unscheduled circuit add no error |
+| Readout | Each bit flips with the qubit's calibrated p(1\|0) and p(0\|1) |
+| Events per shot | Poisson, with the circuit's expected number of errors |
+
+The frame passes through Clifford gates exactly, so a Clifford circuit's
+samples follow its noisy distribution under this model. Through `rz`, `rx`,
+`ry` and `rzz` by θ, a frame Pauli P that anticommutes with the rotation
+becomes cos θ P + sin θ P′, which the sampler replaces by P′ with probability
+sin² θ. That is the Pauli twirling approximation
+([Geller and Zhou 2013](https://doi.org/10.1103/PhysRevA.88.012314)), which
+drops the coherent cross term. Any other non-Clifford gate randomises the frame
+on its qubits. Amplitude damping during gates and coherent gate errors are not
+modelled.
 
 #### Application Output
 
