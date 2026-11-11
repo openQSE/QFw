@@ -1,6 +1,5 @@
-# mqt.core.mlir binds Qiskit's C API per minor release and accepts only the
-# 2.5 series, so this pin tracks the Qiskit the MQT compiler was built for.
-qiskit==2.5.2
+# Pin a Qiskit minor supported by MQT Core's native compiler.
+qiskit==2.6.2
 qiskit_aer==0.17.2
 qiskit-algorithms
 qiskit-optimization
