@@ -582,6 +582,20 @@ services:
       type: mpi
       wrapper: null
 
+  - name: aer
+    module: svc_aer_qpm
+    load-modules: svc_aer_qpm,api_launcher
+    agent-prefix: qpm_aer
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    aer:
+      mode: ideal
+      device: CPU
+      num-qubits: 30
+    provider-launch:
+      type: mpi
+
   - name: fake-iqm
     module: svc_fake_iqm_qpm
     load-modules: svc_fake_iqm_qpm,api_launcher
@@ -604,6 +618,30 @@ placement, assigned-host fields, ports, and device ID. Simulator launch code
 also consumes `provider-launch.wrapper`. The packaged `agent-prefix` and
 `provider-launch.type` fields are reserved metadata and do not currently alter
 launch behavior.
+
+The `aer` service reads its own `aer` block:
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `mode` | `ideal` runs noiselessly. `noisy` emulates the service's `device-id` under its noise model. | `ideal` |
+| `device` | `CPU` or `GPU`, as Aer's `device` option. | `CPU` |
+| `method` | An Aer simulation method. | `automatic` |
+| `max-memory-mb` | Aer's memory limit; 0 lets Aer decide. | `0` |
+| `target-gpus` | The GPU ids to use, with `device: GPU`. | all |
+| `num-qubits` | The width when there is no `device-id`. | none |
+
+`device-id` names a `qiskit-ibm-runtime` `fake_provider` class, such as
+`FakeFez`, or a JSON file `{"configuration": ..., "properties": ...}` of raw IBM
+records. With one, the service describes that device and clients transpile for
+it, in either mode. The service publishes `aer_mode`, `aer_device` and
+`aer_method` in its properties. It refuses to start when `device: GPU` is set
+and its host's Aer has no GPU, and a circuit runner without one fails rather
+than run on the CPU.
+
+GPU needs a GPU build of Aer in place of `qiskit-aer`, and QFw pins
+`qiskit_aer==0.17.2`. PyPI has `qiskit-aer-gpu-cu11==0.17.2` (CUDA 11, x86_64
+Linux) but no `qiskit-aer-gpu` (CUDA 12) 0.17.2. Elsewhere, build Aer 0.17.2
+from source with `-DAER_THRUST_BACKEND=CUDA`.
 
 </details>
 
