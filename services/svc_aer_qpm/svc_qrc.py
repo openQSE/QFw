@@ -46,7 +46,9 @@ class QRC(UTIL_QRC):
 		return build_mpi_command_string(
 			sys.executable,
 			executable_args=executable_args,
-			np=info["np"],
+			# The pip wheels of qiskit-aer are not built with MPI, so every
+			# further rank would run the whole circuit again.
+			np=1,
 			hosts=info.get("hosts", None),
 			dvm_uri=dvm
 		)

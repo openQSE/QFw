@@ -159,6 +159,16 @@ def test_the_runner_gets_the_settings(service, monkeypatch):
 	assert "--device-id" in command
 
 
+def test_the_runner_runs_on_one_rank_whatever_the_circuit_asks(
+		service, monkeypatch):
+	circuit = _circuit(service, monkeypatch)
+	circuit.info["np"] = 4
+
+	command = QRC(start=False).form_cmd(circuit, "c.qasm")
+
+	assert "--np 1 " in command
+
+
 def test_the_runner_gets_the_job_seed(service, monkeypatch):
 	command = QRC(start=False).form_cmd(
 		_circuit(service, monkeypatch, seed=7), "c.qasm")
