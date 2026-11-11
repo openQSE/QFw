@@ -578,8 +578,8 @@ def test_a_slurm_service_runs_in_the_foreground_of_an_srun_step(
     state = service_plane.start(args)
 
     step = steps[0]
-    assert step.launch[:6] == [
-        "srun", "--overlap", "--nodes=1", "--ntasks=1",
+    assert step.launch[:7] == [
+        "srun", "--overlap", "--mem=0", "--nodes=1", "--ntasks=1",
         "--nodelist", "directory-a"]
     assert "--background" not in step.launch
     assert state["components"]["directory"]["step"]["pid"] == step.pid
@@ -588,38 +588,6 @@ def test_a_slurm_service_runs_in_the_foreground_of_an_srun_step(
     service_plane.stop(tmp_path / "dir-run")
 
     assert step.returncode == 0
-
-
-@pytest.mark.parametrize("cpus_per_node, node, expected", [
-    ("64", "directory-a", ["--cpus-per-task=64"]),
-    ("64(x2)", "directory-a", []),
-    (None, "directory-a", []),
-])
-def test_a_held_step_asks_for_the_jobs_cpus_on_its_node(
-        tmp_path, monkeypatch, cpus_per_node, node, expected):
-    if cpus_per_node is None:
-        monkeypatch.delenv("SLURM_JOB_CPUS_PER_NODE", raising=False)
-    else:
-        monkeypatch.setenv("SLURM_JOB_CPUS_PER_NODE", cpus_per_node)
-    launches = []
-
-    def start_step(launch, env, step_log):
-        launches.append(launch)
-        return HeldStep(launch)
-
-    monkeypatch.setattr(service_plane, "_start_step", start_step)
-    allocation = dict(SLURM_ALLOCATION, group0=["directory-a"])
-
-    service_plane._launch(
-        {"pid_file": str(tmp_path / "pid")}, node, ["service"], "--background",
-        {}, allocation, lambda: True, 1, "service")
-
-    assert launches[0][6:] == [*expected, "service"]
-
-
-def test_cpu_counts_expand_slurms_repeat_notation():
-    assert service_plane._expand_cpu_counts("72(x2),36") == [72, 72, 36]
-    assert service_plane._expand_cpu_counts("") is None
 
 
 def test_a_service_whose_srun_step_ends_during_startup_is_named(
