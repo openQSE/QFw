@@ -639,8 +639,17 @@ records. With one, the service describes that device and clients transpile for
 it, in either mode. The service publishes `aer_mode`, `aer_device` and
 `aer_method` in its properties, and `aer_mps_max_bond_dimension`,
 `aer_mps_truncation_threshold` and `aer_mps_log_data` when they are set. A
-Qiskit result's `metadata["diagnostics"]` holds Aer's metadata for the
-circuit.
+QFw result keeps Aer's metadata for each circuit in
+`result.data(circuit)["metadata"]["diagnostics"]`, not in
+`result.results[0].metadata`. The service refuses to start when
+`device: GPU` is set and its host's Aer has no GPU, and a circuit runner
+without one fails rather than run on the CPU.
+
+Noisy mode runs only the device's basis gates, so circuits must be transpiled
+for the target the service publishes. A circuit Aer cannot run fails with
+Aer's reason, such as `aer: AerError: 'unknown instruction: h'`. A service
+whose `aer` block it refuses does not start, and `qfw-setup` reports only a
+readiness timeout. The reason is in the QPM's `defw_py.log`.
 
 The runner is one MPI rank that uses Aer's threads. Unless `mpi-launch` sets
 `bind-to`, the service starts it with `--bind-to none`, so Open MPI does not
@@ -661,9 +670,7 @@ services:
     aer:
       mode: noisy
       method: matrix_product_state
-``` It refuses to start when `device: GPU` is set
-and its host's Aer has no GPU, and a circuit runner without one fails rather
-than run on the CPU.
+```
 
 GPU needs a GPU build of Aer in place of `qiskit-aer`, and QFw pins
 `qiskit_aer==0.17.2`. PyPI has `qiskit-aer-gpu-cu11==0.17.2` (CUDA 11, x86_64
