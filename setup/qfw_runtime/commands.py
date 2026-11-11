@@ -167,12 +167,13 @@ def qfw_target(argv):
     env, _allocation = _application_run_environment(args.run_dir)
     if env is None:
         return 1
-    # On this node, not through srun: the query is one DEFw client.
-    command = [
-        str(_command_path("defw-python", env=env)),
-        str(_target_query_script()),
-        *query_args,
-    ]
+    return _run_on_this_node_without_srun(
+        [str(_command_path("defw-python", env=env)),
+         str(_target_query_script()), *query_args],
+        env)
+
+
+def _run_on_this_node_without_srun(command, env):
     return subprocess.run(command, env=env).returncode
 
 

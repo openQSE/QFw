@@ -11,6 +11,8 @@ import json
 import sys
 import types
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "setup"))
 sys.path.insert(0, str(_REPO_ROOT / "services"))
@@ -170,8 +172,13 @@ def test_qfw_srun_takes_run_variables_from_its_own_run(tmp_path, monkeypatch):
         assert name not in env
 
 
+@pytest.fixture
+def backends_on_pythonpath(monkeypatch):
+    monkeypatch.syspath_prepend(str(_REPO_ROOT / "backends"))
+
+
 def test_qfw_target_queries_on_this_node_with_the_run_environment(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, backends_on_pythonpath):
     run_dir = tmp_path / "run"
     _site_only_state(run_dir)
     _set_environment(
@@ -190,9 +197,6 @@ def test_qfw_target_queries_on_this_node_with_the_run_environment(
     monkeypatch.setattr(commands, "_resolve_host_address",
                         lambda host: "10.0.0.4")
     monkeypatch.setattr(commands.subprocess, "run", fake_run)
-    # qfw-activate puts the backends on PYTHONPATH.
-    monkeypatch.syspath_prepend(
-        str(Path(__file__).resolve().parents[1] / "backends"))
 
     assert commands.qfw_target([
         "--run-dir", str(run_dir), "--provider", "aer"]) == 0

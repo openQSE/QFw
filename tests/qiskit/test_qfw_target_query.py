@@ -1,6 +1,3 @@
-# target_from_json against a real IBM device's raw records, as a QPM that
-# describes FakeFez publishes them, after a round trip through the document's
-# JSON text.
 import importlib.util
 import json
 import pathlib
@@ -17,9 +14,7 @@ PACKAGE = REPO_ROOT / "backends" / "qfw_qiskit"
 FEZ = pathlib.Path(fake_provider.__file__).parent / "backends" / "fez"
 
 
-def _load(name):
-	# Importing the qfw_qiskit package starts the DEFw client, so its modules
-	# are loaded from their files.
+def _load_from_file(name):
 	spec = importlib.util.spec_from_file_location(
 		f"qfw_qiskit.{name}", PACKAGE / f"{name}.py")
 	module = importlib.util.module_from_spec(spec)
@@ -28,12 +23,16 @@ def _load(name):
 	return module
 
 
-sys.modules.setdefault("qfw_qiskit", types.ModuleType("qfw_qiskit"))
-_load("qfw_target")
-target_query = _load("qfw_target_query")
+@pytest.fixture(scope="module")
+def target_query_without_starting_defw():
+	sys.modules.setdefault("qfw_qiskit", types.ModuleType("qfw_qiskit"))
+	_load_from_file("qfw_target")
+	return _load_from_file("qfw_target_query")
 
 
-def test_a_device_document_round_trips_to_the_device_target():
+def test_a_device_document_round_trips_to_the_device_target(
+		target_query_without_starting_defw):
+	target_query = target_query_without_starting_defw
 	configuration = json.loads((FEZ / "conf_fez.json").read_text())
 	properties = json.loads((FEZ / "props_fez.json").read_text())
 	document = {

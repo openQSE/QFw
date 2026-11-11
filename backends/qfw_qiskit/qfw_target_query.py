@@ -1,8 +1,3 @@
-"""qfw-target: what a QPM says about its device, read without reserving it.
-
-Run through the qfw-target command, which gives it the run's DEFw
-environment. The document it prints is what target_from_json() reads back.
-"""
 import argparse
 import json
 import sys
@@ -17,7 +12,6 @@ RECORDS = (
 
 
 def target_document(resolved, telemetry, lib=None):
-	"""The versioned document for the resolved QPM and its telemetry."""
 	settings = dict(resolved.properties or {})
 	document = {
 		"schema": SCHEMA,
@@ -38,15 +32,7 @@ def target_document(resolved, telemetry, lib=None):
 
 
 def target_from_json(document):
-	"""The Qiskit Target the document's device records describe, built as
-	QFwBackend builds it.
-
-	document is a qfw-target-v1 dict or its JSON text. A QPM without device
-	metadata gets QFw's generic target at the QPM's published num_qubits,
-	where QFwBackend uses its own num_qubits argument.
-	"""
-	from qfw_qiskit.qfw_target import (
-		QFW_NUM_QUBITS, build_device_target, build_qfw_target)
+	from qfw_qiskit.qfw_target import build_device_target
 	if isinstance(document, (str, bytes)):
 		document = json.loads(document)
 	if document.get("schema") != SCHEMA:
@@ -57,7 +43,11 @@ def target_from_json(document):
 		document.get("coupling_graph"), document.get("calibration"))
 	if target is not None:
 		return target
-	settings = document.get("settings") or {}
+	return generic_target_at_published_width(document.get("settings") or {})
+
+
+def generic_target_at_published_width(settings):
+	from qfw_qiskit.qfw_target import QFW_NUM_QUBITS, build_qfw_target
 	return build_qfw_target(
 		int(settings.get("num_qubits") or QFW_NUM_QUBITS),
 		settings.get("instructions"))
