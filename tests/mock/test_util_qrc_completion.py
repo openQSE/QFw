@@ -161,3 +161,19 @@ def test_circuit_time_limit_comes_from_the_site_file(tmp_path):
 		site.write_text(f"qpm:\n  circuit-time-limit-seconds: {bad}\n")
 		with pytest.raises(ValueError):
 			circuit_time_limit(str(site))
+
+
+def test_a_services_own_circuit_time_limit_overrides_the_site_file(tmp_path):
+	from util.qpm.util_qrc import circuit_time_limit
+
+	site = tmp_path / "site.yaml"
+	site.write_text("qpm:\n  circuit-time-limit-seconds: 30\n")
+	aer = {"name": "aer", "circuit-time-limit-seconds": 7200}
+
+	assert circuit_time_limit(str(site), service=aer) == 7200
+	assert circuit_time_limit(
+		str(site), service=dict(aer, **{"circuit-time-limit-seconds": 0})) is None
+	assert circuit_time_limit(str(site), service={"name": "aer"}) == 30
+	with pytest.raises(ValueError, match=r"services\[aer\]"):
+		circuit_time_limit(
+			str(site), service=dict(aer, **{"circuit-time-limit-seconds": -1}))
