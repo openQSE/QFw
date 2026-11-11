@@ -25,6 +25,12 @@ The role managers use a private runtime module when a DEFw process must be
 started on another node. Applications and administrators use only the public
 lifecycle commands above.
 
+Inside a Slurm allocation, each service, the directory service and the PRTE DVM
+runs in the foreground of its own `srun --overlap` step. Slurm with
+`proctrack/cgroup` ends every process of a step when the step ends, so a step
+lasts as long as its service. Teardown stops the service and then ends the
+step. `step.log` beside the component's pid file holds the step's output.
+
 ## Application Runtime Directory
 
 `qfw-setup` creates one directory for one logical application run. Several
