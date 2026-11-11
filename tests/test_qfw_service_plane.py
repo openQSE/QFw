@@ -24,6 +24,47 @@ def process_identity(pid):
     }
 
 
+SLURM_ALLOCATION = {
+    "mode": "slurm",
+    "group0": ["directory-a"],
+    "group1": ["qpm-a"],
+    "group0_nodelist": "directory-a",
+    "group1_nodelist": "qpm-a",
+}
+
+
+class HeldStep:
+    pids = iter(range(4100, 4200))
+
+    def __init__(self, launch, returncode=None):
+        self.launch = list(launch)
+        self.pid = next(self.pids)
+        self.returncode = returncode
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.returncode = 0
+        return 0
+
+
+def hold_steps(monkeypatch):
+    steps = []
+
+    def start_step(launch, env, step_log):
+        pid_file = Path(launch[launch.index("--pid-file") + 1])
+        ready_file = Path(launch[launch.index("--ready-file") + 1])
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text("3101\n", encoding="utf-8")
+        ready_file.write_text('{"ready": true}\n', encoding="utf-8")
+        steps.append(HeldStep(launch))
+        return steps[-1]
+
+    monkeypatch.setattr(service_plane, "_start_step", start_step)
+    return steps
+
+
 def write_site_configuration(tmp_path, services):
     manifest = tmp_path / "services.yaml"
     manifest.write_text(
@@ -484,18 +525,7 @@ def test_directory_lifecycle_publishes_connection_record(
     ])
     runtime = tmp_path / "site-runtime.yaml"
     runtime.write_text("resolver:\n  scope-order:\n    - site\n")
-    calls = []
-
-    def fake_run_on_node(node, command, env, allocation, check=True):
-        calls.append((node, list(command)))
-        pid_file = Path(command[command.index("--pid-file") + 1])
-        ready_file = Path(command[command.index("--ready-file") + 1])
-        pid_file.parent.mkdir(parents=True, exist_ok=True)
-        pid_file.write_text("3101\n", encoding="utf-8")
-        ready_file.write_text('{"ready": true}\n', encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0)
-
-    monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
+    hold_steps(monkeypatch)
     monkeypatch.setattr(
         service_plane, "_read_process_identity",
         lambda pid, *_args: process_identity(pid))
@@ -524,6 +554,108 @@ def test_directory_lifecycle_publishes_connection_record(
     service_plane.stop(tmp_path / "dir-run")
     connection = json.loads(connection_file.read_text(encoding="utf-8"))
     assert connection["ready"] is False
+
+
+def test_a_slurm_service_runs_in_the_foreground_of_an_srun_step(
+        tmp_path, monkeypatch):
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text("resolver:\n  scope-order:\n    - site\n")
+    steps = hold_steps(monkeypatch)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda pid, *_args: process_identity(pid))
+    monkeypatch.setattr(service_plane, "_terminate_pid", lambda *args: None)
+    monkeypatch.setattr(
+        service_plane, "_allocation_context", lambda: SLURM_ALLOCATION)
+    args = parse_role_start_args(
+        "directory", "--run-dir", str(tmp_path / "dir-run"),
+        "--site-config", str(site), "--runtime-config", str(runtime),
+        "--node", "directory-a")
+
+    state = service_plane.start(args)
+
+    step = steps[0]
+    assert step.launch[:6] == [
+        "srun", "--overlap", "--nodes=1", "--ntasks=1",
+        "--nodelist", "directory-a"]
+    assert "--background" not in step.launch
+    assert state["components"]["directory"]["step"]["pid"] == step.pid
+    assert step.returncode is None
+
+    service_plane.stop(tmp_path / "dir-run")
+
+    assert step.returncode == 0
+
+
+def test_a_service_whose_srun_step_ends_during_startup_is_named(
+        tmp_path, monkeypatch):
+    def ended_step(launch, env, step_log):
+        step_log.write_text("srun: error: Unable to create step\n")
+        return HeldStep(launch, returncode=1)
+
+    monkeypatch.setattr(service_plane, "_start_step", ended_step)
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    with pytest.raises(
+            service_plane.ServicePlaneError,
+            match="ended with its srun step, status 1: srun: error: Unable"):
+        service_plane._launch(
+            record, "c1", ["service"], "--background", {}, SLURM_ALLOCATION,
+            lambda: False, 1, "directory service d")
+
+
+def test_a_held_step_outlives_its_launch_until_it_is_ended(
+        tmp_path, monkeypatch):
+    fake_srun = tmp_path / "bin" / "srun"
+    fake_srun.parent.mkdir()
+    fake_srun.write_text(
+        "#!/bin/sh\n"
+        "while [ \"${1#-}\" != \"$1\" ]; do\n"
+        "  case \"$1\" in --nodelist) shift 2 ;; *) shift ;; esac\n"
+        "done\n"
+        "exec \"$@\"\n")
+    fake_srun.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_srun.parent}{os.pathsep}{os.environ['PATH']}")
+    ready_file = tmp_path / "ready"
+    service = [
+        sys.executable, "-c",
+        "import pathlib, sys, time\n"
+        "pathlib.Path(sys.argv[1]).write_text('ready')\n"
+        "time.sleep(600)\n",
+        str(ready_file)]
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    service_plane._launch(
+        record, "c1", service, "--background", os.environ.copy(),
+        SLURM_ALLOCATION, ready_file.exists, 10, "held service")
+    step = service_plane._STEPS[record["step"]["pid"]]
+    time.sleep(0.5)
+
+    assert step.poll() is None
+    monkeypatch.setattr(service_plane, "TERMINATE_TIMEOUT_SECONDS", 0.5)
+    service_plane._end_step(record)
+    assert step.poll() is not None
+
+
+def test_a_local_service_still_detaches_without_srun(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run_on_node(node, command, env, allocation, check=True):
+        calls.append(list(command))
+
+    monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
+    monkeypatch.setattr(service_plane, "_start_step", pytest.fail)
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    service_plane._launch(
+        record, "c1", ["service"], "--background", {}, {"mode": "local"},
+        lambda: True, 1, "local service")
+
+    assert calls == [["service", "--background"]]
+    assert "step" not in record
 
 
 def test_stale_directory_connection_record_is_replaced(tmp_path, monkeypatch):

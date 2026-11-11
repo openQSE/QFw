@@ -24,6 +24,10 @@ SCHEMA = "qfw-service-plane-v1"
 STATE_NAME = "service-plane.json"
 ENV_NAME = "qfw-service-env.sh"
 TERMINATE_TIMEOUT_SECONDS = 10
+STEP_START_GRACE_SECONDS = 60
+SLURM_MODES = frozenset({"slurm", "heterogeneous"})
+STEP_LOG_TAIL_LINES = 5
+_STEPS = {}
 
 
 class ServicePlaneError(RuntimeError):
@@ -673,10 +677,9 @@ def _start_prte(state, timeout, service_environment=None):
         if os.geteuid() == 0:
             command.append("--allow-run-as-root")
         command.extend(["--keepalive", "0"])
-        command.append("--daemonize")
-        _run_on_node(dvm["launch_node"], command, process_environment,
-                     state["allocation"])
-        _wait_for(
+        _launch(
+            record, dvm["launch_node"], command, "--daemonize",
+            process_environment, state["allocation"],
             lambda: (
                 uri_path.exists() and uri_path.stat().st_size > 0
                 and pid_file.exists() and pid_file.stat().st_size > 0
@@ -721,7 +724,6 @@ def _start_directory(state, timeout):
         command = [
             sys.executable or "python3",
             "-m", "qfw_runtime._process_launcher", "directory",
-            "--background",
             "--site-config", state["configuration"]["site_config"],
             "--run-dir", state["run_dir"],
             "--name", name,
@@ -732,8 +734,11 @@ def _start_directory(state, timeout):
             "--pid-file", str(pid_file),
             "--ready-file", str(ready_file),
         ]
-        _run_on_node(directory["target"], command, os.environ.copy(),
-                     state["allocation"])
+        _launch(
+            record, directory["target"], command, "--background",
+            os.environ.copy(), state["allocation"],
+            lambda: _launched_service_ready(pid_file, ready_file), timeout,
+            f"directory service {name}")
         record["pid"] = _read_pid(pid_file)
         record["process_identity"] = _require_process_identity(
             record["pid"], record.get("node"), state["allocation"])
@@ -787,7 +792,6 @@ def _start_qpm(state, service, timeout, service_environment=None):
         command = [
             sys.executable or "python3",
             "-m", "qfw_runtime._process_launcher", "qpm",
-            "--background",
             "--run-dir", state["run_dir"],
             "--service-id", service_id,
             "--manifest-service-name", service["manifest_service_name"],
@@ -801,7 +805,11 @@ def _start_qpm(state, service, timeout, service_environment=None):
             "--pid-file", str(pid_file),
             "--ready-file", str(ready_file),
         ]
-        _run_on_node(service["target"], command, env, state["allocation"])
+        _launch(
+            record, service["target"], command, "--background", env,
+            state["allocation"],
+            lambda: _launched_service_ready(pid_file, ready_file), timeout,
+            f"QPM service {service_id}")
         record["pid"] = _read_pid(pid_file)
         record["process_identity"] = _require_process_identity(
             record["pid"], record.get("node"), state["allocation"])
@@ -967,6 +975,7 @@ def _stop_components(state):
                     _terminate_pid(
                         int(component["pid"]), component.get("node"),
                         state["allocation"])
+                _end_step(component)
             _discard_component_control_files(component)
             component["ready"] = False
             component["state"] = "stopped"
@@ -1014,6 +1023,7 @@ def _stop_prte(component, state, environment=None):
             _terminate_pid(
                 int(component["pid"]), component.get("node"),
                 state["allocation"])
+        _end_step(component)
     finally:
         _discard_component_control_files(component)
 
@@ -1189,6 +1199,97 @@ def _ready_file(path):
         return False
 
 
+def _launched_service_ready(pid_file, ready_file):
+    return pid_file.exists() and _ready_file(ready_file)
+
+
+def _launch(record, node, command, detach_flag, env, allocation, ready,
+            timeout, description):
+    if allocation.get("mode") not in SLURM_MODES:
+        _run_on_node(node, [*command, detach_flag], env, allocation)
+        _wait_for(ready, timeout, description)
+        return
+    step_log = Path(record["pid_file"]).with_name("step.log")
+    step = _start_step(_node_launch(node, command, allocation), env, step_log)
+    _STEPS[step.pid] = step
+    record["step"] = {
+        "pid": step.pid,
+        "host": socket.gethostname(),
+        "log": str(step_log),
+        "process_identity": _local_step_identity(step.pid),
+    }
+
+    def step_ready():
+        if step.poll() is not None:
+            raise ServicePlaneError(
+                f"{description} ended with its srun step, status "
+                f"{step.returncode}: {_log_tail(step_log)}")
+        return ready()
+
+    _wait_for(step_ready, timeout + STEP_START_GRACE_SECONDS, description)
+
+
+def _start_step(launch, env, step_log):
+    step_log.parent.mkdir(parents=True, exist_ok=True)
+    with step_log.open("ab") as log:
+        return subprocess.Popen(
+            launch, env=env, stdin=subprocess.DEVNULL, stdout=log,
+            stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def _local_step_identity(pid):
+    try:
+        return qfw_process_state.local_process_identity(pid)
+    except qfw_process_state.ProcessProbeError:
+        return None
+
+
+def _log_tail(path):
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "no step log"
+    return " | ".join(lines.strip().splitlines()[-STEP_LOG_TAIL_LINES:])
+
+
+def _end_step(component):
+    step = component.get("step")
+    if not step:
+        return
+    child = _STEPS.pop(step["pid"], None)
+    if child is not None:
+        _end_child_step(child)
+        return
+    if step.get("host") != socket.gethostname():
+        return
+    observed = _local_step_identity(step["pid"])
+    if not qfw_process_state.identities_match(
+            step.get("process_identity"), observed):
+        return
+    _end_local_pid(step["pid"])
+
+
+def _end_child_step(child):
+    try:
+        child.wait(timeout=TERMINATE_TIMEOUT_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        child.terminate()
+    try:
+        child.wait(timeout=TERMINATE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+
+
+def _end_local_pid(pid):
+    deadline = time.monotonic() + TERMINATE_TIMEOUT_SECONDS
+    while _local_pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if _local_pid_alive(pid):
+        _terminate_pid(pid, None, {"mode": "local"})
+
+
 def _run_on_node(node, command, env, allocation, check=True):
     launch = _node_launch(node, command, allocation)
     result = subprocess.run(launch, env=env)
@@ -1206,13 +1307,13 @@ def _node_launch(node, command, allocation):
     if mode == "heterogeneous":
         group = _group_for_node(node, allocation)
         launch = [
-            "srun", f"--het-group={group}", "--nodes=1", "--ntasks=1",
-            "--nodelist", str(node), *launch,
+            "srun", f"--het-group={group}", "--overlap", "--nodes=1",
+            "--ntasks=1", "--nodelist", str(node), *launch,
         ]
     elif mode == "slurm":
         launch = [
-            "srun", "--nodes=1", "--ntasks=1", "--nodelist", str(node),
-            *launch,
+            "srun", "--overlap", "--nodes=1", "--ntasks=1",
+            "--nodelist", str(node), *launch,
         ]
     return launch
 
