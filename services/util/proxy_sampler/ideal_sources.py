@@ -1,6 +1,3 @@
-"""The chain of sources the calibrated proxy draws a circuit's ideal outcomes from: outcomes recorded on the circuit,
-ffsim, Pauli-rotation programs, then Aer (statevector or MPS)."""
-
 from __future__ import annotations
 
 import logging
@@ -31,8 +28,6 @@ Cached = TypeVar("Cached")
 
 
 def remember(cache: OrderedDict[str, Cached], key: str, value: Cached, limit: int) -> None:
-	"""Store ``value`` under ``key`` as the most recent entry, dropping the oldest beyond ``limit``."""
-
 	cache[key] = value
 	cache.move_to_end(key)
 	while len(cache) > limit:
@@ -40,15 +35,11 @@ def remember(cache: OrderedDict[str, Cached], key: str, value: Cached, limit: in
 
 
 def measured_map(circuit: Any) -> list[tuple[int, int]]:
-	"""(qubit index, clbit index) for every measurement, in circuit order."""
-
 	return [(circuit.find_bit(i.qubits[0]).index, circuit.find_bit(i.clbits[0]).index)
 			for i in circuit.data if i.operation.name == "measure"]
 
 
 def on_active_qubits(circuit: Any) -> tuple[Any, list[int]]:
-	"""Circuit on the active qubits only (delays and barriers dropped), plus the qubit order."""
-
 	active = active_qubits(circuit)
 	index = {q: k for k, q in enumerate(active)}
 	compact = QuantumCircuit(len(active), circuit.num_clbits)
@@ -62,14 +53,10 @@ def on_active_qubits(circuit: Any) -> tuple[Any, list[int]]:
 
 
 def gate_passes(circuit: Any) -> int:
-	"""The amplitude updates of simulating ``circuit`` as a statevector: one pass over its 2^n amplitudes per gate."""
-
 	return len(circuit.data) << int(circuit.num_qubits)
 
 
 def born_probabilities(amplitudes: Amplitudes) -> Floats:
-	"""The outcome probabilities of a statevector, normalised."""
-
 	probabilities = np.abs(np.asarray(amplitudes)) ** 2
 	probabilities /= probabilities.sum()
 	return probabilities
@@ -97,8 +84,6 @@ def _mid_circuit_measure(circuit: Any) -> bool:
 
 
 def _occupation_words(norb: int, nelec: int | tuple[int, int], picks: Ints) -> Ints:
-	"""The JW occupation bitstring of each picked ffsim address (alpha orbitals low, beta high when spinful)."""
-
 	import ffsim
 
 	if isinstance(nelec, int):
@@ -118,9 +103,6 @@ def _occupation_words(norb: int, nelec: int | tuple[int, int], picks: Ints) -> I
 
 @dataclass(frozen=True)
 class IdealDraw:
-	"""One request for ideal outcomes: the compiled circuit and its measurements, the logical circuit it was compiled
-	from exactly (None when absent or approximate), the shot count and the generator drawing them."""
-
 	circuit: Any
 	measured: list[tuple[int, int]]
 	logical: Any
@@ -134,19 +116,13 @@ class IdealDraw:
 
 	@property
 	def known(self) -> Any:
-		"""The ideal classical bits recorded on the circuit, None without them."""
-
 		return (getattr(self.circuit, "metadata", None) or {}).get("ideal_clbits")
 
 	def picks(self, probabilities: Floats) -> Ints:
-		"""One outcome index per shot, drawn from ``probabilities``."""
-
 		picks: Ints = self.rng.choice(len(probabilities), size=self.shots, p=probabilities)
 		return picks
 
 	def logical_bits(self, words: Ints) -> Bits:
-		"""Each shot's classical bits, read from its logical-qubit word at the logical circuit's measurements."""
-
 		bits = np.zeros((self.shots, self.logical.num_clbits), dtype=bool)
 		for qubit, clbit in measured_map(self.logical):
 			bits[:, clbit] = (words >> qubit) & 1
@@ -154,9 +130,6 @@ class IdealDraw:
 
 
 class IdealSource:
-	"""A link of the chain: draws a circuit's ideal outcomes and names its method, or hands the draw to its
-	successor."""
-
 	def __init__(self, successor: IdealSource | None) -> None:
 		self.successor = successor
 
@@ -167,8 +140,6 @@ class IdealSource:
 
 
 class KnownOutcomes(IdealSource):
-	"""The ideal bits recorded on the circuit, the same in every shot."""
-
 	def outcomes(self, draw: IdealDraw) -> tuple[Bits, str]:
 		known = draw.known
 		if known is None:
@@ -177,8 +148,6 @@ class KnownOutcomes(IdealSource):
 
 
 class FfsimStates(IdealSource):
-	"""Samples of an ffsim-native logical circuit's fermionic state, caching the states."""
-
 	def __init__(self, successor: IdealSource, states: OrderedDict[str, Any], cache_limit: int,
 				 stats: dict[str, int]) -> None:
 		super().__init__(successor)
@@ -203,15 +172,13 @@ class FfsimStates(IdealSource):
 		if state is None:
 			try:
 				state = ffsim.qiskit.final_state_vector(logical.remove_final_measurements(inplace=False))
-			except Exception:  # noqa: BLE001 - circuits ffsim cannot simulate are sampled another way
+			except Exception:  # noqa: BLE001
 				return None
 			remember(self.states, key, state, self.cache_limit)
 		return state
 
 
 class RotationPrograms(IdealSource):
-	"""Exact samples of a logical circuit of Pauli gates and exponentials, when cheaper than simulating its ISA."""
-
 	def __init__(self, successor: IdealSource, states: OrderedDict[str, Any], cache_limit: int, max_memory_mb: int,
 				 stats: dict[str, int]) -> None:
 		super().__init__(successor)
@@ -255,10 +222,6 @@ class RotationPrograms(IdealSource):
 
 
 class AerStatevectors(IdealSource):
-	"""The compiled circuit on its active qubits simulated by Aer within ``max_memory_mb`` MiB: its cached
-	statevector, or sampled shots for a mid-circuit measurement, by MPS where Aer refuses the statevector for its
-	memory; the chain's last source."""
-
 	def __init__(self, states: OrderedDict[str, Any], cache_limit: int, max_memory_mb: int,
 				 stats: dict[str, int]) -> None:
 		super().__init__(None)
@@ -266,8 +229,6 @@ class AerStatevectors(IdealSource):
 		self.max_memory_mb = max_memory_mb
 
 	def statevector(self, compact: Any) -> Amplitudes:
-		"""The statevector of a circuit on its active qubits, cached per circuit."""
-
 		unitary = compact.remove_final_measurements(inplace=False)
 		key = circuit_digest(unitary)
 		vector: Amplitudes | None = self.states.get(key)
@@ -303,9 +264,6 @@ class AerStatevectors(IdealSource):
 		return bits, "statevector"
 
 	def _shots(self, compact: Any, draw: IdealDraw, method: str = "statevector") -> tuple[Bits, str]:
-		"""``draw``'s shots of ``compact`` sampled by Aer's ``method``, by MPS where Aer refuses the statevector for its
-		memory; AerMemoryRefused when it refuses MPS too."""
-
 		seed = int(draw.rng.integers(2**31))
 		try:
 			result = aer_result(compact, method, self.max_memory_mb, shots=draw.shots, seed_simulator=seed)

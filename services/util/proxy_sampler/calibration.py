@@ -1,6 +1,3 @@
-"""A device's calibration (gate and readout errors, durations, T1/T2) and the expected error events of a circuit
-on it."""
-
 from __future__ import annotations
 
 import logging
@@ -18,13 +15,10 @@ from .gates import VIRTUAL
 
 logger = logging.getLogger(__name__)
 
-# process infidelity per reported average gate infidelity, (d + 1) / d
 PROCESS_PER_AVERAGE = {1: 1.5, 2: 1.25}
 
 
 def delay_seconds(operation: Any, dt: float | None) -> float:
-	"""A delay's duration in seconds: ``dt`` samples times ``dt`` (0 without one), else SI-prefixed seconds."""
-
 	duration = float(operation.duration or 0)
 	if operation.unit == "dt":
 		return duration * dt if dt else 0.0
@@ -33,9 +27,6 @@ def delay_seconds(operation: Any, dt: float | None) -> float:
 
 @dataclass
 class Calibration:
-	"""A device's calibrated errors and times; a gate error, duration or readout error the backend does not report
-	is a lookup error naming the gate or qubit."""
-
 	_gate_error: dict[tuple[str, tuple[int, ...]], float]
 	_gate_duration: dict[tuple[str, tuple[int, ...]], float]
 	_coherence: dict[int, Coherence | UnknownCoherence]
@@ -65,16 +56,12 @@ class Calibration:
 		return self._coherence.get(qubit, UnknownCoherence())
 
 	def readout_flips(self, qubit: int) -> tuple[float, float]:
-		"""(p(1|0), p(0|1)): the probability a measured 0 reads 1, and a 1 reads 0."""
-
 		if qubit not in self._readout:
 			raise LookupError(f"the device reports no readout error for qubit {qubit}")
 		return self._readout[qubit]
 
 	def read_out(self, column: NDArray[np.bool_], qubit: int, rng: np.random.Generator,
 				 twirl: NDArray[np.bool_] | None) -> NDArray[np.bool_]:
-		"""``column``'s bits as ``qubit`` reads them out, each flipped with its readout error (under ``twirl``)."""
-
 		flip_up, flip_down = self.readout_flips(qubit)
 		measured = column if twirl is None else column ^ twirl
 		draws = rng.random(len(column))
@@ -86,9 +73,6 @@ class Calibration:
 		return self._dt
 
 	def implicit_idle(self, circuit: Any, idle_model: str) -> list[tuple[int, int, float]]:
-		"""(instruction index, qubit, seconds) of each gap over half a sample time in an ASAP schedule after the
-		qubit's first operation under the ``scheduled`` idle model; none under ``explicit``."""
-
 		if idle_model != "scheduled":
 			return []
 		resolution = self._dt / 2 if self._dt else 0.0
@@ -148,8 +132,6 @@ class Calibration:
 
 
 def _assignment_errors(properties: Any, qubit: int) -> tuple[float, float] | None:
-	"""(p(1|0), p(0|1)) as the backend's properties report them for ``qubit``; None without both."""
-
 	if properties is None:
 		return None
 	try:
@@ -161,9 +143,6 @@ def _assignment_errors(properties: Any, qubit: int) -> tuple[float, float] | Non
 
 
 def error_budget(circuit: Any, calibration: Calibration, idle_model: str = "explicit") -> dict[str, float | int]:
-	"""Expected error events of the ISA circuit, total and Z-type: process infidelity r * error with r = 3/2
-	(one-qubit), 5/4 (two-qubit); Z-type fraction 1/3 and 3/15."""
-
 	logger.debug("error_budget: qubits=%d idle_model=%s", circuit.num_qubits, idle_model)
 	budget = _ErrorBudget(calibration)
 	for instruction in circuit.data:
@@ -186,8 +165,6 @@ def error_budget(circuit: Any, calibration: Calibration, idle_model: str = "expl
 
 
 class _ErrorBudget:
-	"""Running totals of error events (all, Z-type), gate counts and delays."""
-
 	def __init__(self, calibration: Calibration) -> None:
 		self.calibration = calibration
 		self.lam = self.lam_z = self.delays = 0.0

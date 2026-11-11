@@ -1,5 +1,3 @@
-"""Pauli-frame noise propagation for the calibrated proxy: a noisy shot is the ideal sample XOR its frame flips."""
-
 from __future__ import annotations
 
 import logging
@@ -24,8 +22,6 @@ FrameOp = tuple[str, tuple[int, ...], tuple[int, ...], float | None, Bits | None
 
 
 class _NoiseLocations:
-	"""Where Pauli errors can occur: each location's weight (total probability), op, rows and Pauli distribution."""
-
 	def __init__(self) -> None:
 		self.weights: list[float] = []
 		self.ops: list[int] = []
@@ -47,15 +43,12 @@ class _NoiseLocations:
 
 def _operation_entry(name: str, operation: Any, rows: tuple[int, ...], clbits: tuple[int, ...],
 					 clifford_cache: dict[str, Bits | None]) -> FrameOp:
-	"""(name, rows, clbits, rotation angle, Clifford table): the angle of a twirl-updated rotation, the table of a
-	one- or two-qubit gate outside the hand-written updates (cached per gate name)."""
-
 	param: float | None = None
 	clifford: Bits | None = None
 	if name in _TWIRL_UPDATES:
 		try:
 			param = float(operation.params[0])
-		except Exception:  # noqa: BLE001 - a parameter that is not a number is kept as None
+		except Exception:  # noqa: BLE001
 			param = None
 	elif name not in CLIFFORD_1Q and name not in ("measure", "reset", "delay", "cz", "cx", "swap"):
 		if name not in clifford_cache:
@@ -68,8 +61,6 @@ _UNIFORM_PAULIS = {1: np.full(3, 1 / 3), 2: np.full(15, 1 / 15)}
 
 
 def _gate_paulis(name: str, physical: tuple[int, ...], calibration: Calibration) -> WeightedPaulis | None:
-	"""(probability, uniform Pauli distribution) of a one- or two-qubit gate's calibrated error; None without one."""
-
 	error = calibration.gate_error(name, physical)
 	k = len(physical)
 	if error <= 0 or k > 2:
@@ -79,8 +70,6 @@ def _gate_paulis(name: str, physical: tuple[int, ...], calibration: Calibration)
 
 @dataclass
 class Program:
-	"""Pauli-frame simulation of circuit noise on qubits and clbits: Frame-propagation program of one ISA circuit."""
-
 	ops: list[FrameOp]
 	rows: int
 	width: int
@@ -129,19 +118,13 @@ class Program:
 		return cls(ops, len(active), circuit.num_clbits, *noise.arrays())
 
 	def propagate(self, shots: int, rng: np.random.Generator) -> Bits:
-		"""Outcome flips (shots x clbits)."""
-
 		return self._propagate(shots, rng, None)
 
 	def propagate_frames(self, shots: int, rng: np.random.Generator) -> tuple[Bits, Bits]:
-		"""The (x, z) frame bits (shots x clbits each) at each measurement."""
-
 		frame_z = np.zeros((shots, self.width), dtype=bool)
 		return self._propagate(shots, rng, frame_z), frame_z
 
 	def _propagate(self, shots: int, rng: np.random.Generator, frame_z: Bits | None) -> Bits:
-		"""Outcome flips (the x frame bits) at each measurement, the z frame bits written into ``frame_z`` if set."""
-
 		flips = np.zeros((shots, self.width), dtype=bool)
 		total = self.events
 		if total <= 0 or not len(self.weights):
@@ -198,7 +181,7 @@ class Program:
 def _clifford_rows(operation: Any) -> Bits | None:
 	try:
 		return np.asarray(Clifford(operation).symplectic_matrix, dtype=bool)
-	except Exception:  # noqa: BLE001 - a non-Clifford operation has no symplectic rows
+	except Exception:  # noqa: BLE001
 		return None
 
 
@@ -207,8 +190,6 @@ _PAULI_XZ = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=bool)
 
 def _conjugate(name: str, rows: tuple[int, ...], param: float | None, clifford: Bits | None, x: Bits, z: Bits,
 			   rng: np.random.Generator) -> None:
-	"""Carry the frames (x, z) through one gate: Cliffords exactly, rotations twirled, anything else depolarizes."""
-
 	if name in _FRAME_IDENTITY:
 		return
 	update = CLIFFORD_UPDATES.get(name)
@@ -287,8 +268,6 @@ def _twirl_zz(rows: tuple[int, ...], x: Bits, z: Bits, s2: float, rng: np.random
 
 
 def _apply_clifford(rows: tuple[int, ...], clifford: Bits, x: Bits, z: Bits) -> None:
-	"""Any other Clifford, from its symplectic matrix."""
-
 	k = len(rows)
 	bits = [x[r].copy() for r in rows] + [z[r].copy() for r in rows]
 	for column, r in enumerate(rows):
@@ -303,8 +282,6 @@ def _apply_clifford(rows: tuple[int, ...], clifford: Bits, x: Bits, z: Bits) -> 
 
 
 def _depolarize(rows: tuple[int, ...], x: Bits, z: Bits, rng: np.random.Generator) -> None:
-	"""A non-Clifford, non-twirlable gate: randomize the frame where it is non-trivial on these qubits."""
-
 	support = np.zeros(x.shape[1], dtype=bool)
 	for r in rows:
 		support |= x[r] | z[r]

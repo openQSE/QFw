@@ -1,6 +1,3 @@
-"""Calibrated proxy sampler: the ideal distribution (ffsim, Aer statevector or MPS) with calibrated Pauli-frame noise
-and asymmetric readout error."""
-
 from __future__ import annotations
 
 import logging
@@ -39,11 +36,8 @@ _SDG = np.array([[1, 0], [0, -1j]], dtype=complex)
 
 
 def _apply_local(vector: Amplitudes, num_qubits: int, unitaries: dict[int, Amplitudes]) -> Amplitudes:
-	"""Apply single-qubit unitaries to a little-endian statevector."""
-
 	psi = np.asarray(vector)
 	for q, m in sorted(unitaries.items()):
-		# measured: a broadcast matmul instead took 11 s per basis at 24 qubits
 		view = psi.reshape(1 << (num_qubits - 1 - q), 2, 1 << q)
 		low, high = view[:, 0, :], view[:, 1, :]
 		psi = np.stack([m[0, 0] * low + m[0, 1] * high, m[1, 0] * low + m[1, 1] * high], axis=1).reshape(-1)
@@ -52,16 +46,11 @@ def _apply_local(vector: Amplitudes, num_qubits: int, unitaries: dict[int, Ampli
 
 @dataclass(frozen=True)
 class PreparedState:
-	"""A circuit's statevector on its active qubits, with the active qubit each physical qubit is (``index``) and the
-	physical qubit each measured logical qubit is (``physical``)."""
-
 	amplitudes: Amplitudes
 	index: dict[int, int]
 	physical: list[int]
 
 	def probabilities(self, basis: str) -> Floats:
-		"""Outcome probabilities after rotating the measured qubits into ``basis``."""
-
 		n = len(basis)
 		rotation: dict[int, Amplitudes] = {}
 		for position, letter in enumerate(basis):
@@ -76,8 +65,6 @@ class PreparedState:
 								   else self.amplitudes)
 
 	def outcomes(self, picks: Ints, logical: int, letter: str, rng: np.random.Generator) -> Bits:
-		"""The sampled bit of one measured qubit in every shot."""
-
 		p = self.physical[logical]
 		if p in self.index:
 			return ((picks >> self.index[p]) & 1).astype(bool)
@@ -88,9 +75,6 @@ class PreparedState:
 
 @dataclass
 class ProxySampler:
-	"""Samples a device's circuits as their ideal outcomes with its calibrated noise, caching states and programs; Aer
-	simulates them within ``max_memory_mb`` MiB."""
-
 	backend: Any
 	max_memory_mb: int
 	idle_model: str = "explicit"
@@ -120,9 +104,6 @@ class ProxySampler:
 	def sample(self, circuit: Any, shots: int, rng: np.random.Generator, logical: Any = None,
 			   ideal_rng: np.random.Generator | None = None,
 			   twirl: Bits | None = None) -> tuple[Bits, dict[str, Any]]:
-		"""Bool matrix (shots x num_clbits) and diagnostics; ``ideal_rng`` draws ideal outcomes, ``rng`` the noise,
-		``twirl`` applies measurement twirling."""
-
 		draw = IdealDraw.of(circuit, logical, shots, ideal_rng if ideal_rng is not None else rng)
 		ideal, method = self._ideal.outcomes(draw)
 		info: dict[str, Any] = {"tier": "proxy", "ideal": method}
@@ -139,9 +120,6 @@ class ProxySampler:
 			self, isa: Any, physical: list[int], bases: list[str], shots_list: list[int],
 			rng: np.random.Generator, measure_masks: Sequence[Bits] | None = None
 	) -> list[tuple[Bits, dict[str, Any]]]:
-		"""One record per Pauli basis from one prepared state and one set of noise frames; ``measure_masks``
-		applies measurement twirling."""
-
 		logger.debug("sample_bases: bases=%d qubits=%d", len(bases), len(bases[0]))
 		n = len(bases[0])
 		base = isa.remove_final_measurements(inplace=False)
@@ -167,15 +145,10 @@ class ProxySampler:
 		return out
 
 	def prepared_state(self, compact: Any) -> Amplitudes:
-		"""The whole circuit's statevector from Aer, cached per circuit; AerMemoryRefused when it does not fit."""
-
 		return self._aer.statevector(compact)
 
 	def _basis_bits(self, state: PreparedState, basis: str, shots: int, rng: np.random.Generator,
 					frames: tuple[Bits, Bits], twirl: Bits | None) -> Bits:
-		"""One basis's shots: the state rotated into it and sampled, each outcome flipped by its Pauli frame (and
-		twirl, when set) and its readout error; idle qubits stay |0>."""
-
 		n = len(basis)
 		fx, fz = frames
 		probabilities = state.probabilities(basis)
@@ -203,7 +176,5 @@ class ProxySampler:
 		return program
 
 	def _apply_events(self, circuit: Any, ideal: Bits, rng: np.random.Generator) -> Bits:
-		"""Ideal samples XOR the outcome flips of calibrated Pauli errors propagated as frames."""
-
 		program = self._program(circuit)
 		return ideal ^ program.propagate(ideal.shape[0], rng)

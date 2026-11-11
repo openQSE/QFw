@@ -2,8 +2,6 @@ import json
 
 
 def load_emulated_device(class_name):
-	"""The qiskit-ibm-runtime fake backend named ``class_name``, such as FakeFez."""
-
 	from qiskit_ibm_runtime import fake_provider
 
 	factory = getattr(fake_provider, class_name, None) if class_name.startswith("Fake") else None
@@ -13,9 +11,6 @@ def load_emulated_device(class_name):
 
 
 def ibm_backend_info(backend):
-	"""The device's raw IBM BackendConfiguration under ``static_architecture`` and BackendProperties under
-	``backend_properties``, the telemetry record that ``qfw_target.build_device_target`` turns into a Target."""
-
 	def jsonable(record):
 		return json.loads(json.dumps(record.to_dict(), default=str))
 
