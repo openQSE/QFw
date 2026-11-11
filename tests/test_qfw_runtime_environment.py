@@ -170,6 +170,48 @@ def test_qfw_srun_takes_run_variables_from_its_own_run(tmp_path, monkeypatch):
         assert name not in env
 
 
+def test_qfw_target_queries_on_this_node_with_the_run_environment(
+        tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    _site_only_state(run_dir)
+    _set_environment(
+        monkeypatch, DEFW_IMPORT_PLACEHOLDERS,
+        {"SLURM_JOB_ID": "42", "SLURM_JOB_NODELIST": "c1"})
+    captured = {}
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        captured["env"] = dict(env)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands, "_command_path",
+                        lambda name, env=None: Path("/usr/bin/defw-python"))
+    monkeypatch.setattr(commands, "_free_tcp_port", lambda host: 45680)
+    monkeypatch.setattr(commands, "_resolve_host_address",
+                        lambda host: "10.0.0.4")
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+    # qfw-activate puts the backends on PYTHONPATH.
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[1] / "backends"))
+
+    assert commands.qfw_target([
+        "--run-dir", str(run_dir), "--provider", "aer"]) == 0
+
+    argv = captured["argv"]
+    assert argv[0] == "/usr/bin/defw-python"
+    assert argv[1].endswith("qfw_qiskit/qfw_target_query.py")
+    assert Path(argv[1]).is_file()
+    assert argv[2:] == ["--provider", "aer"]
+    assert captured["env"]["DEFW_PARENT_HOSTNAME"] == "slurmctld"
+
+
+def test_qfw_target_refuses_an_unready_run(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    _write_state(run_dir, {"setup_complete": False})
+
+    assert commands.qfw_target(["--run-dir", str(run_dir)]) == 1
+
+
 def test_qfw_srun_keeps_the_directory_of_a_job_local_run(
         tmp_path, monkeypatch):
     run_dir = tmp_path / "run"

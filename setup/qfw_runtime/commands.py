@@ -1,4 +1,5 @@
 import argparse
+import importlib.util
 import json
 import os
 import shlex
@@ -17,6 +18,7 @@ COMMANDS = {
     "qfw-setup",
     "qfw-status",
     "qfw-srun",
+    "qfw-target",
     "qfw-teardown",
 }
 PATH_ENVIRONMENT_VARS = {
@@ -40,6 +42,8 @@ def main(argv=None):
             return qfw_status(argv)
         if command == "qfw-srun":
             return qfw_srun(argv)
+        if command == "qfw-target":
+            return qfw_target(argv)
         if command == "qfw-teardown":
             return qfw_teardown(argv)
     except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
@@ -138,17 +142,9 @@ def qfw_srun(argv):
     if not args.application:
         parser.error("application command is required")
 
-    state = qfw_config.read_state(args.run_dir)
-    if not state.get("setup_complete"):
-        print(
-            f"QFw runtime setup is incomplete: {state.get('run_dir')}",
-            file=sys.stderr,
-        )
+    env, allocation = _application_run_environment(args.run_dir)
+    if env is None:
         return 1
-    env = _application_environment(state)
-    allocation = _allocation_context_from_env(env)
-    _publish_allocation_environment(env, allocation)
-    _configure_application_defw_environment(env, state)
     defw_python = _command_path("defw-python", env=env)
     command = _application_launch_command(
         [str(defw_python), *args.application],
@@ -162,6 +158,44 @@ def qfw_srun(argv):
         },
     )
     return subprocess.run(command, env=env).returncode
+
+
+def qfw_target(argv):
+    parser = argparse.ArgumentParser(prog="qfw-target", add_help=False)
+    parser.add_argument("--run-dir")
+    args, query_args = parser.parse_known_args(argv)
+    env, _allocation = _application_run_environment(args.run_dir)
+    if env is None:
+        return 1
+    # On this node, not through srun: the query is one DEFw client.
+    command = [
+        str(_command_path("defw-python", env=env)),
+        str(_target_query_script()),
+        *query_args,
+    ]
+    return subprocess.run(command, env=env).returncode
+
+
+def _target_query_script():
+    spec = importlib.util.find_spec("qfw_qiskit")
+    if spec is None or not spec.submodule_search_locations:
+        raise RuntimeError("qfw-target: the qfw_qiskit package is not installed")
+    return Path(spec.submodule_search_locations[0]) / "qfw_target_query.py"
+
+
+def _application_run_environment(run_dir):
+    state = qfw_config.read_state(run_dir)
+    if not state.get("setup_complete"):
+        print(
+            f"QFw runtime setup is incomplete: {state.get('run_dir')}",
+            file=sys.stderr,
+        )
+        return None, None
+    env = _application_environment(state)
+    allocation = _allocation_context_from_env(env)
+    _publish_allocation_environment(env, allocation)
+    _configure_application_defw_environment(env, state)
+    return env, allocation
 
 
 def _application_environment(state):
