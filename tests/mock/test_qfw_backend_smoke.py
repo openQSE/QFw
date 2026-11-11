@@ -500,6 +500,7 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 				"num_shots": 12,
 				"compiler": "staq",
 				"qubit_mapping": {"0": "QB7"},
+				"seed_simulator": 34,
 				"reservation_id": 1,
 			}
 		]

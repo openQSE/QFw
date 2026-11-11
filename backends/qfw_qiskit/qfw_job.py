@@ -10,7 +10,7 @@ from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError
-from util.circuit_payload import encode_qiskit_circuit
+from util.circuit_payload import encode_logical_circuit, encode_qiskit_circuit
 from util import instrumentation
 from util.qpm.statevector import (
 	decode_statevector_payload,
@@ -39,7 +39,18 @@ QPM_STATUS_CHECK_INTERVAL_SEC = 60
 QFW_INFO_PASSTHROUGH_OPTIONS = (
 	"param_values",
 	"compilation_options",
+	"seed_simulator",
+	"bases",
 )
+
+# The parts of a QPM's result besides the counts that reach the result's
+# metadata: the QHW result, and a proxy sampler's diagnostics and bases records.
+RESULT_METADATA_KEYS = ("qhw_result", "diagnostics", "bases")
+
+# A circuit names its pre-compilation circuit in its metadata under this key,
+# as a QuantumCircuit. The job sends it beside the circuit as
+# info["logical_circuit"] and leaves it out of the circuit's own payload.
+LOGICAL_CIRCUIT_METADATA_KEY = "qfw_logical_circuit"
 
 
 def normalize_param_values(param_values):
@@ -212,9 +223,9 @@ class QFwJob(Job):
 		}
 		# Serialize in the best format this QPM says it reads. A QPM that
 		# declares nothing gets OpenQASM 2 in info["qasm"], exactly as before.
+		logical = (circuit.metadata or {}).get(LOGICAL_CIRCUIT_METADATA_KEY)
 		with instrumentation.app_prepare(circuit) as prepare:
-			info.update(
-				encode_qiskit_circuit(circuit, self._declared_properties()))
+			info.update(self._encode_circuit(circuit, logical))
 			instrumentation.describe_payload(prepare, info)
 		qubit_mapping = get_qubit_mapping(circuit)
 		if qubit_mapping:
@@ -241,6 +252,26 @@ class QFwJob(Job):
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
+
+	def _encode_circuit(self, circuit, logical):
+		properties = self._declared_properties()
+		if logical is None:
+			return encode_qiskit_circuit(circuit, properties)
+		if not (properties or {}).get("logical_circuit"):
+			raise DEFwError(
+				f"the circuit carries a logical circuit in its "
+				f"{LOGICAL_CIRCUIT_METADATA_KEY!r} metadata, and this QPM "
+				"does not read one")
+		metadata = dict(circuit.metadata)
+		del metadata[LOGICAL_CIRCUIT_METADATA_KEY]
+		original = circuit.metadata
+		circuit.metadata = metadata
+		try:
+			fields = encode_qiskit_circuit(circuit, properties)
+		finally:
+			circuit.metadata = original
+		fields.update(encode_logical_circuit(logical, properties))
+		return fields
 
 	def _job_labels(self):
 		# The device and backend kind the job's own metrics carry.
@@ -269,6 +300,10 @@ class QFwJob(Job):
 			circuits = [self._qobj]
 		else:
 			circuits = self._qobj
+		if self._options.get("bases") is not None and len(circuits) != 1:
+			raise DEFwError(
+				"a bases job measures one prepared state, so it takes "
+				f"exactly one circuit, not {len(circuits)}")
 
 		# One trace per job. The RPCs inside the scope carry its context to
 		# the QPM, so the QPM's own spans join this trace.
@@ -418,9 +453,9 @@ class QFwJob(Job):
 
 	def _result_metadata(self, output):
 		metadata = {}
-		qhw_result = output.get("qhw_result")
-		if isinstance(qhw_result, dict):
-			metadata["qhw_result"] = qhw_result
+		for key in RESULT_METADATA_KEYS:
+			if isinstance(output.get(key), (dict, list)):
+				metadata[key] = output[key]
 		return metadata
 
 	def _raise_for_failed_results(self, qpm_results):

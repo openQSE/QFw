@@ -80,6 +80,7 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 		"num_qubits": 3,
 		"num_shots": 17,
 		"compiler": "staq",
+		"seed_simulator": 11,
 		"reservation_id": 1,
 	}
 	assert len(job._cid_list) == 1
