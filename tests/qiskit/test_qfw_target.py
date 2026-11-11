@@ -29,6 +29,23 @@ def test_qfw_target_transpiles_pennylane_remote_circuit_shape():
 	assert transpiled.num_qubits == 2
 
 
+def test_mqt_compilation_preserves_classical_outputs():
+	from mqt.core.mlir import compile_program
+	from qiskit.providers.basic_provider import BasicSimulator
+
+	circuit = QuantumCircuit(3, 3)
+	circuit.x(0)
+	circuit.cx(0, 2)
+	circuit.x(0)
+	circuit.measure([2, 0, 1], [0, 1, 2])
+
+	compiled = compile_program(circuit, target=qfw_target.build_qfw_target(num_qubits=3))
+
+	assert isinstance(compiled, QuantumCircuit)
+	counts = BasicSimulator().run(compiled, shots=32).result().get_counts()
+	assert counts == {"001": 32}
+
+
 def _iqm_records():
 	# A four-qubit IQM-shaped device in the shapes the shim's telemetry
 	# returns (see tests/mock/test_qfw_backend_target.py for the full set).

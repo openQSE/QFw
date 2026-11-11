@@ -273,17 +273,6 @@ circuit.
 ./qfw_qiskit_simple_w_mqt.sh 4
 ```
 
-NOTE: This example needs an MQT Core newer than 4.1.1. Until such a release is
-cut, you can install one from source:
-
-```bash
-uv pip install "mqt-core[qiskit] @ git+https://github.com/munich-quantum-toolkit/core.git@6992bf9e3604a9fbf038f323e9b9b999016eca28"
-```
-
-TODO: After the next release of MQT Core, update
-`setup/qdmi-requirements.txt`, remove the note above, and remove the MQT Core
-version check in `QFwBackend.compile`.
-
 ### `qfw_ghz.sh`
 
 Runs the GHZ example through either the Qiskit or PennyLane frontend.

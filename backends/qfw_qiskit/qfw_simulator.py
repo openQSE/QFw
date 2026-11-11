@@ -1,13 +1,11 @@
 import atexit
 import os
-import re
 import time
 import logging
 import threading
 import yaml
 import sys
 from collections import deque
-from importlib.metadata import PackageNotFoundError, version
 
 from qiskit.providers import BackendV2, Options
 
@@ -81,17 +79,6 @@ class CircuitMetrics:
 g_circ_metrics = CircuitMetrics()
 
 EVENT_TYPE_CIRC_RESULT = 1
-
-
-def _mqt_core_version():
-	try:
-		raw = version('mqt-core')
-	except PackageNotFoundError:
-		return None, None
-	match = re.match(r'(\d+(?:\.\d+)*)', raw)
-	if match is None:
-		return raw, None
-	return raw, tuple(int(p) for p in match.group(1).split('.'))
 
 
 class QFwBackend(BackendV2):
@@ -337,18 +324,6 @@ class QFwBackend(BackendV2):
 		elif compiler == 'mqt':
 			from mqt.core import mlir
 
-			# Version check the installed MQTC.
-			# TODO: Once setup/qdmi-requirements.txt pins a newer MQT
-			# Core, remove this check and the NOTE in examples/README.md.
-			require_mqtc_above = (4, 1, 1)
-			mqtc_ver_str, mqtc_ver = _mqt_core_version()
-			if mqtc_ver is not None and mqtc_ver <= require_mqtc_above:
-				require_mqtc_str = '.'.join(str(p) for p in require_mqtc_above)
-				raise RuntimeError(
-					f"The 'mqt' compiler requires an MQT Core newer than "
-					f"{require_mqtc_str}, but {mqtc_ver_str} is installed. "
-					"See notes for qfw_qiskit_simple_w_mqt.sh in "
-					"examples/README.md for more information.")
 			return mlir.compile_program(
 				circuits, target=self.target, **kwargs)
 		else:

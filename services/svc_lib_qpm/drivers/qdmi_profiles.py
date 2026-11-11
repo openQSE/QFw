@@ -114,9 +114,11 @@ class QdmiProfile(ProviderProfile):
 		return float(info.get("timeout", default))
 
 	def result_counts(self, counts, measurement):
-		# Key the device library's histogram the way the circuit's classical
-		# bits are ordered. Identity where they already agree.
-		return counts
+		if measurement is None:
+			return counts
+		from mqt.core.mlir import decode_counts
+		return decode_counts(counts, measurement.result_width,
+			sum(counts.values()), measurement.result_layout)
 
 
 class IqmQdmiProfile(QdmiProfile):
@@ -352,6 +354,7 @@ class IbmQdmiProfile(QdmiProfile):
 		return access.get("backend_name")
 
 	def encode(self, driver, source, info, backend):
+		from mqt.core.mlir import TargetEnvironment, serialize_program
 		from mqt.core.plugins.qiskit.exceptions import UnsupportedOperationError
 		from mqt.core.qdmi import ProgramFormat
 		from qiskit import transpile
@@ -359,19 +362,20 @@ class IbmQdmiProfile(QdmiProfile):
 		circuit = load_qiskit_circuit(source)
 		if circuit.parameters:
 			raise DEFwExecutionError("IBM circuits must have bound parameters")
-		# IBMBackend's serializer rebuilds registers in declaration order.
 		if [bit for register in circuit.cregs for bit in register] != circuit.clbits:
 			raise DEFwExecutionError(
 				"IBM circuits require classical registers that partition "
 				"the classical bits in order")
+		circuit = backend._preprocess_circuit(circuit)
 		try:
-			circuit = backend._preprocess_circuit(circuit)
+			backend.validate_circuit(circuit, native=True)
 		except UnsupportedOperationError:
 			circuit = transpile(circuit, backend=backend, optimization_level=1)
-			circuit = backend._preprocess_circuit(circuit)
-		backend._validate_circuit(circuit)
-		program, fmt = backend._serialize_circuit(circuit, [ProgramFormat.QASM3])
-		return program, fmt.name, None
+			backend.validate_circuit(circuit, native=True)
+		environment = TargetEnvironment.from_device(
+			backend.device, program_format=ProgramFormat.QASM3)
+		program = serialize_program(circuit, target=environment)
+		return program.payload, program.program_format.name, program
 
 	def check_shots(self, shots):
 		if shots <= 0:
