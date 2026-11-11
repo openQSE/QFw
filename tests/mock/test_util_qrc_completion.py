@@ -47,13 +47,15 @@ class _Circuit:
 			raise self.free_error
 
 
-def _qrc(monkeypatch, launcher, limit=600):
+def _qrc(monkeypatch, launcher, limit=600,
+	 source="qpm.circuit-time-limit-seconds"):
 	import util.qpm.util_qrc as util_qrc
 
 	monkeypatch.delenv("QFW_SITE_CONFIG", raising=False)
 	qrc = util_qrc.UTIL_QRC(num_workers=1, start=False)
 	qrc.launcher = launcher
 	qrc.circuit_time_limit = limit
+	qrc.circuit_time_limit_source = source
 	qrc.worker_pool = [{'active_tasks': [], 'queue': queue.Queue()}]
 
 	def killpg(pid, sig):
@@ -177,3 +179,32 @@ def test_a_services_own_circuit_time_limit_overrides_the_site_file(tmp_path):
 	with pytest.raises(ValueError, match=r"services\[aer\]"):
 		circuit_time_limit(
 			str(site), service=dict(aer, **{"circuit-time-limit-seconds": -1}))
+
+
+def test_a_services_own_circuit_time_limit_is_named_as_its_source(tmp_path):
+	from util.qpm.util_qrc import circuit_time_limit_and_source
+
+	site = tmp_path / "site.yaml"
+	site.write_text("qpm:\n  circuit-time-limit-seconds: 30\n")
+	aer = {"name": "aer", "circuit-time-limit-seconds": 3}
+
+	assert circuit_time_limit_and_source(str(site), service=aer) == (
+		3, "services[aer].circuit-time-limit-seconds")
+	assert circuit_time_limit_and_source(str(site), service={"name": "aer"}) == (
+		30, "qpm.circuit-time-limit-seconds")
+
+
+def test_a_runner_killed_by_its_services_limit_names_that_limit(
+		monkeypatch, tmp_path):
+	launcher = _Launcher()
+	qrc = _qrc(monkeypatch, launcher, limit=3,
+		   source="services[aer].circuit-time-limit-seconds")
+	circuit = _Circuit()
+	qrc.worker_pool[0]['active_tasks'].append(_task(tmp_path, circuit, age=4))
+
+	qrc.check_active_tasks(0)
+	qrc.check_active_tasks(0)
+
+	[result] = qrc.circuit_results
+	assert "services[aer].circuit-time-limit-seconds" in result['result']
+	assert "qpm.circuit-time-limit-seconds" not in result['result']
