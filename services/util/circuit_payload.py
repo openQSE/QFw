@@ -140,10 +140,6 @@ def qiskit_input(info):
 
 
 def logical_circuit_payload(info):
-	# Return (format, data) for the optional logical circuit of a job, or None
-	# when the job carries none. The logical circuit is the circuit before
-	# compilation. It travels in info["logical_circuit"] in the envelope of
-	# info["circuit"], so it is read, compressed and versioned the same way.
 	logical = (info or {}).get("logical_circuit")
 	if logical is None:
 		return None
@@ -151,7 +147,6 @@ def logical_circuit_payload(info):
 
 
 def load_circuit(fmt, data):
-	# The QuantumCircuit a (format, data) pair from circuit_payload holds.
 	if fmt == QPY:
 		return load_qpy(data)
 	if fmt == OPENQASM2:
@@ -319,8 +314,6 @@ def encode_qiskit_circuit(circuit, properties=None):
 
 
 def encode_logical_circuit(circuit, properties=None):
-	# The info field carrying the logical circuit: the envelope of
-	# info["circuit"], in the format the QPM declares.
 	fields = encode_qiskit_circuit(circuit, properties)
 	if "circuit" in fields:
 		return {"logical_circuit": fields["circuit"]}

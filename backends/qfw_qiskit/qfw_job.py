@@ -43,13 +43,8 @@ QFW_INFO_PASSTHROUGH_OPTIONS = (
 	"bases",
 )
 
-# The parts of a QPM's result besides the counts that reach the result's
-# metadata: the QHW result, and a proxy sampler's diagnostics and bases records.
 RESULT_METADATA_KEYS = ("qhw_result", "diagnostics", "bases")
 
-# A circuit names its pre-compilation circuit in its metadata under this key,
-# as a QuantumCircuit. The job sends it beside the circuit as
-# info["logical_circuit"] and leaves it out of the circuit's own payload.
 LOGICAL_CIRCUIT_METADATA_KEY = "qfw_logical_circuit"
 
 
