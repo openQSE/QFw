@@ -9,13 +9,18 @@ placement, provider launcher, and optional device identity.
 .SH MPI LAUNCH KEYS
 An optional top-level
 .B mpi-launch
-mapping sets how MPI providers run
-.BR mpirun .
+mapping sets the
+.B mpirun
+command line for MPI providers.
 The installed local manifest sets no transport or placement. A site that needs
 them names its own manifest through
 .B service-manifest
 in
 .BR qfw-runtime.yaml (5).
+A site-owned QPM reads the manifest that
+.B service.manifest
+names in
+.BR site.yaml .
 .TP
 .B launcher
 The MPI launcher. The default is
@@ -45,7 +50,9 @@ and
 .BR --bind-to .
 .TP
 .B extra-args
-A list added to every command.
+A list of arguments added to every
+.B mpirun
+command.
 .SH SERVICE KEYS
 .TP
 .B name

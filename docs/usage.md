@@ -600,12 +600,16 @@ launch behavior.
 
 The default `mpi-launch` block sets no transport or placement, so Open MPI
 chooses its own. A site that needs its own settings copies this manifest, edits
-`mpi-launch`, and names the copy in the runtime file:
+`mpi-launch`, and adds `service-manifest` to the `local-services` block of the
+runtime file it passes to `qfw-setup --runtime-config`:
 
 ```yaml
 local-services:
   service-manifest: /path/to/site-local-services.yaml
 ```
+
+A site-owned QPM takes `mpi-launch` from the manifest that `service.manifest`
+names in `site.yaml`.
 
 QFw passes each `mca` entry to `mpirun` as `--mca`, which takes precedence over
 `OMPI_MCA_*` variables. Frontier, on HPE Slingshot, uses:
