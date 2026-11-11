@@ -1,3 +1,5 @@
+import pathlib
+
 from util.mpi import build_mpi_command
 
 
@@ -73,3 +75,42 @@ def test_the_mpirun_command_carries_the_fallback(monkeypatch):
 		config={"mpi-launch": {"map-by": "ppr:1:l3cache"}})
 
 	assert command[command.index("--map-by") + 1] == "ppr:1:l2cache"
+
+
+LOCAL_SERVICES = (pathlib.Path(__file__).resolve().parents[2] / "share" / "qfw"
+	/ "config" / "services" / "local-services.yaml")
+SITE_TRANSPORT_AND_PLACEMENT = """
+mpi-launch:
+  map-by: ppr:1:node
+  bind-to: core
+  mca:
+    btl: self,sm
+    pml: ob1
+"""
+
+
+def test_the_installed_local_manifest_leaves_transport_and_placement_to_open_mpi():
+	from util.mpi import load_service_config
+
+	command = build_mpi_command(
+		"simulator", np=2, dvm_uri="",
+		config=load_service_config(str(LOCAL_SERVICES)))
+
+	assert not {"--mca", "--map-by", "--bind-to"} & set(command)
+
+
+def test_a_site_manifest_sets_transport_and_placement(tmp_path):
+	from util.mpi import load_service_config
+
+	site_manifest = tmp_path / "site-local-services.yaml"
+	site_manifest.write_text(SITE_TRANSPORT_AND_PLACEMENT, encoding="utf-8")
+
+	command = build_mpi_command(
+		"simulator", np=2, dvm_uri="",
+		config=load_service_config(str(site_manifest)))
+
+	assert command[command.index("--map-by") + 1] == "ppr:1:node"
+	assert ["--mca", "btl", "self,sm"] == command[
+		command.index("btl") - 1:command.index("btl") + 2]
+	assert ["--mca", "pml", "ob1"] == command[
+		command.index("pml") - 1:command.index("pml") + 2]
