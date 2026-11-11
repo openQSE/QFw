@@ -24,6 +24,7 @@ SCHEMA = "qfw-service-plane-v1"
 STATE_NAME = "service-plane.json"
 ENV_NAME = "qfw-service-env.sh"
 TERMINATE_TIMEOUT_SECONDS = 10
+PROBE_TIMEOUT_SECONDS = 30
 STEP_START_GRACE_SECONDS = 60
 SLURM_MODES = frozenset({"slurm", "heterogeneous"})
 STEP_LOG_TAIL_LINES = 5
@@ -1106,13 +1107,19 @@ def _read_process_identity(pid, node, allocation):
          str(pid)],
         allocation,
     )
-    result = subprocess.run(
-        launch,
-        env=os.environ.copy(),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            launch,
+            env=os.environ.copy(),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ServicePlaneError(_unknown_liveness(
+            pid, node, f"probe gave no answer in {PROBE_TIMEOUT_SECONDS} s"
+        )) from exc
     if result.returncode:
         # Includes a process_state too old to answer "gone" as JSON, which
         # exited non-zero for it. Reporting that loudly is the safe direction.
@@ -1226,7 +1233,14 @@ def _launch(record, node, command, detach_flag, env, allocation, ready,
                 f"{step.returncode}: {_log_tail(step_log)}")
         return ready()
 
-    _wait_for(step_ready, timeout + STEP_START_GRACE_SECONDS, description)
+    try:
+        _wait_for(step_ready, timeout + STEP_START_GRACE_SECONDS, description)
+    except ServicePlaneError as exc:
+        if step.poll() is not None:
+            raise
+        raise ServicePlaneError(
+            f"{exc}. Its srun step is still running, and {step_log} ends: "
+            f"{_log_tail(step_log)}") from exc
 
 
 def _start_step(launch, env, step_log):

@@ -607,6 +607,38 @@ def test_a_service_whose_srun_step_ends_during_startup_is_named(
             lambda: False, 1, "directory service d")
 
 
+def test_a_step_srun_has_not_started_names_its_log_when_it_times_out(
+        tmp_path, monkeypatch):
+    def queued_step(launch, env, step_log):
+        step_log.write_text(
+            "srun: Job step creation temporarily disabled, retrying "
+            "(Requested nodes are busy)\n")
+        return HeldStep(launch)
+
+    monkeypatch.setattr(service_plane, "_start_step", queued_step)
+    monkeypatch.setattr(service_plane, "STEP_START_GRACE_SECONDS", 0)
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    with pytest.raises(
+            service_plane.ServicePlaneError,
+            match=r"still running, and .*step\.log ends: .*Requested nodes are busy"):
+        service_plane._launch(
+            record, "c1", ["service"], "--background", {}, SLURM_ALLOCATION,
+            lambda: False, 0, "directory service d")
+
+
+def test_a_liveness_probe_that_does_not_answer_is_reported(monkeypatch):
+    def no_answer(launch, **kwargs):
+        raise subprocess.TimeoutExpired(launch, kwargs["timeout"])
+
+    monkeypatch.setattr(service_plane.subprocess, "run", no_answer)
+
+    with pytest.raises(
+            service_plane.ServicePlaneError,
+            match="cannot determine whether process 3101 on qpm-a"):
+        service_plane._read_process_identity(3101, "qpm-a", SLURM_ALLOCATION)
+
+
 def test_a_held_step_outlives_its_launch_until_it_is_ended(
         tmp_path, monkeypatch):
     fake_srun = tmp_path / "bin" / "srun"
