@@ -1195,7 +1195,7 @@ device. A qubit with no published T1 or T2 gets the maximum idle error.
 
 | Setting or option | Effect |
 | --- | --- |
-| `QFW_PROXY_MAX_MEMORY_MB` (default 4096) | Memory limit of the Aer sources. A circuit Aer cannot hold within it fails with `AerMemoryRefused` in the circuit's error. ffsim's state vector is not limited |
+| `QFW_PROXY_MAX_MEMORY_MB` (default 4096) | Memory limit of the ideal sources. A circuit Aer cannot hold within it fails with `AerMemoryRefused`, and an ffsim state vector larger than it fails with `FfsimMemoryRefused`, in the circuit's error. Cached ffsim states are dropped to make room for a new one |
 | `seed_simulator` run option | Fixes the ideal draws and the noise draws together |
 | `circuit.metadata["qfw_logical_circuit"] = logical` | The pre-compilation circuit. The ideal outcomes come from it and the noise from the compiled circuit. It is sent beside the circuit as `info["logical_circuit"]`, in the same `{format, data}` envelope as `info["circuit"]` |
 | `backend.run(state, bases={"physical": [...], "bases": ["XZ", ...], "shots": [...]})` | One record per basis from one prepared state, in the result's `metadata["bases"]` |
