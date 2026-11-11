@@ -47,6 +47,15 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_TENSORNETWORK,
 	},
+	# The calibrated Pauli-frame proxy sampler, one service per emulated device.
+	# It samples circuits too wide for statevector or density-matrix noise. A
+	# noisy superconducting device is what it emulates, and it returns no
+	# statevector, so it is not typed QPM_CAP_STATEVECTOR.
+	"proxy": {
+		"provider": "proxy",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
 	"qb": {
 		"provider": "qb",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
