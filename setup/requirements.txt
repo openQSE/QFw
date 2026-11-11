@@ -1,5 +1,5 @@
 # Pin a Qiskit minor supported by MQT Core's native compiler.
-qiskit==2.5.2
+qiskit==2.6.2
 qiskit_aer==0.17.2
 qiskit-algorithms
 qiskit-optimization
