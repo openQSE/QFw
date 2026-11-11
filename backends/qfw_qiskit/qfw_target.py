@@ -43,6 +43,7 @@ from qiskit.circuit.library import (
 	ZGate,
 )
 from qiskit.transpiler import InstructionProperties, Target
+from util.gate_names import INSTRUCTION_ALIASES
 
 
 QFW_NUM_QUBITS = 400
@@ -118,6 +119,9 @@ def build_qfw_target(num_qubits=QFW_NUM_QUBITS, instructions=None):
 	for instruction in qfw_instructions():
 		if (instructions is None or set(openqasm2_instructions(instruction))
 				<= set(instructions)):
+			# Numeric placeholders would restrict the target to those angles.
+			if instruction.params:
+				instruction.params = [Parameter(f"p{i}") for i in range(len(instruction.params))]
 			target.add_instruction(instruction)
 
 	return target
@@ -155,27 +159,6 @@ def openqasm2_instructions(instruction):
 # operations on the loci they are calibrated for, and the measured error and
 # duration of each, when the snapshot has them.
 # ---------------------------------------------------------------------------
-
-# Provider names for operations, mapped onto the names Qiskit's library uses.
-# IQM calls its phased X rotation prx (Qiskit: r) and its reset reset_wait;
-# Braket spells several standard gates its own way.
-INSTRUCTION_ALIASES = {
-	"prx": "r",
-	"reset_wait": "reset",
-	"cnot": "cx",
-	"ccnot": "ccx",
-	"toffoli": "ccx",
-	"i": "id",
-	"phaseshift": "p",
-	"cphaseshift": "cp",
-	"si": "sdg",
-	"ti": "tdg",
-	"v": "sx",
-	"vi": "sxdg",
-	"xx": "rxx",
-	"yy": "ryy",
-	"zz": "rzz",
-}
 
 # Provider operations that are not instructions a Qiskit circuit carries: IQM's
 # classically controlled prx, its 1-2 transition pulse and its measurement

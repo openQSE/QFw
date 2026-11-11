@@ -41,7 +41,7 @@ class _Device:
 
 def _backend(accepted, native=None):
 	# Skip live session/Target construction while exercising the released
-	# provider serializer. CUSTOM1 can be broader than the native gates.
+	# transcode. CUSTOM1 can be broader than the native gates.
 	backend = object.__new__(AmazonBraketBackend)
 	backend._device = _Device(accepted if native is None else native)
 	backend._device.query_custom_operations = lambda _slot: [
