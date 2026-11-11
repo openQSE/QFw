@@ -997,6 +997,7 @@ qfw-setup -> qfw-status -> qfw-srun -> qfw-teardown
 | `qfw-setup` | Select configuration, create run state, validate directory access, and start job-owned services when requested |
 | `qfw-status` | Report the current application run and recorded role-manager health |
 | `qfw-srun` | Launch the application through DEFw with the prepared runtime and Slurm placement |
+| `qfw-target` | Print one QPM's settings and device records as a `qfw-target-v1` JSON document, without reserving it |
 | `qfw-teardown` | Stop job-owned services and clean runtime state without stopping site-owned services |
 
 One `qfw-setup` invocation creates one run directory for one logical
