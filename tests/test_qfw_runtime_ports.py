@@ -636,6 +636,7 @@ def test_qfw_srun_uses_group0_for_heterogeneous_allocation(
     assert captured["argv"] == [
         "srun",
         "--het-group=0",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
         "--shots", "10",
@@ -766,6 +767,7 @@ def test_qfw_srun_configures_application_defw_environment(
     assert captured["argv"] == [
         "srun",
         "--het-group=0",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
     ]
@@ -822,6 +824,7 @@ def test_qfw_srun_honors_slurm_application_placement(
         "--nodes", "1",
         "--ntasks", "1",
         "--nodelist", "client-b",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
     ]
@@ -901,4 +904,14 @@ def test_a_process_that_exits_during_startup_names_its_stderr(tmp_path):
         f"dirsvc exited during startup with status 3. {stderr} ends: "
         "Traceback (most recent call last): | "
         "ModuleNotFoundError: No module named 'svc_iqm_qpm'")
+
+
+@pytest.mark.parametrize("launch_options, expected", [
+    ({}, ["srun", "--overlap", "app"]),
+    ({"exclusive": True}, ["srun", "--exclusive", "app"]),
+])
+def test_an_application_step_overlaps_the_held_service_steps(
+        launch_options, expected):
+    assert commands._application_launch_command(
+        ["app"], {"mode": "slurm"}, launch_options) == expected
 
