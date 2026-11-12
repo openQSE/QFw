@@ -424,8 +424,9 @@ def _simulator_runner(monkeypatch, tmp_path, launched):
 		util_qrc.cdefw_global, "get_defw_tmp_dir", lambda: str(tmp_path),
 		raising=False)
 	runner = _Runner.__new__(_Runner)
+	runner.circuit_time_limit = None
 	runner.launcher = types.SimpleNamespace(
-		launch=lambda cmd: launched.append(cmd) or 4242)
+		launch=lambda cmd, env=None: launched.append(cmd) or 4242)
 	runner.form_cmd = lambda circ, qasm_file: ["simulator", qasm_file]
 	return runner
 
