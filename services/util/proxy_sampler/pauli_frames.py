@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 from qiskit.quantum_info import Clifford
 
 from .calibration import PROCESS_PER_AVERAGE, Calibration, delay_seconds, poisson_rates
-from .circuits import active_qubits
+from .circuits import OperationKey, active_qubits, operation_key
 from .coherence import WeightedPaulis
 from .gates import CLIFFORD_1Q, NOISELESS
 
@@ -42,7 +42,7 @@ class _NoiseLocations:
 
 
 def _operation_entry(name: str, operation: Any, rows: tuple[int, ...], clbits: tuple[int, ...],
-					 clifford_cache: dict[str, Bits | None]) -> FrameOp:
+					 clifford_cache: dict[OperationKey, Bits | None]) -> FrameOp:
 	param: float | None = None
 	clifford: Bits | None = None
 	if name in _TWIRL_UPDATES:
@@ -51,9 +51,10 @@ def _operation_entry(name: str, operation: Any, rows: tuple[int, ...], clbits: t
 		except Exception:  # noqa: BLE001
 			param = None
 	elif name not in CLIFFORD_1Q and name not in ("measure", "reset", "delay", "cz", "cx", "swap"):
-		if name not in clifford_cache:
-			clifford_cache[name] = _clifford_rows(operation) if operation.num_qubits <= 2 else None
-		clifford = clifford_cache[name]
+		key = operation_key(operation)
+		if key not in clifford_cache:
+			clifford_cache[key] = _clifford_rows(operation) if operation.num_qubits <= 2 else None
+		clifford = clifford_cache[key]
 	return name, rows, clbits, param, clifford
 
 
@@ -95,7 +96,7 @@ class Program:
 		index = {q: k for k, q in enumerate(active)}
 		ops: list[FrameOp] = []
 		noise = _NoiseLocations()
-		clifford_cache: dict[str, Bits | None] = {}
+		clifford_cache: dict[OperationKey, Bits | None] = {}
 		waits: dict[int, list[tuple[int, float]]] = {}
 		for position, qubit, seconds in calibration.implicit_idle(circuit, idle_model):
 			waits.setdefault(position, []).append((qubit, seconds))

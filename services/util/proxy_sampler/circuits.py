@@ -6,6 +6,8 @@ import numpy as np
 
 from .gates import BARRIER_DELAY, GATES_DIGESTED_BY_PARAMETER_VALUE
 
+OperationKey = tuple[str, tuple[str, ...], bytes]
+
 
 def active_qubits(circuit: Any) -> list[int]:
 	return sorted({circuit.find_bit(q).index for i in circuit.data if i.operation.name not in BARRIER_DELAY
@@ -40,6 +42,12 @@ def _operation_fingerprint(operation: Any) -> bytes:
 def _definition_digest(operation: Any) -> bytes:
 	definition = operation.definition
 	return b"" if definition is None else circuit_digest(definition).encode()
+
+
+def operation_key(operation: Any) -> OperationKey:
+	params = tuple(_canonical_param(p) for p in operation.params)
+	definition = b"" if operation.name in GATES_DIGESTED_BY_PARAMETER_VALUE else _definition_digest(operation)
+	return operation.name, params, definition
 
 
 def _canonical_param(value: Any) -> str:

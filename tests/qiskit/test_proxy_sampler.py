@@ -425,3 +425,25 @@ def test_the_last_qubit_measured_into_a_bit_decides_its_noise():
 	flips = Program.from_circuit(circuit, Calibration({}, {}, {}, {}, None)).propagate(2000, np.random.default_rng(0))
 
 	assert not flips.any()
+
+
+def test_each_u3_moves_the_frame_by_its_own_angles():
+	from qiskit.circuit.library import U3Gate
+
+	from util.proxy_sampler.calibration import Calibration
+	from util.proxy_sampler.coherence import Coherence
+	from util.proxy_sampler.pauli_frames import Program
+
+	pure_dephasing = Coherence(t1=1.0, t2=1e-12)
+	calibration = Calibration({("u3", (0,)): 0.0}, {}, {0: pure_dephasing}, {}, None)
+	circuit = QuantumCircuit(1, 1)
+	circuit.delay(100, 0, unit="ns")
+	circuit.append(U3Gate(np.pi, 0, np.pi), [0])
+	circuit.append(U3Gate(np.pi / 2, 0, np.pi), [0])
+	circuit.measure(0, 0)
+	shots = 40_000
+
+	flips = Program.from_circuit(circuit, calibration).propagate(shots, np.random.default_rng(0))
+
+	z_error_turned_into_x_by_the_hadamard = 0.5
+	assert abs(flips.mean() - z_error_turned_into_x_by_the_hadamard) < 4 * np.sqrt(0.25 / shots)
