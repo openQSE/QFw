@@ -177,10 +177,7 @@ def backends_on_pythonpath(monkeypatch):
     monkeypatch.syspath_prepend(str(_REPO_ROOT / "backends"))
 
 
-def test_qfw_target_queries_on_this_node_with_the_run_environment(
-        tmp_path, monkeypatch, backends_on_pythonpath):
-    run_dir = tmp_path / "run"
-    _site_only_state(run_dir)
+def _capture_qfw_target(monkeypatch, argv):
     _set_environment(
         monkeypatch, DEFW_IMPORT_PLACEHOLDERS,
         {"SLURM_JOB_ID": "42", "SLURM_JOB_NODELIST": "c1"})
@@ -198,8 +195,17 @@ def test_qfw_target_queries_on_this_node_with_the_run_environment(
                         lambda host: "10.0.0.4")
     monkeypatch.setattr(commands.subprocess, "run", fake_run)
 
-    assert commands.qfw_target([
-        "--run-dir", str(run_dir), "--provider", "aer"]) == 0
+    assert commands.qfw_target(argv) == 0
+    return captured
+
+
+def test_qfw_target_queries_on_this_node_with_the_run_environment(
+        tmp_path, monkeypatch, backends_on_pythonpath):
+    run_dir = tmp_path / "run"
+    _site_only_state(run_dir)
+
+    captured = _capture_qfw_target(
+        monkeypatch, ["--run-dir", str(run_dir), "--provider", "aer"])
 
     argv = captured["argv"]
     assert argv[0] == "/usr/bin/defw-python"
@@ -207,6 +213,24 @@ def test_qfw_target_queries_on_this_node_with_the_run_environment(
     assert Path(argv[1]).is_file()
     assert argv[2:] == ["--provider", "aer"]
     assert captured["env"]["DEFW_PARENT_HOSTNAME"] == "slurmctld"
+
+
+def test_qfw_target_names_a_service_the_run_launched_by_its_runtime_id(
+        tmp_path, monkeypatch, backends_on_pythonpath):
+    run_dir = tmp_path / "run"
+    state = _site_only_state(run_dir)
+    _write_state(run_dir, {**state, "service_managers": [
+        {"owner": "application", "role": "directory"},
+        {"owner": "application", "role": "qpm", "service_id": "nwqsim-0f1e",
+         "manifest_service_name": "nwqsim"}]})
+
+    launched = _capture_qfw_target(
+        monkeypatch, ["--run-dir", str(run_dir), "--service-id=nwqsim"])
+    other = _capture_qfw_target(
+        monkeypatch, ["--run-dir", str(run_dir), "--service-id", "aer"])
+
+    assert launched["argv"][2:] == ["--service-id", "nwqsim-0f1e"]
+    assert other["argv"][2:] == ["--service-id", "aer"]
 
 
 def test_qfw_target_refuses_an_unready_run(tmp_path, monkeypatch):

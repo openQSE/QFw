@@ -163,6 +163,7 @@ def qfw_srun(argv):
 def qfw_target(argv):
     parser = argparse.ArgumentParser(prog="qfw-target", add_help=False)
     parser.add_argument("--run-dir")
+    parser.add_argument("--service-id")
     args, query_args = parser.parse_known_args(argv)
     if {"-h", "--help"} & set(query_args):
         return subprocess.run(
@@ -172,8 +173,20 @@ def qfw_target(argv):
         return 1
     return _run_on_this_node_without_srun(
         [str(_command_path("defw-python", env=env)),
-         str(_target_query_script()), *query_args],
+         str(_target_query_script()), *query_args,
+         *_runtime_service_id_args(
+             args.service_id, qfw_config.read_state(args.run_dir))],
         env)
+
+
+def _runtime_service_id_args(service_id, state):
+    if not service_id:
+        return []
+    for manager in state.get("service_managers") or []:
+        if (manager.get("role") == "qpm"
+                and manager.get("manifest_service_name") == service_id):
+            return ["--service-id", manager["service_id"]]
+    return ["--service-id", service_id]
 
 
 def _run_on_this_node_without_srun(command, env):
