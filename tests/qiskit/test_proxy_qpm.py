@@ -1,3 +1,4 @@
+import json
 import time
 
 import numpy as np
@@ -25,17 +26,37 @@ from util.qpm.controller import _clear_target_controllers_for_tests  # noqa: E40
 DEVICE = "FakeFez"
 
 
+SERVICE = "proxy-fez"
+
+
 @pytest.fixture
-def qpm(monkeypatch):
+def service_entry(tmp_path, monkeypatch):
+	def configure(**proxy):
+		entry = {"name": SERVICE, "module": "svc_proxy_qpm", "device-id": DEVICE}
+		if proxy:
+			entry["proxy"] = proxy
+		path = tmp_path / "services.yaml"
+		path.write_text(json.dumps({"services": [entry]}))
+		monkeypatch.setenv("QFW_SERVICE_CONFIG", str(path))
+		monkeypatch.setenv("QFW_QPM_SERVICE_NAME", SERVICE)
+	return configure
+
+
+def _start_qpm(monkeypatch, backend=None):
 	_clear_target_controllers_for_tests()
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_QPU_DEVICE_ID", DEVICE)
-	monkeypatch.setenv("QFW_PROXY_MAX_MEMORY_MB", "8")
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
 	return QPM(
 		admission_context_factory=FakeAdmissionContext,
 		scheduler_context_factory=FakeSchedulerContext,
-		backend=FakeFez())
+		backend=backend or FakeFez())
+
+
+@pytest.fixture
+def qpm(service_entry, monkeypatch):
+	service_entry(**{"max-memory-mb": 8})
+	return _start_qpm(monkeypatch)
 
 
 def _ghz(width, physical):
@@ -233,11 +254,35 @@ def test_an_untranspiled_circuit_fails_with_what_to_do(qpm):
 	assert error["error"].endswith("Transpile the circuit for backend.target")
 
 
-def test_an_unknown_emulated_device_is_named():
+def test_an_unknown_emulated_device_is_named_by_its_setting():
 	from util.proxy_sampler.device import load_emulated_device
 
-	with pytest.raises(ValueError, match="no device 'FakeNowhere'"):
+	with pytest.raises(ValueError, match="device-id 'FakeNowhere' is not a qiskit_ibm_runtime.fake_provider class"):
 		load_emulated_device("FakeNowhere")
+
+
+def test_without_a_proxy_block_the_memory_limit_is_the_default(service_entry, monkeypatch):
+	from svc_proxy_qpm.settings import DEFAULT_MAX_MEMORY_MB
+
+	service_entry()
+
+	assert _start_qpm(monkeypatch).query()["properties"]["max_memory_mb"] == DEFAULT_MAX_MEMORY_MB
+
+
+@pytest.mark.parametrize("proxy, refusal", [
+	({"max-memory-mb": "4GB"}, "proxy max-memory-mb must be a positive whole number of MiB, not '4GB'"),
+	({"max-memory-mb": 0}, "proxy max-memory-mb must be a positive whole number of MiB, not 0"),
+	({"max-memory-mb": -5}, "proxy max-memory-mb must be a positive whole number of MiB, not -5"),
+	({"max-memory-mb": 1.5}, "proxy max-memory-mb must be a positive whole number of MiB, not 1.5"),
+	({"memory": 8}, "unknown proxy settings: memory"),
+])
+def test_a_proxy_block_it_cannot_use_stops_the_start_by_naming_the_setting(service_entry, monkeypatch, proxy, refusal):
+	from defw_exception import DEFwExecutionError
+
+	service_entry(**proxy)
+
+	with pytest.raises(DEFwExecutionError, match=refusal):
+		_start_qpm(monkeypatch)
 
 
 def test_the_seed_fixes_the_ideal_and_noise_draws_together():

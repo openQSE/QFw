@@ -1,8 +1,10 @@
 import logging
 import os
 
+from .settings import proxy_settings_from_service_entry
 from .svc_qrc import QRC
 from util.circuit_payload import qiskit_circuit_formats
+from util.mpi import this_service_entry
 from util.proxy_sampler.device import ibm_backend_info, load_emulated_device
 from util.proxy_sampler.sampler import ProxySampler
 from util.qpm.util_circuit import set_max_qubits_pp
@@ -10,22 +12,17 @@ from util.qpm.util_qpm import UTIL_QPM
 
 PROXY_PROVIDER = "proxy"
 DEFAULT_EMULATED_DEVICE = "FakeFez"
-MEMORY_LIMIT_ENV = "QFW_PROXY_MAX_MEMORY_MB"
-DEFAULT_MAX_MEMORY_MB = 4096
 MAX_PROXY_SHOTS = 1_000_000
-
-
-def max_memory_mb():
-	return int(os.environ.get(MEMORY_LIMIT_ENV) or DEFAULT_MAX_MEMORY_MB)
 
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True, admission_context_factory=None,
 		     scheduler_context_factory=None, backend=None):
+		self.settings = proxy_settings_from_service_entry(this_service_entry())
 		self.device_id = os.environ.get("QFW_QPU_DEVICE_ID") or DEFAULT_EMULATED_DEVICE
 		self.backend = backend or load_emulated_device(self.device_id)
 		self.num_qubits = self.backend.num_qubits
-		self.max_memory_mb = max_memory_mb()
+		self.max_memory_mb = self.settings.max_memory_mb
 		self._backend_info = None
 		sampler = ProxySampler(self.backend, max_memory_mb=self.max_memory_mb)
 		super().__init__(

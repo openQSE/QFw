@@ -85,6 +85,8 @@ services:
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     device-id: FakeFez
+    proxy:
+      max-memory-mb: 4096
     provider-launch:
       type: internal
 
