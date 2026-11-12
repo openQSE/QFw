@@ -636,6 +636,7 @@ def test_qfw_srun_uses_group0_for_heterogeneous_allocation(
     assert captured["argv"] == [
         "srun",
         "--het-group=0",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
         "--shots", "10",
@@ -766,6 +767,7 @@ def test_qfw_srun_configures_application_defw_environment(
     assert captured["argv"] == [
         "srun",
         "--het-group=0",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
     ]
@@ -822,6 +824,7 @@ def test_qfw_srun_honors_slurm_application_placement(
         "--nodes", "1",
         "--ntasks", "1",
         "--nodelist", "client-b",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
     ]
@@ -887,17 +890,47 @@ def test_qfw_srun_configures_site_directory_defw_environment(
 
 
 def test_a_process_that_exits_during_startup_names_its_stderr(tmp_path):
-    stderr = tmp_path / "qpm.stderr.log"
+    stderr = tmp_path / "dirsvc.stderr.log"
     stderr.write_text(
-        "svc_aer_qpm.svc_qpm.QPM cannot be built: "
-        "aer needs a device-id or num-qubits for its width\n")
-    exited = types.SimpleNamespace(poll=lambda: 1)
+        "Traceback (most recent call last):\n"
+        "ModuleNotFoundError: No module named 'svc_iqm_qpm'\n")
+    exited = types.SimpleNamespace(poll=lambda: 3)
 
     with pytest.raises(RuntimeError) as raised:
         process_launcher._wait_process_ready(
-            exited, 300, "aer", lambda: False, stderr_path=stderr)
+            exited, 5, "dirsvc", lambda: False, stderr_path=stderr)
 
     assert str(raised.value) == (
-        f"aer exited during startup with status 1. {stderr} ends: "
-        "svc_aer_qpm.svc_qpm.QPM cannot be built: "
-        "aer needs a device-id or num-qubits for its width")
+        f"dirsvc exited during startup with status 3. {stderr} ends: "
+        "Traceback (most recent call last): | "
+        "ModuleNotFoundError: No module named 'svc_iqm_qpm'")
+
+
+@pytest.mark.parametrize("launch_options, expected", [
+    ({}, ["srun", "--overlap", "app"]),
+    ({"exclusive": True}, ["srun", "--exclusive", "app"]),
+])
+def test_an_application_step_overlaps_the_held_service_steps(
+        launch_options, expected):
+    assert commands._application_launch_command(
+        ["app"], {"mode": "slurm"}, launch_options) == expected
+
+
+@pytest.mark.parametrize("stop_requested, status", [(True, 0), (False, -15)])
+def test_a_foreground_service_stopped_by_teardown_exits_zero(
+        tmp_path, stop_requested, status):
+    import signal
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    ready_file = tmp_path / "ready.json"
+    service = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    if stop_requested:
+        process_launcher.qfw_process_state.stop_request_path(pid_file).touch()
+    service.send_signal(signal.SIGTERM)
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, ready_file) == status
+    assert not process_launcher.qfw_process_state.stop_request_path(
+        pid_file).exists()
+
