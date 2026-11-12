@@ -851,7 +851,9 @@ qpm:
 ```
 
 When a runner passes the limit, the QPM kills its launcher, fails the circuit
-and moves on. Without a limit, a runner whose exit never reaches the QPM, as
+and moves on. A runner that a PRTE DVM started is not the launcher's child,
+so the QPM also gives each launch `MPIEXEC_TIMEOUT`, five seconds longer than
+its own limit, and the DVM ends that runner itself. Without a limit, a runner whose exit never reaches the QPM, as
 when PRTE loses it, holds the QPM's dispatch slot for good, and every later
 circuit waits behind it. The default is `600` seconds. Raise it for circuits
 that take longer, or set `0` for no limit. A service entry's own
