@@ -30,6 +30,7 @@ qfw_target = _load("qfw_target", REPO_ROOT / "backends" / "qfw_qiskit" / "qfw_ta
 sys.path.insert(0, str(SERVICE_DIR))
 import circuit_runner  # noqa: E402
 import device  # noqa: E402
+aer_settings = _load("aer_settings", SERVICE_DIR / "settings.py")
 
 
 @pytest.fixture(scope="module")
@@ -126,7 +127,7 @@ def test_a_circuit_aer_refuses_fails_with_the_reason_first(tmp_path):
 	run = subprocess.run(
 		[sys.executable, str(SERVICE_DIR / "circuit_runner.py"),
 		 "--qasm-file", str(qasm), "--shots", "10",
-		 "--mode", "noisy", "--device-id", "FakeFez"],
+		 "--settings", json.dumps({"mode": "noisy", "device_id": "FakeFez"})],
 		capture_output=True, text=True, cwd=SERVICE_DIR)
 
 	assert run.returncode == 1
@@ -150,19 +151,22 @@ def _ghz(width):
 	return qasm2.dumps(circuit)
 
 
-def test_the_method_setting_reaches_aer():
-	sim = circuit_runner.aer_simulator(method="matrix_product_state")
+def test_the_service_entrys_settings_reach_aer():
+	settings = aer_settings.aer_settings_from_service_entry({"aer": {
+		"method": "matrix_product_state", "mps-max-bond-dimension": 64,
+		"mps-truncation-threshold": 1e-10, "max-memory-mb": 512}})
+
+	sim = circuit_runner.aer_simulator(**settings.options)
 
 	assert sim.options.method == "matrix_product_state"
-
-
-def test_the_mps_settings_reach_aer():
-	sim = circuit_runner.aer_simulator(
-		method="matrix_product_state", mps_max_bond_dimension=64,
-		mps_truncation_threshold=1e-10)
-
 	assert sim.options.matrix_product_state_max_bond_dimension == 64
 	assert sim.options.matrix_product_state_truncation_threshold == 1e-10
+	assert sim.options.max_memory_mb == 512
+
+
+MPS_ONE_BRANCH = {"options": {
+	"method": "matrix_product_state",
+	"matrix_product_state_max_bond_dimension": 1}}
 
 
 def test_a_bond_dimension_of_one_keeps_one_branch_of_a_ghz_state(
@@ -171,8 +175,7 @@ def test_a_bond_dimension_of_one_keeps_one_branch_of_a_ghz_state(
 	qasm_file.write_text(_ghz(4))
 	monkeypatch.setattr(sys, "argv", [
 		"circuit_runner", "--qasm-file", str(qasm_file), "--shots", "200",
-		"--seed", "1", "--method", "matrix_product_state",
-		"--mps-max-bond-dimension", "1"])
+		"--seed", "1", "--settings", json.dumps(MPS_ONE_BRANCH)])
 
 	circuit_runner.main()
 
@@ -185,8 +188,8 @@ def test_the_runner_returns_the_mps_truncation_when_asked(
 	qasm_file.write_text(_ghz(4))
 	monkeypatch.setattr(sys, "argv", [
 		"circuit_runner", "--qasm-file", str(qasm_file), "--shots", "10",
-		"--method", "matrix_product_state", "--mps-max-bond-dimension", "1",
-		"--mps-log-data"])
+		"--settings", json.dumps({"options": {
+			**MPS_ONE_BRANCH["options"], "mps_log_data": True}})])
 
 	circuit_runner.main()
 
@@ -221,3 +224,17 @@ def test_an_ideal_runner_transpiles_gates_its_method_lacks():
 		qasm2.dumps(circuit), 100, method="matrix_product_state")
 
 	assert sum(counts.values()) == 100
+
+
+def test_a_records_file_samples_like_its_fake_backend(tmp_path, bell_on_fez):
+	configuration, properties = device.ibm_device_records("FakeFez")
+	records = tmp_path / "fez.json"
+	records.write_text(json.dumps(
+		{"configuration": configuration, "properties": properties}))
+	qasm = qasm2.dumps(bell_on_fez)
+
+	from_file = circuit_runner.sample_counts(
+		qasm, SHOTS, seed=9, mode="noisy", device_id=str(records))
+	from_fake = circuit_runner.sample_counts(qasm, SHOTS, seed=9, **NOISY_FEZ)
+
+	assert from_file == from_fake

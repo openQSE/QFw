@@ -14,9 +14,12 @@ DEVICE_ENV = "QFW_QPU_DEVICE_ID"
 SERVICE_ID_ENV = "QFW_QPM_SERVICE_ID"
 
 
-def available_devices():
+def check_aer_options(options):
 	from qiskit_aer import AerSimulator
-	return AerSimulator().available_devices()
+	try:
+		AerSimulator(**options)
+	except Exception as error:
+		raise DEFwExecutionError(f"aer refuses its settings: {error}")
 
 
 class QPM(UTIL_QPM):
@@ -26,10 +29,7 @@ class QPM(UTIL_QPM):
 		if self.settings.mode == "noisy" and not self.device:
 			raise DEFwExecutionError(
 				"aer mode noisy needs a device-id to emulate")
-		if self.settings.device == "GPU" and "GPU" not in available_devices():
-			raise DEFwExecutionError(
-				"aer device GPU was asked for, and this host's qiskit-aer "
-				f"offers {', '.join(available_devices())}")
+		check_aer_options(self.settings.options)
 		self.configuration = self.properties = None
 		if self.device:
 			self.configuration, self.properties = ibm_device_records(
@@ -48,9 +48,6 @@ class QPM(UTIL_QPM):
 
 	@property
 	def backend_name(self):
-		return self.backend_name_per_service()
-
-	def backend_name_per_service(self):
 		return os.environ.get(SERVICE_ID_ENV) or self.device or "aer"
 
 	def query(self):
@@ -61,11 +58,8 @@ class QPM(UTIL_QPM):
 			"num_qubits": self.num_qubits,
 			"max_shots": MAX_AER_SHOTS,
 			"aer_mode": self.settings.mode,
-			"aer_device": self.settings.device,
-			"aer_method": self.settings.method,
+			**self.settings.published,
 		})
-		for name, value in self.mps_settings().items():
-			properties[f"aer_{name}"] = value
 		if self.device:
 			properties["device_id"] = self.device
 		info = self.query_helper(
@@ -81,20 +75,9 @@ class QPM(UTIL_QPM):
 		info['aer'] = {
 			"mode": self.settings.mode,
 			"device_id": self.device,
-			"device": self.settings.device,
-			"method": self.settings.method,
-			"max_memory_mb": self.settings.max_memory_mb,
-			"target_gpus": list(self.settings.target_gpus),
-			**self.mps_settings(),
+			"options": self.settings.options,
 		}
 		return info
-
-	def mps_settings(self):
-		return {name: value for name, value in (
-			("mps_max_bond_dimension", self.settings.mps_max_bond_dimension),
-			("mps_truncation_threshold", self.settings.mps_truncation_threshold),
-			("mps_log_data", self.settings.mps_log_data or None),
-		) if value is not None}
 
 	def get_backend_info(self, lib=None, token=None, reservation_id=None):
 		if not self.device:

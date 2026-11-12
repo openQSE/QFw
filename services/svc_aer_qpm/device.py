@@ -26,20 +26,37 @@ def _load_json(directory, filename):
 		return json.load(stream)
 
 
-def fake_backend_from_ibm_records(configuration, properties):
-	from qiskit_ibm_runtime.fake_provider.fake_backend import FakeBackendV2
-	from qiskit_ibm_runtime.utils.backend_decoder import (
-		decode_backend_configuration, properties_from_server_data)
+def device_backend(fake_backend_name_or_records_file):
+	from qiskit_ibm_runtime import fake_provider
+	spec = fake_backend_name_or_records_file
+	if hasattr(fake_provider, spec):
+		return getattr(fake_provider, spec)()
+	return recorded_backend(*ibm_device_records(spec))
 
-	class CalibratedBackend(FakeBackendV2):
-		def _get_conf_dict_from_json(self):
-			decoded = json.loads(json.dumps(configuration))
-			decode_backend_configuration(decoded)
-			return decoded
 
-		def _set_props_dict_from_json(self):
-			decoded = json.loads(json.dumps(properties))
-			properties_from_server_data(decoded)
-			self._props_dict = decoded
+def recorded_backend(configuration, properties):
+	from qiskit.providers import BackendV2, Options
+	from qiskit_ibm_runtime.models import (
+		BackendConfiguration, BackendProperties)
+	from qiskit_ibm_runtime.utils.backend_converter import convert_to_target
 
-	return CalibratedBackend()
+	class RecordedBackend(BackendV2):
+		@property
+		def target(self):
+			return target
+
+		@property
+		def max_circuits(self):
+			return None
+
+		@classmethod
+		def _default_options(cls):
+			return Options()
+
+		def run(self, run_input, **options):
+			raise NotImplementedError
+
+	target = convert_to_target(
+		BackendConfiguration.from_dict(configuration),
+		BackendProperties.from_dict(properties))
+	return RecordedBackend(name=configuration["backend_name"])
