@@ -626,21 +626,13 @@ A site-owned QPM takes `mpi-launch` from the manifest that `service.manifest`
 names in `site.yaml`.
 
 QFw passes each `mca` entry to `mpirun` as `--mca`, which takes precedence over
-`OMPI_MCA_*` variables. Frontier, on HPE Slingshot, uses:
+`OMPI_MCA_*` variables. `frontier-local-services.yaml`, beside this manifest,
+is the same manifest with Frontier's HPE Slingshot settings. Frontier names it
+in its runtime file:
 
 ```yaml
-mpi-launch:
-  launcher: mpirun
-  allow-run-as-root: auto
-  export-env:
-    - LD_LIBRARY_PATH
-  bind-to: core
-  map-by: ppr:1:l3cache
-  mca:
-    btl: ^tcp,ofi,vader,openib
-    pml: ^ucx
-    mtl: ofi
-    opal_common_ofi_provider_include: shm+cxi:linkx
+local-services:
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/frontier-local-services.yaml
 ```
 
 `mpi-launch` also takes `extra-args`, a list added to every `mpirun` command.
