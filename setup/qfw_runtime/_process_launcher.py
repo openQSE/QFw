@@ -268,6 +268,7 @@ def start_qpm(argv):
         ),
         "QFW_QPM_OPERATION_MODE": operation_mode,
         "QFW_QPM_SERVICE_ID": service_id,
+        "QFW_QPM_SERVICE_NAME": str(service.get("name") or service_id),
         "QFW_QPM_SERVICE_MODULE": module,
         "QFW_QPM_CREDENTIAL_MODE": credential_mode,
         "QFW_QPM_RUN_DIR": str(run_dir),

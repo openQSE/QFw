@@ -23,12 +23,25 @@ sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 # site file to change it; 0 turns the limit off.
 SITE_CONFIG_ENV = "QFW_SITE_CONFIG"
 CIRCUIT_TIME_LIMIT_KEY = "circuit-time-limit-seconds"
+SERVICE_CONFIG_ENV = "QFW_SERVICE_CONFIG"
 DEFAULT_CIRCUIT_TIME_LIMIT_SEC = 600
 
 
-def circuit_time_limit(path=None):
+SITE_CIRCUIT_TIME_LIMIT = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
+
+
+def circuit_time_limit(path=None, service=None):
 	"""The runner time limit in seconds from the site file, or None for
 	no limit."""
+	return circuit_time_limit_and_source(path, service)[0]
+
+
+def circuit_time_limit_and_source(path=None, service=None):
+	if service is None:
+		service = _this_service_entry()
+	if CIRCUIT_TIME_LIMIT_KEY in service:
+		source = f"services[{service.get('name')}].{CIRCUIT_TIME_LIMIT_KEY}"
+		return _time_limit(service[CIRCUIT_TIME_LIMIT_KEY], source), source
 	if path is None:
 		path = os.environ.get(SITE_CONFIG_ENV, "").strip()
 	value = None
@@ -45,8 +58,18 @@ def circuit_time_limit(path=None):
 		if isinstance(qpm, dict):
 			value = qpm.get(CIRCUIT_TIME_LIMIT_KEY)
 	if value is None:
-		return DEFAULT_CIRCUIT_TIME_LIMIT_SEC
-	source = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
+		return DEFAULT_CIRCUIT_TIME_LIMIT_SEC, SITE_CIRCUIT_TIME_LIMIT
+	return _time_limit(value, SITE_CIRCUIT_TIME_LIMIT), SITE_CIRCUIT_TIME_LIMIT
+
+
+def _this_service_entry():
+	if not os.environ.get(SERVICE_CONFIG_ENV, "").strip():
+		return {}
+	from util.mpi import this_service_entry
+	return this_service_entry()
+
+
+def _time_limit(value, source):
 	if isinstance(value, bool):
 		raise ValueError(f"invalid {source}: {value!r}")
 	try:
@@ -77,7 +100,8 @@ class UTIL_QRC:
 		self.worker_pool_rr = 0
 		self.num_workers = num_workers
 		self.num_worker_tasks = num_worker_tasks
-		self.circuit_time_limit = circuit_time_limit()
+		self.circuit_time_limit, self.circuit_time_limit_source = (
+			circuit_time_limit_and_source())
 		logging.debug(f'start = {start}')
 		if start:
 			self.launcher = svc_launcher.Launcher()
@@ -155,7 +179,7 @@ class UTIL_QRC:
 		task_info['time_limit_hit'] = limit
 		logging.critical(
 			f"circuit {task_info['circ'].get_cid()} has run for more "
-			f"than {limit:g} s (qpm.{CIRCUIT_TIME_LIMIT_KEY}); killing "
+			f"than {limit:g} s ({self.circuit_time_limit_source}); killing "
 			f"its launcher, pid {pid}")
 		try:
 			# The launcher starts each runner in a session of its own,
@@ -189,7 +213,7 @@ class UTIL_QRC:
 					message = (
 						f"circuit runner killed after {limit:g} s, the "
 						f"QPM's circuit time limit "
-						f"(qpm.{CIRCUIT_TIME_LIMIT_KEY})")
+						f"({self.circuit_time_limit_source})")
 					res = message + '\n' + res
 					error = DEFwExecutionError(message)
 				else:
