@@ -23,17 +23,10 @@ sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 # site file to change it; 0 turns the limit off.
 SITE_CONFIG_ENV = "QFW_SITE_CONFIG"
 CIRCUIT_TIME_LIMIT_KEY = "circuit-time-limit-seconds"
-SERVICE_CONFIG_ENV = "QFW_SERVICE_CONFIG"
 DEFAULT_CIRCUIT_TIME_LIMIT_SEC = 600
 
 
 SITE_CIRCUIT_TIME_LIMIT = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
-
-
-def circuit_time_limit(path=None, service=None):
-	"""The runner time limit in seconds from the site file, or None for
-	no limit."""
-	return circuit_time_limit_and_source(path, service)[0]
 
 
 def circuit_time_limit_and_source(path=None, service=None):
@@ -63,10 +56,11 @@ def circuit_time_limit_and_source(path=None, service=None):
 
 
 def _this_service_entry():
-	if not os.environ.get(SERVICE_CONFIG_ENV, "").strip():
-		return {}
 	from util.mpi import this_service_entry
-	return this_service_entry()
+	try:
+		return this_service_entry()
+	except RuntimeError:
+		return {}
 
 
 def _time_limit(value, source):
