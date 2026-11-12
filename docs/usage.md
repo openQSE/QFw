@@ -1272,7 +1272,7 @@ The service reads its own `proxy` block:
 
 | Key | Values | Default |
 | --- | --- | --- |
-| `max-memory-mb` | The memory limit of the ideal sources, in MiB. It covers the cached states and the arrays that sample them. A circuit whose statevector does not fit is sampled by matrix product state. A circuit that does not fit that way either, or a bases job whose statevector does not fit, fails with `AerMemoryRefused`, and an ffsim state vector that does not fit fails with `FfsimMemoryRefused`, in the circuit's error. Cached states are dropped to make room for a new one. | `4096` |
+| `max-memory-mb` | The memory limit of each job's ideal sources, in MiB. It covers the cached states and the arrays that sample them. A circuit whose statevector does not fit is sampled by matrix product state. A circuit that does not fit that way either, or a bases job whose statevector does not fit, fails with `AerMemoryRefused`, and an ffsim state vector that does not fit fails with `FfsimMemoryRefused`, in the circuit's error. Cached states are dropped to make room for a new one. | `4096` |
 
 A service whose `proxy` block or `device-id` it refuses does not start, and
 `qfw-setup` reports only a readiness timeout
@@ -1297,10 +1297,15 @@ is in the result's `metadata["diagnostics"]`, and `ideal` names the source of
 the ideal outcomes: `known`, `ffsim`, `pauli-rotations`, `statevector`,
 `matrix_product_state` or `statevector-bases`.
 
-The service samples in its own process, one job at a time. A job cancelled
-while it waits for its turn is not sampled. One already sampling runs to the
-end, and its result is discarded. The `circuit-time-limit-seconds` setting
-does not apply.
+Each job samples in a runner process of its own, `circuit_runner.py`, launched
+as the Aer service launches its runner. Jobs run in parallel, one per slot of
+the service's `assigned-hosts`. The memory limit applies to each runner, and
+cached states last only for the job, so each job loads the device and
+computes its states afresh. A runner that outlives the circuit time limit is
+killed, and a service entry's own `circuit-time-limit-seconds` overrides the
+site's. Cancelling a job kills its runner. A runner that fails prints the
+reason as its first line, such as `proxy: LookupError: ...`, and the job's
+error keeps the error's type.
 
 A noisy shot is its ideal outcome with the X part of a Pauli frame applied,
 the frame carried from each error to the measurement, as in Stim's frame
