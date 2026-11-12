@@ -54,7 +54,8 @@ class Calibration:
 	def _calibrated(values: dict[tuple[str, tuple[int, ...]], float], quantity: str, name: str,
 					qubits: tuple[int, ...]) -> float:
 		if (name, qubits) not in values:
-			raise LookupError(f"the device reports no {quantity} for {name} on qubits {qubits}")
+			raise LookupError(f"the device reports no {quantity} for {name} on qubits {qubits}. Transpile the "
+							  "circuit for backend.target")
 		return values[(name, qubits)]
 
 	def coherence(self, qubit: int) -> Coherence | UnknownCoherence:

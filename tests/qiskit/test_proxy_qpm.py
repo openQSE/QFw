@@ -220,6 +220,19 @@ def test_a_bases_job_beyond_the_memory_limit_fails_with_a_named_error(qpm):
 	assert "memory limit" in error["error"]
 
 
+def test_an_untranspiled_circuit_fails_with_what_to_do(qpm):
+	untranspiled = QuantumCircuit(2, 2)
+	untranspiled.h(0)
+	untranspiled.cx(0, 1)
+	untranspiled.measure(range(2), range(2))
+	completion = _run(qpm, _job_info(qpm, untranspiled))
+
+	assert completion["outcome"] == "FAILED"
+	error = completion["result"]["proxy"]
+	assert error["error_type"] == "LookupError"
+	assert error["error"].endswith("Transpile the circuit for backend.target")
+
+
 def test_an_unknown_emulated_device_is_named():
 	from util.proxy_sampler.device import load_emulated_device
 
