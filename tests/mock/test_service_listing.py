@@ -32,8 +32,8 @@ def test_a_simulator_lists_the_provider_its_qpm_advertises(module, provider):
 
 @pytest.mark.parametrize("aer, accelerator", [
 	({"device": "GPU"}, "gpu"),
-	({"device": "CPU"}, "cpu"),
-	({}, "cpu"),
+	({"device": "CPU"}, None),
+	({}, None),
 ])
 def test_an_aer_service_lists_the_device_it_runs_on(aer, accelerator):
 	record = service_listing.service_record(
