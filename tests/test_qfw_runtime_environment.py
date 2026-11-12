@@ -216,6 +216,16 @@ def test_qfw_target_refuses_an_unready_run(tmp_path, monkeypatch):
     assert commands.qfw_target(["--run-dir", str(run_dir)]) == 1
 
 
+def test_qfw_target_help_needs_no_ready_run(
+        tmp_path, monkeypatch, capfd, backends_on_pythonpath):
+    run_dir = tmp_path / "run"
+    _write_state(run_dir, {"setup_complete": False})
+
+    assert commands.qfw_target(["--run-dir", str(run_dir), "--help"]) == 0
+
+    assert "--run-dir" in capfd.readouterr().out
+
+
 def test_qfw_srun_keeps_the_directory_of_a_job_local_run(
         tmp_path, monkeypatch):
     run_dir = tmp_path / "run"

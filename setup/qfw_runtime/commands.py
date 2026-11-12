@@ -164,6 +164,9 @@ def qfw_target(argv):
     parser = argparse.ArgumentParser(prog="qfw-target", add_help=False)
     parser.add_argument("--run-dir")
     args, query_args = parser.parse_known_args(argv)
+    if {"-h", "--help"} & set(query_args):
+        return subprocess.run(
+            [sys.executable, str(_target_query_script()), "--help"]).returncode
     env, _allocation = _application_run_environment(args.run_dir)
     if env is None:
         return 1
