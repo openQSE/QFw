@@ -672,6 +672,52 @@ def test_a_held_step_outlives_its_launch_until_it_is_ended(
     assert step.poll() is not None
 
 
+HET_ALLOCATION = {
+    "mode": "heterogeneous",
+    "group0": ["app-a"],
+    "group1": ["sim-a", "sim-b"],
+}
+
+
+@pytest.mark.parametrize("allocation, environment, node, cpus", [
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "login-a,directory-a,qpm-a",
+      "SLURM_JOB_CPUS_PER_NODE": "8,64(x2)"}, "directory-a", 64),
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "directory-a,qpm-a",
+      "SLURM_JOB_CPUS_PER_NODE": "64,32"}, "qpm-a", 32),
+    (HET_ALLOCATION,
+     {"SLURM_JOB_NODELIST_HET_GROUP_1": "sim-a,sim-b",
+      "SLURM_JOB_CPUS_PER_NODE_HET_GROUP_1": "16,48"}, "sim-b", 48),
+    (SLURM_ALLOCATION, {}, "qpm-a", None),
+])
+def test_a_held_step_asks_for_the_jobs_cpus_on_its_node(
+        tmp_path, monkeypatch, allocation, environment, node, cpus):
+    for variable in ("SLURM_JOB_NODELIST", "SLURM_JOB_CPUS_PER_NODE"):
+        monkeypatch.delenv(variable, raising=False)
+    for variable, value in environment.items():
+        monkeypatch.setenv(variable, value)
+    steps = []
+
+    def start_step(launch, env, step_log):
+        steps.append(HeldStep(launch))
+        return steps[-1]
+
+    monkeypatch.setattr(service_plane, "_start_step", start_step)
+
+    service_plane._launch(
+        {"pid_file": str(tmp_path / "pid")}, node, ["service"],
+        "--background", {}, allocation, lambda: True, 1, "service")
+
+    [step] = steps
+    asked = [item for item in step.launch if item.startswith("--cpus-per-task")]
+    assert asked == ([f"--cpus-per-task={cpus}"] if cpus else [])
+    command = step.launch[step.launch.index("env"):]
+    assert command == [
+        "env", "-u", "SLURM_CPUS_PER_TASK", "-u", "SLURM_TRES_PER_TASK",
+        "service"]
+
+
 def test_a_local_service_still_detaches_without_srun(tmp_path, monkeypatch):
     calls = []
 

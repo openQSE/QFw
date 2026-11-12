@@ -25,6 +25,8 @@ STATE_NAME = "service-plane.json"
 ENV_NAME = "qfw-service-env.sh"
 TERMINATE_TIMEOUT_SECONDS = 10
 PROBE_TIMEOUT_SECONDS = 30
+_STEP_VARIABLES_UNSET = (
+    "-u", "SLURM_CPUS_PER_TASK", "-u", "SLURM_TRES_PER_TASK")
 STEP_START_GRACE_SECONDS = 60
 SLURM_MODES = frozenset({"slurm", "heterogeneous"})
 STEP_LOG_TAIL_LINES = 5
@@ -1218,7 +1220,13 @@ def _launch(record, node, command, detach_flag, env, allocation, ready,
         _wait_for(ready, timeout, description)
         return
     step_log = Path(record["pid_file"]).with_name("step.log")
-    step = _start_step(_node_launch(node, command, allocation), env, step_log)
+    cpus = _job_cpus_on(node, allocation)
+    step_options = [f"--cpus-per-task={cpus}"] if cpus else []
+    step = _start_step(
+        _node_launch(
+            node, ["env", *_STEP_VARIABLES_UNSET, *command], allocation,
+            step_options),
+        env, step_log)
     _STEPS[step.pid] = step
     record["step"] = {
         "pid": step.pid,
@@ -1316,21 +1324,46 @@ def _run_on_node(node, command, env, allocation, check=True):
     return result
 
 
-def _node_launch(node, command, allocation):
+def _node_launch(node, command, allocation, step_options=()):
     launch = list(command)
     mode = allocation.get("mode")
     if mode == "heterogeneous":
         group = _group_for_node(node, allocation)
         launch = [
             "srun", f"--het-group={group}", "--overlap", "--mem=0",
-            "--nodes=1", "--ntasks=1", "--nodelist", str(node), *launch,
+            "--nodes=1", "--ntasks=1", "--nodelist", str(node),
+            *step_options, *launch,
         ]
     elif mode == "slurm":
         launch = [
             "srun", "--overlap", "--mem=0", "--nodes=1", "--ntasks=1",
-            "--nodelist", str(node), *launch,
+            "--nodelist", str(node), *step_options, *launch,
         ]
     return launch
+
+
+def _job_cpus_on(node, allocation):
+    suffix = ""
+    if allocation.get("mode") == "heterogeneous":
+        suffix = f"_HET_GROUP_{_group_for_node(node, allocation)}"
+    nodes = _expand_hosts(os.environ.get(f"SLURM_JOB_NODELIST{suffix}"))
+    counts = _expand_cpu_counts(
+        os.environ.get(f"SLURM_JOB_CPUS_PER_NODE{suffix}"))
+    if counts is None or len(counts) != len(nodes) or node not in nodes:
+        return None
+    return counts[nodes.index(node)]
+
+
+def _expand_cpu_counts(value):
+    counts = []
+    for item in str(value or "").split(","):
+        count, _, repeat = item.strip().partition("(x")
+        try:
+            counts.extend(
+                [int(count)] * (int(repeat.rstrip(")")) if repeat else 1))
+        except ValueError:
+            return None
+    return counts or None
 
 
 def _group_for_node(node, allocation):
