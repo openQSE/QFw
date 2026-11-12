@@ -395,6 +395,7 @@ def _exit_because_the_service_cannot_be_built(service_class, error):
 			f"cannot be built: {message}")
 		logging.error(reason, exc_info=error)
 		print(reason, file=sys.__stderr__, flush=True)
+		logging.shutdown()
 		os._exit(SERVICE_CANNOT_BE_BUILT_STATUS)
 
 

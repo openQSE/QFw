@@ -801,15 +801,19 @@ def test_a_qpm_whose_service_cannot_be_built_exits_with_the_reason(
 	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
 	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
 
+	shut_down = []
+
 	def exit_process(status):
-		raise SystemExit(status)
+		raise SystemExit((status, list(shut_down)))
 	monkeypatch.setattr(startup.os, "_exit", exit_process)
+	monkeypatch.setattr(
+		startup.logging, "shutdown", lambda: shut_down.append(True))
 
 	with pytest.raises(SystemExit) as exited:
 		startup._ensure_local_registration(
 			UnbuildableDefw(dirsvc=FakeSiteDirSvc()))
 
-	assert exited.value.code == 1
+	assert exited.value.code == (1, [True])
 	assert capfd.readouterr().err == (
 		f"{__name__}.UnbuildableQPM cannot be built: "
 		"aer needs a device-id or num-qubits for its width\n")
