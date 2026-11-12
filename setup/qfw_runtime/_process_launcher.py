@@ -15,6 +15,8 @@ from pathlib import Path
 from . import config as qfw_config
 from util import device_access
 
+STDERR_TAIL_LINES = 5
+
 
 def _service_env_suffix(service_id):
     return "".join(
@@ -334,6 +336,7 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
     defw_python = _command_path("defw-python", env=env)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
+    stderr_path = Path(stderr_log.name)
     try:
         process = subprocess.Popen(
             [str(defw_python), "-d", "-x"],
@@ -347,7 +350,8 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
         stderr_log.close()
     pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
     try:
-        _wait_process_ready(process, timeout, name, ready_probe)
+        _wait_process_ready(
+            process, timeout, name, ready_probe, stderr_path=stderr_path)
         _write_ready(ready_file, ready_payload)
         if background:
             return 0
@@ -423,14 +427,15 @@ def _default_process_log_dir():
     return qfw_config.qfw_run_base_dir() / "logs"
 
 
-def _wait_process_ready(process, timeout, name, ready_probe):
+def _wait_process_ready(process, timeout, name, ready_probe, stderr_path=None):
     deadline = time.monotonic() + max(0, timeout)
     last_error = None
     while True:
         returncode = process.poll()
         if returncode is not None:
             raise RuntimeError(
-                f"{name} exited during startup with status {returncode}")
+                f"{name} exited during startup with status {returncode}"
+                + _stderr_detail(stderr_path))
         try:
             if ready_probe():
                 return
@@ -441,6 +446,18 @@ def _wait_process_ready(process, timeout, name, ready_probe):
             raise TimeoutError(
                 f"{name} readiness timed out after {timeout} seconds{detail}")
         time.sleep(0.1)
+
+
+def _stderr_detail(path):
+    if path is None:
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+    except OSError:
+        return f". Its stderr would be in {path}, which cannot be read"
+    tail = " | ".join(
+        [line for line in lines if line.strip()][-STDERR_TAIL_LINES:])
+    return f". {path} ends: {tail}" if tail else f". {path} is empty"
 
 
 def _write_ready(path, payload):

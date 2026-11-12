@@ -559,7 +559,7 @@ def test_private_process_launcher_uses_defw_python_wrapper(
     monkeypatch.setattr(
         process_launcher,
         "_wait_process_ready",
-        lambda process, timeout, name, ready_probe: None,
+        lambda process, timeout, name, ready_probe, **_kwargs: None,
     )
 
     rc = process_launcher._start_defw_owned_process(
@@ -884,3 +884,20 @@ def test_qfw_srun_configures_site_directory_defw_environment(
     assert captured["env"]["DEFW_PARENT_NAME"] == "qfw-site-dirsvc"
     assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.3"
     assert captured["env"]["DEFW_LISTEN_PORT"] == "45679"
+
+
+def test_a_process_that_exits_during_startup_names_its_stderr(tmp_path):
+    stderr = tmp_path / "qpm.stderr.log"
+    stderr.write_text(
+        "svc_aer_qpm.svc_qpm.QPM cannot be built: "
+        "aer needs a device-id or num-qubits for its width\n")
+    exited = types.SimpleNamespace(poll=lambda: 1)
+
+    with pytest.raises(RuntimeError) as raised:
+        process_launcher._wait_process_ready(
+            exited, 300, "aer", lambda: False, stderr_path=stderr)
+
+    assert str(raised.value) == (
+        f"aer exited during startup with status 1. {stderr} ends: "
+        "svc_aer_qpm.svc_qpm.QPM cannot be built: "
+        "aer needs a device-id or num-qubits for its width")
