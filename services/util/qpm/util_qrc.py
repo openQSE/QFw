@@ -219,7 +219,7 @@ class UTIL_QRC:
 				else:
 					error = DEFwExecutionError(
 						f"circuit runner exited {rc}")
-				output = "{result: " + f"{res}" + "}"
+				output = self.runner_failure_output(task_info, res, stdout)
 				circ.set_fail()
 		finally:
 			self.cleanup_task(circ, task_info)
@@ -251,6 +251,17 @@ class UTIL_QRC:
 			# The client gets its result even if the QPM's own
 			# bookkeeping for it failed.
 			self._push_or_store_result(r)
+
+	def runner_failure_output(self, task_info, res, stdout):
+		return "{result: " + f"{res}" + "}"
+
+	def write_circuit_file(self, circ):
+		qasm_c = openqasm2_text(circ.info)
+		tmp_dir = cdefw_global.get_defw_tmp_dir()
+		qasm_file = os.path.join(tmp_dir, str(circ.get_cid()) + ".qasm")
+		with open(qasm_file, 'w') as f:
+			f.write(qasm_c)
+		return qasm_file
 
 	def runner(self, my_id):
 		# get the next available entry on the queue
@@ -374,14 +385,7 @@ class UTIL_QRC:
 		return None
 
 	def run_circuit_async(self, circ):
-		cid = circ.get_cid()
-
-		tmp_dir = cdefw_global.get_defw_tmp_dir()
-
-		qasm_c = openqasm2_text(circ.info)
-		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
-		with open(qasm_file, 'w') as f:
-			f.write(qasm_c)
+		qasm_file = self.write_circuit_file(circ)
 
 		cmd = self.form_cmd(circ, qasm_file)
 		# The run spans two visits by the worker: the launch here and the
@@ -413,13 +417,7 @@ class UTIL_QRC:
 
 	def run_circuit(self, circ):
 		cid = circ.get_cid()
-
-		tmp_dir = cdefw_global.get_defw_tmp_dir()
-
-		qasm_c = openqasm2_text(circ.info)
-		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
-		with open(qasm_file, 'w') as f:
-			f.write(qasm_c)
+		qasm_file = self.write_circuit_file(circ)
 
 		launcher = svc_launcher.Launcher()
 
