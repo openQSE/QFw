@@ -8,11 +8,10 @@ from typing import Any, TypeVar
 import numpy as np
 from numpy.typing import NDArray
 from qiskit import QuantumCircuit
-from qiskit.circuit.library import XGate
-from qiskit.converters import circuit_to_dag
 
 from .circuits import active_qubits, circuit_digest
 from .errors import AerMemoryRefused, FfsimMemoryRefused
+from .fermionic import FermionSpace, NotFermionic, ffsim_module, ffsim_program
 from .gates import BARRIER_DELAY, FFSIM_GATES
 from .pauli_frames import Bits, Floats
 from .rotation_states import (
@@ -85,21 +84,6 @@ def _mid_circuit_measure(circuit: Any) -> bool:
 			return True
 	return any(i.operation.name in ("if_else", "reset", "while_loop", "for_loop", "switch_case")
 			   for i in circuit.data)
-
-
-def _fermion_space(logical: Any) -> tuple[int, int | tuple[int, int]]:
-	import ffsim
-
-	first = logical.data[0].operation if logical.data else None
-	if isinstance(first, (ffsim.qiskit.PrepareHartreeFockJW, ffsim.qiskit.PrepareHartreeFockSpinlessJW)):
-		return first.norb, first.nelec
-	if isinstance(first, ffsim.qiskit.PrepareSlaterDeterminantJW):
-		occupied_alpha, occupied_beta = first.occupied_orbitals
-		return first.norb, (len(occupied_alpha), len(occupied_beta))
-	if isinstance(first, ffsim.qiskit.PrepareSlaterDeterminantSpinlessJW):
-		return first.norb, len(first.occupied_orbitals)
-	front = circuit_to_dag(logical).front_layer()
-	return logical.num_qubits, sum(isinstance(node.op, XGate) for node in front)
 
 
 def _occupation_words(norb: int, nelec: int | tuple[int, int], picks: Ints) -> Ints:
@@ -176,6 +160,9 @@ class FfsimStates(IdealSource):
 	def outcomes(self, draw: IdealDraw) -> tuple[Bits, str]:
 		if draw.logical is None or not _is_ffsim_native(draw.logical):
 			return super().outcomes(draw)
+		if ffsim_module() is None:
+			logger.info("FfsimStates: ffsim is not installed; the next ideal source samples the circuit")
+			return super().outcomes(draw)
 		state = self._state(draw.logical)
 		if state is None:
 			return super().outcomes(draw)
@@ -185,28 +172,33 @@ class FfsimStates(IdealSource):
 		return draw.logical_bits(_occupation_words(state.norb, state.nelec, picks)), "ffsim"
 
 	def _state(self, logical: Any) -> Any:
-		import ffsim
-
 		key = circuit_digest(logical)
 		state = self.states.get(key)
 		if state is not None:
 			return state
-		self._make_room(logical)
 		try:
-			state = ffsim.qiskit.final_state_vector(logical.remove_final_measurements(inplace=False))
-		except Exception:  # noqa: BLE001
+			program = ffsim_program(logical)
+		except NotFermionic as reason:
+			logger.warning("FfsimStates: ffsim cannot simulate the logical circuit, %s; the next ideal source "
+						   "samples it", reason)
+			return None
+		self._make_room(program.space)
+		try:
+			state = ffsim_module().qiskit.final_state_vector(
+				program.circuit, norb=program.space.norb, nelec=program.space.nelec)
+		except ValueError as reason:
+			logger.warning("FfsimStates: ffsim refused the logical circuit, %s; the next ideal source samples it",
+						   reason)
 			return None
 		remember(self.states, key, state, self.cache_limit)
 		return state
 
-	def _make_room(self, logical: Any) -> None:
-		import ffsim
-
-		norb, nelec = _fermion_space(logical)
-		needed = ffsim.dim(norb, nelec) * AMPLITUDE_BYTES
+	def _make_room(self, space: FermionSpace) -> None:
+		needed = ffsim_module().dim(space.norb, space.nelec) * AMPLITUDE_BYTES
 		limit = self.max_memory_mb * MIB
 		if needed > limit:
-			raise FfsimMemoryRefused(f"{norb} orbitals and {nelec} electrons", -(-needed // MIB), self.max_memory_mb)
+			raise FfsimMemoryRefused(f"{space.norb} orbitals and {space.nelec} electrons", -(-needed // MIB),
+									 self.max_memory_mb)
 		while self.states and needed + sum(state.vec.nbytes for state in self.states.values()) > limit:
 			self.states.popitem(last=False)
 

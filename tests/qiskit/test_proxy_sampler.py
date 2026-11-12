@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import sys
 
 import numpy as np
 import pytest
@@ -292,3 +293,51 @@ def test_a_clifford_circuit_follows_its_noisy_distribution_under_the_proxy_noise
 
 	total_variation = 0.5 * sum(abs(proxy.get(k, 0) - exact.get(k, 0)) for k in set(proxy) | set(exact))
 	assert total_variation < 0.01
+
+
+def _through_qpy(circuit):
+	import io
+
+	from qiskit import qpy
+
+	buffer = io.BytesIO()
+	qpy.dump(circuit, buffer)
+	return qpy.load(io.BytesIO(buffer.getvalue()))[0]
+
+
+@pytest.mark.parametrize("spin", ["balanced", "unbalanced", "spinless"])
+def test_an_ffsim_circuit_loaded_from_qpy_rebuilds_the_same_state(spin):
+	ffsim = pytest.importorskip("ffsim")
+	from util.proxy_sampler.fermionic import ffsim_program
+
+	norb = 5
+	if spin == "spinless":
+		logical = QuantumCircuit(norb)
+		logical.append(ffsim.qiskit.PrepareHartreeFockSpinlessJW(norb, 2), range(norb))
+		operator = ffsim.qiskit.UCJOpSpinlessJW(ffsim.random.random_ucj_op_spinless(norb, n_reps=2, seed=3))
+	else:
+		logical = QuantumCircuit(2 * norb)
+		logical.append(ffsim.qiskit.PrepareHartreeFockJW(norb, (3, 2)), range(2 * norb))
+		random_operator = (ffsim.random.random_ucj_op_spin_balanced if spin == "balanced"
+						   else ffsim.random.random_ucj_op_spin_unbalanced)
+		operator_gate = (ffsim.qiskit.UCJOpSpinBalancedJW if spin == "balanced" else ffsim.qiskit.UCJOpSpinUnbalancedJW)
+		operator = operator_gate(random_operator(norb, n_reps=2, with_final_orbital_rotation=True, seed=3))
+	logical.append(operator, logical.qubits)
+	native = ffsim.qiskit.final_state_vector(logical)
+
+	program = ffsim_program(_through_qpy(logical))
+	rebuilt = ffsim.qiskit.final_state_vector(program.circuit, norb=program.space.norb, nelec=program.space.nelec)
+
+	assert program.space.nelec == native.nelec
+	assert abs(np.vdot(native.vec, rebuilt.vec)) == pytest.approx(1, abs=1e-10)
+
+
+def test_a_qpm_without_ffsim_samples_an_ffsim_circuit_with_the_next_source(device, monkeypatch):
+	logical = _through_qpy(_hartree_fock(3, (1, 1)))
+	isa = transpile(logical, device, initial_layout=list(range(6)), seed_transpiler=1)
+	monkeypatch.setitem(sys.modules, "ffsim", None)
+
+	_, diagnostics = ProxySampler(device, max_memory_mb=MEMORY_MB).sample(
+		isa, 10, np.random.default_rng(0), logical=logical)
+
+	assert diagnostics["ideal"] != "ffsim"

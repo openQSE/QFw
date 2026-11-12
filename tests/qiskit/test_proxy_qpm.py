@@ -221,3 +221,38 @@ def test_the_seed_fixes_the_ideal_and_noise_draws_together():
 	assert ideal.random() == again_ideal.random()
 	assert noise.random() == again_noise.random()
 	assert not np.array_equal(seeded_generators(3)[0].random(4), seeded_generators(3)[1].random(4))
+
+
+def _lucj(norb, nelec, n_reps=1):
+	ffsim = pytest.importorskip("ffsim")
+	logical = QuantumCircuit(2 * norb)
+	logical.append(ffsim.qiskit.PrepareHartreeFockJW(norb, nelec), range(2 * norb))
+	if n_reps:
+		pairs = ([(p, p + 1) for p in range(norb - 1)], [(p, p) for p in range(norb)])
+		operator = ffsim.random.random_ucj_op_spin_balanced(
+			norb, n_reps=n_reps, interaction_pairs=pairs, with_final_orbital_rotation=True, seed=1)
+		logical.append(ffsim.qiskit.UCJOpSpinBalancedJW(operator), range(2 * norb))
+	logical.measure_all()
+	return logical
+
+
+def _logical_job(qpm, logical, **extra):
+	isa = transpile(logical, FakeFez(), initial_layout=list(range(logical.num_qubits)), seed_transpiler=1)
+	properties = qpm.query()["properties"]
+	return _job_info(qpm, isa, **circuit_payload.encode_logical_circuit(logical, properties), **extra)
+
+
+def test_a_lucj_logical_circuit_sent_as_qpy_is_sampled_by_ffsim(qpm):
+	completion = _run(qpm, _logical_job(qpm, _lucj(4, (2, 2))))
+
+	assert completion["outcome"] == "COMPLETED"
+	assert completion["result"]["diagnostics"]["ideal"] == "ffsim"
+
+
+def test_an_ffsim_state_sent_as_qpy_beyond_the_memory_limit_is_refused_by_name(qpm):
+	completion = _run(qpm, _logical_job(qpm, _lucj(12, (6, 6), n_reps=0)))
+
+	assert completion["outcome"] == "FAILED"
+	error = completion["result"]["proxy"]
+	assert error["error_type"] == "FfsimMemoryRefused"
+	assert "12 orbitals and (6, 6) electrons" in error["error"]
