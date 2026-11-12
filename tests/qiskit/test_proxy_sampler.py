@@ -267,6 +267,8 @@ def _mirror(width, rounds):
 	forward.h(0)
 	for qubit in range(width - 1):
 		forward.cx(qubit, qubit + 1)
+	for qubit in reversed(range(width - 1)):
+		forward.cx(qubit + 1, qubit)
 	forward.s(range(width))
 	forward.h(range(width))
 	circuit = QuantumCircuit(width, width)
