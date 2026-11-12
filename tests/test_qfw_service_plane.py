@@ -1028,6 +1028,46 @@ def test_prte_start_uses_keepalive_mode(tmp_path, monkeypatch):
     ])]
 
 
+def test_a_dvm_held_in_a_step_does_not_watch_its_stdin(tmp_path, monkeypatch):
+    uri_path = tmp_path / "prte_dvm" / "dvm-uri"
+    state = {
+        "run_dir": str(tmp_path),
+        "owner": "application",
+        "dry_run": False,
+        "dvm": {
+            "launch_node": "directory-a",
+            "nodes": ["directory-a"],
+            "uri_path": str(uri_path),
+        },
+        "allocation": SLURM_ALLOCATION,
+        "components": {},
+    }
+    steps = []
+
+    def start_step(launch, env, step_log):
+        uri_path.write_text("test-dvm-uri\n", encoding="utf-8")
+        Path(launch[launch.index("--report-pid") + 1]).write_text(
+            "7201\n", encoding="utf-8")
+        steps.append(HeldStep(launch))
+        return steps[-1]
+
+    monkeypatch.setattr(service_plane, "_start_step", start_step)
+    monkeypatch.setattr(service_plane, "_write_state", lambda state: None)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda pid, *_args: process_identity(pid))
+    monkeypatch.setattr(
+        service_plane, "_command_path", lambda name, env=None: name)
+    monkeypatch.setattr(service_plane.os, "geteuid", lambda: 1000)
+
+    service_plane._start_prte(state, timeout=1)
+
+    [step] = steps
+    assert "prte" in step.launch
+    assert "--keepalive" not in step.launch
+    assert "--daemonize" not in step.launch
+
+
 def test_qpm_start_composes_private_process_launcher(tmp_path, monkeypatch):
     site, _manifest = write_site_configuration(tmp_path, [
         ("iqm-test", "svc_iqm_qpm", "remote-api"),

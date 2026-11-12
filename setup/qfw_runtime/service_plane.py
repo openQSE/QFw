@@ -677,7 +677,8 @@ def _start_prte(state, timeout, service_environment=None):
         command.extend(_prte_runtime_args(state["allocation"]))
         if os.geteuid() == 0:
             command.append("--allow-run-as-root")
-        command.extend(["--keepalive", "0"])
+        if state["allocation"].get("mode") not in SLURM_MODES:
+            command.extend(["--keepalive", "0"])
         _launch(
             record, dvm["launch_node"], command, "--daemonize",
             process_environment, state["allocation"],
