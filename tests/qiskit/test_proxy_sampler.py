@@ -366,3 +366,34 @@ def test_composite_gates_with_one_name_and_different_angles_do_not_share_cached_
 
 	assert likeliest(flips_both) == "11"
 	assert likeliest(flips_neither) == "00"
+
+
+def _fully_depolarizing_delay():
+	from util.proxy_sampler.calibration import Calibration
+
+	no_coherence_times = Calibration({}, {}, {}, {}, None)
+	circuit = QuantumCircuit(1, 1)
+	circuit.delay(100, 0, unit="ns")
+	circuit.measure(0, 0)
+	return circuit, no_coherence_times
+
+
+def test_a_fully_depolarizing_delay_flips_a_measured_bit_half_the_time():
+	from util.proxy_sampler.pauli_frames import Program
+
+	circuit, no_coherence_times = _fully_depolarizing_delay()
+	shots = 40_000
+
+	flips = Program.from_circuit(circuit, no_coherence_times).propagate(shots, np.random.default_rng(0))
+
+	four_standard_errors = 4 * np.sqrt(0.25 / shots)
+	assert abs(flips.mean() - 0.5) < four_standard_errors
+
+
+def test_the_fidelity_is_the_chance_that_no_location_errs():
+	from util.proxy_sampler.calibration import error_budget
+	from util.proxy_sampler.coherence import MAXIMUM_IDLE_ERROR
+
+	budget = error_budget(*_fully_depolarizing_delay())
+
+	assert budget["fidelity"] == pytest.approx(1 - MAXIMUM_IDLE_ERROR)

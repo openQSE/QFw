@@ -16,6 +16,11 @@ from .gates import VIRTUAL
 logger = logging.getLogger(__name__)
 
 PROCESS_PER_AVERAGE = {1: 1.5, 2: 1.25}
+MAX_LOCATION_PROBABILITY = 1 - 1e-12
+
+
+def poisson_rates(probabilities: Any) -> Any:
+	return -np.log1p(-np.minimum(probabilities, MAX_LOCATION_PROBABILITY))
 
 
 def delay_seconds(operation: Any, dt: float | None) -> float:
@@ -158,23 +163,27 @@ def error_budget(circuit: Any, calibration: Calibration, idle_model: str = "expl
 	for _, qubit, seconds in gaps:
 		budget.idle_event(qubit, seconds)
 	implicit = float(sum(seconds for _, _, seconds in gaps))
-	return {"events": budget.lam, "z_events": budget.lam_z, "fidelity": float(np.exp(-budget.lam)),
+	return {"events": budget.lam, "z_events": budget.lam_z, "fidelity": float(np.exp(-budget.rate)),
 			"gates_1q": budget.gates_1q, "gates_2q": budget.gates_2q, "delay_s": budget.delays,
-			"implicit_idle_s": implicit, "log10_fidelity": float(-budget.lam / np.log(10)),
+			"implicit_idle_s": implicit, "log10_fidelity": float(-budget.rate / np.log(10)),
 			"unknown_coherence_qubits": sum(not calibration.coherence(q).known for q in active_qubits(circuit))}
 
 
 class _ErrorBudget:
 	def __init__(self, calibration: Calibration) -> None:
 		self.calibration = calibration
-		self.lam = self.lam_z = self.delays = 0.0
+		self.lam = self.lam_z = self.rate = self.delays = 0.0
 		self.gates_1q = self.gates_2q = 0
+
+	def add(self, probability: float) -> None:
+		self.lam += probability
+		self.rate += float(poisson_rates(probability))
 
 	def idle_event(self, q: int, t: float) -> None:
 		if t <= 0:
 			return
 		error, dephasing = self.calibration.coherence(q).idle_error(t)
-		self.lam += error
+		self.add(error)
 		self.lam_z += min(dephasing, error)
 
 	def delay(self, q: int, duration: float) -> None:
@@ -185,7 +194,7 @@ class _ErrorBudget:
 		if name in VIRTUAL:
 			return
 		error = self.calibration.gate_error(name, qubits)
-		self.lam += PROCESS_PER_AVERAGE[min(len(qubits), 2)] * error
+		self.add(PROCESS_PER_AVERAGE[min(len(qubits), 2)] * error)
 		if len(qubits) == 1:
 			self.lam_z += 0.5 * error
 			self.gates_1q += 1

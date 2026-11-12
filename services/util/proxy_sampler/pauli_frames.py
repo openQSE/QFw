@@ -9,7 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 from qiskit.quantum_info import Clifford
 
-from .calibration import PROCESS_PER_AVERAGE, Calibration, delay_seconds
+from .calibration import PROCESS_PER_AVERAGE, Calibration, delay_seconds, poisson_rates
 from .circuits import active_qubits
 from .coherence import WeightedPaulis
 from .gates import CLIFFORD_1Q, NOISELESS
@@ -126,15 +126,17 @@ class Program:
 
 	def _propagate(self, shots: int, rng: np.random.Generator, frame_z: Bits | None) -> Bits:
 		flips = np.zeros((shots, self.width), dtype=bool)
-		total = self.events
-		if total <= 0 or not len(self.weights):
+		rates = poisson_rates(self.weights)
+		total = float(rates.sum())
+		if total <= 0:
 			return flips
 		counts = rng.poisson(total, size=shots)
-		n_events = int(counts.sum())
-		if n_events == 0:
+		if not counts.any():
 			return flips
-		shot_of_event = np.repeat(np.arange(shots), counts)
-		location = rng.choice(len(self.weights), size=n_events, p=self.weights / total)
+		shot_of_draw = np.repeat(np.arange(shots), counts)
+		location_of_draw = rng.choice(len(rates), size=len(shot_of_draw), p=rates / total)
+		hit_at_least_once = np.unique(shot_of_draw * len(rates) + location_of_draw)
+		shot_of_event, location = np.divmod(hit_at_least_once, len(rates))
 		order = np.argsort(self.location_op[location], kind="stable")
 		shot_of_event, location = shot_of_event[order], location[order]
 		op_of_event = self.location_op[location]
