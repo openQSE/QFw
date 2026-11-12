@@ -12,8 +12,15 @@ qfw-target \- print what a QPM says about its device, without reserving it
 .SH DESCRIPTION
 .B qfw-target
 resolves one QPM in the runtime prepared by
-.BR qfw-setup (1),
-as an application would, and reads its telemetry. It does not reserve the QPM.
+.BR qfw-setup (1)
+the way
+.B QFwBackend
+does, and reads its telemetry. It does not reserve the QPM. In a job with a
+reservation it describes the reserved QPM. Otherwise
+.B QFW_QPM_IMPL
+picks the provider when
+.B --provider
+is not given.
 It runs on the current node with the same DEFw environment
 .BR qfw-srun (1)
 gives an application.
@@ -45,12 +52,13 @@ and
 .BR backend_info ", " device_info ", " coupling_graph ", " calibration
 The QPM's telemetry records. A record the QPM cannot answer is null, and
 .B errors
-names why.
+holds the error's message.
 .PP
 .B qfw_qiskit.qfw_target_query.target_from_json
 builds the Qiskit target from the document, as
 .B QFwBackend
-builds it from the same records.
+builds it from the same records. A QPM that describes no device gets the same
+generic 400-qubit target as the backend.
 .SH OPTIONS
 .TP
 .BI --run-dir " directory"
@@ -65,18 +73,21 @@ Resolve a service of this provider.
 Resolve this service.
 .TP
 .BI --lib " library"
-The shim library to describe.
+The shim library to describe. The default is
+.BR QFW_SHIM_LIB .
 .TP
 .BI --timeout " seconds"
-How long to wait for a matching service. The default is 10.
+How long to wait for the directory and for a matching service. The default
+is 10. DEFw can take several seconds to reach the directory.
 .TP
 .BI --output " file"
 Write the document to this file instead of standard output.
 .SH EXIT STATUS
 Zero when the document was written. Nonzero when the runtime is not ready or
-no service matches.
+no service matches, with the reason on one line of standard error.
 .SH SEE ALSO
 .BR qfw-setup (1),
 .BR qfw-srun (1),
 .BR qfw-status (1),
+.BR qfw-services.yaml (5),
 .BR qfw (7)

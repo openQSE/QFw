@@ -1255,6 +1255,25 @@ library (`lib`) and reservation token filled in. A workflow that plans its
 layout before it submits reads them in the reserved job it submits from, since
 they describe the QPM the reservation names.
 
+`qfw-target` prints the same records as one `qfw-target-v1` JSON document
+without a backend and without a new reservation. It picks the QPM and shim
+library the way `QFwBackend` does: the reserved QPM in a job with a
+reservation, otherwise `--provider` or `QFW_QPM_IMPL`, and `--lib` or
+`QFW_SHIM_LIB`. `qfw_qiskit.qfw_target_query.target_from_json` builds the same
+target as `backend.target` from it. The note above on `credential-mode:
+required` shims applies to it too.
+
+```bash
+qfw-target --output target.json
+```
+
+```python
+from qfw_qiskit.qfw_target_query import target_from_json
+
+with open("target.json") as stream:
+    target = target_from_json(stream.read())
+```
+
 #### Application Output
 
 Applications write normal results to standard output and errors to standard
