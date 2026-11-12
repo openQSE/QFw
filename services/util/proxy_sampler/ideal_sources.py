@@ -69,6 +69,41 @@ def born_probabilities(amplitudes: Amplitudes) -> Floats:
 MPS = "matrix_product_state"
 MIB = 1 << 20
 AMPLITUDE_BYTES = np.dtype(np.complex128).itemsize
+FLOAT_BYTES = np.dtype(np.float64).itemsize
+INDEX_BYTES = np.dtype(np.int64).itemsize
+PROBABILITY_BYTES = FLOAT_BYTES
+OUTCOME_ARRAY_BYTES = PROBABILITY_BYTES + 2 * INDEX_BYTES
+
+
+def _held_bytes(value: Any) -> int:
+	return int(getattr(value, "vec", value).nbytes)
+
+
+@dataclass
+class MemoryLimit:
+	max_memory_mb: int
+	caches: tuple[OrderedDict[str, Any], ...]
+
+	@property
+	def limit_bytes(self) -> int:
+		return self.max_memory_mb * MIB
+
+	def held_bytes(self) -> int:
+		return sum(_held_bytes(value) for cache in self.caches for value in cache.values())
+
+	def make_room(self, needed: int, keep: str | None = None) -> bool:
+		while needed + self.held_bytes() > self.limit_bytes:
+			evictable = [cache for cache in self.caches if any(key != keep for key in cache)]
+			if not evictable:
+				return False
+			cache = max(evictable, key=lambda c: sum(_held_bytes(value) for value in c.values()))
+			del cache[next(key for key in cache if key != keep)]
+		return True
+
+	def refusal(self, computation: str, needed: int) -> str:
+		held = self.held_bytes()
+		cached = f" beside {-(-held // MIB)} MiB of cached states" if held else ""
+		return f"{computation} needs {-(-needed // MIB)} MiB{cached}"
 
 
 def _is_ffsim_native(circuit: Any) -> bool:
@@ -155,10 +190,11 @@ class KnownOutcomes(IdealSource):
 
 class FfsimStates(IdealSource):
 	def __init__(self, successor: IdealSource, states: OrderedDict[str, Any], cache_limit: int, max_memory_mb: int,
-				 stats: dict[str, int]) -> None:
+				 stats: dict[str, int], memory: MemoryLimit | None = None) -> None:
 		super().__init__(successor)
 		self.states, self.cache_limit, self.stats = states, cache_limit, stats
 		self.max_memory_mb = max_memory_mb
+		self.memory = memory or MemoryLimit(max_memory_mb, (states,))
 
 	def outcomes(self, draw: IdealDraw) -> tuple[Bits, str]:
 		if draw.logical is None or not _is_ffsim_native(draw.logical):
@@ -166,16 +202,19 @@ class FfsimStates(IdealSource):
 		if ffsim_module() is None:
 			logger.info("FfsimStates: ffsim is not installed; the next ideal source samples the circuit")
 			return super().outcomes(draw)
-		state = self._state(draw.logical)
+		key = circuit_digest(draw.logical)
+		state = self._state(draw.logical, key)
 		if state is None:
 			return super().outcomes(draw)
+		needed = state.vec.size * PROBABILITY_BYTES
+		if not self.memory.make_room(needed, keep=key):
+			raise FfsimMemoryRefused(self.memory.refusal("sampling the ffsim state", needed), self.max_memory_mb)
 		self.stats["ffsim"] += 1
 		picks = draw.picks(born_probabilities(state.vec))
 		logger.debug("FfsimStates.outcomes: qubits=%d shots=%d", draw.logical.num_qubits, draw.shots)
 		return draw.logical_bits(_occupation_words(state.norb, state.nelec, picks)), "ffsim"
 
-	def _state(self, logical: Any) -> Any:
-		key = circuit_digest(logical)
+	def _state(self, logical: Any, key: str) -> Any:
 		state = self.states.get(key)
 		if state is not None:
 			return state
@@ -198,20 +237,18 @@ class FfsimStates(IdealSource):
 
 	def _make_room(self, space: FermionSpace) -> None:
 		needed = ffsim_module().dim(space.norb, space.nelec) * AMPLITUDE_BYTES
-		limit = self.max_memory_mb * MIB
-		if needed > limit:
-			raise FfsimMemoryRefused(f"{space.norb} orbitals and {space.nelec} electrons", -(-needed // MIB),
-									 self.max_memory_mb)
-		while self.states and needed + sum(state.vec.nbytes for state in self.states.values()) > limit:
-			self.states.popitem(last=False)
+		if not self.memory.make_room(needed):
+			state = f"the ffsim state vector of {space.norb} orbitals and {space.nelec} electrons"
+			raise FfsimMemoryRefused(self.memory.refusal(state, needed), self.max_memory_mb)
 
 
 class RotationPrograms(IdealSource):
 	def __init__(self, successor: IdealSource, states: OrderedDict[str, Any], cache_limit: int, max_memory_mb: int,
-				 stats: dict[str, int]) -> None:
+				 stats: dict[str, int], memory: MemoryLimit | None = None) -> None:
 		super().__init__(successor)
 		self.states, self.cache_limit, self.stats = states, cache_limit, stats
 		self.max_memory_mb = max_memory_mb
+		self.memory = memory or MemoryLimit(max_memory_mb, (states,))
 		self.not_rotation: set[str] = set()
 
 	def outcomes(self, draw: IdealDraw) -> tuple[Bits, str]:
@@ -240,6 +277,11 @@ class RotationPrograms(IdealSource):
 		program = rotation_circuit(logical.num_qubits, ops)
 		if gate_passes(program) >= gate_passes(compact):
 			return None
+		needed = (AMPLITUDE_BYTES + PROBABILITY_BYTES) << program.num_qubits
+		if not self.memory.make_room(needed):
+			logger.info("RotationPrograms: %s, over the %d MiB memory limit",
+						self.memory.refusal("the rotation program's state", needed), self.max_memory_mb)
+			return None
 		try:
 			probabilities = born_probabilities(aer_statevector(program, self.max_memory_mb))
 		except AerMemoryRefused as refusal:
@@ -251,15 +293,20 @@ class RotationPrograms(IdealSource):
 
 class AerStatevectors(IdealSource):
 	def __init__(self, states: OrderedDict[str, Any], cache_limit: int, max_memory_mb: int,
-				 stats: dict[str, int]) -> None:
+				 stats: dict[str, int], memory: MemoryLimit | None = None) -> None:
 		super().__init__(None)
 		self.states, self.cache_limit, self.stats = states, cache_limit, stats
 		self.max_memory_mb = max_memory_mb
+		self.memory = memory or MemoryLimit(max_memory_mb, (states,))
 
-	def statevector(self, compact: Any) -> Amplitudes:
+	def statevector(self, compact: Any, working_bytes_per_amplitude: int = 0) -> Amplitudes:
 		unitary = compact.remove_final_measurements(inplace=False)
 		key = circuit_digest(unitary)
 		vector: Amplitudes | None = self.states.get(key)
+		needed = (working_bytes_per_amplitude + (AMPLITUDE_BYTES if vector is None else 0)) << unitary.num_qubits
+		if not self.memory.make_room(needed, keep=key):
+			raise AerMemoryRefused(f"a statevector of {unitary.num_qubits} qubits", self.max_memory_mb,
+								   self.memory.refusal("it", needed))
 		if vector is None:
 			vector = aer_statevector(unitary, self.max_memory_mb)
 			remember(self.states, key, vector, self.cache_limit)
@@ -273,7 +320,7 @@ class AerStatevectors(IdealSource):
 		if _mid_circuit_measure(circuit):
 			return self._shots(compact, draw)
 		try:
-			vector = self.statevector(compact)
+			vector = self.statevector(compact, OUTCOME_ARRAY_BYTES)
 		except AerMemoryRefused as refusal:
 			logger.info("AerStatevectors: %s; sampled by matrix_product_state", refusal)
 			return self._shots(compact, draw, MPS)

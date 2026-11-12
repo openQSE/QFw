@@ -4,5 +4,5 @@ class AerMemoryRefused(MemoryError):
 
 
 class FfsimMemoryRefused(MemoryError):
-	def __init__(self, space, needed_mb, max_memory_mb):
-		super().__init__(f"ffsim state vector of {space} needs {needed_mb} MiB, over its {max_memory_mb} MiB memory limit")
+	def __init__(self, need, max_memory_mb):
+		super().__init__(f"{need}, over its {max_memory_mb} MiB memory limit")

@@ -8,7 +8,7 @@ pytest.importorskip("qiskit_aer")
 pytest.importorskip("qiskit_ibm_runtime")
 
 from qiskit import QuantumCircuit, transpile  # noqa: E402
-from qiskit.circuit.library import PauliEvolutionGate  # noqa: E402
+from qiskit.circuit.library import PauliEvolutionGate, XGate  # noqa: E402
 from qiskit.quantum_info import SparsePauliOp, Statevector  # noqa: E402
 from qiskit_aer import AerSimulator  # noqa: E402
 from qiskit_ibm_runtime.fake_provider import FakeFez  # noqa: E402
@@ -449,3 +449,31 @@ def test_each_u3_moves_the_frame_by_its_own_angles():
 
 	z_error_turned_into_x_by_the_hadamard = 0.5
 	assert abs(flips.mean() - z_error_turned_into_x_by_the_hadamard) < 4 * np.sqrt(0.25 / shots)
+
+
+def _aer_source(max_memory_mb):
+	return AerStatevectors(OrderedDict(), 2, max_memory_mb, {"statevector": 0, "mps": 0, "prefix_hits": 0})
+
+
+SIXTEEN_QUBITS_MIB = 1
+
+
+def test_a_statevector_whose_sampling_arrays_pass_the_memory_limit_is_sampled_by_mps():
+	room_for_the_statevector_alone = 2 * SIXTEEN_QUBITS_MIB
+
+	_, method = _aer_source(room_for_the_statevector_alone).outcomes(
+		IdealDraw.of(_ghz(16), None, 10, np.random.default_rng(1)))
+
+	assert method == "matrix_product_state"
+
+
+def test_cached_statevectors_make_room_for_a_new_one_within_the_memory_limit():
+	source = _aer_source(3 * SIXTEEN_QUBITS_MIB)
+	flipped = _ghz(16)
+	flipped.data.insert(0, flipped.data[0].replace(operation=XGate()))
+
+	for circuit in (_ghz(16), flipped):
+		_, method = source.outcomes(IdealDraw.of(circuit, None, 10, np.random.default_rng(1)))
+		assert method == "statevector"
+
+	assert len(source.states) == 1

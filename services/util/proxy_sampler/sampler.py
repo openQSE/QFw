@@ -13,12 +13,15 @@ from qiskit import ClassicalRegister
 from .calibration import Calibration, error_budget
 from .circuits import circuit_digest
 from .ideal_sources import (
+	AMPLITUDE_BYTES,
+	PROBABILITY_BYTES,
 	AerStatevectors,
 	Amplitudes,
 	FfsimStates,
 	IdealDraw,
 	Ints,
 	KnownOutcomes,
+	MemoryLimit,
 	RotationPrograms,
 	born_probabilities,
 	on_active_qubits,
@@ -30,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 PROGRAM_CACHE_SIZE = 16
 STATE_CACHE_SIZE = 2
+BASIS_ROTATION_BYTES = 3 * AMPLITUDE_BYTES + 2 * PROBABILITY_BYTES
 
 _H = np.array([[1, 1], [1, -1]], dtype=complex) / np.sqrt(2)
 _SDG = np.array([[1, 0], [0, -1j]], dtype=complex)
@@ -85,9 +89,11 @@ class ProxySampler:
 	stats: dict[str, int] = field(default_factory=lambda: {"ffsim": 0, "statevector": 0, "mps": 0, "prefix_hits": 0})
 
 	def __post_init__(self) -> None:
-		self._aer = AerStatevectors(self._states, STATE_CACHE_SIZE, self.max_memory_mb, self.stats)
-		rotations = RotationPrograms(self._aer, self._states, STATE_CACHE_SIZE, self.max_memory_mb, self.stats)
-		self._ideal = KnownOutcomes(FfsimStates(rotations, self._ffsim, STATE_CACHE_SIZE, self.max_memory_mb, self.stats))
+		memory = MemoryLimit(self.max_memory_mb, (self._states, self._ffsim))
+		self._aer = AerStatevectors(self._states, STATE_CACHE_SIZE, self.max_memory_mb, self.stats, memory)
+		rotations = RotationPrograms(self._aer, self._states, STATE_CACHE_SIZE, self.max_memory_mb, self.stats, memory)
+		self._ideal = KnownOutcomes(FfsimStates(rotations, self._ffsim, STATE_CACHE_SIZE, self.max_memory_mb, self.stats,
+												memory))
 
 	def __str__(self) -> str:
 		return (f"ProxySampler(backend={self.backend!r}, max_memory_mb={self.max_memory_mb}, "
@@ -145,7 +151,7 @@ class ProxySampler:
 		return out
 
 	def prepared_state(self, compact: Any) -> Amplitudes:
-		return self._aer.statevector(compact)
+		return self._aer.statevector(compact, BASIS_ROTATION_BYTES)
 
 	def _basis_bits(self, state: PreparedState, basis: str, shots: int, rng: np.random.Generator,
 					frames: tuple[Bits, Bits], twirl: Bits | None) -> Bits:
