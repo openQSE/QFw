@@ -1,11 +1,13 @@
 import json
 import logging
 import os
+import sys
 import threading
 import uuid
 from pathlib import Path
 from time import monotonic, sleep, time_ns
 
+from defw_exception import DEFwError
 import util.qpm.util_qpm as uq
 from .controller import find_target_controller
 from util import instrumentation
@@ -26,7 +28,9 @@ LOCAL_REGISTRATION_STATE_ATTR = "_qfw_local_dirsvc_registrations"
 REGISTRATION_LISTENER_ATTR = "_qfw_dirsvc_registration_listener"
 REGISTRATION_MONITOR_THREAD_ATTR = "_qfw_dirsvc_registration_monitor_thread"
 REGISTRATION_RETRY_SECONDS = 1
+SERVICE_CANNOT_BE_BUILT_STATUS = 1
 _site_registration_lock = threading.RLock()
+_service_build_failure_lock = threading.Lock()
 
 
 def startup_timeout():
@@ -372,12 +376,26 @@ def _query_local_service_metadata(defw_module):
 		for service_class in getattr(module, "service_classes", []):
 			try:
 				obj = service_class(start=False)
+			except Exception as error:
+				_exit_because_the_service_cannot_be_built(service_class, error)
+			try:
 				metadata = obj.query()
 			except Exception:
 				logging.exception("failed to query QPM service metadata")
 				continue
 			advertisements.extend(_as_list(metadata))
 	return advertisements
+
+
+def _exit_because_the_service_cannot_be_built(service_class, error):
+	with _service_build_failure_lock:
+		message = error.msg if isinstance(error, DEFwError) else error
+		reason = (
+			f"{service_class.__module__}.{service_class.__qualname__} "
+			f"cannot be built: {message}")
+		logging.error(reason, exc_info=error)
+		print(reason, file=sys.__stderr__, flush=True)
+		os._exit(SERVICE_CANNOT_BE_BUILT_STATUS)
 
 
 def _service_record(defw_module, advertisement):
