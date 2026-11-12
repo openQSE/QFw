@@ -645,8 +645,9 @@ QFw result keeps Aer's metadata for each circuit in
 `device: GPU` is set and its host's Aer has no GPU, and a circuit runner
 without one fails rather than run on the CPU.
 
-Noisy mode runs only the device's basis gates, so circuits must be transpiled
-for the target the service publishes. A circuit Aer cannot run fails with
+In ideal mode the runner transpiles each circuit to its `method`'s gates, so
+any gate the target offers runs. Noisy mode runs only the device's basis
+gates, so circuits must be transpiled for the target the service publishes. A circuit Aer cannot run fails with
 Aer's reason, such as `aer: AerError: 'unknown instruction: h'`. A service
 whose `aer` block it refuses does not start, and `qfw-setup` reports only a
 readiness timeout. The reason is in the QPM's `defw_py.log`.
