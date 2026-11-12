@@ -559,7 +559,7 @@ def test_private_process_launcher_uses_defw_python_wrapper(
     monkeypatch.setattr(
         process_launcher,
         "_wait_process_ready",
-        lambda process, timeout, name, ready_probe: None,
+        lambda process, timeout, name, ready_probe, **_kwargs: None,
     )
 
     rc = process_launcher._start_defw_owned_process(
@@ -884,3 +884,21 @@ def test_qfw_srun_configures_site_directory_defw_environment(
     assert captured["env"]["DEFW_PARENT_NAME"] == "qfw-site-dirsvc"
     assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.3"
     assert captured["env"]["DEFW_LISTEN_PORT"] == "45679"
+
+
+def test_a_process_that_exits_during_startup_names_its_stderr(tmp_path):
+    stderr = tmp_path / "dirsvc.stderr.log"
+    stderr.write_text(
+        "Traceback (most recent call last):\n"
+        "ModuleNotFoundError: No module named 'svc_iqm_qpm'\n")
+    exited = types.SimpleNamespace(poll=lambda: 3)
+
+    with pytest.raises(RuntimeError) as raised:
+        process_launcher._wait_process_ready(
+            exited, 5, "dirsvc", lambda: False, stderr_path=stderr)
+
+    assert str(raised.value) == (
+        f"dirsvc exited during startup with status 3. {stderr} ends: "
+        "Traceback (most recent call last): | "
+        "ModuleNotFoundError: No module named 'svc_iqm_qpm'")
+
