@@ -268,6 +268,16 @@ class QFwJob(Job):
 		fields.update(encode_logical_circuit(logical, properties))
 		return fields
 
+	def _check_bases_job(self, circuits):
+		if not (self._declared_properties() or {}).get("bases_jobs"):
+			raise DEFwError(
+				"the job asks for bases, and this QPM does not run bases "
+				"jobs")
+		if len(circuits) != 1:
+			raise DEFwError(
+				"a bases job measures one prepared state, so it takes "
+				f"exactly one circuit, not {len(circuits)}")
+
 	def _job_labels(self):
 		# The device and backend kind the job's own metrics carry.
 		return dict(getattr(self._telemetry, "labels", None) or {})
@@ -295,10 +305,8 @@ class QFwJob(Job):
 			circuits = [self._qobj]
 		else:
 			circuits = self._qobj
-		if self._options.get("bases") is not None and len(circuits) != 1:
-			raise DEFwError(
-				"a bases job measures one prepared state, so it takes "
-				f"exactly one circuit, not {len(circuits)}")
+		if self._options.get("bases") is not None:
+			self._check_bases_job(circuits)
 
 		# One trace per job. The RPCs inside the scope carry its context to
 		# the QPM, so the QPM's own spans join this trace.

@@ -173,6 +173,15 @@ def test_the_client_refuses_a_logical_circuit_for_a_qpm_that_does_not_read_one()
 		job._encode_circuit(circuit, QuantumCircuit(1))
 
 
+def test_the_client_refuses_a_bases_job_for_a_qpm_that_does_not_run_one():
+	job = object.__new__(QFwJob)
+	job._qpm = type("Directory", (), {"qpm_properties": {"provider": "nwqsim"}})()
+	job._qobj = QuantumCircuit(1)
+	job._options = {"bases": {"physical": [0], "bases": ["Z"], "shots": [1]}}
+	with pytest.raises(Exception, match="does not run bases jobs"):
+		job.submit()
+
+
 def test_a_job_without_a_logical_circuit_reads_none():
 	assert circuit_payload.logical_circuit_payload({"qasm": "OPENQASM 2.0;"}) is None
 
