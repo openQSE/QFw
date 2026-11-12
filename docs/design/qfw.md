@@ -1442,6 +1442,11 @@ sequenceDiagram
     EventEP-->>Client: application-level notification handling
 ```
 
+A circuit whose `info` sets `completion_event_class_id` has its completion
+sent only to the matching registrations with that class ID. `QFwJob` sets it
+to its event API's class ID. Without it, or when no matching registration has
+that class ID, every matching registration gets the completion.
+
 Local out-of-resource handling happens in `UTIL_QPM` before provider
 submission. The notification path avoids unbounded polling while preserving
 completion-queue reads as a fallback and recovery mechanism.
