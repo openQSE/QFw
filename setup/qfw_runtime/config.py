@@ -165,12 +165,6 @@ def qfw_bin_path(prefix=None):
     return qfw_prefix() / "bin"
 
 
-def qfw_services_dir(prefix=None):
-    prefix = qfw_prefix() if prefix is None else Path(prefix)
-    installed = prefix / "lib" / "qfw" / "services"
-    return installed if installed.is_dir() else prefix / "services"
-
-
 def qfw_run_base_dir():
     value = (
         os.environ.get("QFW_RUN_BASE_DIR") or

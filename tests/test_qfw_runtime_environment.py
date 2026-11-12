@@ -411,13 +411,16 @@ def test_service_launcher_ignores_defw_placeholders(tmp_path, monkeypatch):
     assert env["QFW_SERVICE_SCOPE"] == "site"
 
 
-def _profile_with_manifest(tmp_path, manifest_text):
+def _profile_with_manifest(tmp_path, manifest_text, selected=None):
     manifest_path = tmp_path / "local-services.yaml"
     manifest_path.write_text(manifest_text, encoding="utf-8")
     runtime_path = tmp_path / "runtime.yaml"
     runtime_path.write_text(
         "local-services:\n"
-        f"  service-manifest: {manifest_path}\n",
+        f"  service-manifest: {manifest_path}\n"
+        + "".join(
+            ["  services:\n"] + [f"    - {name}\n" for name in selected]
+            if selected else []),
         encoding="utf-8",
     )
     site_path = tmp_path / "site.yaml"
@@ -435,7 +438,11 @@ def test_qfw_services_lists_the_manifest_through_defw_python(
         "    module: svc_aer_qpm\n"
         "    credential-mode: no-secret\n"
         "    aer:\n"
-        "      device: GPU\n",
+        "      device: GPU\n"
+        "  - name: nwqsim\n"
+        "    module: svc_nwqsim_qpm\n"
+        "    credential-mode: no-secret\n",
+        selected=["aer-gpu"],
     )
     records = [{"service": "aer-gpu", "provider": "aer", "device_id": None,
                 "accelerator": "gpu"}]
@@ -458,7 +465,7 @@ def test_qfw_services_lists_the_manifest_through_defw_python(
     defw_python, listing, entries = captured["command"]
     assert defw_python == "/bin/defw-python"
     assert listing == str(
-        tmp_path.resolve() / "services" / "util" / "service_listing.py")
+        _REPO_ROOT / "services" / "util" / "service_listing.py")
     assert [entry["name"] for entry in json.loads(entries)] == ["aer-gpu"]
     assert "DEFW_AGENT_NAME" not in captured["env"]
 
