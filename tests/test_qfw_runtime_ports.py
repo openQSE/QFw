@@ -915,3 +915,22 @@ def test_an_application_step_overlaps_the_held_service_steps(
     assert commands._application_launch_command(
         ["app"], {"mode": "slurm"}, launch_options) == expected
 
+
+@pytest.mark.parametrize("stop_requested, status", [(True, 0), (False, -15)])
+def test_a_foreground_service_stopped_by_teardown_exits_zero(
+        tmp_path, stop_requested, status):
+    import signal
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    ready_file = tmp_path / "ready.json"
+    service = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    if stop_requested:
+        process_launcher.qfw_process_state.stop_request_path(pid_file).touch()
+    service.send_signal(signal.SIGTERM)
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, ready_file) == status
+    assert not process_launcher.qfw_process_state.stop_request_path(
+        pid_file).exists()
+

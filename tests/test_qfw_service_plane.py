@@ -794,6 +794,31 @@ def test_a_held_step_asks_for_the_jobs_cpus_on_its_node(
         "service"]
 
 
+def test_teardown_asks_a_service_to_stop_before_it_signals_it(
+        tmp_path, monkeypatch):
+    pid_file = tmp_path / "services" / "d" / "pid"
+    pid_file.parent.mkdir(parents=True)
+    requested = []
+    monkeypatch.setattr(
+        service_plane, "_verified_component_status",
+        lambda component, state: "alive")
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *args: requested.append(
+            process_state.stop_request_path(pid_file).exists()))
+    state = {
+        "allocation": SLURM_ALLOCATION,
+        "components": {"directory": {
+            "role": "directory", "pid": 3101, "node": "directory-a",
+            "pid_file": str(pid_file)}},
+    }
+
+    assert service_plane._stop_components(state) == []
+
+    assert requested == [True]
+    assert not process_state.stop_request_path(pid_file).exists()
+
+
 def test_a_local_service_still_detaches_without_srun(tmp_path, monkeypatch):
     calls = []
 

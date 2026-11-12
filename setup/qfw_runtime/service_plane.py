@@ -976,6 +976,7 @@ def _stop_components(state):
                 # reached the node report success and then discard the state
                 # naming a process that is still running.
                 if _verified_component_status(component, state) == "alive":
+                    _request_stop(component)
                     _terminate_pid(
                         int(component["pid"]), component.get("node"),
                         state["allocation"])
@@ -989,6 +990,12 @@ def _stop_components(state):
             component["error"] = str(exc)
             errors.append(f"{key}: {exc}")
     return errors
+
+
+def _request_stop(component):
+    if component.get("pid_file"):
+        with contextlib.suppress(OSError):
+            qfw_process_state.stop_request_path(component["pid_file"]).touch()
 
 
 def _stopped_service_environment(state):
@@ -1044,6 +1051,9 @@ def _discard_component_control_files(component):
         selected = component.get(key)
         if selected:
             Path(selected).unlink(missing_ok=True)
+    if component.get("pid_file"):
+        qfw_process_state.stop_request_path(
+            component["pid_file"]).unlink(missing_ok=True)
 
 
 def _require_process_identity(pid, node, allocation):

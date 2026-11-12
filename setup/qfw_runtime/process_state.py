@@ -18,6 +18,13 @@ class ProcessProbeError(RuntimeError):
     """Raised when the probe cannot tell whether a process is alive."""
 
 
+STOP_REQUEST_NAME = "stop-requested"
+
+
+def stop_request_path(pid_file):
+    return Path(pid_file).with_name(STOP_REQUEST_NAME)
+
+
 def local_process_identity(pid):
     """Return the kernel identity of *pid*, or ``None`` when it is gone.
 
