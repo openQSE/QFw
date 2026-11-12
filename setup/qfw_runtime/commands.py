@@ -549,6 +549,8 @@ def _application_srun_options(launch_options):
         srun.extend(["--nodelist", str(launch_options["nodelist"])])
     if launch_options.get("exclusive"):
         srun.append("--exclusive")
+    else:
+        srun.append("--overlap")
     return srun
 
 
