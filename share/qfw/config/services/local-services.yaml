@@ -42,6 +42,21 @@ services:
       type: mpi
       wrapper: null
 
+  - name: aer
+    credential-mode: no-secret
+    module: svc_aer_qpm
+    load-modules: svc_aer_qpm,api_launcher
+    agent-prefix: qpm_aer
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    aer:
+      mode: ideal
+      device: CPU
+      num-qubits: 30
+    provider-launch:
+      type: mpi
+
   - name: fake-iqm
     credential-mode: no-secret
     module: svc_fake_iqm_qpm

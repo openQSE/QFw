@@ -411,6 +411,23 @@ def test_qfw_job_metadata_keeps_only_qhw_result():
 	assert metadata == {"qhw_result": qhw_result}
 
 
+def test_qfw_job_metadata_keeps_the_qpms_diagnostics():
+	from qfw_qiskit.qfw_job import QFwJob
+
+	class FakeBackend:
+		def returns_statevector(self):
+			return False
+
+	job = QFwJob(
+		FakeBackend(), FakeQPM(), FakeEventAPI(), FakeCircuit(1), {"shots": 12})
+	diagnostics = {"MPS_log_data": "{discarded_value=0.5}"}
+
+	_, _, metadata = job._split_result_payload(
+		{"counts": {"0x0": 12}, "diagnostics": diagnostics})
+
+	assert metadata == {"diagnostics": diagnostics}
+
+
 def test_qfw_job_reads_the_shim_result_envelope():
 	# The QRMI/QDMI shim run-queue hoists a driver's qhw-result-v1 record
 	# into {"counts", "qhw_result"} (svc_lib_qpm.svc_qrc._result_envelope),
@@ -500,6 +517,7 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 				"num_shots": 12,
 				"compiler": "staq",
 				"qubit_mapping": {"0": "QB7"},
+				"seed_simulator": 34,
 				"reservation_id": 1,
 			}
 		]
@@ -576,6 +594,14 @@ def _backend_with_qpm_properties(monkeypatch, properties):
 	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
 	monkeypatch.delenv(qfw_simulator.SHIM_LIB_ENV, raising=False)
 	return qfw_simulator.QFwBackend()
+
+
+def test_backend_run_leaves_the_simulator_seed_unset_by_default(monkeypatch):
+	backend = _backend_with_qpm_properties(monkeypatch, {"provider": "aer"})
+
+	job = backend.run(FakeCircuit(2, name="unseeded"))
+
+	assert job.options["seed_simulator"] is None
 
 
 def test_backend_run_names_the_shim_library(monkeypatch):
