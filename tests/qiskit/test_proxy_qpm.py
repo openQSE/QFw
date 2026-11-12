@@ -1,4 +1,9 @@
 import json
+import os
+import shlex
+import subprocess
+import sys
+import threading
 import time
 
 import numpy as np
@@ -15,6 +20,10 @@ from tests.mock.fakes import FakeSchedulerContext  # noqa: E402
 from tests.mock.test_fake_iqm_qpm import FakeAdmissionContext  # noqa: E402
 
 import util.qpm.util_qpm as util_qpm  # noqa: E402
+import util.qpm.util_qrc as util_qrc  # noqa: E402
+import svc_proxy_qpm.svc_qrc as proxy_qrc  # noqa: E402
+from defw_exception import DEFwInProgress  # noqa: E402
+from svc_fake_iqm_qpm.svc_qrc import _CompletionEvent  # noqa: E402
 from qfw_qiskit.qfw_job import LOGICAL_CIRCUIT_METADATA_KEY, QFwJob  # noqa: E402
 from qfw_qiskit.qfw_target import build_device_target  # noqa: E402
 from qfw_qiskit.qpm_selection import qpm_selection_for_provider  # noqa: E402
@@ -27,14 +36,64 @@ DEVICE = "FakeFez"
 
 
 SERVICE = "proxy-fez"
+RUNNER_SLOTS = 4
+
+
+class SubprocessLauncher:
+	def __init__(self):
+		self.processes = {}
+		self.finished = {}
+		self.commands = []
+
+	def launch(self, cmd):
+		self.commands.append(shlex.split(cmd))
+		process = subprocess.Popen(
+			shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+		self.processes[process.pid] = process
+
+		def wait():
+			stdout, stderr = process.communicate()
+			self.finished[process.pid] = (stdout, stderr, process.returncode)
+
+		threading.Thread(target=wait, daemon=True).start()
+		return process.pid
+
+	def status(self, pid):
+		if pid not in self.finished:
+			raise DEFwInProgress(f"runner {pid} is running")
+		return self.finished.pop(pid)
+
+	def running(self):
+		return [pid for pid, process in self.processes.items() if process.poll() is None]
+
+	def shutdown(self):
+		for process in self.processes.values():
+			if process.poll() is None:
+				process.kill()
+
+
+def _plain_command(executable, executable_args=None, **mpi):
+	return shlex.join([executable, *(str(arg) for arg in executable_args or ())])
+
+
+@pytest.fixture(autouse=True)
+def runners_as_local_processes(tmp_path, monkeypatch):
+	monkeypatch.setattr(util_qrc.os, "sched_getaffinity", lambda pid: {0}, raising=False)
+	monkeypatch.setattr(util_qrc.os, "sched_setaffinity", lambda pid, mask: None, raising=False)
+	monkeypatch.setattr(util_qrc.svc_launcher, "Launcher", SubprocessLauncher)
+	monkeypatch.setattr(util_qrc, "Event", _CompletionEvent)
+	monkeypatch.setattr(proxy_qrc.cdefw_global, "get_defw_tmp_dir", lambda: str(tmp_path), raising=False)
+	monkeypatch.setattr(proxy_qrc, "build_mpi_command_string", _plain_command)
 
 
 @pytest.fixture
 def service_entry(tmp_path, monkeypatch):
-	def configure(**proxy):
+	def configure(circuit_time_limit_seconds=None, **proxy):
 		entry = {"name": SERVICE, "module": "svc_proxy_qpm", "device-id": DEVICE}
 		if proxy:
 			entry["proxy"] = proxy
+		if circuit_time_limit_seconds is not None:
+			entry["circuit-time-limit-seconds"] = circuit_time_limit_seconds
 		path = tmp_path / "services.yaml"
 		path.write_text(json.dumps({"services": [entry]}))
 		monkeypatch.setenv("QFW_SERVICE_CONFIG", str(path))
@@ -44,7 +103,7 @@ def service_entry(tmp_path, monkeypatch):
 
 def _start_qpm(monkeypatch, backend=None):
 	_clear_target_controllers_for_tests()
-	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
+	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", f"localhost:{RUNNER_SLOTS}")
 	monkeypatch.setenv("QFW_QPU_DEVICE_ID", DEVICE)
 	monkeypatch.setattr(util_qpm, "qpm_initialized", True)
 	return QPM(
@@ -56,7 +115,9 @@ def _start_qpm(monkeypatch, backend=None):
 @pytest.fixture
 def qpm(service_entry, monkeypatch):
 	service_entry(**{"max-memory-mb": 8})
-	return _start_qpm(monkeypatch)
+	started = _start_qpm(monkeypatch)
+	yield started
+	started.qrc.shutdown()
 
 
 def _ghz(width, physical):
@@ -131,7 +192,7 @@ def test_the_same_seed_returns_the_same_counts_and_another_seed_does_not(qpm):
 
 	def counts(seed):
 		completion = _run(qpm, _job_info(qpm, circuit, seed=seed))
-		assert completion["outcome"] == "COMPLETED"
+		assert completion["rc"] == 0
 		return completion["result"]["counts"]
 
 	first = counts(7)
@@ -166,7 +227,7 @@ def test_the_ideal_outcomes_come_from_the_logical_circuit_sent_beside_the_compil
 	assert circuit_payload.logical_circuit_payload(info)[0] == circuit_payload.QPY
 	completion = _run(qpm, info)
 
-	assert completion["outcome"] == "COMPLETED"
+	assert completion["rc"] == 0
 	counts = completion["result"]["counts"]
 	x_on_logical_qubit_one = "010"
 	assert max(counts, key=counts.get) == x_on_logical_qubit_one
@@ -220,7 +281,7 @@ def test_a_bases_job_returns_one_record_per_basis(qpm):
 	bases = {"physical": [0, 1], "bases": ["ZZ", "XX"], "shots": [300, 500]}
 	completion = _run(qpm, _job_info(qpm, isa, bases=bases))
 
-	assert completion["outcome"] == "COMPLETED"
+	assert completion["rc"] == 0
 	records = completion["result"]["bases"]
 	assert [(record["basis"], sum(record["counts"].values())) for record in records] == [("ZZ", 300), ("XX", 500)]
 	assert records[0]["diagnostics"]["ideal"] == "statevector-bases"
@@ -286,7 +347,7 @@ def test_a_proxy_block_it_cannot_use_stops_the_start_by_naming_the_setting(servi
 
 
 def test_the_seed_fixes_the_ideal_and_noise_draws_together():
-	from svc_proxy_qpm.svc_qrc import seeded_generators
+	from util.proxy_sampler.jobs import seeded_generators
 
 	ideal, noise = seeded_generators(3)
 	again_ideal, again_noise = seeded_generators(3)
@@ -317,7 +378,7 @@ def _logical_job(qpm, logical, **extra):
 def test_a_lucj_logical_circuit_sent_as_qpy_is_sampled_by_ffsim(qpm):
 	completion = _run(qpm, _logical_job(qpm, _lucj(4, (2, 2))))
 
-	assert completion["outcome"] == "COMPLETED"
+	assert completion["rc"] == 0
 	assert completion["result"]["diagnostics"]["ideal"] == "ffsim"
 
 
@@ -330,20 +391,88 @@ def test_an_ffsim_state_sent_as_qpy_beyond_the_memory_limit_is_refused_by_name(q
 	assert "12 orbitals and (6, 6) electrons" in error["error"]
 
 
-def test_a_job_cancelled_while_it_waits_to_sample_is_never_sampled(qpm, monkeypatch):
-	sampled = []
-	monkeypatch.setattr(qpm.qrc.sampler, "sample", lambda *args, **kwargs: sampled.append(args))
-	decision = qpm.reserve(request={
-		"owner": {"user": "proxy-user"}, "job_id": "job-proxy", "scope_id": "allocation-proxy",
-		"target_device_id": DEVICE, "task_class": {"qubit_count": 3, "shots": 16}})
-	with qpm.qrc._sampling_lock:
-		response = qpm.async_run(_job_info(qpm, _ghz(3, [0, 1, 2])), reservation_id=decision["reservation_id"])
-		deadline = time.monotonic() + 10
-		while not qpm.qrc._tasks and time.monotonic() < deadline:
-			time.sleep(0.01)
-		qpm.cancel_task(cid=response["cid"], reservation_id=decision["reservation_id"])
-	while qpm.qrc._tasks and time.monotonic() < deadline:
-		time.sleep(0.01)
+SLOW_SHOTS = 1_000_000
+RUNNER = os.path.join(os.path.dirname(proxy_qrc.__file__), "circuit_runner.py")
 
-	assert not qpm.qrc._tasks
-	assert sampled == []
+
+def _wait_for(check, timeout=60):
+	deadline = time.monotonic() + timeout
+	while time.monotonic() < deadline:
+		if check():
+			return True
+		time.sleep(0.02)
+	return check()
+
+
+def _reserve(qpm):
+	return qpm.reserve(request={
+		"owner": {"user": "proxy-user"}, "job_id": "job-proxy", "scope_id": "allocation-proxy",
+		"target_device_id": DEVICE, "task_class": {"qubit_count": 20, "shots": 16}})["reservation_id"]
+
+
+def _slow_job(qpm):
+	ghz = QuantumCircuit(20, 20)
+	ghz.h(0)
+	for qubit in range(19):
+		ghz.cx(qubit, qubit + 1)
+	ghz.measure(range(20), range(20))
+	return _job_info(qpm, transpile(ghz, FakeFez(), seed_transpiler=1, optimization_level=1), shots=SLOW_SHOTS)
+
+
+def test_a_runner_that_outlives_the_service_entrys_time_limit_is_killed(service_entry, monkeypatch):
+	service_entry(circuit_time_limit_seconds=1)
+	qpm = _start_qpm(monkeypatch)
+	try:
+		completion = _run(qpm, _slow_job(qpm))
+	finally:
+		qpm.qrc.shutdown()
+
+	assert completion["rc"] != 0
+	assert "killed after 1 s" in completion["result"]
+	assert "services[proxy-fez].circuit-time-limit-seconds" in completion["result"]
+
+
+def test_cancelling_a_job_that_is_sampling_stops_its_runner(qpm):
+	reservation = _reserve(qpm)
+	cid = qpm.async_run(_slow_job(qpm), reservation_id=reservation)["cid"]
+	assert _wait_for(lambda: qpm.qrc.launcher.running())
+
+	qpm.cancel_task(cid=cid, reservation_id=reservation)
+
+	assert _wait_for(lambda: not qpm.qrc.launcher.running(), timeout=10)
+	completion = qpm.read_cq(cid=cid, reservation_id=reservation)
+	assert completion.get("outcome") == "CANCELLED"
+	assert completion.get("rc") != 0
+
+
+def test_jobs_sample_in_parallel_runners(qpm):
+	reservation = _reserve(qpm)
+	for _ in range(2):
+		qpm.async_run(_slow_job(qpm), reservation_id=reservation)
+
+	assert _wait_for(lambda: len(qpm.qrc.launcher.running()) == 2)
+
+
+def test_a_failed_runner_prints_its_reason_first(tmp_path):
+	untranspiled = QuantumCircuit(1, 1)
+	untranspiled.h(0)
+	untranspiled.measure(0, 0)
+	job = tmp_path / "job.json"
+	job.write_text(json.dumps(proxy_qrc.runner_job(
+		{"num_shots": 10, **circuit_payload.encode_qiskit_circuit(untranspiled, circuit_payload.qiskit_circuit_formats())})))
+
+	runner = subprocess.run(
+		[sys.executable, RUNNER, "--job-file", str(job), "--log-file", str(tmp_path / "log"),
+		 "--device-id", DEVICE, "--max-memory-mb", "8"], capture_output=True, text=True)
+
+	assert runner.returncode == 1
+	assert runner.stdout.splitlines()[0].startswith("proxy: LookupError: the device reports no error for h")
+
+
+def test_the_runner_samples_under_the_service_entrys_memory_limit_and_device(qpm):
+	completion = _run(qpm, _logical_job(qpm, _lucj(12, (6, 6), n_reps=0)))
+
+	assert completion["result"]["proxy"]["error_type"] == "FfsimMemoryRefused"
+	command = qpm.qrc.launcher.commands[-1]
+	assert command[command.index("--max-memory-mb") + 1] == "8"
+	assert command[command.index("--device-id") + 1] == DEVICE
