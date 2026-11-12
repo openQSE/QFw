@@ -33,6 +33,18 @@ def _with_declared_properties(client, resolved):
 
 def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 		 timeout=SYSTEM_UP_TIMEOUT, provider=None, service_id=None):
+	resolved, lifecycle_binding, reservation_id = bind_qpm(
+		dirsvc, qpm_type, qpm_capabilities, timeout=timeout,
+		provider=provider, service_id=service_id)
+	client = lifecycle_binding.api(
+		resolved.api_binding.binding_name,
+		expected_runtime_id=resolved.runtime_id,
+	)
+	return _with_declared_properties(client, resolved), reservation_id
+
+
+def bind_qpm(dirsvc, qpm_type=-1, qpm_capabilities=-1,
+	     timeout=SYSTEM_UP_TIMEOUT, provider=None, service_id=None):
 	want = provider or os.environ.get(QPM_IMPL_ENV)
 	resolver = QPMResolver.from_environment(dirsvc=dirsvc, defw_module=defw)
 	reservations = parse_qfw_reservations(required=False)
@@ -44,7 +56,7 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 			selected.reservation_id,
 			timeout=timeout,
 			binding_name=EXECUTION_BINDING)
-		return (_with_declared_properties(binding.client, binding.resolved),
+		return (binding.resolved, binding.lifecycle_binding,
 			binding.reservation_id)
 	request = {
 		"timeout": timeout,
@@ -57,12 +69,7 @@ def _connect_qpm(dirsvc, qpm_type, qpm_capabilities,
 	if service_id:
 		request["service_id"] = service_id
 	resolved = resolver.resolve(**request)
-	lifecycle_binding = resolver.managed_binding(resolved)
-	client = lifecycle_binding.api(
-		resolved.api_binding.binding_name,
-		expected_runtime_id=resolved.runtime_id,
-	)
-	return _with_declared_properties(client, resolved), None
+	return resolved, resolver.managed_binding(resolved), None
 
 
 def get_qpm(qpm_type=-1, qpm_capabilities=-1, timeout=SYSTEM_UP_TIMEOUT,
