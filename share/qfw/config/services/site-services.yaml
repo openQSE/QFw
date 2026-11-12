@@ -31,6 +31,22 @@ services:
     provider-launch:
       type: internal
 
+  - name: aer
+    credential-mode: no-secret
+    module: svc_aer_qpm
+    load-modules: svc_aer_qpm,api_launcher
+    agent-prefix: qpm_aer
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    listen-port: 8790
+    telnet-port: 8791
+    aer:
+      mode: ideal
+      device: CPU
+      num-qubits: 30
+    provider-launch:
+      type: mpi
+
   - name: backline-local
     credential-mode: no-secret
     module: svc_backline_qpm

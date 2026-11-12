@@ -263,6 +263,7 @@ qfw_example_service_for_backend() {
 	case "${backend}" in
 		""|"tnqvm") printf "%s\n" "tnqvm" ;;
 		"nwqsim")  printf "%s\n" "nwqsim" ;;
+		"aer") printf "%s\n" "aer" ;;
 		"fake-iqm"|"fake-iqm-20q") printf "%s\n" "fake-iqm" ;;
 		"iqm-garnet-mock") printf "%s\n" "shim-garnet-mock" ;;
 		*)

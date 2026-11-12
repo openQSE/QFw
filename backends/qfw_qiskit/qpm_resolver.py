@@ -26,7 +26,7 @@ SCOPE_ALIASES = {
 }
 QPM_TYPE_HARDWARE = 1 << 0
 QPM_TYPE_SIMULATOR = 1 << 1
-SIMULATOR_PROVIDERS = {"simulator", "nwqsim", "tnqvm", "qb", "proxy"}
+SIMULATOR_PROVIDERS = {"simulator", "nwqsim", "tnqvm", "qb", "aer", "proxy"}
 ZERO_UUID = str(uuid.UUID(int=0))
 
 API_CATEGORY_BINDINGS = {

@@ -790,10 +790,16 @@ def test_qfw_job_forwards_each_passthrough_option_on_its_own(monkeypatch):
 	assert "param_values" not in only_compile
 
 
+def test_qfw_job_forwards_the_simulator_seed(monkeypatch):
+	payload = _submit_with_options(monkeypatch, seed_simulator=7)
+	assert payload["seed_simulator"] == 7
+
+
 def test_qfw_job_leaves_passthrough_options_out_when_unset(monkeypatch):
 	payload = _submit_with_options(monkeypatch)
 	assert "param_values" not in payload
 	assert "compilation_options" not in payload
+	assert "seed_simulator" not in payload
 
 
 def test_qfw_job_leaves_passthrough_options_out_when_none(monkeypatch):
