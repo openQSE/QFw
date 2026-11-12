@@ -207,3 +207,17 @@ def test_matrix_product_state_runs_a_circuit_too_wide_for_statevector():
 
 	assert set(counts) <= {"0" * 44, "1" * 44}
 	assert sum(counts.values()) == 100
+
+
+def test_an_ideal_runner_transpiles_gates_its_method_lacks():
+	circuit = QuantumCircuit(2, 2)
+	circuit.ry(0.4, 0)
+	circuit.crx(0.7, 0, 1)
+	circuit.cs(0, 1)
+	circuit.ch(1, 0)
+	circuit.measure([0, 1], [0, 1])
+
+	counts = circuit_runner.sample_counts(
+		qasm2.dumps(circuit), 100, method="matrix_product_state")
+
+	assert sum(counts.values()) == 100

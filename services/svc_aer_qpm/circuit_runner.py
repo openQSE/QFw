@@ -3,7 +3,9 @@ import json
 import sys
 import traceback
 
+import qiskit
 import qiskit.qasm2
+from qiskit.circuit.library import get_standard_gate_name_mapping
 from qiskit_aer import AerSimulator
 
 from device import fake_backend_from_ibm_records, ibm_device_records
@@ -29,6 +31,12 @@ def aer_simulator(mode="ideal", device_id=None, device="CPU",
 	return AerSimulator(**options)
 
 
+def standard_basis_gates(simulator):
+	standard = get_standard_gate_name_mapping()
+	return [name for name in simulator.configuration().basis_gates
+		if name in standard]
+
+
 def sample_counts(qasm, shots, seed=None, **settings):
 	return sample(qasm, shots, seed, **settings)["counts"]
 
@@ -39,7 +47,12 @@ def sample(qasm, shots, seed=None, **settings):
 		run_options["seed_simulator"] = seed
 	circuit = qiskit.qasm2.loads(
 		qasm, custom_instructions=qiskit.qasm2.LEGACY_CUSTOM_INSTRUCTIONS)
-	result = aer_simulator(**settings).run(circuit, **run_options).result()
+	simulator = aer_simulator(**settings)
+	if settings.get("mode", "ideal") == "ideal":
+		circuit = qiskit.transpile(
+			circuit, basis_gates=standard_basis_gates(simulator),
+			optimization_level=0)
+	result = simulator.run(circuit, **run_options).result()
 	if not result.success:
 		raise RuntimeError(result.status)
 	return {"counts": result.get_counts(),
