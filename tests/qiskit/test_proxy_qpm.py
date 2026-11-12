@@ -129,13 +129,17 @@ def test_the_job_returns_the_error_budget_as_diagnostics(qpm):
 	assert 0 < diagnostics["fidelity"] < 1
 
 
-def test_a_logical_circuit_travels_beside_the_compiled_one(qpm):
-	logical = QuantumCircuit(3, 3)
-	logical.x(0)
-	logical.measure(range(3), range(3))
-	isa = transpile(logical, FakeFez(), initial_layout=[4, 5, 6], seed_transpiler=1)
+def _x_on(qubit):
+	circuit = QuantumCircuit(3, 3)
+	circuit.x(qubit)
+	circuit.measure(range(3), range(3))
+	return circuit
+
+
+def test_the_ideal_outcomes_come_from_the_logical_circuit_sent_beside_the_compiled_one(qpm):
+	isa = transpile(_x_on(0), FakeFez(), initial_layout=[4, 5, 6], seed_transpiler=1)
 	properties = qpm.query()["properties"]
-	info = _job_info(qpm, isa, **circuit_payload.encode_logical_circuit(logical, properties))
+	info = _job_info(qpm, isa, **circuit_payload.encode_logical_circuit(_x_on(1), properties))
 
 	assert set(info["logical_circuit"]) == {"format", "data"}
 	assert circuit_payload.logical_circuit_payload(info)[0] == circuit_payload.QPY
@@ -143,8 +147,9 @@ def test_a_logical_circuit_travels_beside_the_compiled_one(qpm):
 
 	assert completion["outcome"] == "COMPLETED"
 	counts = completion["result"]["counts"]
-	x_on_qubit_zero = "001"
-	assert max(counts, key=counts.get) == x_on_qubit_zero
+	x_on_logical_qubit_one = "010"
+	assert max(counts, key=counts.get) == x_on_logical_qubit_one
+	assert completion["result"]["diagnostics"]["ideal"] == "pauli-rotations"
 
 
 def test_the_client_sends_the_logical_circuit_from_the_circuit_metadata(qpm):

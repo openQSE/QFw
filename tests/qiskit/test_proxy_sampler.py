@@ -114,7 +114,7 @@ def test_the_logical_circuit_is_the_source_of_pauli_rotation_outcomes(device):
 	isa = transpile(logical, device, initial_layout=[0, 1, 2], seed_transpiler=1)
 	_, diagnostics = ProxySampler(device, max_memory_mb=MEMORY_MB).sample(
 		isa, 10, np.random.default_rng(0), logical=logical)
-	assert diagnostics["ideal"] in ("pauli-rotations", "statevector")
+	assert diagnostics["ideal"] == "pauli-rotations"
 
 
 def test_a_pauli_rotation_program_is_exact():
