@@ -77,8 +77,10 @@ def test_the_mpirun_command_carries_the_fallback(monkeypatch):
 	assert command[command.index("--map-by") + 1] == "ppr:1:l2cache"
 
 
-LOCAL_SERVICES = (pathlib.Path(__file__).resolve().parents[2] / "share" / "qfw"
-	/ "config" / "services" / "local-services.yaml")
+SERVICE_MANIFESTS = (pathlib.Path(__file__).resolve().parents[2] / "share"
+	/ "qfw" / "config" / "services")
+LOCAL_SERVICES = SERVICE_MANIFESTS / "local-services.yaml"
+FRONTIER_SERVICES = SERVICE_MANIFESTS / "frontier-local-services.yaml"
 SITE_TRANSPORT_AND_PLACEMENT = """
 mpi-launch:
   map-by: ppr:1:node
@@ -111,3 +113,16 @@ def test_a_site_manifest_sets_transport_and_placement(tmp_path):
 		command.index("btl") - 1:command.index("btl") + 2]
 	assert ["--mca", "pml", "ob1"] == command[
 		command.index("pml") - 1:command.index("pml") + 2]
+
+
+def test_frontiers_manifest_is_the_local_one_with_slingshot_transport():
+	local = load_service_config(str(LOCAL_SERVICES))
+	frontier = load_service_config(str(FRONTIER_SERVICES))
+
+	command = build_mpi_command(
+		"simulator", np=2, dvm_uri="", config=frontier)
+
+	assert frontier["services"] == local["services"]
+	assert ["--mca", "mtl", "ofi"] == command[
+		command.index("mtl") - 1:command.index("mtl") + 2]
+	assert command[command.index("--bind-to") + 1] == "core"

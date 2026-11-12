@@ -1,0 +1,101 @@
+mpi-launch:
+  launcher: mpirun
+  allow-run-as-root: auto
+  export-env:
+    - LD_LIBRARY_PATH
+  bind-to: core
+  map-by: ppr:1:l3cache
+  mca:
+    btl: ^tcp,ofi,vader,openib
+    pml: ^ucx
+    mtl: ofi
+    opal_common_ofi_provider_include: shm+cxi:linkx
+
+services:
+  - name: nwqsim
+    credential-mode: no-secret
+    module: svc_nwqsim_qpm
+    load-modules: svc_nwqsim_qpm,api_launcher
+    environment-modules:
+      - libfabric
+      - openmpi
+      - nwqsim
+    required-executables:
+      - circuit_runner.nwqsim
+    agent-prefix: qpm_nwqsim
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    provider-launch:
+      type: mpi
+      wrapper: null
+      use-dvm: true
+
+  - name: tnqvm
+    credential-mode: no-secret
+    module: svc_tnqvm_qpm
+    load-modules: svc_tnqvm_qpm,api_launcher
+    environment-modules:
+      - libfabric
+      - openmpi
+      - tnqvm
+    required-executables:
+      - circuit_runner.tnqvm
+    agent-prefix: qpm_tnqvm
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    provider-launch:
+      type: mpi
+      wrapper: null
+
+  - name: aer
+    credential-mode: no-secret
+    module: svc_aer_qpm
+    load-modules: svc_aer_qpm,api_launcher
+    agent-prefix: qpm_aer
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    aer:
+      mode: ideal
+      device: CPU
+      num-qubits: 30
+    provider-launch:
+      type: mpi
+
+  - name: fake-iqm
+    credential-mode: no-secret
+    module: svc_fake_iqm_qpm
+    load-modules: svc_fake_iqm_qpm,api_launcher
+    agent-prefix: qpm_fake_iqm
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: fake-iqm-20q
+    provider-launch:
+      type: internal
+
+  - name: backline-local
+    credential-mode: no-secret
+    module: svc_backline_qpm
+    load-modules: svc_backline_qpm,api_launcher
+    agent-prefix: qpm_backline
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: backline-local
+    provider-launch:
+      type: internal
+
+  - name: shim-garnet-mock
+    credential-mode: required
+    module: svc_lib_qpm
+    load-modules: svc_lib_qpm,api_launcher
+    agent-prefix: qpm_shim_garnet_mock
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: iqm-garnet-mock
+    provider-launch:
+      type: qrmi-qdmi
