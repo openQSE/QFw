@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 
 SCHEMA = "qfw-target-v1"
@@ -25,10 +26,14 @@ def target_document(resolved, telemetry, lib=None):
 			document[key] = getattr(telemetry, call)(lib=lib)
 		except Exception as exc:
 			document[key] = None
-			errors[key] = str(exc)
+			errors[key] = error_message(exc)
 	if errors:
 		document["errors"] = errors
 	return document
+
+
+def error_message(exc):
+	return " ".join(str(getattr(exc, "msg", None) or exc).split())
 
 
 def target_from_json(document):
@@ -43,36 +48,35 @@ def target_from_json(document):
 		document.get("coupling_graph"), document.get("calibration"))
 	if target is not None:
 		return target
-	return generic_target_at_published_width(document.get("settings") or {})
+	return generic_target(document.get("settings") or {})
 
 
-def generic_target_at_published_width(settings):
+def generic_target(settings):
 	from qfw_qiskit.qfw_target import QFW_NUM_QUBITS, build_qfw_target
-	return build_qfw_target(
-		int(settings.get("num_qubits") or QFW_NUM_QUBITS),
-		settings.get("instructions"))
+	return build_qfw_target(QFW_NUM_QUBITS, settings.get("instructions"))
 
 
 def query(provider=None, service_id=None, lib=None, timeout=10):
-	import defw
 	from defw_app_util import defw_get_directory_service
-	from qfw_qiskit.qfw_lookup_service import (
-		EXECUTION_BINDING, TELEMETRY_BINDING)
+	from qfw_qiskit.qfw_job import SHIM_LIB_ENV, normalize_shim_library
+	from qfw_qiskit.qfw_lookup_service import TELEMETRY_BINDING, bind_qpm
 	from qfw_qiskit.qfw_telemetry import QFwTelemetry
-	from qfw_qiskit.qpm_resolver import QPMResolver
+	from qfw_qiskit.qpm_selection import qpm_selection_for_provider
 
-	resolver = QPMResolver.from_environment(
-		dirsvc=defw_get_directory_service(timeout=timeout),
-		defw_module=defw)
-	request = {"timeout": timeout, "binding_name": EXECUTION_BINDING}
-	if provider:
-		request["provider"] = provider
-	if service_id:
-		request["service_id"] = service_id
-	resolved = resolver.resolve(**request)
-	api = resolver.managed_binding(resolved).api(
+	selection = qpm_selection_for_provider(provider) if provider else {}
+	resolved, lifecycle_binding, _reservation_id = bind_qpm(
+		defw_get_directory_service(timeout=timeout),
+		selection.get("qpm_type", -1), selection.get("qpm_capabilities", -1),
+		timeout=timeout, provider=selection.get("provider"),
+		service_id=service_id)
+	properties = dict(resolved.properties or {})
+	if lib is None and properties.get("provider") == "shim":
+		lib = os.environ.get(SHIM_LIB_ENV)
+	api = lifecycle_binding.api(
 		TELEMETRY_BINDING, expected_runtime_id=resolved.runtime_id)
-	return target_document(resolved, QFwTelemetry(api), lib=lib)
+	return target_document(
+		resolved, QFwTelemetry(api),
+		lib=normalize_shim_library(lib, properties))
 
 
 def main(argv=None):
@@ -80,13 +84,21 @@ def main(argv=None):
 		prog="qfw-target",
 		description="Print what a QPM says about its device, as one "
 			    f"{SCHEMA} JSON document, without reserving it.")
+	parser.add_argument("--run-dir", help="the QFw run to query")
 	parser.add_argument("--provider")
 	parser.add_argument("--service-id")
 	parser.add_argument("--lib", help="the shim library to describe")
-	parser.add_argument("--timeout", type=int, default=10)
+	parser.add_argument(
+		"--timeout", type=int, default=10,
+		help="seconds to wait for the directory and for a matching QPM")
 	parser.add_argument("--output", help="write here instead of stdout")
 	args = parser.parse_args(argv)
-	document = query(args.provider, args.service_id, args.lib, args.timeout)
+	try:
+		document = query(
+			args.provider, args.service_id, args.lib, args.timeout)
+	except Exception as exc:
+		print(f"qfw-target: {error_message(exc)}", file=sys.stderr)
+		return 1
 	text = json.dumps(document, indent=2, sort_keys=True, default=str)
 	if args.output:
 		with open(args.output, "w", encoding="utf-8") as stream:

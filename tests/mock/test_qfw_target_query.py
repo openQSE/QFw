@@ -33,18 +33,26 @@ class FakeTelemetryAPI:
 class FakeResolver:
 	def __init__(self):
 		self.requests = []
+		self.reserved = []
 		self.api = FakeTelemetryAPI()
 		self.bound = []
+		self.resolved = RESOLVED
 
 	def resolve(self, **request):
 		self.requests.append(request)
-		return RESOLVED
+		return self.resolved
 
 	def managed_binding(self, resolved):
 		def api(binding_name, expected_runtime_id=None):
 			self.bound.append((binding_name, expected_runtime_id))
 			return self.api
 		return types.SimpleNamespace(api=api)
+
+	def connect_reserved_managed(self, service_id, reservation_id, **kwargs):
+		self.reserved.append((service_id, reservation_id))
+		return types.SimpleNamespace(
+			resolved=self.resolved, reservation_id=reservation_id,
+			lifecycle_binding=self.managed_binding(self.resolved))
 
 	def __getattr__(self, name):
 		raise AssertionError(f"qfw-target must not call {name}")
@@ -59,6 +67,9 @@ def resolver(monkeypatch):
 	monkeypatch.setattr(
 		sys.modules["defw_app_util"], "defw_get_directory_service",
 		lambda timeout=None: object())
+	monkeypatch.delenv("QFW_RESERVATIONS", raising=False)
+	monkeypatch.delenv("QFW_QPM_IMPL", raising=False)
+	monkeypatch.delenv("QFW_SHIM_LIB", raising=False)
 	return fake
 
 
@@ -88,9 +99,10 @@ def test_a_record_the_qpm_cannot_answer_is_null_with_its_error():
 def test_the_query_resolves_and_reads_telemetry_without_reserving(resolver):
 	document = target_query.query(provider="aer", service_id="aer-0123abcd")
 
-	assert resolver.requests == [{
-		"timeout": 10, "binding_name": "execution", "provider": "aer",
-		"service_id": "aer-0123abcd"}]
+	[request] = resolver.requests
+	assert (request["provider"], request["service_id"], request["timeout"]) == (
+		"aer", "aer-0123abcd", 10)
+	assert resolver.reserved == []
 	assert resolver.bound == [("telemetry", "runtime-1")]
 	assert document["service_id"] == "aer-0123abcd"
 
@@ -103,12 +115,77 @@ def test_the_command_writes_the_document(resolver, tmp_path):
 	assert json.loads(output.read_text())["settings"]["aer_mode"] == "ideal"
 
 
-def test_a_device_less_document_gets_the_generic_target_at_the_qpm_width():
+def test_a_job_with_a_reservation_describes_the_reserved_qpm(resolver, monkeypatch):
+	monkeypatch.setenv("QFW_RESERVATIONS", '[["fake-iqm-0123", "7"]]')
+
+	document = target_query.query()
+
+	assert [service_id for service_id, _id in resolver.reserved] == ["fake-iqm-0123"]
+	assert resolver.requests == []
+	assert document["service_id"] == "aer-0123abcd"
+
+
+def test_without_a_provider_the_job_s_qpm_impl_picks_the_qpm(
+		resolver, monkeypatch):
+	monkeypatch.setenv("QFW_QPM_IMPL", "fake-iqm")
+
+	target_query.query()
+
+	assert resolver.requests[0]["provider"] == "fake-iqm"
+
+
+def test_a_shim_qpm_is_described_through_the_job_s_shim_library(
+		resolver, monkeypatch):
+	monkeypatch.setenv("QFW_SHIM_LIB", "qdmi")
+	resolver.resolved = types.SimpleNamespace(
+		service_id="shim-a", runtime_id="runtime-1",
+		properties={"provider": "shim"})
+	calls = []
+	resolver.api = types.SimpleNamespace(**{
+		call: (lambda call: lambda **kwargs: calls.append((call, kwargs)))(call)
+		for _key, call in target_query.RECORDS})
+
+	target_query.query(provider="shim")
+
+	assert {kwargs.get("lib") for _call, kwargs in calls} == {"qdmi"}
+
+
+def test_a_device_less_document_gets_the_backends_generic_target():
+	from qfw_qiskit.qfw_target import QFW_NUM_QUBITS
+
 	document = target_query.target_document(RESOLVED, FakeTelemetryAPI())
 
 	target = target_query.target_from_json(json.dumps(document))
 
-	assert target.num_qubits == 30
+	assert target.num_qubits == QFW_NUM_QUBITS
+
+
+def test_a_record_error_is_its_message_without_the_remote_stack():
+	class RemoteError(Exception):
+		msg = "no credential record for user qfw"
+
+		def __str__(self):
+			return "DEFwError:\n  msg: ...\n  stack: ...\n"
+
+	document = target_query.target_document(
+		RESOLVED, types.SimpleNamespace(**{
+			call: (lambda **kwargs: (_ for _ in ()).throw(RemoteError()))
+			for _key, call in target_query.RECORDS}))
+
+	assert set(document["errors"].values()) == {
+		"no credential record for user qfw"}
+
+
+def test_a_failed_query_is_one_line(resolver, monkeypatch, capsys):
+	def refuse(**request):
+		raise RuntimeError("no QPM matches provider 'aer'\nin 2 directories")
+
+	monkeypatch.setattr(resolver, "resolve", refuse)
+
+	assert target_query.main(["--provider", "aer"]) == 1
+
+	assert capsys.readouterr().err == (
+		"qfw-target: no QPM matches provider 'aer' in 2 directories\n")
 
 
 def test_a_document_of_another_schema_is_refused():
