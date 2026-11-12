@@ -6,7 +6,7 @@ def load_emulated_device(class_name):
 
 	factory = getattr(fake_provider, class_name, None) if class_name.startswith("Fake") else None
 	if factory is None:
-		raise ValueError(f"qiskit_ibm_runtime.fake_provider has no device {class_name!r}")
+		raise ValueError(f"device-id {class_name!r} is not a qiskit_ibm_runtime.fake_provider class such as FakeFez")
 	return factory()
 
 
