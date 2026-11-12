@@ -341,3 +341,28 @@ def test_a_qpm_without_ffsim_samples_an_ffsim_circuit_with_the_next_source(devic
 		isa, 10, np.random.default_rng(0), logical=logical)
 
 	assert diagnostics["ideal"] != "ffsim"
+
+
+def _trotter_step(angle):
+	step = QuantumCircuit(2, name="trotter")
+	step.rxx(angle, 0, 1)
+	logical = QuantumCircuit(2)
+	logical.append(step.to_gate(), [0, 1])
+	logical.measure_all()
+	return logical
+
+
+def test_composite_gates_with_one_name_and_different_angles_do_not_share_cached_outcomes(device):
+	sampler = ProxySampler(device, max_memory_mb=MEMORY_MB)
+	flips_both, flips_neither = np.pi, 2 * np.pi
+
+	def likeliest(angle):
+		logical = _trotter_step(angle)
+		isa = transpile(logical, device, initial_layout=[0, 1], seed_transpiler=1, optimization_level=0)
+		bits, diagnostics = sampler.sample(isa, 200, np.random.default_rng(0), logical=logical)
+		assert diagnostics["ideal"] == "pauli-rotations"
+		counts = counts_of(bits)
+		return max(counts, key=counts.get)
+
+	assert likeliest(flips_both) == "11"
+	assert likeliest(flips_neither) == "00"

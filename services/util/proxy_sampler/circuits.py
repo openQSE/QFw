@@ -37,6 +37,11 @@ def _operation_fingerprint(operation: Any) -> bytes:
 		return repr(sorted(state.items(), key=lambda kv: kv[0])).encode()
 
 
+def _definition_digest(operation: Any) -> bytes:
+	definition = operation.definition
+	return b"" if definition is None else circuit_digest(definition).encode()
+
+
 def _canonical_param(value: Any) -> str:
 	try:
 		number = float(value)
@@ -60,6 +65,7 @@ def circuit_digest(circuit: Any) -> str:
 			digest.update(repr((operation.duration, operation.unit)).encode())
 		elif operation.name not in GATES_DIGESTED_BY_PARAMETER_VALUE:
 			digest.update(_operation_fingerprint(operation))
+			digest.update(_definition_digest(operation))
 	metadata = circuit.metadata or {}
 	digest.update(repr(sorted((k, repr(v)) for k, v in metadata.items())).encode())
 	return digest.hexdigest()
