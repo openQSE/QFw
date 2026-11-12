@@ -47,6 +47,12 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_TENSORNETWORK,
 	},
+	# Qiskit Aer, noiseless or emulating a named device under its noise.
+	"aer": {
+		"provider": "aer",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
 	"qb": {
 		"provider": "qb",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
