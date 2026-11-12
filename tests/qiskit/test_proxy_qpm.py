@@ -283,3 +283,22 @@ def test_an_ffsim_state_sent_as_qpy_beyond_the_memory_limit_is_refused_by_name(q
 	error = completion["result"]["proxy"]
 	assert error["error_type"] == "FfsimMemoryRefused"
 	assert "12 orbitals and (6, 6) electrons" in error["error"]
+
+
+def test_a_job_cancelled_while_it_waits_to_sample_is_never_sampled(qpm, monkeypatch):
+	sampled = []
+	monkeypatch.setattr(qpm.qrc.sampler, "sample", lambda *args, **kwargs: sampled.append(args))
+	decision = qpm.reserve(request={
+		"owner": {"user": "proxy-user"}, "job_id": "job-proxy", "scope_id": "allocation-proxy",
+		"target_device_id": DEVICE, "task_class": {"qubit_count": 3, "shots": 16}})
+	with qpm.qrc._sampling_lock:
+		response = qpm.async_run(_job_info(qpm, _ghz(3, [0, 1, 2])), reservation_id=decision["reservation_id"])
+		deadline = time.monotonic() + 10
+		while not qpm.qrc._tasks and time.monotonic() < deadline:
+			time.sleep(0.01)
+		qpm.cancel_task(cid=response["cid"], reservation_id=decision["reservation_id"])
+	while qpm.qrc._tasks and time.monotonic() < deadline:
+		time.sleep(0.01)
+
+	assert not qpm.qrc._tasks
+	assert sampled == []

@@ -11,6 +11,11 @@ from util.proxy_sampler.counts import counts_of
 
 PROXY_BACKEND_KIND = "proxy"
 BASIS_LETTERS = frozenset("XYZ")
+LOCK_POLL_SECONDS = 0.05
+
+
+class JobCancelled(Exception):
+	pass
 
 
 def seeded_generators(seed):
@@ -41,15 +46,31 @@ class QRC(ThreadedQRC):
 	def sample_job(self, info):
 		ideal_rng, noise_rng = seeded_generators(info.get("seed_simulator"))
 		circuit = load_circuit(*circuit_payload(info))
-		with self._sampling_lock:
-			if info.get("bases") is not None:
-				return self._bases_payload(circuit, info["bases"], noise_rng)
-			logical = logical_circuit_payload(info)
-			bits, diagnostics = self.sampler.sample(
-				circuit, int(info["num_shots"]), noise_rng,
-				logical=None if logical is None else load_circuit(*logical),
-				ideal_rng=ideal_rng)
+		if info.get("bases") is not None:
+			return self._bases_payload(circuit, info["bases"], noise_rng)
+		logical = logical_circuit_payload(info)
+		bits, diagnostics = self.sampler.sample(
+			circuit, int(info["num_shots"]), noise_rng,
+			logical=None if logical is None else load_circuit(*logical),
+			ideal_rng=ideal_rng)
 		return {"counts": counts_of(bits), "diagnostics": diagnostics}
+
+	def _sample_unless_cancelled(self, info, cancel_event):
+		def cancelled():
+			return cancel_event is not None and cancel_event.is_set()
+
+		while not self._sampling_lock.acquire(timeout=LOCK_POLL_SECONDS):
+			if cancelled():
+				raise JobCancelled()
+		try:
+			if cancelled():
+				raise JobCancelled()
+			payload = self.sample_job(info)
+		finally:
+			self._sampling_lock.release()
+		if cancelled():
+			raise JobCancelled()
+		return payload
 
 	def _bases_payload(self, circuit, request, rng):
 		physical, bases, shots = check_bases(request)
@@ -69,23 +90,26 @@ class QRC(ThreadedQRC):
 			circuit.set_launching()
 			start_ns = time.time_ns()
 			circuit.set_running()
+			cancelled = False
 			try:
-				payload = self.sample_job(info)
+				payload = self._sample_unless_cancelled(info, cancel_event)
+			except JobCancelled:
+				cancelled = True
 			except Exception as exc:
 				failure = exc
 			observed_ns = time.time_ns() - start_ns
-			if failure is None:
+			if failure is None and not cancelled:
 				circuit.set_exec_done()
 			else:
 				circuit.set_fail()
-		result = self._result(circuit, observed_ns, cancelled=False)
+		result = self._result(circuit, observed_ns, cancelled=cancelled)
 		result["provider"] = PROXY_BACKEND_KIND
-		if failure is None:
-			result["result"] = payload
-		else:
+		if failure is not None:
 			result.update(
 				outcome="FAILED", rc=1,
 				result={PROXY_BACKEND_KIND: {
 					"error": str(failure), "error_type": type(failure).__name__}})
+		elif not cancelled:
+			result["result"] = payload
 		self._remember_result_metadata(result)
 		return result
