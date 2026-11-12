@@ -147,10 +147,9 @@ class Program:
 		live = np.zeros(self.rows, dtype=bool)
 		for position, (name, rows, clbits, param, clifford) in enumerate(self.ops):
 			if name == "measure":
-				if live[rows[0]]:
-					flips[:, clbits[0]] = x[rows[0]]
-					if frame_z is not None:
-						frame_z[:, clbits[0]] = z[rows[0]]
+				flips[:, clbits[0]] = x[rows[0]]
+				if frame_z is not None:
+					frame_z[:, clbits[0]] = z[rows[0]]
 			elif any(live[r] for r in rows):
 				_conjugate(name, rows, param, clifford, x, z, rng)
 			start, stop = boundaries[position], boundaries[position + 1]

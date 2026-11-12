@@ -36,8 +36,11 @@ def remember(cache: OrderedDict[str, Cached], key: str, value: Cached, limit: in
 
 
 def measured_map(circuit: Any) -> list[tuple[int, int]]:
-	return [(circuit.find_bit(i.qubits[0]).index, circuit.find_bit(i.clbits[0]).index)
-			for i in circuit.data if i.operation.name == "measure"]
+	last_into: dict[int, int] = {}
+	for instruction in circuit.data:
+		if instruction.operation.name == "measure":
+			last_into[circuit.find_bit(instruction.clbits[0]).index] = circuit.find_bit(instruction.qubits[0]).index
+	return [(qubit, clbit) for clbit, qubit in last_into.items()]
 
 
 def on_active_qubits(circuit: Any) -> tuple[Any, list[int]]:

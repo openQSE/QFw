@@ -397,3 +397,31 @@ def test_the_fidelity_is_the_chance_that_no_location_errs():
 	budget = error_budget(*_fully_depolarizing_delay())
 
 	assert budget["fidelity"] == pytest.approx(1 - MAXIMUM_IDLE_ERROR)
+
+
+def _measured_twice_into_one_bit(first_qubit_gate):
+	circuit = QuantumCircuit(2, 1)
+	first_qubit_gate(circuit)
+	circuit.measure(0, 0)
+	circuit.measure(1, 0)
+	return circuit
+
+
+def test_the_last_qubit_measured_into_a_bit_decides_its_ideal_value(device):
+	isa = transpile(_measured_twice_into_one_bit(lambda circuit: circuit.x(0)), device, initial_layout=[0, 1],
+					seed_transpiler=1)
+
+	bits, _ = ProxySampler(device, max_memory_mb=MEMORY_MB).sample(isa, 2000, np.random.default_rng(0))
+
+	assert bits.mean() < 0.1
+
+
+def test_the_last_qubit_measured_into_a_bit_decides_its_noise():
+	from util.proxy_sampler.calibration import Calibration
+	from util.proxy_sampler.pauli_frames import Program
+
+	circuit = _measured_twice_into_one_bit(lambda circuit: circuit.delay(100, 0, unit="ns"))
+
+	flips = Program.from_circuit(circuit, Calibration({}, {}, {}, {}, None)).propagate(2000, np.random.default_rng(0))
+
+	assert not flips.any()
