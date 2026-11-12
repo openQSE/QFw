@@ -195,6 +195,7 @@ class QPMRuntimeTask:
 	external_ids: dict = field(default_factory=dict)
 	canonical_ids: dict = field(default_factory=dict)
 	state: str = QPM_TASK_CREATED
+	completion_event_class_id: str = None
 	# The trace context the circuit was received in, kept here because the
 	# circuit itself is gone by the time its completion is published.
 	trace_context: object = None
@@ -1806,6 +1807,8 @@ class QPMTargetController:
 				token_metadata=_token_metadata(request_context.token),
 				owner_metadata=dict(owner_metadata),
 				request_metadata=request_metadata,
+				completion_event_class_id=(
+					request_context.completion_event_class_id),
 			)
 			runtime.external_ids, runtime.canonical_ids = (
 				self.canonicalize_reservation_metadata(request_metadata))
@@ -2075,6 +2078,7 @@ class QPMTargetController:
 			external_ids=dict(runtime.external_ids),
 			canonical_ids=dict(runtime.canonical_ids),
 			state=runtime.state,
+			completion_event_class_id=runtime.completion_event_class_id,
 			trace_context=runtime.trace_context,
 		)
 		self.terminal_tasks_by_cid[snapshot.cid] = snapshot
@@ -2166,8 +2170,20 @@ class QPMTargetController:
 			event = _CompletionEvent(event_type, record)
 		return {
 			"event": event,
-			"matches": matches,
+			"matches": self._completion_recipients_locked(matches, record),
 		}
+
+	def _completion_recipients_locked(self, registrations, record):
+		runtime = self._completion_runtime_locked(record)
+		submitter = getattr(runtime, "completion_event_class_id", None)
+		if submitter is None:
+			return registrations
+		submitter_registrations = [
+			registration
+			for registration in registrations
+			if registration.get("class_id") == submitter
+		]
+		return submitter_registrations or registrations
 
 	def _dispatch_completion_deliveries(self, deliveries):
 		delivered = False
