@@ -672,6 +672,82 @@ def test_a_held_step_outlives_its_launch_until_it_is_ended(
     assert step.poll() is not None
 
 
+CGROUP_SRUN = """#!/bin/sh
+pid_file=
+for arg in "$@"; do
+  [ "$previous" = --pid-file ] && pid_file=$arg
+  previous=$arg
+done
+while [ "${1#-}" != "$1" ]; do
+  case "$1" in --nodelist) shift 2 ;; *) shift ;; esac
+done
+"$@"
+status=$?
+[ -n "$pid_file" ] && [ -s "$pid_file" ] && kill -9 "$(cat "$pid_file")" 2>/dev/null
+exit $status
+"""
+
+DIRECTORY_SERVICE = """#!/usr/bin/env python3
+import json, os, sys, time
+argv = sys.argv[1:]
+pid_file = argv[argv.index("--pid-file") + 1]
+ready_file = argv[argv.index("--ready-file") + 1]
+if "--background" in argv and os.fork():
+    sys.exit(0)
+if "--background" in argv:
+    os.setsid()
+os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+open(pid_file, "w").write(f"{os.getpid()}\\n")
+open(ready_file, "w").write(json.dumps({"ready": True}))
+time.sleep(600)
+"""
+
+
+def _alive_identity(pid, *_args):
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return None
+    return process_identity(pid)
+
+
+def test_a_service_outlives_its_launch_when_the_step_end_kills_its_processes(
+        tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, text in (("srun", CGROUP_SRUN), ("directory", DIRECTORY_SERVICE)):
+        (bin_dir / name).write_text(text)
+        (bin_dir / name).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(service_plane.sys, "executable", str(bin_dir / "directory"))
+    monkeypatch.setattr(service_plane, "_read_process_identity", _alive_identity)
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda pid, *_args: os.kill(int(pid), signal.SIGKILL))
+    monkeypatch.setattr(
+        service_plane, "_allocation_context", lambda: SLURM_ALLOCATION)
+    monkeypatch.setattr(service_plane, "TERMINATE_TIMEOUT_SECONDS", 1)
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text("resolver:\n  scope-order:\n    - site\n")
+    args = parse_role_start_args(
+        "directory", "--run-dir", str(tmp_path / "dir-run"),
+        "--site-config", str(site), "--runtime-config", str(runtime),
+        "--node", "directory-a")
+
+    state = service_plane.start(args)
+    pid = state["components"]["directory"]["pid"]
+    time.sleep(0.3)
+
+    assert _alive_identity(pid) is not None
+
+    service_plane.stop(tmp_path / "dir-run")
+
+    assert _alive_identity(pid) is None
+
+
 HET_ALLOCATION = {
     "mode": "heterogeneous",
     "group0": ["app-a"],
