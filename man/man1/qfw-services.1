@@ -12,8 +12,11 @@ reads the
 .B local-services
 manifest of a runtime profile, selected as
 .BR qfw-setup (1)
-selects it, and prints one record per manifest entry. It starts no service and
-needs no run.
+selects it, and prints one record for each service the profile would start:
+the profile's
+.BR services ,
+or every manifest entry when it names none. It starts no service and needs no
+run.
 .PP
 Each record has four fields.
 .TP
@@ -32,13 +35,12 @@ The entry's
 or null.
 .TP
 .B accelerator
-What the module derives from the entry's settings, such as
 .B gpu
-for an
+when the entry's settings run it on a GPU, such as an
 .B aer
 entry with
 .BR "device: GPU" ,
-or null when the module does not say.
+otherwise null.
 .PP
 The command imports each entry's module through
 .BR defw-python (1).
