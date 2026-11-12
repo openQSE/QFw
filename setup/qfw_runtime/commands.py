@@ -14,6 +14,7 @@ from . import service_plane as qfw_service_plane
 
 
 COMMANDS = {
+    "qfw-services",
     "qfw-setup",
     "qfw-status",
     "qfw-srun",
@@ -34,6 +35,8 @@ def main(argv=None):
         return 2
     command = argv.pop(0)
     try:
+        if command == "qfw-services":
+            return qfw_services(argv)
         if command == "qfw-setup":
             return qfw_setup(argv)
         if command == "qfw-status":
@@ -107,6 +110,47 @@ def qfw_setup(argv):
         raise
 
     print(state["run_dir"])
+    return 0
+
+
+def qfw_services(argv):
+    parser = argparse.ArgumentParser(prog="qfw-services")
+    parser.add_argument("--site-config")
+    parser.add_argument("--runtime-config")
+    parser.add_argument("--profile")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    prefix = qfw_config.site_install_prefixes(qfw_config.load_yaml(
+        qfw_config.resolve_site_config(args.site_config)))["qfw_prefix"]
+    runtime_path = qfw_config.resolve_runtime_config(
+        explicit=args.runtime_config,
+        profile=args.profile,
+        qfw_prefix_override=prefix,
+    )
+    local_config = qfw_config.local_services(
+        qfw_config.load_yaml(runtime_path))
+    if not local_config:
+        raise ValueError(f"{runtime_path} has no local-services")
+    entries = qfw_config.load_service_manifest(
+        qfw_config.service_manifest_path(local_config, qfw_prefix_value=prefix))
+    env = qfw_config.launch_environment(run_state=False)
+    listing = subprocess.run(
+        [str(_command_path("defw-python", env=env)),
+         str(qfw_config.qfw_services_dir(prefix) / "util" /
+             "service_listing.py"),
+         json.dumps(entries)],
+        env=env, stdout=subprocess.PIPE, text=True)
+    if listing.returncode:
+        return listing.returncode
+    records = json.loads(listing.stdout)
+    if args.json:
+        print(json.dumps(records, indent=2))
+    else:
+        for record in records:
+            print(" ".join(
+                str(record[key] or "-") for key in
+                ("service", "provider", "device_id", "accelerator")))
     return 0
 
 

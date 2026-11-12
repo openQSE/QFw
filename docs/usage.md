@@ -1067,6 +1067,7 @@ qfw-setup -> qfw-status -> qfw-srun -> qfw-teardown
 
 | Command | Responsibility |
 | --- | --- |
+| `qfw-services` | List the profile's local services with their provider, device id and accelerator, without starting them |
 | `qfw-setup` | Select configuration, create run state, validate directory access, and start job-owned services when requested |
 | `qfw-status` | Report the current application run and recorded role-manager health |
 | `qfw-srun` | Launch the application through DEFw with the prepared runtime and Slurm placement |
