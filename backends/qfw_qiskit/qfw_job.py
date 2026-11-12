@@ -212,6 +212,7 @@ class QFwJob(Job):
 			"num_qubits": num_qubits,
 			"num_shots": self.options()["shots"],
 			"compiler": "staq",
+			"completion_event_class_id": self._qpm_event_api.class_id(),
 		}
 		# Serialize in the best format this QPM says it reads. A QPM that
 		# declares nothing gets OpenQASM 2 in info["qasm"], exactly as before.
