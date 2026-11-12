@@ -14,6 +14,9 @@ svc_info = {
 	'description': SERVICE_DESC,
 	'version': 1.0,
 	'instance_mode': 'singleton',
+	'properties': {
+		'provider': 'nwqsim',
+	},
 }
 
 # This is used by the infrastructure to define all the service classes.
