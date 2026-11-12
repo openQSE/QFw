@@ -63,7 +63,7 @@ and directory remain alive.
 <summary>Reservation, result, and cleanup checks</summary>
 
 ```bash
-srun /usr/bin/env | grep '^QFW_RESERVATIONS='
+srun --overlap /usr/bin/env | grep '^QFW_RESERVATIONS='
 squeue -j "${SLURM_JOB_ID}"
 qfw-status
 ```

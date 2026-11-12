@@ -32,7 +32,9 @@ away from later steps. A held step asks for the job's CPUs on its node with
 `--cpus-per-task`, read from `SLURM_JOB_CPUS_PER_NODE` against
 `SLURM_JOB_NODELIST`, and runs its service with `SLURM_CPUS_PER_TASK` and
 `SLURM_TRES_PER_TASK` unset, so the `srun` steps `prte` starts don't inherit
-them. Slurm with `proctrack/cgroup` ends every process of a
+them. Under Slurm 20.11 the CPUs of an `--overlap` step go only to other
+`--overlap` steps, so `qfw-srun` launches the application with `--overlap`,
+and a plain `srun` in the job script waits until teardown. Slurm with `proctrack/cgroup` ends every process of a
 step when the step ends, so a step lasts as long as its service. Teardown
 stops the service and then ends the step. `step.log` beside the component's
 pid file holds the step's output, and a start-up timeout quotes its last

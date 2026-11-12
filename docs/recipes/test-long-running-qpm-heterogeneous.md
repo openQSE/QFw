@@ -58,8 +58,8 @@ The example must emit a terminal JSON record with `"status": "ok"`.
 <summary>Component and reservation checks</summary>
 
 ```bash
-srun --het-group=0 /usr/bin/env | grep '^QFW_RESERVATIONS='
-srun --het-group=1 /usr/bin/env | grep '^QFW_RESERVATIONS='
+srun --overlap --het-group=0 /usr/bin/env | grep '^QFW_RESERVATIONS='
+srun --overlap --het-group=1 /usr/bin/env | grep '^QFW_RESERVATIONS='
 printf 'group0=%s\ngroup1=%s\n' \
   "${SLURM_JOB_NODELIST_HET_GROUP_0}" \
   "${SLURM_JOB_NODELIST_HET_GROUP_1}"
