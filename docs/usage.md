@@ -1260,21 +1260,47 @@ they describe the QPM the reservation names.
 density-matrix or noisy statevector simulation. Each shot's ideal outcome comes
 from the first source that can produce it: outcomes recorded on the circuit,
 ffsim, Pauli rotation programs, then Aer statevector and matrix product state.
-The device's calibrated noise is applied on top. One service emulates one device, named by its
-`device-id`, a `qiskit_ibm_runtime.fake_provider` class such as `FakeFez`
-(`proxy-fez` in the local manifest). Its telemetry is the IBM
+The device's calibrated noise is applied on top. One service emulates one
+device, named by its `device-id`, a `qiskit_ibm_runtime.fake_provider` class
+such as `FakeFez` (`proxy-fez` in the local manifest). Its telemetry is the IBM
 `static_architecture` and `backend_properties`, so `backend.target` is the
-device. A qubit with no published T1 or T2 gets the maximum idle error.
+device. A circuit must be transpiled for `backend.target`. A gate the device
+has no calibration for fails the circuit with a `LookupError` that says so. A
+qubit with no published T1 or T2 gets the maximum idle error.
 
-| Setting or option | Effect |
+The service reads its own `proxy` block:
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `max-memory-mb` | The memory limit of the ideal sources, in MiB. It covers the cached states and the arrays that sample them. A circuit whose statevector does not fit is sampled by matrix product state. A circuit that does not fit that way either, or a bases job whose statevector does not fit, fails with `AerMemoryRefused`, and an ffsim state vector that does not fit fails with `FfsimMemoryRefused`, in the circuit's error. Cached states are dropped to make room for a new one. | `4096` |
+
+A service whose `proxy` block or `device-id` it refuses does not start, and
+`qfw-setup` reports only a readiness timeout
+([#215](https://github.com/openQSE/QFw/issues/215)). The reason, which names
+the setting, is in the QPM's `defw_py.log`.
+
+| Run option | Effect |
 | --- | --- |
-| `QFW_PROXY_MAX_MEMORY_MB` (default 4096) | Memory limit of the ideal sources. A circuit Aer cannot hold within it fails with `AerMemoryRefused`, and an ffsim state vector larger than it fails with `FfsimMemoryRefused`, in the circuit's error. Cached ffsim states are dropped to make room for a new one |
-| `seed_simulator` run option | Fixes the ideal draws and the noise draws together |
+| `seed_simulator` | Fixes the ideal draws and the noise draws together. Without it, each job draws fresh samples |
 | `circuit.metadata["qfw_logical_circuit"] = logical` | The pre-compilation circuit. The ideal outcomes come from it and the noise from the compiled circuit. It is sent beside the circuit as `info["logical_circuit"]`, in the same `{format, data}` envelope as `info["circuit"]` |
-| `backend.run(state, bases={"physical": [...], "bases": ["XZ", ...], "shots": [...]})` | One record per basis from one prepared state, in the result's `metadata["bases"]` |
+| `bases={"physical": [...], "bases": ["XZ", ...], "shots": [...]}` | One record per basis from one prepared state, in the result's `metadata["bases"]`. A basis string reads like a Qiskit bitstring: its last letter is the basis of `physical[0]`, and each record's counts keep that order. The job's own counts are empty. Only a QPM that declares `bases_jobs` takes one |
 
-The error budget of each circuit (`fidelity`, `events_per_shot`, `gates_2q`,
-the ideal source used) is in the result's `metadata["diagnostics"]`.
+A logical circuit of ffsim gates travels as QPY, which loads each ffsim gate as
+a plain gate with its definition. The service rebuilds the orbital rotations
+and diagonal Coulomb evolutions from those definitions, so ffsim simulates the
+circuit as ffsim built it. This needs ffsim where the QPM runs. Without ffsim,
+or for a circuit ffsim cannot simulate, the next source samples it, and the
+QPM's log says why.
+
+The error budget of each circuit (`fidelity`, `events_per_shot`, `gates_2q`)
+is in the result's `metadata["diagnostics"]`, and `ideal` names the source of
+the ideal outcomes: `known`, `ffsim`, `pauli-rotations`, `statevector`,
+`matrix_product_state` or `statevector-bases`.
+
+The service samples in its own process, one job at a time. A job cancelled
+while it waits for its turn is not sampled. One already sampling runs to the
+end, and its result is discarded. The `circuit-time-limit-seconds` setting
+does not apply.
 
 A noisy shot is its ideal outcome with the X part of a Pauli frame applied,
 the frame carried from each error to the measurement, as in Stim's frame
@@ -1284,8 +1310,8 @@ sampling ([Gidney 2021](https://doi.org/10.22331/q-2021-07-06-497)):
 | --- | --- |
 | Gate | A uniformly random non-identity Pauli with probability (d + 1)/d times the calibrated average gate error |
 | Idle (`delay` only) | The Pauli-twirled T1 and T2 channel. Gaps in an unscheduled circuit add no error |
-| Readout | Each bit flips with the qubit's calibrated p(1\|0) and p(0\|1) |
-| Events per shot | Poisson, with the circuit's expected number of errors |
+| Readout | Each bit flips with the qubit's calibrated p(1\|0) and p(0\|1), once, for the last qubit measured into it |
+| Errors per shot | Each gate and delay errs at most once, independently, with its own probability |
 
 The frame passes through Clifford gates exactly, so a Clifford circuit's
 samples follow its noisy distribution under this model. Through `rz`, `rx`,
