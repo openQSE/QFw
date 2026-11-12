@@ -1259,7 +1259,9 @@ they describe the QPM the reservation names.
 without a backend and without a new reservation. It picks the QPM and shim
 library the way `QFwBackend` does: the reserved QPM in a job with a
 reservation, otherwise `--provider` or `QFW_QPM_IMPL`, and `--lib` or
-`QFW_SHIM_LIB`. `qfw_qiskit.qfw_target_query.target_from_json` builds the same
+`QFW_SHIM_LIB`. `--service-id` takes the name of a QPM that `qfw-setup`
+launched for the run as well as its runtime id.
+`qfw_qiskit.qfw_target_query.target_from_json` builds the same
 target as `backend.target` from it. The note above on `credential-mode:
 required` shims applies to it too.
 
