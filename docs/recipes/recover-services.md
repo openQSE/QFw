@@ -37,7 +37,7 @@ Read the recorded node and PID from `state/service-plane.json`. On that exact
 node, verify both the PID and full command line:
 
 ```bash
-srun --nodes=1 --ntasks=1 --nodelist "${RECORDED_NODE}" \
+srun --overlap --mem=0 --nodes=1 --ntasks=1 --nodelist "${RECORDED_NODE}" \
   ps -o pid=,lstart=,args= -p "${RECORDED_PID}"
 ```
 

@@ -851,7 +851,9 @@ qpm:
 ```
 
 When a runner passes the limit, the QPM kills its launcher, fails the circuit
-and moves on. Without a limit, a runner whose exit never reaches the QPM, as
+and moves on. A runner that a PRTE DVM started is not the launcher's child,
+so the QPM also gives each launch `MPIEXEC_TIMEOUT`, five seconds longer than
+its own limit, and the DVM ends that runner itself. Without a limit, a runner whose exit never reaches the QPM, as
 when PRTE loses it, holds the QPM's dispatch slot for good, and every later
 circuit waits behind it. The default is `600` seconds. Raise it for circuits
 that take longer, or set `0` for no limit. A service entry's own
@@ -1070,6 +1072,7 @@ qfw-setup -> qfw-status -> qfw-srun -> qfw-teardown
 | `qfw-setup` | Select configuration, create run state, validate directory access, and start job-owned services when requested |
 | `qfw-status` | Report the current application run and recorded role-manager health |
 | `qfw-srun` | Launch the application through DEFw with the prepared runtime and Slurm placement |
+| `qfw-target` | Print one QPM's settings and device records as a `qfw-target-v1` JSON document, without reserving it |
 | `qfw-teardown` | Stop job-owned services and clean runtime state without stopping site-owned services |
 
 One `qfw-setup` invocation creates one run directory for one logical
@@ -1253,6 +1256,27 @@ job = backend.run(isa_circuit, shots=100)
 library (`lib`) and reservation token filled in. A workflow that plans its
 layout before it submits reads them in the reserved job it submits from, since
 they describe the QPM the reservation names.
+
+`qfw-target` prints the same records as one `qfw-target-v1` JSON document
+without a backend and without a new reservation. It picks the QPM and shim
+library the way `QFwBackend` does: the reserved QPM in a job with a
+reservation, otherwise `--provider` or `QFW_QPM_IMPL`, and `--lib` or
+`QFW_SHIM_LIB`. `--service-id` takes the name of a QPM that `qfw-setup`
+launched for the run as well as its runtime id.
+`qfw_qiskit.qfw_target_query.target_from_json` builds the same
+target as `backend.target` from it. The note above on `credential-mode:
+required` shims applies to it too.
+
+```bash
+qfw-target --output target.json
+```
+
+```python
+from qfw_qiskit.qfw_target_query import target_from_json
+
+with open("target.json") as stream:
+    target = target_from_json(stream.read())
+```
 
 #### Proxy Sampler
 

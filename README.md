@@ -81,7 +81,7 @@ cmake --install build
 
 The install places public commands in `/path/to/qfw-install/bin`,
 including `qfw-activate`, `defw-python`, `qfw-setup`, `qfw-srun`,
-`qfw-status`, `qfw-teardown`, `qfw-dir-svc`, and `qfw-qpm-svc`. The
+`qfw-status`, `qfw-target`, `qfw-teardown`, `qfw-dir-svc`, and `qfw-qpm-svc`. The
 two role commands are the only public interfaces for independently managed
 directory services and QPMs.
 
@@ -333,6 +333,8 @@ The installed prefix contains:
 - `bin/qfw-status`: reports the current application runtime and its recorded
   service-manager health.
 - `bin/qfw-srun`: launches applications with the active QFw runtime state.
+- `bin/qfw-target`: prints what a QPM says about its device, without
+  reserving it.
 - `bin/qfw-teardown`: stops application-owned role managers and removes the
   application run directory.
 - `bin/qfw-dir-svc`: manages one directory-service instance.
