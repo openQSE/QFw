@@ -1312,9 +1312,10 @@ the setting, is in the QPM's `defw_py.log`.
 A logical circuit of ffsim gates travels as QPY, which loads each ffsim gate as
 a plain gate with its definition. The service rebuilds the orbital rotations
 and diagonal Coulomb evolutions from those definitions, so ffsim simulates the
-circuit as ffsim built it. This needs ffsim where the QPM runs. Without ffsim,
-or for a circuit ffsim cannot simulate, the next source samples it, and the
-QPM's log says why.
+circuit as ffsim built it. This needs ffsim where the QPM runs, from
+`setup/proxy-requirements.txt`, which the base install leaves out because ffsim
+brings jax. Without ffsim, or for a circuit ffsim cannot simulate, the next
+source samples it, and the QPM's log says why.
 
 The error budget of each circuit (`fidelity`, `events_per_shot`, `gates_2q`)
 is in the result's `metadata["diagnostics"]`, and `ideal` names the source of

@@ -23,9 +23,6 @@ iqm-exa-common==27.5.1
 iqm-pulse==13.0.1
 iqm-station-control-client==12.1.1
 qiskit_nature
-# The proxy QPM samples a fermionic circuit with ffsim. Without it the proxy
-# falls back to Aer, so it is a soft dependency.
-ffsim
 openfermion>=1.5.2
 mpi4py
 networkx
