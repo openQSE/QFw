@@ -469,11 +469,104 @@ class PasqalQdmiProfile(QdmiProfile):
 		return "neutral-atom"
 
 
+class MqvQdmiProfile(QdmiProfile):
+	"""MQV's QDMI device, the Munich Quantum Software Stack (MQSS) as one device.
+
+	A circuit goes to MQV's MQSS deployment, which runs it on a machine
+	behind it (IQM at LRZ, planqc, Amazon Braket). MQV ships the device
+	library and no Qiskit backend, so the session is MQT Core's generic
+	QDMIBackend around it, as Pasqal's is a bare device.
+	"""
+	provider = "mqv"
+	requires = "MQV's QDMI device package"
+	# OpenQASM 2 first, which the LRZ devices behind MQSS take, then 3.
+	PROGRAM_FORMATS = ("QASM2", "QASM3")
+
+	def access(self, credential=None):
+		# The reservation's token first, then QFW_API_KEY, then the user's
+		# credential DB entry, as for IQM. The endpoint comes from the same
+		# places or from the device's url; MQV's catalogue entry may also
+		# set it, so it is not required here. The catalogue entry itself
+		# must be named, since QFw knows no default for MQV.
+		login = resolve_login(
+			self._descriptor, credential, self.provider,
+			lambda login: not login["token"],
+			"QDMI driver could not resolve MQV device access: set "
+			"QFW_API_KEY or configure device access")
+		device_id = self._descriptor.get("qdmi_device_id")
+		missing = []
+		if not device_id:
+			missing.append("its QDMI device id (qdmi-device-id in device-access config)")
+		if not login["token"]:
+			missing.append("a token (QFW_API_KEY or device-access api_key)")
+		if missing:
+			raise DEFwExecutionError(
+				"an MQV device session needs " + " and ".join(missing))
+		base_url = login["base_url"] or self._descriptor.get("url")
+		return {
+			"qdmi_device_id": str(device_id),
+			"base_url": base_url.rstrip("/") if base_url else None,
+			"token": login["token"],
+		}
+
+	def open_backend(self, access):
+		from mqt.core.qdmi import builtin_driver
+		device_id = access["qdmi_device_id"]
+		if device_id not in builtin_driver.registered_device_ids():
+			raise DEFwExecutionError(
+				f"no QDMI device {device_id!r} is registered; install "
+				f"{self.requires}, which registers MQV's catalogue entries")
+		from mqt.core.plugins.qiskit import QDMIBackend
+		settings = {key: value for key, value in access.items()
+			if key != "qdmi_device_id" and value not in (None, "")}
+		device = builtin_driver.open_device(device_id, **settings)
+		return QDMIBackend(device=device, device_id=device_id)
+
+	def describe(self, access):
+		return access.get("qdmi_device_id")
+
+	def encode(self, driver, source, info, backend):
+		# The circuit is compiled to the device's own target, which MQSS
+		# reports, then serialized in the first format the device takes.
+		device = backend.device
+		supported = {fmt.name for fmt in device.supported_program_formats()}
+		name = next((fmt for fmt in self.PROGRAM_FORMATS if fmt in supported), None)
+		if name is None:
+			raise DEFwExecutionError(
+				f"MQV device {device.name()!r} takes none of "
+				f"{', '.join(self.PROGRAM_FORMATS)}; it reports "
+				f"{sorted(supported) or 'no program formats'}")
+		from mqt.core.mlir import TargetEnvironment, serialize_program
+		from mqt.core.plugins.qiskit.exceptions import UnsupportedOperationError
+		from mqt.core.qdmi import ProgramFormat
+		from qiskit import transpile
+		from util.iqm_transcode import load_qiskit_circuit
+		circuit = load_qiskit_circuit(source)
+		if circuit.parameters:
+			raise DEFwExecutionError("MQV circuits must have bound parameters")
+		circuit = backend._preprocess_circuit(circuit)
+		try:
+			backend.validate_circuit(circuit, native=True)
+		except UnsupportedOperationError:
+			circuit = transpile(circuit, backend=backend, optimization_level=1)
+			backend.validate_circuit(circuit, native=True)
+		environment = TargetEnvironment.from_device(
+			device, program_format=getattr(ProgramFormat, name))
+		program = serialize_program(circuit, target=environment)
+		return program.payload, program.program_format.name, program
+
+	def check_shots(self, shots):
+		if shots <= 0:
+			raise DEFwExecutionError("MQV shots must be positive")
+		return super().check_shots(shots)
+
+
 PROFILES = {
 	IqmQdmiProfile.provider: IqmQdmiProfile,
 	BraketQdmiProfile.provider: BraketQdmiProfile,
 	IbmQdmiProfile.provider: IbmQdmiProfile,
 	PasqalQdmiProfile.provider: PasqalQdmiProfile,
+	MqvQdmiProfile.provider: MqvQdmiProfile,
 }
 
 

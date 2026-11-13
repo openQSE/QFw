@@ -96,6 +96,17 @@ serves public IBM Cloud.
 .B QFW_IBM_IAM_ENDPOINT
 overrides it when set in the QPM's environment.
 .TP
+.B qdmi-device-id
+The QDMI catalogue entry a device opens through MQT Core, as a provider's
+package registers it. Optional for
+.BR aws ,
+.B ibm
+and
+.BR pasqal ,
+which have defaults. Required for
+.BR mqv ,
+whose entries come from MQV's own package.
+.TP
 .BR s3-endpoint ", " s3-bucket ", " s3-region
 Object storage that an
 .B IBMQuantumSystem

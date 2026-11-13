@@ -3,3 +3,4 @@ amazon-braket-qdmi[qiskit]==1.4.0
 iqm-qdmi[qiskit]==1.6.0
 ibm-qdmi[qiskit]==1.1.0
 pasqal-qdmi[mqt-core,pulser]==1.2.0
+# The mqv provider's device library comes from MQV's own wheel, not on PyPI yet.

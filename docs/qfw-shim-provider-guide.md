@@ -321,6 +321,38 @@ serves the same `pulser_devices` record as QRMI, so the existing
 [Pasqal recipe](recipes/run-against-pasqal.md) covers configuration, atom order,
 and submission through the existing QPM API.
 
+### MQV
+
+MQV's QDMI device hands a circuit to MQV's Munich Quantum Software Stack
+(MQSS) deployment, which runs it on a machine behind it, such as IQM at LRZ,
+planqc or Amazon Braket. MQV ships the device library in its own package,
+which is not on PyPI yet. Install MQV's wheel next to the packages in
+`setup/qdmi-requirements.txt`; the profile needs MQT Core 4.2 or newer. The
+wheel registers MQV's catalogue entries with MQT Core, and `qdmi-device-id`
+names the one a device uses. QFw has no default for it.
+
+```yaml
+qpus:
+  mqv-lrz:
+    provider: mqv
+    qdmi-device-id: mqv.lrz          # a catalogue entry MQV's package registers
+    url: https://mqss.example/api    # optional when the entry names the endpoint
+    credential-db: /etc/openqse/qfw/device/qpu-users.json
+    libraries: [qdmi]
+    preference: qdmi
+    execution-owner: qdmi
+    job-timeout-seconds: 3600
+```
+
+Under each user's `devices.mqv-lrz` entry in the credential database, set
+`enabled: true` and the `api_key` the MQSS session opens with. The
+reservation's key comes first, then `QFW_API_KEY` in the QPM's environment.
+The same order applies to the endpoint, then the device's `url`. MQV ships no
+Qiskit backend, so QFw opens MQT Core's generic `QDMIBackend` around the
+device, compiles each circuit to the target the device reports, and submits
+it as OpenQASM 2, or as OpenQASM 3 when the device takes only that. Bind all
+parameters before submission.
+
 ## Step 4. Add a QPM Shim Service
 
 Add a service entry that uses the shim module and points at the logical machine.
