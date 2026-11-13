@@ -45,10 +45,11 @@ class SubprocessLauncher:
 		self.finished = {}
 		self.commands = []
 
-	def launch(self, cmd):
+	def launch(self, cmd, env=None):
 		self.commands.append(shlex.split(cmd))
 		process = subprocess.Popen(
-			shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+			shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+			env={**os.environ, **(env or {})})
 		self.processes[process.pid] = process
 
 		def wait():
