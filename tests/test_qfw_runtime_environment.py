@@ -11,6 +11,8 @@ import json
 import sys
 import types
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "setup"))
 sys.path.insert(0, str(_REPO_ROOT / "services"))
@@ -168,6 +170,84 @@ def test_qfw_srun_takes_run_variables_from_its_own_run(tmp_path, monkeypatch):
     for name in ("QFW_QPM_SERVICE_IDS", "QFW_SERVICE_SCOPE", "QFW_LOG_DIR",
                  "QFW_DIRECTORY_SERVICE_INFO"):
         assert name not in env
+
+
+@pytest.fixture
+def backends_on_pythonpath(monkeypatch):
+    monkeypatch.syspath_prepend(str(_REPO_ROOT / "backends"))
+
+
+def _capture_qfw_target(monkeypatch, argv):
+    _set_environment(
+        monkeypatch, DEFW_IMPORT_PLACEHOLDERS,
+        {"SLURM_JOB_ID": "42", "SLURM_JOB_NODELIST": "c1"})
+    captured = {}
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        captured["env"] = dict(env)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(commands, "_command_path",
+                        lambda name, env=None: Path("/usr/bin/defw-python"))
+    monkeypatch.setattr(commands, "_free_tcp_port", lambda host: 45680)
+    monkeypatch.setattr(commands, "_resolve_host_address",
+                        lambda host: "10.0.0.4")
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    assert commands.qfw_target(argv) == 0
+    return captured
+
+
+def test_qfw_target_queries_on_this_node_with_the_run_environment(
+        tmp_path, monkeypatch, backends_on_pythonpath):
+    run_dir = tmp_path / "run"
+    _site_only_state(run_dir)
+
+    captured = _capture_qfw_target(
+        monkeypatch, ["--run-dir", str(run_dir), "--provider", "aer"])
+
+    argv = captured["argv"]
+    assert argv[0] == "/usr/bin/defw-python"
+    assert argv[1].endswith("qfw_qiskit/qfw_target_query.py")
+    assert Path(argv[1]).is_file()
+    assert argv[2:] == ["--provider", "aer"]
+    assert captured["env"]["DEFW_PARENT_HOSTNAME"] == "slurmctld"
+
+
+def test_qfw_target_names_a_service_the_run_launched_by_its_runtime_id(
+        tmp_path, monkeypatch, backends_on_pythonpath):
+    run_dir = tmp_path / "run"
+    state = _site_only_state(run_dir)
+    _write_state(run_dir, {**state, "service_managers": [
+        {"owner": "application", "role": "directory"},
+        {"owner": "application", "role": "qpm", "service_id": "nwqsim-0f1e",
+         "manifest_service_name": "nwqsim"}]})
+
+    launched = _capture_qfw_target(
+        monkeypatch, ["--run-dir", str(run_dir), "--service-id=nwqsim"])
+    other = _capture_qfw_target(
+        monkeypatch, ["--run-dir", str(run_dir), "--service-id", "aer"])
+
+    assert launched["argv"][2:] == ["--service-id", "nwqsim-0f1e"]
+    assert other["argv"][2:] == ["--service-id", "aer"]
+
+
+def test_qfw_target_refuses_an_unready_run(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    _write_state(run_dir, {"setup_complete": False})
+
+    assert commands.qfw_target(["--run-dir", str(run_dir)]) == 1
+
+
+def test_qfw_target_help_needs_no_ready_run(
+        tmp_path, monkeypatch, capfd, backends_on_pythonpath):
+    run_dir = tmp_path / "run"
+    _write_state(run_dir, {"setup_complete": False})
+
+    assert commands.qfw_target(["--run-dir", str(run_dir), "--help"]) == 0
+
+    assert "--run-dir" in capfd.readouterr().out
 
 
 def test_qfw_srun_keeps_the_directory_of_a_job_local_run(

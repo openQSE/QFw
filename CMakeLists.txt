@@ -180,6 +180,7 @@ foreach(qfw_command
 		qfw-setup
 		qfw-status
 		qfw-srun
+		qfw-target
 		qfw-teardown)
 	set(QFW_COMMAND_NAME "${qfw_command}")
 	configure_file(
@@ -200,6 +201,7 @@ install(PROGRAMS
 	"${QFW_GENERATED_BIN_DIR}/qfw-setup"
 	"${QFW_GENERATED_BIN_DIR}/qfw-status"
 	"${QFW_GENERATED_BIN_DIR}/qfw-srun"
+	"${QFW_GENERATED_BIN_DIR}/qfw-target"
 	"${QFW_GENERATED_BIN_DIR}/qfw-teardown"
 	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
 	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"

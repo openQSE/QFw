@@ -1,6 +1,7 @@
 from api_events import Event
 from defw_util import print_thread_stack_trace_to_logger
 import logging
+import math
 import time
 import queue
 import signal
@@ -28,6 +29,15 @@ DEFAULT_CIRCUIT_TIME_LIMIT_SEC = 600
 
 
 SITE_CIRCUIT_TIME_LIMIT = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
+
+# Killing the launcher does not reach a runner that a DVM started (mpirun
+# --dvm). That runner is a child of the DVM's prte, so it would keep running
+# until teardown. Each launch therefore also gives mpirun the limit through
+# MPIEXEC_TIMEOUT, and the DVM ends the job's processes itself, on every
+# host. The DVM's limit is a few seconds longer than the QPM's, so the QPM
+# still fails the circuit first, with a message that names the limit.
+MPIEXEC_TIMEOUT_ENV = "MPIEXEC_TIMEOUT"
+DVM_TIME_LIMIT_GRACE_SEC = 5
 
 
 def circuit_time_limit(path=None, service=None):
@@ -182,11 +192,27 @@ class UTIL_QRC:
 			f"than {limit:g} s ({self.circuit_time_limit_source}); killing "
 			f"its launcher, pid {pid}")
 		try:
-			# The launcher starts each runner in a session of its own,
-			# so this reaches whatever it started on this host.
+			# The launcher runs in a session of its own, so this reaches
+			# what it started itself on this host. A runner that a DVM
+			# started is the DVM's child, and the DVM ends it
+			# (MPIEXEC_TIMEOUT_ENV).
 			os.killpg(pid, signal.SIGKILL)
 		except ProcessLookupError:
 			pass
+
+	def _launch_env(self):
+		"""What a runner's launcher adds to its environment: the DVM's
+		own time limit, a little longer than the QPM's.
+
+		mpirun reads MPIEXEC_TIMEOUT as its --timeout, which a DVM
+		enforces even after the launcher is gone. Without a QPM limit the
+		launcher's environment is left as it is.
+		"""
+		limit = self.circuit_time_limit
+		if not limit:
+			return None
+		seconds = math.ceil(limit) + DVM_TIME_LIMIT_GRACE_SEC
+		return {MPIEXEC_TIMEOUT_ENV: str(seconds)}
 
 	def _finish_task(self, task_info, stdout, stderr, rc):
 		circ = task_info['circ']
@@ -393,8 +419,9 @@ class UTIL_QRC:
 		circ.set_launching()
 		try:
 			task_info = {}
-			logging.debug(f"Running -- {cmd}")
-			pid = self.launcher.launch(cmd)
+			env = self._launch_env()
+			logging.debug(f"Running -- {cmd} -- adding {env}")
+			pid = self.launcher.launch(cmd, env=env)
 			logging.debug(f"Running -- {cmd} -- with pid {pid}")
 			circ.set_running()
 		except Exception as e:
