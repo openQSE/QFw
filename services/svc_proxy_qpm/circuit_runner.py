@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import socket
 import sys
 import traceback
 
@@ -11,6 +12,7 @@ SERVICES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROVIDER = "proxy"
 QPY = "qpy"
 LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
+CANCELLED_EXIT = 3
 
 
 def load_circuit(envelope):
@@ -34,6 +36,13 @@ def run(job, device_id, max_memory_mb):
 		logical=None if logical is None else load_circuit(logical), bases=job.get("bases"))
 
 
+def record_pid(pid_file):
+	partial = pid_file + ".partial"
+	with open(partial, "w", encoding="utf-8") as stream:
+		json.dump({"host": socket.gethostname(), "pid": os.getpid()}, stream)
+	os.replace(partial, pid_file)
+
+
 def plain(value):
 	return value.item() if hasattr(value, "item") else str(value)
 
@@ -48,7 +57,12 @@ def main():
 	parser.add_argument("--log-file", required=True)
 	parser.add_argument("--device-id", required=True)
 	parser.add_argument("--max-memory-mb", type=int, required=True)
+	parser.add_argument("--pid-file", required=True)
+	parser.add_argument("--cancel-file", required=True)
 	args = parser.parse_args()
+	record_pid(args.pid_file)
+	if os.path.exists(args.cancel_file):
+		sys.exit(CANCELLED_EXIT)
 	logging.basicConfig(filename=args.log_file, level=logging.INFO, format=LOG_FORMAT)
 	try:
 		with open(args.job_file, encoding="utf-8") as stream:

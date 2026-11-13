@@ -446,6 +446,34 @@ def test_cancelling_a_job_that_is_sampling_stops_its_runner(qpm):
 	assert completion.get("rc") != 0
 
 
+DETACHED_LAUNCH = "import subprocess, sys; subprocess.Popen(sys.argv[1:], start_new_session=True).wait()"
+
+
+def _detached_command(executable, executable_args=None, **mpi):
+	return shlex.join([sys.executable, "-c", DETACHED_LAUNCH, executable, *(str(arg) for arg in executable_args or ())])
+
+
+def _alive(pid):
+	try:
+		os.kill(pid, 0)
+	except ProcessLookupError:
+		return False
+	return True
+
+
+def test_cancelling_a_job_kills_a_runner_outside_its_launchers_process_group(qpm, tmp_path, monkeypatch):
+	monkeypatch.setattr(proxy_qrc, "build_mpi_command_string", _detached_command)
+	reservation = _reserve(qpm)
+	cid = qpm.async_run(_slow_job(qpm), reservation_id=reservation)["cid"]
+	pid_file = tmp_path / f"{cid}.json{proxy_qrc.PID_SUFFIX}"
+	assert _wait_for(pid_file.exists)
+	runner = json.loads(pid_file.read_text())["pid"]
+
+	qpm.cancel_task(cid=cid, reservation_id=reservation)
+
+	assert _wait_for(lambda: not _alive(runner), timeout=10)
+
+
 def test_a_second_job_waits_for_the_one_sampling(qpm):
 	reservation = _reserve(qpm)
 	for _ in range(2):
@@ -465,7 +493,8 @@ def test_a_failed_runner_prints_its_reason_first(tmp_path):
 
 	runner = subprocess.run(
 		[sys.executable, RUNNER, "--job-file", str(job), "--log-file", str(tmp_path / "log"),
-		 "--device-id", DEVICE, "--max-memory-mb", "8"], capture_output=True, text=True)
+		 "--device-id", DEVICE, "--max-memory-mb", "8", "--pid-file", str(tmp_path / "pid"),
+		 "--cancel-file", str(tmp_path / "cancelled")], capture_output=True, text=True)
 
 	assert runner.returncode == 1
 	assert runner.stdout.splitlines()[0].startswith("proxy: LookupError: the device reports no error for h")

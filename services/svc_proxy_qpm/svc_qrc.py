@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 
@@ -17,6 +18,9 @@ SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 CIRCUIT_RUNNER = os.path.join(SERVICE_DIR, "circuit_runner.py")
 PROXY_RANKS = 1
 LOG_SUFFIX = ".log"
+PID_SUFFIX = ".pid"
+CANCEL_SUFFIX = ".cancelled"
+TASK_FILE_SUFFIXES = (LOG_SUFFIX, PID_SUFFIX, CANCEL_SUFFIX)
 
 
 def envelope(fmt, data):
@@ -75,6 +79,8 @@ class QRC(UTIL_QRC):
 				"--log-file", job_file + LOG_SUFFIX,
 				"--device-id", proxy["device_id"],
 				"--max-memory-mb", proxy["max_memory_mb"],
+				"--pid-file", job_file + PID_SUFFIX,
+				"--cancel-file", job_file + CANCEL_SUFFIX,
 			],
 			np=PROXY_RANKS,
 			hosts=circ.info.get("hosts", None),
@@ -102,10 +108,11 @@ class QRC(UTIL_QRC):
 	def cleanup_task(self, circ, task_info):
 		with self._cancel_lock:
 			self._cancelled.discard(circ.get_cid())
-		try:
-			os.remove(task_info["qasm_file"] + LOG_SUFFIX)
-		except (KeyError, OSError):
-			pass
+		for suffix in TASK_FILE_SUFFIXES:
+			try:
+				os.remove(task_info["qasm_file"] + suffix)
+			except (KeyError, OSError):
+				pass
 
 	def _relay_runner_log(self, task_info):
 		try:
@@ -143,8 +150,24 @@ class QRC(UTIL_QRC):
 		if not isinstance(pid, int) or pid <= 0:
 			return
 		task_info["cancelled"] = True
+		with open(task_info["qasm_file"] + CANCEL_SUFFIX, "w", encoding="utf-8"):
+			pass
 		try:
 			os.killpg(pid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+		self._kill_runner(task_info["qasm_file"] + PID_SUFFIX)
+
+	def _kill_runner(self, pid_file):
+		try:
+			with open(pid_file, encoding="utf-8") as stream:
+				runner = json.load(stream)
+		except (OSError, ValueError):
+			return
+		if runner.get("host") != socket.gethostname():
+			return
+		try:
+			os.kill(runner["pid"], signal.SIGKILL)
 		except ProcessLookupError:
 			pass
 
