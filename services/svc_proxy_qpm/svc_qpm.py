@@ -29,7 +29,6 @@ class QPM(UTIL_QPM):
 			target_id=self.device_id,
 			admission_context_factory=admission_context_factory,
 			scheduler_context_factory=scheduler_context_factory)
-		self.configure_dispatch_limits(limits={"max_inflight": sum(self.free_hosts.values())})
 		set_max_qubits_pp(self.num_qubits)
 		self.configure_device_profile(
 			max_qubits=self.num_qubits, max_shots=MAX_PROXY_SHOTS)

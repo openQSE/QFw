@@ -446,12 +446,13 @@ def test_cancelling_a_job_that_is_sampling_stops_its_runner(qpm):
 	assert completion.get("rc") != 0
 
 
-def test_jobs_sample_in_parallel_runners(qpm):
+def test_a_second_job_waits_for_the_one_sampling(qpm):
 	reservation = _reserve(qpm)
 	for _ in range(2):
 		qpm.async_run(_slow_job(qpm), reservation_id=reservation)
 
-	assert _wait_for(lambda: len(qpm.qrc.launcher.running()) == 2)
+	assert _wait_for(lambda: len(qpm.qrc.launcher.running()) == 1)
+	assert not _wait_for(lambda: len(qpm.qrc.launcher.running()) == 2, timeout=1)
 
 
 def test_a_failed_runner_prints_its_reason_first(tmp_path):
