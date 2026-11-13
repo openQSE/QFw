@@ -151,10 +151,12 @@ def test_host_resources_default_to_service_host(monkeypatch):
 	monkeypatch.setattr(util_qpm.os, "uname", lambda: HostInfo())
 	qpm = object.__new__(UTIL_QPM)
 	qpm.free_hosts = {}
+	qpm.host_slots = {}
 
 	qpm.setup_host_resources(3)
 
 	assert qpm.free_hosts == {"site-qpm-host": 3}
+	assert qpm.host_slots == {"site-qpm-host": 3}
 
 
 def test_controller_state_is_target_scoped(monkeypatch):

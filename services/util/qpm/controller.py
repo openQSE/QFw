@@ -241,6 +241,7 @@ class QPMTargetController:
 		self.oor_queue = None
 		self.circuit_results = []
 		self.free_hosts = {}
+		self.host_slots = {}
 		self.all_results = []
 		self.push_info = {}
 		self.qtask_id_next = 1
