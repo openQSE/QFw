@@ -266,6 +266,7 @@ qfw_example_service_for_backend() {
 		"aer") printf "%s\n" "aer" ;;
 		"fake-iqm"|"fake-iqm-20q") printf "%s\n" "fake-iqm" ;;
 		"iqm-garnet-mock") printf "%s\n" "shim-garnet-mock" ;;
+		"qblox-dummy"|"qblox-cluster") printf "%s\n" "qblox" ;;
 		*)
 			echo "ERROR: no local QPM service mapping for backend '${backend}'" >&2
 			return 1

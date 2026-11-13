@@ -1,0 +1,93 @@
+{
+    "config_type": "QbloxHardwareCompilationConfig",
+    "hardware_description": {
+        "cluster0": {
+            "instrument_type": "Cluster",
+            "modules": {
+                "2": {
+                    "instrument_type": "QCM"
+                },
+                "4": {
+                    "instrument_type": "QRM"
+                }
+            },
+            "sequence_to_file": false,
+            "ref": "internal",
+            "ip": null
+        }
+    },
+    "hardware_options": {
+        "modulation_frequencies": {
+            "q0:mw-q0.01": {
+                "interm_freq": 80000000.0
+            },
+            "q1:mw-q1.01": {
+                "interm_freq": 80000000.0
+            },
+            "q2:mw-q2.01": {
+                "interm_freq": 80000000.0
+            },
+            "q0:res-q0.ro": {
+                "interm_freq": 50000000.0
+            },
+            "q1:res-q1.ro": {
+                "interm_freq": 50000000.0
+            },
+            "q2:res-q2.ro": {
+                "interm_freq": 50000000.0
+            }
+        }
+    },
+    "connectivity": {
+        "graph": [
+            [
+                "cluster0.module2.real_output_0",
+                "q0:mw"
+            ],
+            [
+                "cluster0.module2.real_output_1",
+                "q1:mw"
+            ],
+            [
+                "cluster0.module2.real_output_2",
+                "q0:fl"
+            ],
+            [
+                "cluster0.module2.real_output_3",
+                "q2:mw"
+            ],
+            [
+                "cluster0.module4.complex_output_0",
+                "all:res"
+            ],
+            [
+                "cluster0.module4.complex_input_0",
+                "all:res"
+            ],
+            [
+                "cluster0.module4.complex_output_0",
+                "q0:res"
+            ],
+            [
+                "cluster0.module4.complex_input_0",
+                "q0:res"
+            ],
+            [
+                "cluster0.module4.complex_output_0",
+                "q1:res"
+            ],
+            [
+                "cluster0.module4.complex_input_0",
+                "q1:res"
+            ],
+            [
+                "cluster0.module4.complex_output_0",
+                "q2:res"
+            ],
+            [
+                "cluster0.module4.complex_input_0",
+                "q2:res"
+            ]
+        ]
+    }
+}
