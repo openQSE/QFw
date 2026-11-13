@@ -1322,12 +1322,14 @@ the ideal outcomes: `known`, `ffsim`, `pauli-rotations`, `statevector`,
 `matrix_product_state` or `statevector-bases`.
 
 Each job samples in a runner process of its own, `circuit_runner.py`, launched
-as the Aer service launches its runner. Jobs run in parallel, one per slot of
-the service's `assigned-hosts`. The memory limit applies to each runner, and
-cached states last only for the job, so each job loads the device and
-computes its states afresh. A runner that outlives the circuit time limit is
-killed, and a service entry's own `circuit-time-limit-seconds` overrides the
-site's. Cancelling a job kills its runner. A runner that fails prints the
+as the Aer service launches its runner. A job waits for the one sampling, as
+an Aer job does. The memory limit applies to each runner, and cached states
+last only for the job, so each job loads the device and computes its states
+afresh. A runner that outlives the circuit time limit is killed, and a service
+entry's own `circuit-time-limit-seconds` overrides the site's. A runner records
+its host and pid next to its job file, and cancelling a job kills it by that
+pid when it runs on the QPM's host, also when a DVM started it. A runner that
+fails prints the
 reason as its first line, such as `proxy: LookupError: ...`, and the job's
 error keeps the error's type.
 
