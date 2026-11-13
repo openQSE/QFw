@@ -88,7 +88,7 @@ services:
     proxy:
       max-memory-mb: 4096
     provider-launch:
-      type: internal
+      type: mpi
 
   - name: backline-local
     credential-mode: no-secret
