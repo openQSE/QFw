@@ -164,7 +164,7 @@ def check_qblox_packages():
 
 def resolve_config_path(value, default_name):
 	# A QFw service starts in a generated run directory, and in a multinode
-	# allocation it starts on a different node than the one you launched from. 
+	# allocation it starts on a different node than the one you launched from.
 	# Config paths must therefore be absolute and node-visible.
 	value = strip_quotes(value)
 	if not value:
