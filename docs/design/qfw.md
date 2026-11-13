@@ -75,7 +75,9 @@ Relevant implementation points:
   reservation execution context options `reservation_id`, `token`, `timeout`,
   and `cancel_on_timeout` when constructing a `QFwJob`. Its `lib` option
   (default `QFW_SHIM_LIB`) names the shim library, `qrmi` or `qdmi`, that
-  `QFwJob` puts in each circuit's `info`.
+  `QFwJob` puts in each circuit's `info`. Its `compile()` compiles against
+  the backend's target with `qiskit` or `mqt`. A call that names no compiler
+  takes `QFW_COMPILER`, else Qiskit.
 - `backends/qfw_qiskit/qfw_job.py` calls `qpm.async_run(info, **context)` and
   rejects unreserved execution when the launcher did not provide
   `reservation_id`.
