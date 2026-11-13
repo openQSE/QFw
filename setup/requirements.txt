@@ -19,9 +19,20 @@ qiskit-ibm-runtime
 ibm-platform-services>=0.59
 iqm-client==34.0.1
 iqm-data-definitions==2.24
-iqm-exa-common==27.5.1
+# 27.5.4 rather than 27.5.1: 27.5.1 pins ruamel-yaml==0.17.32, which cannot
+# coexist with qblox-scheduler's ruamel.yaml>=0.18.0 (pip reports
+# ResolutionImpossible and the whole file fails to install, for every user).
+# 27.5.4 relaxes it to ruamel-yaml<0.20,>=0.17.32. Patch bump within 27.5.x;
+# iqm-client stays on the 34.0.1 that svc_iqm_qpm/util_iqm.py enforces.
+iqm-exa-common==27.5.4
 iqm-pulse==13.0.1
 iqm-station-control-client==12.1.1
+
+# svc_qblox_qpm. Importing qblox_scheduler is not headless: its __init__
+# reaches quantify_core.visualization -> pyqtgraph -> PyQt5.QtGui, which
+# dlopens libGL, so the image also needs the mesa-libGL system package.
+qblox-scheduler==1.0.0b4
+qblox-instruments==1.2.1
 qiskit_nature
 openfermion>=1.5.2
 mpi4py
