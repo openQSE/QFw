@@ -1322,6 +1322,7 @@ The current service modules follow this pattern:
 | `services/svc_tnqvm_qpm` | TNQVM tensor-network simulator QPM. | `UTIL_QPM` with a TNQVM QRC. |
 | `services/svc_nwqsim_qpm` | NWQSIM state-vector simulator QPM. | `UTIL_QPM` with an NWQSIM QRC. |
 | `services/svc_aer_qpm` | Simulator QPM running Qiskit Aer on the CPU or GPU, noiseless or under a named device's noise model; with a device it publishes that device's IBM configuration and properties. | `UTIL_QPM` with a QRC that runs `circuit_runner.py`. |
+| `services/svc_proxy_qpm` | Simulator QPM that applies a named device's calibrated Pauli-frame noise to each shot's ideal outcome; it publishes that device's IBM configuration and properties. | `UTIL_QPM` with a QRC that runs `circuit_runner.py`. |
 | `services/svc_qb_qpm` | Quantum Brilliance simulator QPM with managed vQPU startup. | `UTIL_QPM` with a QB QRC and QB-specific run preparation. |
 | `services/svc_iqm_qpm` | Native IQM hardware QPM. | `UTIL_QPM` with an IQM QRC. |
 | `services/svc_lib_qpm` | QRMI/QDMI shim QPM. | `UTIL_QPM` with a QRC front end that routes calls to QRMI or QDMI drivers. |
