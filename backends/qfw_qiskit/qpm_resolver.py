@@ -57,6 +57,16 @@ def binding_name_for_category(api_category, binding_name=None):
 	return API_CATEGORY_BINDINGS.get(api_category, api_category)
 
 
+def _unavailable_reserved_service(service_id):
+	message = f"reserved QPM service {service_id!r} is unavailable"
+	try:
+		from qfw_runtime.service_plane import ended_service_report
+	except ImportError:
+		return message
+	report = ended_service_report(service_id)
+	return f"{message}: {report}" if report else message
+
+
 class QPMResolverError(DEFwReserveError):
 	pass
 
@@ -309,8 +319,7 @@ class QPMResolver:
 			wait += 1
 			self._sleep(1)
 		if not candidates:
-			raise QPMResolverError(
-				f"reserved QPM service {service_id!r} is unavailable")
+			raise QPMResolverError(_unavailable_reserved_service(service_id))
 		if len(candidates) != 1:
 			raise QPMAmbiguousResolutionError(
 				f"reserved QPM service {service_id!r} appears in multiple "
