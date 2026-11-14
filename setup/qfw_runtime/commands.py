@@ -269,10 +269,28 @@ def qfw_teardown(argv):
             file=sys.stderr,
         )
         return 1
+    ended = _ended_service_reports(state)
     qfw_config.clear_current_run(state)
-    if not args.keep_run_dir:
+    for report in ended:
+        print(f"qfw-teardown: {report}", file=sys.stderr)
+    if ended:
+        print(
+            "qfw-teardown: a service ended before teardown, so its records "
+            f"and logs were kept in {state['run_dir']}",
+            file=sys.stderr,
+        )
+    elif not args.keep_run_dir:
         shutil.rmtree(state["run_dir"], ignore_errors=True)
     return 0
+
+
+def _ended_service_reports(state):
+    return [
+        report
+        for manager in state.get("service_managers") or []
+        for report in qfw_service_plane.ended_component_reports(
+            manager["run_dir"])
+    ]
 
 
 def _runtime_status(state):
@@ -302,6 +320,8 @@ def _runtime_status(state):
             manager_state = qfw_service_plane.status(record["run_dir"])
             record["state"] = manager_state.get("state", "unknown")
             record["status"] = manager_state
+            if manager_state.get("error"):
+                record["error"] = manager_state["error"]
         except (OSError, RuntimeError, ValueError) as exc:
             record["state"] = "unavailable"
             record["error"] = str(exc)
@@ -373,7 +393,8 @@ def _print_runtime_status(report):
             label = manager["role"] or "service"
             if manager.get("service_id"):
                 label = f"{label}:{manager['service_id']}"
-            print(f"    {label}: {manager['state']}")
+            detail = f": {manager['error']}" if manager.get("error") else ""
+            print(f"    {label}: {manager['state']}{detail}")
     else:
         print("  service-managers: none")
     required = "yes" if report["teardown_required"] else "no"
