@@ -191,7 +191,10 @@ def _install_defw_stubs():
 		defw_exception = types.ModuleType("defw_exception")
 
 		class DEFwError(Exception):
-			pass
+			def __init__(self, msg='', arg=None, halt=False, nname=""):
+				super().__init__(msg)
+				self.msg = msg
+				self.arg = arg
 
 		class DEFwNotReady(DEFwError):
 			pass
