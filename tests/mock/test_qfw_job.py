@@ -80,6 +80,7 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 		"num_qubits": 3,
 		"num_shots": 17,
 		"compiler": "staq",
+		"completion_event_class_id": "event-api-1",
 		"seed_simulator": 11,
 		"reservation_id": 1,
 	}

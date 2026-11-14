@@ -516,6 +516,7 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 				"num_qubits": 1,
 				"num_shots": 12,
 				"compiler": "staq",
+				"completion_event_class_id": "event-api-1",
 				"qubit_mapping": {"0": "QB7"},
 				"seed_simulator": 34,
 				"reservation_id": 1,

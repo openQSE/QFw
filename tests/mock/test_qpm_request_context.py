@@ -77,3 +77,15 @@ def test_parse_execution_request_moves_scoped_payload_metadata(monkeypatch):
 		"run_context": {"priority": "normal"},
 	}
 	assert request.context.auth_disabled is True
+
+
+def test_parse_execution_request_moves_completion_event_class_into_context():
+	import util.qpm.request as qpm_request
+
+	request = qpm_request.parse_execution_request({
+		"qasm": "OPENQASM 2.0;",
+		"completion_event_class_id": "client-events",
+	})
+
+	assert request.payload == {"qasm": "OPENQASM 2.0;"}
+	assert request.context.completion_event_class_id == "client-events"
