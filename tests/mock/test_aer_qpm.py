@@ -63,6 +63,7 @@ def test_settings_default_to_ideal_on_the_cpu():
 	({"method": "statevector", "mps-truncation-threshold": 1e-10},
 	 "needs method: matrix_product_state"),
 	({"mps-log-data": True}, "needs method: matrix_product_state"),
+	({"mps-lapack": True}, "needs method: matrix_product_state"),
 ])
 def test_settings_refuse_what_aer_cannot_run(aer, refusal):
 	with pytest.raises(DEFwExecutionError, match=refusal):

@@ -12,9 +12,12 @@ AER_OPTIONS = {
 	"mps-max-bond-dimension": "matrix_product_state_max_bond_dimension",
 	"mps-truncation-threshold": "matrix_product_state_truncation_threshold",
 	"mps-log-data": "mps_log_data",
+	"mps-lapack": "mps_lapack",
 }
-MPS_KEYS = ("mps-max-bond-dimension", "mps-truncation-threshold", "mps-log-data")
-PUBLISHED_KEYS = ("method", "device", *MPS_KEYS)
+PUBLISHED_MPS_KEYS = (
+	"mps-max-bond-dimension", "mps-truncation-threshold", "mps-log-data")
+MPS_KEYS = (*PUBLISHED_MPS_KEYS, "mps-lapack")
+PUBLISHED_KEYS = ("method", "device", *PUBLISHED_MPS_KEYS)
 
 
 @dataclass(frozen=True)
