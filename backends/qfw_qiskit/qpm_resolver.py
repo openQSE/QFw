@@ -57,12 +57,18 @@ def binding_name_for_category(api_category, binding_name=None):
 	return API_CATEGORY_BINDINGS.get(api_category, api_category)
 
 
+def ended_service_report(service_id):
+	if not service_id:
+		return None
+	try:
+		from qfw_runtime.service_plane import ended_service_report as report
+	except ImportError:
+		return None
+	return report(service_id)
+
+
 def _unavailable_reserved_service(service_id):
 	message = f"reserved QPM service {service_id!r} is unavailable"
-	try:
-		from qfw_runtime.service_plane import ended_service_report
-	except ImportError:
-		return message
 	report = ended_service_report(service_id)
 	return f"{message}: {report}" if report else message
 
