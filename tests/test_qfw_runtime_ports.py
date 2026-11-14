@@ -934,3 +934,27 @@ def test_a_foreground_service_stopped_by_teardown_exits_zero(
     assert not process_launcher.qfw_process_state.stop_request_path(
         pid_file).exists()
 
+
+
+def test_a_foreground_service_that_exits_on_its_own_records_its_status(
+        tmp_path):
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    service = subprocess.Popen([sys.executable, "-c", "raise SystemExit(121)"])
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, tmp_path / "ready.json") == 121
+    assert process_launcher.qfw_process_state.read_exit_status(pid_file) == 121
+
+
+def test_a_foreground_service_stopped_by_request_records_no_status(tmp_path):
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    service = subprocess.Popen([sys.executable, "-c", "raise SystemExit(121)"])
+    process_launcher.qfw_process_state.stop_request_path(pid_file).touch()
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, tmp_path / "ready.json") == 0
+    assert process_launcher.qfw_process_state.read_exit_status(pid_file) is None
