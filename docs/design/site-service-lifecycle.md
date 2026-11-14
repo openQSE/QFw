@@ -30,9 +30,9 @@ run in the foreground of their own `srun --overlap --mem=0` step, which needs
 Slurm 20.11 or newer. `--mem=0` keeps a step from holding the job's memory away
 from later steps. A held step asks for the job's CPUs on its node with
 `--cpus-per-task`, read from `SLURM_JOB_CPUS_PER_NODE` against
-`SLURM_JOB_NODELIST`, and runs its service with `SLURM_CPUS_PER_TASK` and
-`SLURM_TRES_PER_TASK` unset, so the `srun` steps `prte` starts don't inherit
-them. Under Slurm 20.11 the CPUs of an `--overlap` step go only to other
+`SLURM_JOB_NODELIST` and capped at the job's `SLURM_CPUS_PER_TASK`, and runs
+its service with `SLURM_CPUS_PER_TASK` and `SLURM_TRES_PER_TASK` unset, so the
+`srun` steps `prte` starts don't inherit them. Under Slurm 20.11 the CPUs of an `--overlap` step go only to other
 `--overlap` steps, so `qfw-srun` launches the application with `--overlap`, and
 a plain `srun` in the job script waits until teardown. Slurm with
 `proctrack/cgroup` ends every process of a step when the step ends, so a step
