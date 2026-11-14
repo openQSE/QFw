@@ -30,6 +30,8 @@ _STEP_VARIABLES_UNSET = (
 STEP_START_GRACE_SECONDS = 60
 SLURM_MODES = frozenset({"slurm", "heterogeneous"})
 STEP_LOG_TAIL_LINES = 5
+ENDED_LIVENESS = frozenset({"dead", "identity-mismatch"})
+DEFW_LOG_NAME = "defw_py.log"
 _STEPS = {}
 
 
@@ -222,6 +224,13 @@ def status(run_dir):
         if directory_component:
             _publish_directory_connection(
                 state, ready=directory_component.get("ready", False))
+        ended = [
+            component["ended"]
+            for component in state.get("components", {}).values()
+            if "ended" in component
+        ]
+        if ended and not all_ready:
+            state["error"] = "; ".join(ended)
         if all_ready:
             state["state"] = "ready"
         elif "stale" in observed_states:
@@ -299,7 +308,8 @@ def run(args):
             current = status(args.run_dir)
             if current["state"] != "ready":
                 current["state"] = "error"
-                current["error"] = "an owned service-plane component stopped"
+                current["error"] = current.get("error") or (
+                    "an owned service-plane component stopped")
                 current["updated_at_ns"] = time.time_ns()
                 _write_state(current)
                 _stop_components(current)
@@ -948,7 +958,8 @@ def _observed_component_state(component, state, ready):
         return "stale"
     liveness = _component_process_status(component, state)
     component["liveness"] = liveness
-    if liveness in {"dead", "identity-mismatch"}:
+    _record_ended_component(component, liveness)
+    if liveness in ENDED_LIVENESS:
         return "dead"
     if liveness != "alive":
         return "stale"
@@ -975,7 +986,9 @@ def _stop_components(state):
                 # component stopped here is what let a teardown which never
                 # reached the node report success and then discard the state
                 # naming a process that is still running.
-                if _verified_component_status(component, state) == "alive":
+                liveness = _verified_component_status(component, state)
+                _record_ended_component(component, liveness)
+                if liveness == "alive":
                     _request_stop(component)
                     _terminate_pid(
                         int(component["pid"]), component.get("node"),
@@ -990,6 +1003,78 @@ def _stop_components(state):
             component["error"] = str(exc)
             errors.append(f"{key}: {exc}")
     return errors
+
+
+def _record_ended_component(component, liveness):
+    if liveness in ENDED_LIVENESS and "ended" not in component:
+        component["ended"] = _ended_component_report(component)
+
+
+def _ended_component_report(component):
+    label = _component_label(component)
+    status = (
+        qfw_process_state.read_exit_status(component["pid_file"])
+        if component.get("pid_file") else None)
+    if status is None:
+        ended = f"{label} ended"
+    elif status < 0:
+        ended = f"{label} was killed by signal {-status}"
+    else:
+        ended = f"{label} exited with status {status}"
+    return ". ".join([
+        ended,
+        *(f"{path} ends: {_log_tail(path)}"
+          for path in _component_logs(component)),
+    ])
+
+
+def _component_label(component):
+    if component["role"] == "qpm":
+        return f"QPM service {component.get('service_id', '')}".rstrip()
+    if component["role"] == "directory":
+        return f"directory service {component.get('name', '')}".rstrip()
+    return "PRTE DVM"
+
+
+def _component_logs(component):
+    logs = []
+    if component.get("step"):
+        logs.append(Path(component["step"]["log"]))
+    if component.get("log_dir"):
+        log_dir = Path(component["log_dir"])
+        logs.extend(sorted(log_dir.glob("*.stderr.log")))
+        logs.append(log_dir / DEFW_LOG_NAME)
+    return [path for path in logs if path.exists()]
+
+
+def ended_component_reports(run_dir):
+    state = _read_state(run_dir, required=False) or {}
+    return [
+        component["ended"]
+        for component in state.get("components", {}).values()
+        if "ended" in component
+    ]
+
+
+def ended_service_report(service_id, run_dir=None):
+    try:
+        runtime = qfw_config.read_state(run_dir)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    for manager in runtime.get("service_managers") or []:
+        if manager.get("service_id") != service_id:
+            continue
+        try:
+            state = _read_state(manager["run_dir"], required=False) or {}
+        except ServicePlaneError:
+            return None
+        component = state.get("components", {}).get(f"qpm:{service_id}")
+        if not component or not component.get("pid_file"):
+            return None
+        if qfw_process_state.read_exit_status(component["pid_file"]) is None:
+            return None
+        return component.get("ended") or _ended_component_report(component)
+    return None
 
 
 def _request_stop(component):
@@ -1016,7 +1101,9 @@ def _stop_prte(component, state, environment=None):
         return
     # Both probes run before anything is discarded, so a DVM whose liveness
     # could not be established keeps its uri and pid files for the retry.
-    live = _verified_component_status(component, state) == "alive"
+    liveness = _verified_component_status(component, state)
+    _record_ended_component(component, liveness)
+    live = liveness == "alive"
     if live and uri_path.exists():
         environment = environment or os.environ.copy()
         command = [

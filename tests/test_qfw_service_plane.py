@@ -1713,3 +1713,140 @@ def test_process_state_reports_a_failed_probe_on_stderr(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "Permission denied" in captured.err
+
+
+def _ended_qpm_run(tmp_path, exit_status=121):
+    run_dir = tmp_path / "qpm-run"
+    component_dir = run_dir / "services" / "aer-run1"
+    log_dir = component_dir / "logs"
+    log_dir.mkdir(parents=True)
+    pid_file = component_dir / "pid"
+    (log_dir / "defw_py.log").write_text(
+        "loaded svc_aer_qpm\nsampling circuit cid-7\n", encoding="utf-8")
+    step_log = component_dir / "step.log"
+    step_log.write_text(
+        "srun: error: node1: task 0: Exited with exit code 121\n",
+        encoding="utf-8")
+    if exit_status is not None:
+        process_state.exit_status_path(pid_file).write_text(
+            f"{exit_status}\n", encoding="utf-8")
+    service_plane._write_state({
+        "schema": service_plane.SCHEMA,
+        "run_dir": str(run_dir),
+        "state": "ready",
+        "dry_run": False,
+        "allocation": {"mode": "local"},
+        "configuration": {
+            "components": {"directory": False, "prte": False, "qpm": True},
+            "service_ids": ["aer-run1"],
+        },
+        "components": {
+            "qpm:aer-run1": {
+                "role": "qpm",
+                "service_id": "aer-run1",
+                "state": "ready",
+                "pid": 4242,
+                "node": "sim-head",
+                "process_identity": process_identity(4242),
+                "pid_file": str(pid_file),
+                "ready_file": str(component_dir / "ready.json"),
+                "log_dir": str(log_dir),
+                "step": {"pid": 99, "host": "another-host", "log": str(step_log)},
+            }
+        },
+    })
+    return run_dir
+
+
+@pytest.fixture
+def processes_gone(monkeypatch):
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", lambda *_args: None)
+
+
+def test_status_names_a_service_that_exited_with_its_status_and_logs(
+        tmp_path, processes_gone):
+    run_dir = _ended_qpm_run(tmp_path)
+
+    observed = service_plane.status(run_dir)
+
+    assert observed["state"] == "degraded"
+    assert observed["error"].startswith(
+        "QPM service aer-run1 exited with status 121. ")
+    assert "step.log ends: srun: error: node1: task 0: Exited" in observed["error"]
+    assert "defw_py.log ends: loaded svc_aer_qpm | sampling circuit cid-7" in (
+        observed["error"])
+
+
+@pytest.mark.parametrize("exit_status, ended", [
+    (-9, "QPM service aer-run1 was killed by signal 9"),
+    (None, "QPM service aer-run1 ended"),
+])
+def test_status_says_how_a_service_ended(
+        tmp_path, processes_gone, exit_status, ended):
+    run_dir = _ended_qpm_run(tmp_path, exit_status=exit_status)
+
+    assert service_plane.status(run_dir)["error"].startswith(f"{ended}. ")
+
+
+def test_a_foreground_manager_names_the_service_that_ended(
+        tmp_path, monkeypatch, processes_gone):
+    import argparse
+
+    run_dir = _ended_qpm_run(tmp_path)
+    monkeypatch.setattr(
+        service_plane, "start", lambda _args: service_plane._read_state(run_dir))
+
+    assert service_plane.run(
+        argparse.Namespace(run_dir=str(run_dir), poll_interval=0.1)) == 1
+
+    assert service_plane._read_state(run_dir)["error"].startswith(
+        "QPM service aer-run1 exited with status 121. ")
+
+
+def test_stop_keeps_the_record_and_logs_of_a_service_that_ended(
+        tmp_path, processes_gone):
+    run_dir = _ended_qpm_run(tmp_path)
+    component_dir = run_dir / "services" / "aer-run1"
+
+    service_plane.stop(run_dir)
+
+    [report] = service_plane.ended_component_reports(run_dir)
+    assert report.startswith("QPM service aer-run1 exited with status 121. ")
+    assert process_state.read_exit_status(component_dir / "pid") == 121
+    assert (component_dir / "logs" / "defw_py.log").exists()
+
+
+def _runtime_with(tmp_path, qpm_run_dir):
+    runtime_dir = tmp_path / "runtime"
+    (runtime_dir / "state").mkdir(parents=True)
+    (runtime_dir / "state" / "runtime-state.json").write_text(json.dumps({
+        "run_dir": str(runtime_dir),
+        "service_managers": [{
+            "owner": "application",
+            "role": "qpm",
+            "service_id": "aer-run1",
+            "run_dir": str(qpm_run_dir),
+        }],
+    }), encoding="utf-8")
+    return runtime_dir
+
+
+def test_a_client_reads_why_a_reserved_service_ended(tmp_path):
+    runtime_dir = _runtime_with(tmp_path, _ended_qpm_run(tmp_path))
+
+    report = service_plane.ended_service_report("aer-run1", run_dir=runtime_dir)
+
+    assert report.startswith("QPM service aer-run1 exited with status 121. ")
+    assert service_plane.ended_service_report(
+        "nwqsim-run1", run_dir=runtime_dir) is None
+
+
+def test_a_running_service_has_no_ended_report(tmp_path):
+    runtime_dir = _runtime_with(
+        tmp_path, _ended_qpm_run(tmp_path, exit_status=None))
+
+    assert service_plane.ended_service_report(
+        "aer-run1", run_dir=runtime_dir) is None
+    assert service_plane.ended_service_report(
+        "aer-run1", run_dir=tmp_path / "no-runtime") is None
