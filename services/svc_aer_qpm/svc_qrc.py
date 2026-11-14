@@ -45,20 +45,8 @@ class QRC(UTIL_QRC):
 			CIRCUIT_RUNNER,
 			'--qasm-file', qasm_file,
 			'--shots', info["num_shots"],
-			'--mode', aer["mode"],
-			'--device', aer["device"],
-			'--method', aer["method"],
-			'--max-memory-mb', aer["max_memory_mb"],
+			'--settings', json.dumps(aer),
 		]
-		if aer.get("device_id"):
-			executable_args.extend(['--device-id', aer["device_id"]])
-		if aer.get("target_gpus"):
-			executable_args.extend(['--target-gpus', *aer["target_gpus"]])
-		for name in ("mps_max_bond_dimension", "mps_truncation_threshold"):
-			if aer.get(name) is not None:
-				executable_args.extend(['--' + name.replace('_', '-'), aer[name]])
-		if aer.get("mps_log_data"):
-			executable_args.append('--mps-log-data')
 		if info.get("seed_simulator") is not None:
 			executable_args.extend(['--seed', info["seed_simulator"]])
 

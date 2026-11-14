@@ -1,4 +1,5 @@
 import json
+import shlex
 import types
 
 import pytest
@@ -22,7 +23,7 @@ def service(tmp_path, monkeypatch):
 	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_QPM_SERVICE_NAME", "aer")
 	monkeypatch.delenv("QFW_QPU_DEVICE_ID", raising=False)
-	monkeypatch.setattr(svc_qpm, "available_devices", lambda: ("CPU",))
+	monkeypatch.setattr(svc_qpm, "check_aer_options", lambda options: None)
 
 	def configure(device_file=False, mpi_launch=None, **aer):
 		entry = {"name": "aer", "module": "svc_aer_qpm"}
@@ -56,13 +57,13 @@ def test_settings_default_to_ideal_on_the_cpu():
 
 @pytest.mark.parametrize("aer, refusal", [
 	({"mode": "exact"}, "aer mode"),
-	({"device": "TPU"}, "aer device"),
 	({"target-gpus": [0]}, "target-gpus"),
 	({"shots": 10}, "unknown aer settings"),
 	({"mps-max-bond-dimension": 64}, "needs method: matrix_product_state"),
 	({"method": "statevector", "mps-truncation-threshold": 1e-10},
 	 "needs method: matrix_product_state"),
 	({"mps-log-data": True}, "needs method: matrix_product_state"),
+	({"mps-lapack": True}, "needs method: matrix_product_state"),
 ])
 def test_settings_refuse_what_aer_cannot_run(aer, refusal):
 	with pytest.raises(DEFwExecutionError, match=refusal):
@@ -83,18 +84,33 @@ def test_ideal_mode_without_a_device_needs_a_width(service):
 		QPM(start=False)
 
 
-def test_a_gpu_the_host_lacks_is_refused_rather_than_run_on_the_cpu(service):
-	service(mode="ideal", device="GPU", **{"num-qubits": 20})
+def test_settings_aer_refuses_stop_the_start(service, monkeypatch):
+	checked = []
 
-	with pytest.raises(DEFwExecutionError, match="offers CPU"):
+	def refuse(options):
+		checked.append(options)
+		raise DEFwExecutionError("aer refuses its settings: no GPU")
+
+	monkeypatch.setattr(svc_qpm, "check_aer_options", refuse)
+	service(mode="ideal", device="gpu", **{"num-qubits": 20})
+
+	with pytest.raises(DEFwExecutionError, match="no GPU"):
 		QPM(start=False)
+	assert checked == [{"method": "automatic", "device": "GPU"}]
 
 
-def test_a_gpu_the_host_has_is_used(service, monkeypatch):
-	monkeypatch.setattr(svc_qpm, "available_devices", lambda: ("CPU", "GPU"))
-	service(mode="ideal", device="GPU", **{"num-qubits": 20})
+def test_the_entrys_names_become_aers_options():
+	settings = aer_settings_from_service_entry({"aer": {
+		"method": "matrix_product_state", "max-memory-mb": 512,
+		**{key: value for key, value in MPS_SETTINGS.items()
+			if key != "method"}}})
 
-	assert QPM(start=False).settings.device == "GPU"
+	assert settings.options == {
+		"method": "matrix_product_state", "device": "CPU",
+		"max_memory_mb": 512,
+		"matrix_product_state_max_bond_dimension": 64,
+		"matrix_product_state_truncation_threshold": 1e-10,
+		"mps_log_data": True}
 
 
 def test_the_settings_are_published(service, monkeypatch):
@@ -164,11 +180,15 @@ def test_services_emulating_one_device_have_their_own_backend_names(
 
 
 def _circuit(service, monkeypatch, seed=None, mpi_launch=None, **aer):
-	monkeypatch.setattr(svc_qpm, "available_devices", lambda: ("CPU", "GPU"))
 	service(device_file=True, mpi_launch=mpi_launch, **aer)
 	info = QPM(start=False).prepare_circuit(
 		{"num_shots": 100, "np": 1, "seed_simulator": seed})
 	return types.SimpleNamespace(info=info)
+
+
+def _runner_settings(command):
+	words = shlex.split(command)
+	return json.loads(words[words.index("--settings") + 1])
 
 
 def test_the_runner_gets_the_settings(service, monkeypatch):
@@ -176,30 +196,14 @@ def test_the_runner_gets_the_settings(service, monkeypatch):
 		service, monkeypatch, mode="noisy", device="GPU",
 		method="matrix_product_state", **{"target-gpus": [0, 1]})
 
-	command = QRC(start=False).form_cmd(circuit, "c.qasm")
+	settings = _runner_settings(
+		QRC(start=False).form_cmd(circuit, "c.qasm"))
 
-	assert "--mode noisy" in command
-	assert "--method matrix_product_state" in command
-	assert "--device GPU" in command
-	assert "--target-gpus 0 1" in command
-	assert "--device-id" in command
-
-
-def test_the_runner_gets_the_mps_settings(service, monkeypatch):
-	command = QRC(start=False).form_cmd(
-		_circuit(service, monkeypatch, mode="noisy", **MPS_SETTINGS), "c.qasm")
-
-	assert "--mps-max-bond-dimension 64" in command
-	assert "--mps-truncation-threshold 1e-10" in command
-	assert "--mps-log-data" in command
-
-
-def test_the_runner_leaves_the_mps_settings_to_aer_by_default(
-		service, monkeypatch):
-	command = QRC(start=False).form_cmd(
-		_circuit(service, monkeypatch, method="matrix_product_state"), "c.qasm")
-
-	assert "--mps-" not in command
+	assert settings["mode"] == "noisy"
+	assert settings["device_id"]
+	assert settings["options"] == {
+		"method": "matrix_product_state", "device": "GPU",
+		"target_gpus": [0, 1]}
 
 
 def test_the_runner_runs_on_one_rank_whatever_the_circuit_asks(

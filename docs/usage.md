@@ -632,6 +632,7 @@ The `aer` service reads its own `aer` block:
 | `mps-max-bond-dimension` | Aer's `matrix_product_state_max_bond_dimension`, with `method: matrix_product_state`. | Aer's |
 | `mps-truncation-threshold` | Aer's `matrix_product_state_truncation_threshold`, with `method: matrix_product_state`. | Aer's |
 | `mps-log-data` | Aer's `mps_log_data`, with `method: matrix_product_state`. Each result then carries Aer's `MPS_log_data`, which records the discarded weight and bond dimensions. | `false` |
+| `mps-lapack` | Aer's `mps_lapack`, which computes MPS SVDs with LAPACK, with `method: matrix_product_state`. Aer checks each SVD, and one LAPACK gets wrong fails the circuit with `Wrong SVD calculations`, as the OpenBLAS 0.3.3 in the PyPI wheels has done. | `false` |
 
 `device-id` names a `qiskit-ibm-runtime` `fake_provider` class, such as
 `FakeFez`, or a JSON file `{"configuration": ..., "properties": ...}` of raw IBM
@@ -645,8 +646,9 @@ QFw result keeps Aer's metadata for each circuit in
 `device: GPU` is set and its host's Aer has no GPU, and a circuit runner
 without one fails rather than run on the CPU.
 
-Noisy mode runs only the device's basis gates, so circuits must be transpiled
-for the target the service publishes. A circuit Aer cannot run fails with
+In ideal mode the runner transpiles each circuit to its `method`'s gates, so
+any gate the target offers runs. Noisy mode runs only the device's basis
+gates, so circuits must be transpiled for the target the service publishes. A circuit Aer cannot run fails with
 Aer's reason, such as `aer: AerError: 'unknown instruction: h'`. A service
 whose `aer` block it refuses does not start, and `qfw-setup` reports only a
 readiness timeout. The reason is in the QPM's `defw_py.log`.

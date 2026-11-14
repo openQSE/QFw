@@ -197,37 +197,38 @@ def test_a_failure_while_finishing_a_circuit_leaves_the_runner_serving(
 
 
 def test_circuit_time_limit_comes_from_the_site_file(tmp_path):
-	from util.qpm.util_qrc import circuit_time_limit
+	from util.qpm.util_qrc import circuit_time_limit_and_source
 
 	site = tmp_path / "site.yaml"
 
-	assert circuit_time_limit(str(tmp_path / "missing.yaml")) == 600
+	assert circuit_time_limit_and_source(str(tmp_path / "missing.yaml"))[0] == 600
 	site.write_text("qpm:\n  completion-queues: {}\n")
-	assert circuit_time_limit(str(site)) == 600
+	assert circuit_time_limit_and_source(str(site))[0] == 600
 	site.write_text("qpm:\n  circuit-time-limit-seconds: 30\n")
-	assert circuit_time_limit(str(site)) == 30
+	assert circuit_time_limit_and_source(str(site))[0] == 30
 	site.write_text("qpm:\n  circuit-time-limit-seconds: 0\n")
-	assert circuit_time_limit(str(site)) is None
+	assert circuit_time_limit_and_source(str(site))[0] is None
 	for bad in ("-1", "soon", "true"):
 		site.write_text(f"qpm:\n  circuit-time-limit-seconds: {bad}\n")
 		with pytest.raises(ValueError):
-			circuit_time_limit(str(site))
+			circuit_time_limit_and_source(str(site))[0]
 
 
 def test_a_services_own_circuit_time_limit_overrides_the_site_file(tmp_path):
-	from util.qpm.util_qrc import circuit_time_limit
+	from util.qpm.util_qrc import circuit_time_limit_and_source
+
+	def limit(service):
+		return circuit_time_limit_and_source(str(site), service=service)[0]
 
 	site = tmp_path / "site.yaml"
 	site.write_text("qpm:\n  circuit-time-limit-seconds: 30\n")
 	aer = {"name": "aer", "circuit-time-limit-seconds": 7200}
 
-	assert circuit_time_limit(str(site), service=aer) == 7200
-	assert circuit_time_limit(
-		str(site), service=dict(aer, **{"circuit-time-limit-seconds": 0})) is None
-	assert circuit_time_limit(str(site), service={"name": "aer"}) == 30
+	assert limit(aer) == 7200
+	assert limit(dict(aer, **{"circuit-time-limit-seconds": 0})) is None
+	assert limit({"name": "aer"}) == 30
 	with pytest.raises(ValueError, match=r"services\[aer\]"):
-		circuit_time_limit(
-			str(site), service=dict(aer, **{"circuit-time-limit-seconds": -1}))
+		limit(dict(aer, **{"circuit-time-limit-seconds": -1}))
 
 
 def test_a_services_own_circuit_time_limit_is_named_as_its_source(tmp_path):

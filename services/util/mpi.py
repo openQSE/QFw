@@ -43,24 +43,23 @@ def mpi_launch_config(config=None):
 	return config.get('mpi-launch', {}) or {}
 
 
-def backend_config(backend, config=None):
+def service_entry(name, config=None):
 	if config is None:
 		config = load_service_config()
 	for service in config.get('services', []) or []:
-		if str(service.get('name', '')) == str(backend):
-			return service.get('provider-launch', {}) or {}
+		if str(service.get('name', '')) == str(name):
+			return service
 	return {}
+
+
+def backend_config(backend, config=None):
+	return service_entry(backend, config).get('provider-launch', {}) or {}
 
 
 def this_service_entry(config=None):
-	if config is None:
-		config = load_service_config()
-	name = (os.environ.get('QFW_QPM_SERVICE_NAME')
-		or os.environ.get('QFW_QPM_SERVICE_ID', ''))
-	for service in config.get('services', []) or []:
-		if str(service.get('name', '')) == name:
-			return service
-	return {}
+	return service_entry(
+		os.environ.get('QFW_QPM_SERVICE_NAME')
+		or os.environ.get('QFW_QPM_SERVICE_ID', ''), config)
 
 
 def backend_wrapper(backend, config=None):
