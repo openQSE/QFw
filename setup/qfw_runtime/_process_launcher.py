@@ -335,6 +335,7 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
 
     _require_free_defw_ports(name, env)
     qfw_process_state.stop_request_path(pid_file).unlink(missing_ok=True)
+    qfw_process_state.exit_status_path(pid_file).unlink(missing_ok=True)
     defw_python = _command_path("defw-python", env=env)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
@@ -405,6 +406,8 @@ def _wait_foreground(process, pid_file, ready_file):
         returncode = process.wait()
         if qfw_process_state.stop_request_path(pid_file).exists():
             return 0
+        qfw_process_state.exit_status_path(pid_file).write_text(
+            f"{returncode}\n", encoding="utf-8")
         return returncode
     finally:
         signal.signal(signal.SIGINT, old_int)

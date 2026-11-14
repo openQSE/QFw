@@ -934,3 +934,46 @@ def test_a_foreground_service_stopped_by_teardown_exits_zero(
     assert not process_launcher.qfw_process_state.stop_request_path(
         pid_file).exists()
 
+
+
+def test_a_foreground_service_that_exits_on_its_own_records_its_status(
+        tmp_path):
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    service = subprocess.Popen([sys.executable, "-c", "raise SystemExit(121)"])
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, tmp_path / "ready.json") == 121
+    assert process_launcher.qfw_process_state.read_exit_status(pid_file) == 121
+
+
+def test_a_foreground_service_stopped_by_request_records_no_status(tmp_path):
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    service = subprocess.Popen([sys.executable, "-c", "raise SystemExit(121)"])
+    process_launcher.qfw_process_state.stop_request_path(pid_file).touch()
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, tmp_path / "ready.json") == 0
+    assert process_launcher.qfw_process_state.read_exit_status(pid_file) is None
+
+
+def test_teardown_keeps_the_run_dir_of_a_service_that_ended(
+        tmp_path, monkeypatch, capsys):
+    run_base, run_dir = _write_application_runtime(tmp_path, monkeypatch)
+    report = "QPM service mpi-smoke exited with status 121. step.log ends: oom"
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "stop", lambda _run_dir: None)
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "ended_component_reports",
+        lambda _run_dir: [report])
+
+    assert commands.qfw_teardown([]) == 0
+
+    stderr = capsys.readouterr().err
+    assert f"qfw-teardown: {report}" in stderr
+    assert f"kept in {run_dir}" in stderr
+    assert (run_dir / "state" / "runtime-state.json").exists()
+    assert not (run_base / "current").exists()

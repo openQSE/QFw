@@ -17,6 +17,7 @@ from util.qpm.statevector import (
 	statevector_payload_size_summary,
 )
 from .qfw_metadata import get_qubit_mapping
+from .qpm_resolver import ended_service_report
 
 
 EXECUTION_CONTEXT_KEYS = (
@@ -371,9 +372,15 @@ class QFwJob(Job):
 				token=context.get("token"))
 		except Exception as e:
 			self._status = JobStatus.ERROR
-			raise JobError(
+			message = (
 				f"QFw job {self._job_id} could not reach its QPM with "
-				f"{self._describe_unfinished(missing_cids)}: {e}") from e
+				f"{self._describe_unfinished(missing_cids)}: {e}")
+			report = ended_service_report(self._qpm_service_id())
+			raise JobError(f"{message}. {report}" if report else message) from e
+
+	def _qpm_service_id(self):
+		binding = getattr(self._qpm, "lifecycle_binding", None)
+		return getattr(binding, "service_id", None)
 
 	def _describe_unfinished(self, missing_cids):
 		missing = ", ".join(

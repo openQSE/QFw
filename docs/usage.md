@@ -1534,6 +1534,15 @@ Inspect the run directory before deleting it. Application logs, directory
 service logs, QPM logs, generated runtime configuration, and driver result
 records are stored there.
 
+Under Slurm, a QPM or directory service that ends on its own leaves its exit
+status in an `exit-status` file next to its pid file. `qfw-status` then
+reports it, for example `QPM service aer-1 exited with status 121`, with the
+end of its `step.log` and `defw_py.log`. Outside Slurm the service runs
+detached, so the report has no exit status. A client whose reserved QPM ended gets the same
+report after `reserved QPM service ... is unavailable`, and a job waiting on
+it after `could not reach its QPM`. `qfw-teardown` prints
+it and keeps the run directory, so the logs survive teardown.
+
 If setup cannot reach the required directory before its configured timeout, it
 returns nonzero and the application should not be launched. Verify the selected
 site file, runtime profile, hostname resolution, directory port, allocation,

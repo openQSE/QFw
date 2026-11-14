@@ -1,3 +1,7 @@
+import sys
+import types
+
+import pytest
 from defw_exception import DEFwReserveError
 
 from qfw_qiskit.qpm_resolver import (
@@ -7,6 +11,7 @@ from qfw_qiskit.qpm_resolver import (
 	QPMAmbiguousResolutionError,
 	QPMInvalidDirectoryRecordError,
 	QPMResolver,
+	QPMResolverError,
 	QPMSimulatorFallbackPolicyError,
 	QPMStaleGenerationError,
 	binding_name_for_category,
@@ -627,3 +632,21 @@ def test_operation_modes_expose_same_qpm_api_after_binding():
 		item["service_record"]["service_id"]
 		for item in fake_defw.binding_connections
 	] == ["local-qpm", "site-qpm"]
+
+
+def test_an_unavailable_reserved_service_says_why_it_ended(monkeypatch):
+	service_plane = types.ModuleType("qfw_runtime.service_plane")
+	service_plane.ended_service_report = (
+		lambda service_id: f"QPM service {service_id} exited with status 121")
+	monkeypatch.setitem(sys.modules, "qfw_runtime", types.ModuleType("qfw_runtime"))
+	monkeypatch.setitem(sys.modules, "qfw_runtime.service_plane", service_plane)
+	resolver = QPMResolver(
+		[DirectoryScope("site", "site", client=DirectoryClient([]), priority=50)],
+		connector=Connector(),
+		sleeper=lambda seconds: None,
+	)
+
+	with pytest.raises(QPMResolverError, match=(
+			r"reserved QPM service 'aer-run1' is unavailable: "
+			r"QPM service aer-run1 exited with status 121$")):
+		resolver.connect_reserved_managed("aer-run1", "reservation-1", timeout=1)

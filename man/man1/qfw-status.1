@@ -41,6 +41,11 @@ Setup completed and every recorded application-owned manager is ready.
 .TP
 .B degraded
 Setup completed but a recorded manager is stopped, degraded, or unavailable.
+For a service that ended, the manager's line says how, such as
+.BR "QPM service aer-1 exited with status 121" ,
+or
+.BR "was killed by signal 9" ,
+followed by the end of its step and DEFw logs.
 .TP
 .B incomplete
 The runtime has not completed setup.

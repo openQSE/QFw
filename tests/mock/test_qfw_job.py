@@ -220,6 +220,31 @@ def test_qfw_job_fails_when_its_qpm_stops_answering(monkeypatch):
 	assert job.status() == qfw_job.JobStatus.ERROR
 
 
+def test_qfw_job_whose_qpm_ended_says_how(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from defw_exception import DEFwError
+
+	class EndedQPM(FakeQPM):
+		lifecycle_binding = types.SimpleNamespace(service_id="aer-run1")
+
+		def task_status(self, cid=None, **kwargs):
+			raise DEFwError("QPM 'aer-run1' is unavailable")
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	monkeypatch.setattr(
+		qfw_job, "ended_service_report",
+		lambda service_id: f"QPM service {service_id} was killed by signal 9")
+	job = _submitted_job(
+		monkeypatch, EndedQPM(cids=["cid-1"]), FakeEventAPI(),
+		qfw_job.QuantumCircuit(1, name="orphan"))
+
+	with pytest.raises(
+			qfw_job.JobError,
+			match=r"unfinished: cid-1 \(orphan\): QPM 'aer-run1' is unavailable\. "
+			r"QPM service aer-run1 was killed by signal 9$"):
+		job.result()
+
+
 def test_qfw_job_keeps_waiting_while_its_qpm_answers(monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 
