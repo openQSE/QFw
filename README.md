@@ -80,10 +80,10 @@ cmake --install build
 ```
 
 The install places public commands in `/path/to/qfw-install/bin`,
-including `qfw-activate`, `defw-python`, `qfw-setup`, `qfw-srun`,
-`qfw-status`, `qfw-target`, `qfw-teardown`, `qfw-dir-svc`, and `qfw-qpm-svc`. The
-two role commands are the only public interfaces for independently managed
-directory services and QPMs.
+including `qfw-activate`, `defw-python`, `qfw-services`, `qfw-setup`,
+`qfw-srun`, `qfw-status`, `qfw-target`, `qfw-teardown`, `qfw-dir-svc`, and
+`qfw-qpm-svc`. The two role commands are the only public interfaces for
+independently managed directory services and QPMs.
 
 Simulator runners and optional hardware client libraries must be available
 through the activated environment or site image. The QFw install packages
@@ -328,6 +328,8 @@ The installed prefix contains:
 
 - `bin/qfw-activate`: prepares QFw, DEFw, Python, and library paths.
 - `bin/defw-python`: runs Python through the DEFw executor bridge.
+- `bin/qfw-services`: lists a runtime profile's local services with their
+  provider, device and accelerator, without starting them.
 - `bin/qfw-setup`: creates runtime state and starts allocation-local
   services when requested.
 - `bin/qfw-status`: reports the current application runtime and its recorded

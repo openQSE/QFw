@@ -10,6 +10,7 @@ set(QFW_MAN1_PAGES
 	man1/qfw_run_all.sh.1
 	man1/qfw_supermarq.sh.1
 	man1/qfw-qpm-svc.1
+	man1/qfw-services.1
 	man1/qfw-setup.1
 	man1/qfw-srun.1
 	man1/qfw-status.1

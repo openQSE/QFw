@@ -1,3 +1,4 @@
+from .settings import aer_settings_from_service_entry
 from .svc_qpm import QPM
 import defw
 import util.qpm.startup as qpm_startup
@@ -17,6 +18,12 @@ svc_info = {
 }
 
 service_classes = [QPM]
+
+
+def accelerator(service_entry):
+	if aer_settings_from_service_entry(service_entry).device == "GPU":
+		return "gpu"
+	return None
 
 
 def initialize():

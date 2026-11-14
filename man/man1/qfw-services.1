@@ -1,0 +1,74 @@
+.TH QFW-SERVICES 1 "November 2026" "QFw 0.1.0" "QFw Commands"
+.SH NAME
+qfw-services \- list the services a runtime profile can start
+.SH SYNOPSIS
+.B qfw-services
+.RI [ --site-config " path" ]
+.RI [ --runtime-config " path" | --profile " name" ]
+.RI [ --json ]
+.SH DESCRIPTION
+.B qfw-services
+reads the
+.B local-services
+manifest of a runtime profile, selected as
+.BR qfw-setup (1)
+selects it, and prints one record for each service the profile would start:
+the profile's
+.BR services ,
+or every manifest entry when it names none. It starts no service and needs no
+run.
+.PP
+Each record has four fields.
+.TP
+.B service
+The entry's
+.BR name .
+.TP
+.B provider
+The
+.B provider
+property the entry's service module publishes, the one its QPM advertises.
+.TP
+.B device_id
+The entry's
+.BR device-id ,
+or null.
+.TP
+.B accelerator
+.B gpu
+when the entry's settings run it on a GPU, such as an
+.B aer
+entry with
+.BR "device: GPU" ,
+otherwise null.
+.PP
+The command imports each entry's module through
+.BR defw-python (1).
+.SH OPTIONS
+.TP
+.BI --site-config " path"
+Read the install prefix from this site configuration.
+.TP
+.BI --runtime-config " path"
+Read this runtime configuration.
+.TP
+.BI --profile " name"
+Read
+.IB name .yaml
+under the runtime configuration directory.
+.TP
+.B --json
+Print the records as one JSON list. Without it, each record is one line, with
+.B -
+for a null field.
+.SH EXIT STATUS
+Zero when every entry's module was imported. A configuration without
+.B local-services
+returns 1, and a module that fails to import returns
+.BR defw-python 's
+status.
+.SH SEE ALSO
+.BR qfw-setup (1),
+.BR qfw-services.yaml (5),
+.BR qfw-runtime.yaml (5),
+.BR qfw (7)

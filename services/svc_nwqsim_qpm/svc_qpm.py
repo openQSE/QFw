@@ -30,14 +30,14 @@ class QPM(UTIL_QPM):
 			max_shots=MAX_NWQSIM_SHOTS)
 
 	def query(self):
-		from . import SERVICE_NAME, SERVICE_DESC
+		from . import SERVICE_NAME, SERVICE_DESC, svc_info
 		from api_qpm_common import QPMType, QPMCapability
 		info = self.query_helper(
 			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_STATEVECTOR,
 			SERVICE_NAME, SERVICE_DESC,
 			properties={
-				"provider": "nwqsim",
+				**svc_info["properties"],
 				"num_qubits": MAX_NWQSIM_QUBITS,
 				"max_shots": MAX_NWQSIM_SHOTS,
 				"instructions": list(NWQSIM_INSTRUCTIONS),
