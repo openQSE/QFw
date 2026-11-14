@@ -765,11 +765,22 @@ HET_ALLOCATION = {
     (HET_ALLOCATION,
      {"SLURM_JOB_NODELIST_HET_GROUP_1": "sim-a,sim-b",
       "SLURM_JOB_CPUS_PER_NODE_HET_GROUP_1": "16,48"}, "sim-b", 48),
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "qpm-a", "SLURM_JOB_CPUS_PER_NODE": "2",
+      "SLURM_CPUS_PER_TASK": "1"}, "qpm-a", 1),
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "qpm-a", "SLURM_JOB_CPUS_PER_NODE": "96",
+      "SLURM_CPUS_PER_TASK": "48"}, "qpm-a", 48),
+    (HET_ALLOCATION,
+     {"SLURM_JOB_NODELIST_HET_GROUP_1": "sim-a,sim-b",
+      "SLURM_JOB_CPUS_PER_NODE_HET_GROUP_1": "16,48",
+      "SLURM_CPUS_PER_TASK_HET_GROUP_1": "8"}, "sim-b", 8),
     (SLURM_ALLOCATION, {}, "qpm-a", None),
 ])
-def test_a_held_step_asks_for_the_jobs_cpus_on_its_node(
+def test_a_held_step_asks_for_the_jobs_cpus_on_its_node_up_to_its_cpus_per_task(
         tmp_path, monkeypatch, allocation, environment, node, cpus):
-    for variable in ("SLURM_JOB_NODELIST", "SLURM_JOB_CPUS_PER_NODE"):
+    for variable in ("SLURM_JOB_NODELIST", "SLURM_JOB_CPUS_PER_NODE",
+                     "SLURM_CPUS_PER_TASK"):
         monkeypatch.delenv(variable, raising=False)
     for variable, value in environment.items():
         monkeypatch.setenv(variable, value)
