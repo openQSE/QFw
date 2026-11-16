@@ -21,7 +21,8 @@ Braket profile this recipe exercises.
 
 - A QFw installation whose Python environment carries `amazon-braket-qdmi`
   (the cluster image and `do_qfw_build.sh` pin it through
-  `setup/qdmi-requirements.txt`) beside `mqt-core`.
+  [`setup/qdmi-requirements.txt`](../../setup/qdmi-requirements.txt)) beside
+  `mqt-core`.
   Check with `python -c 'import amazon.braket.qdmi'` after activation.
 - An AWS account prepared as in Step 1, and an identity for the service
   process as in Step 2.
@@ -192,8 +193,7 @@ print(backend.device.status())
 PY
 ```
 
-This is the same packaged adapter QFw's Braket profile opens the device
-with (`amazon-braket-qdmi[qiskit]`, MQT Core 4.2).
+This is the same packaged adapter QFw's Braket profile uses to open the device.
 
 `Status.IDLE` means the device is inside an execution window with fewer
 than five tasks queued. `Status.BUSY` means a longer queue or a closed
