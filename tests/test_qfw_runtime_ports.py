@@ -28,6 +28,7 @@ except ImportError:
 from qfw_runtime import commands
 from qfw_runtime import config as qfw_config
 from qfw_runtime import _process_launcher as process_launcher
+from qfw_runtime import service_plane
 
 
 def allocation():
@@ -977,3 +978,58 @@ def test_teardown_keeps_the_run_dir_of_a_service_that_ended(
     assert f"kept in {run_dir}" in stderr
     assert (run_dir / "state" / "runtime-state.json").exists()
     assert not (run_base / "current").exists()
+
+
+def test_two_sessions_of_one_user_start_their_qpms_on_one_host(
+        tmp_path, monkeypatch):
+    manifest_path = tmp_path / "services.yaml"
+    manifest_path.write_text(
+        "services:\n"
+        "  - name: aer\n"
+        "    module: svc_aer_qpm\n"
+        "    credential-mode: no-secret\n",
+        encoding="utf-8",
+    )
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(
+        "directory-service:\n"
+        "  endpoint: 127.0.0.1:8090\n"
+        "service:\n"
+        f"  manifest: {manifest_path}\n",
+        encoding="utf-8",
+    )
+    held = []
+
+    def start_service(name, env, *args):
+        process_launcher._require_free_defw_ports(name, env)
+        for variable in ("DEFW_LISTEN_PORT", "DEFW_TELNET_PORT"):
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("", int(env[variable])))
+            listener.listen(1)
+            held.append(listener)
+        return 0
+
+    monkeypatch.setenv("QFW_SERVICE_SCOPE", "site")
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", start_service)
+    manifest_services = qfw_config.load_yaml(manifest_path)["services"]
+
+    try:
+        for session in ("first", "second"):
+            [service] = service_plane._resolve_services(
+                ["aer"], manifest_services, {}, {"group1": ["localhost"]},
+                types.SimpleNamespace(scope="application"), None, None,
+                f"aer-{session}")
+            assert process_launcher.start_qpm([
+                "--service-id", service["service_id"],
+                "--manifest-service-name", "aer",
+                "--site-config", str(site_path),
+                "--run-dir", str(tmp_path / session),
+                "--listen-port", str(service["listen_port"]),
+                "--telnet-port", str(service["telnet_port"]),
+            ]) == 0
+    finally:
+        for listener in held:
+            listener.close()
+
+    assert len(held) == 4

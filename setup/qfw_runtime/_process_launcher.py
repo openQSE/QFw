@@ -241,7 +241,10 @@ def start_qpm(argv):
         target = str(service.get("host", ""))
     service_host = str(service.get(
         "bind-host", service.get("host", target or "127.0.0.1")))
-    service_port = int(service.get("listen-port", args.listen_port))
+    service_port = int(service.get("listen-port", args.listen_port)) or (
+        _unused_tcp_port(()))
+    telnet_port = int(service.get("telnet-port", args.telnet_port)) or (
+        _unused_tcp_port((service_port,)))
     assigned_hosts = (
         os.environ.get("QFW_SERVICE_ASSIGNED_HOSTS") or
         _resolve_host_policy(service.get("assigned-hosts"), allocation)
@@ -252,7 +255,7 @@ def start_qpm(argv):
     env.update({
         "DEFW_AGENT_NAME": service_id,
         "DEFW_LISTEN_PORT": str(service_port),
-        "DEFW_TELNET_PORT": str(service.get("telnet-port", args.telnet_port)),
+        "DEFW_TELNET_PORT": str(telnet_port),
         "DEFW_ONLY_LOAD_MODULE": load_modules,
         "DEFW_LOAD_NO_INIT": "",
         "DEFW_SHELL_TYPE": "daemon",
@@ -378,6 +381,15 @@ def _require_free_defw_ports(name, env):
                 f"{name} cannot start: {label} port {port} is already in use "
                 f"on {socket.gethostname()}, possibly by a service left over "
                 "from an earlier run")
+
+
+def _unused_tcp_port(taken):
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("", 0))
+            port = int(sock.getsockname()[1])
+        if port not in taken:
+            return port
 
 
 def _tcp_port_free(port):
