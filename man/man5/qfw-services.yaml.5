@@ -6,6 +6,56 @@ A QFw service manifest is YAML containing a
 .B services
 sequence. Each entry names one QPM service and describes the DEFw module,
 placement, provider launcher, and optional device identity.
+.SH MPI LAUNCH KEYS
+An optional top-level
+.B mpi-launch
+mapping sets the
+.B mpirun
+command line for MPI providers.
+The installed local manifest sets no transport or placement. A site that needs
+them names its own manifest through
+.B service-manifest
+in
+.BR qfw-runtime.yaml (5).
+A site-owned QPM reads the manifest that
+.B service.manifest
+names in
+.BR site.yaml .
+The installed
+.I frontier-local-services.yaml
+is the local manifest with Frontier's HPE Slingshot settings.
+.TP
+.B launcher
+The MPI launcher. The default is
+.BR mpirun .
+.TP
+.B allow-run-as-root
+.BR auto ,
+.BR true ,
+or
+.BR false .
+.TP
+.B export-env
+Environment variables passed with
+.BR -x .
+.TP
+.B mca
+A mapping of MCA parameters passed with
+.BR --mca .
+These take precedence over
+.B OMPI_MCA_*
+variables.
+.TP
+.BR map-by ", " bind-to
+Passed as
+.B --map-by
+and
+.BR --bind-to .
+.TP
+.B extra-args
+A list of arguments added to every
+.B mpirun
+command.
 .SH SERVICE KEYS
 .TP
 .B name
