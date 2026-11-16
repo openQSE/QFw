@@ -984,7 +984,8 @@ def test_site_simulator_nodes_expand_from_environment(monkeypatch):
         [], allocation, {}, "site") == ["sim-a", "sim-b"]
 
 
-def test_independent_application_qpms_use_manifest_port_offsets(tmp_path):
+def test_application_qpms_offset_a_configured_port_base_by_manifest_index(
+        tmp_path):
     site, manifest = write_site_configuration(tmp_path, [
         ("nwqsim", "svc_nwqsim_qpm", "mpi"),
         ("tnqvm", "svc_tnqvm_qpm", "mpi"),
@@ -992,6 +993,8 @@ def test_independent_application_qpms_use_manifest_port_offsets(tmp_path):
     runtime = write_runtime_configuration(tmp_path, prte=False)
     with runtime.open("a", encoding="utf-8") as stream:
         stream.write(f"  service-manifest: {manifest}\n")
+        stream.write("  service-listen-port-base: 8290\n")
+        stream.write("  service-telnet-port-base: 8291\n")
     connection_file = tmp_path / "directory-service.json"
     connection_file.write_text(json.dumps({
         "schema": "qfw-directory-service-v1",

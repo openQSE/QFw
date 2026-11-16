@@ -30,6 +30,7 @@ _STEP_VARIABLES_UNSET = (
 STEP_START_GRACE_SECONDS = 60
 SLURM_MODES = frozenset({"slurm", "heterogeneous"})
 STEP_LOG_TAIL_LINES = 5
+AUTO_PORT = "auto"
 _STEPS = {}
 
 
@@ -472,8 +473,8 @@ def _selected_service_ids(explicit, local, manifest_services):
 
 def _resolve_services(selected, manifest_services, local, allocation, args,
                       qpm_node, default_target, runtime_service_id=None):
-    listen_port = int(local.get("service-listen-port-base", 8290))
-    telnet_port = int(local.get("service-telnet-port-base", 8291))
+    listen_port = _port_base(local, "service-listen-port-base")
+    telnet_port = _port_base(local, "service-telnet-port-base")
     stride = int(local.get("service-port-stride", 100))
     resolved = []
     manifest_indexes = {
@@ -494,9 +495,9 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
         if not assigned_hosts:
             assigned_hosts = target
         service_listen = int(service.get(
-            "listen-port", listen_port + index * stride))
+            "listen-port", listen_port and listen_port + index * stride))
         service_telnet = int(service.get(
-            "telnet-port", telnet_port + index * stride))
+            "telnet-port", telnet_port and telnet_port + index * stride))
         resolved.append({
             "service_id": runtime_service_id or service_name,
             "manifest_service_name": service_name,
@@ -514,6 +515,11 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
             "manifest": service,
         })
     return resolved
+
+
+def _port_base(local, key):
+    value = str(local.get(key, AUTO_PORT)).strip().lower()
+    return 0 if value == AUTO_PORT else int(value)
 
 
 def _resolve_directory(site, site_path, local, allocation, scope,
