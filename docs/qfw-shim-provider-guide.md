@@ -260,12 +260,13 @@ the credential files, and the environment the service needs.
 
 ### IBM
 
-IBM QDMI 1.0 supports IBM Cloud Qiskit Runtime
-(`IBMQiskitRuntimeService`) and requires Python 3.11 or newer. For other
-IBM resource types, set `libraries: [qrmi]`. Omitting `libraries` enables
-both QRMI and QDMI and routes device queries to QDMI by default.
+The IBM QDMI device supports IBM Cloud Qiskit Runtime
+(`IBMQiskitRuntimeService`).
+For other IBM resource types, set `libraries: [qrmi]`. Omitting `libraries`
+enables both QRMI and QDMI and routes device queries to QDMI by default.
 
-Install the provider packages from `setup/qdmi-requirements.txt`, then
+Install the provider packages from
+[`setup/qdmi-requirements.txt`](../setup/qdmi-requirements.txt), then
 configure an IBM backend:
 
 ```yaml
@@ -304,10 +305,11 @@ that cover each classical bit once, in bit order.
 
 ### Pasqal
 
-Install `pasqal-qdmi[mqt-core,pulser]==1.2.1` from PyPI through
-`setup/qdmi-requirements.txt` (Python 3.11 or newer). Pasqal uses native
-Pulser JSON through QDMI; bind variables and register mappings and include a
-measurement before calling `Sequence.to_abstract_repr()`. The shim advertises
+Install the provider packages from
+[`setup/qdmi-requirements.txt`](../setup/qdmi-requirements.txt), which includes
+the Pasqal provider's Pulser integration. Pasqal uses native Pulser JSON through
+QDMI; bind variables and register mappings and include a measurement before
+calling `Sequence.to_abstract_repr()`. The shim advertises
 `pulser-abstract-repr` and submits it as QDMI `ProgramFormat.CUSTOM1`.
 
 The existing reservation-bound `api_key`/`token` and `project_id` fields
