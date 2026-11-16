@@ -1,5 +1,5 @@
-mqt-core[qiskit]==4.2.0
-amazon-braket-qdmi[qiskit]==1.4.0
-iqm-qdmi[qiskit]==1.6.0
-ibm-qdmi[qiskit]==1.1.0
-pasqal-qdmi[mqt-core,pulser]==1.2.0
+mqt-core[qiskit]==4.2.1
+amazon-braket-qdmi[qiskit]==1.4.1
+iqm-qdmi[qiskit]==1.6.1
+ibm-qdmi[qiskit]==1.1.1
+pasqal-qdmi[mqt-core,pulser]==1.2.1
