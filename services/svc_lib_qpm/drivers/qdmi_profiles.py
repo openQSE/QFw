@@ -478,7 +478,7 @@ class MqvQdmiProfile(QdmiProfile):
 	QDMIBackend around it, as Pasqal's is a bare device.
 	"""
 	provider = "mqv"
-	requires = "MQV's QDMI device package"
+	requires = "MQV's QDMI device package (mqss-qdmi-mqv)"
 	# OpenQASM 2 first, which the LRZ devices behind MQSS take, then 3.
 	PROGRAM_FORMATS = ("QASM2", "QASM3")
 

@@ -325,17 +325,19 @@ and submission through the existing QPM API.
 
 MQV's QDMI device hands a circuit to MQV's Munich Quantum Software Stack
 (MQSS) deployment, which runs it on a machine behind it, such as IQM at LRZ,
-planqc or Amazon Braket. MQV ships the device library in its own package,
-which is not on PyPI yet. Install MQV's wheel next to the packages in
-`setup/qdmi-requirements.txt`; the profile needs MQT Core 4.2 or newer. The
-wheel registers MQV's catalogue entries with MQT Core, and `qdmi-device-id`
-names the one a device uses. QFw has no default for it.
+planqc or Amazon Braket. MQV ships the device library as `mqss-qdmi-mqv` on
+PyPI, pinned in `setup/qdmi-requirements.txt`. It comes only as an x86_64
+Linux wheel for Python 3.11 and newer, so other machines skip it. The profile
+needs MQT Core 4.2 or newer. The package registers three catalogue entries
+with MQT Core: `mqv.eqe1` (IQM at LRZ), `mqv.maqcs` (planqc) and `mqv.aws`
+(Amazon Braket SV1). `qdmi-device-id` names the one a device uses. QFw has no
+default for it.
 
 ```yaml
 qpus:
-  mqv-lrz:
+  mqv-eqe1:
     provider: mqv
-    qdmi-device-id: mqv.lrz          # a catalogue entry MQV's package registers
+    qdmi-device-id: mqv.eqe1         # a catalogue entry MQV's package registers
     url: https://mqss.example/api    # optional when the entry names the endpoint
     credential-db: /etc/openqse/qfw/device/qpu-users.json
     libraries: [qdmi]
@@ -344,7 +346,7 @@ qpus:
     job-timeout-seconds: 3600
 ```
 
-Under each user's `devices.mqv-lrz` entry in the credential database, set
+Under each user's `devices.mqv-eqe1` entry in the credential database, set
 `enabled: true` and the `api_key` the MQSS session opens with. The
 reservation's key comes first, then `QFW_API_KEY` in the QPM's environment.
 The same order applies to the endpoint, then the device's `url`. MQV ships no

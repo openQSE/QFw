@@ -14,8 +14,8 @@ from tests.mock.fakes import stub_qdmi_session
 
 def _descriptor(**overrides):
 	descriptor = {
-		"provider": "mqv", "id": "mqv-lrz",
-		"qdmi_device_id": "mqv.lrz", "url": "https://mqss.example/api/"}
+		"provider": "mqv", "id": "mqv-eqe1",
+		"qdmi_device_id": "mqv.eqe1", "url": "https://mqss.example/api/"}
 	descriptor.update(overrides)
 	return descriptor
 
@@ -26,7 +26,7 @@ def _clear_defaults(monkeypatch):
 		monkeypatch.delenv(name, raising=False)
 
 
-def _stub_core(monkeypatch, registered=("mqv.lrz",)):
+def _stub_core(monkeypatch, registered=("mqv.eqe1",)):
 	"""Stand in for MQT Core's driver and Qiskit plugin; returns the opens."""
 	opened = []
 
@@ -58,7 +58,7 @@ def test_the_reservations_token_and_url_come_first(monkeypatch):
 	access = profile_for(_descriptor()).access(
 		{"api_key": "user-token", "url": "https://reserved.example/"})
 	assert access == {
-		"qdmi_device_id": "mqv.lrz", "base_url": "https://reserved.example",
+		"qdmi_device_id": "mqv.eqe1", "base_url": "https://reserved.example",
 		"token": "user-token"}
 
 
@@ -98,14 +98,14 @@ def test_a_session_opens_the_named_device_once_per_reservation(monkeypatch):
 	assert driver._device({"reservation_id": "first", "api_key": "token-a"}) is first
 	assert driver._device({"reservation_id": "second", "api_key": "token-b"}) is not first
 	assert opened == [
-		("mqv.lrz", {"base_url": "https://mqss.example/api", "token": "token-a"}),
-		("mqv.lrz", {"base_url": "https://mqss.example/api", "token": "token-b"})]
+		("mqv.eqe1", {"base_url": "https://mqss.example/api", "token": "token-a"}),
+		("mqv.eqe1", {"base_url": "https://mqss.example/api", "token": "token-b"})]
 
 
 def test_settings_left_unset_are_not_passed_to_the_library(monkeypatch):
 	opened = _stub_core(monkeypatch)
 	QdmiDriver(_descriptor(url=None))._device({"api_key": "token-a"})
-	assert opened == [("mqv.lrz", {"token": "token-a"})]
+	assert opened == [("mqv.eqe1", {"token": "token-a"})]
 
 
 def test_an_unregistered_device_names_the_package(monkeypatch):
@@ -161,6 +161,6 @@ def test_submission_returns_the_devices_counts_and_job_metadata(monkeypatch):
 		get_cid=lambda: "cid-mqv")
 	assert driver.run_circuit(circuit) == {"schema": "qhw-result-v1"}
 	assert submitted == [(("OPENQASM 2.0; ...", "fmt-qasm2", 10), {})]
-	assert records == [(counts, 10, "mqv", "mqv-lrz", {
+	assert records == [(counts, 10, "mqv", "mqv-eqe1", {
 		"job_id": "mqss-job", "status": "completed", "queue_position": 1})]
 	assert driver.get_task_metadata("cid-mqv")["job_id"] == "mqss-job"

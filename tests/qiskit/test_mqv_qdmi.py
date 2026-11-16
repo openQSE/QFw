@@ -1,8 +1,10 @@
-# QFw's MQV profile with released MQT Core, without MQV's device package.
-# MQT Core's own simulator device stands in for MQV's: both are QDMI devices
-# with no Qiskit backend of their own, so the profile opens either the same
-# way, compiles to its target and submits OpenQASM to it.
+# QFw's MQV profile with released MQT Core. MQT Core's own simulator device
+# stands in for MQV's: both are QDMI devices with no Qiskit backend of their
+# own, so the profile opens either the same way, compiles to its target and
+# submits OpenQASM to it. Where MQV's package is installed, its catalogue
+# entries are checked too; reaching MQSS needs MQV's endpoint and a token.
 
+import importlib.metadata
 import pathlib
 import sys
 import time
@@ -88,3 +90,12 @@ def test_unbound_parameters_fail_before_submission(profile, backend):
 def test_an_unregistered_device_names_the_package(profile):
 	with pytest.raises(DEFwExecutionError, match="MQV's QDMI device package"):
 		profile.open_backend({"qdmi_device_id": "mqv.not-installed"})
+
+
+def test_mqv_package_registers_its_three_devices():
+	try:
+		importlib.metadata.version("mqss-qdmi-mqv")
+	except importlib.metadata.PackageNotFoundError:
+		pytest.skip("mqss-qdmi-mqv is not installed (x86_64 Linux wheels only)")
+	registered = set(qdmi.builtin_driver.registered_device_ids())
+	assert {"mqv.eqe1", "mqv.maqcs", "mqv.aws"} <= registered
