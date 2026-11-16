@@ -1033,3 +1033,58 @@ def test_two_sessions_of_one_user_start_their_qpms_on_one_host(
             listener.close()
 
     assert len(held) == 4
+
+
+def test_two_sessions_of_one_user_start_their_directories_on_one_host(
+        tmp_path, monkeypatch):
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text("{}\n", encoding="utf-8")
+    held = []
+    ports = []
+
+    def start_service(name, env, pid_file, ready_file, timeout, background,
+                      dry_run, ready_payload, ready_probe):
+        process_launcher._require_free_defw_ports(name, env)
+        for variable in ("DEFW_LISTEN_PORT", "DEFW_TELNET_PORT"):
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("", int(env[variable])))
+            listener.listen(1)
+            held.append(listener)
+            ports.append(listener.getsockname()[1])
+        process_launcher._write_ready(ready_file, ready_payload)
+        return 0
+
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", start_service)
+    planned = {
+        session: service_plane._resolve_directory(
+            {}, site_path, {"dirsvc": {"port": "auto"}},
+            {"group1": ["localhost"]}, "application", None, False,
+            tmp_path / session)
+        for session in ("first", "second")
+    }
+    endpoints = []
+
+    try:
+        for session, directory in planned.items():
+            assert (directory["port"], directory["telnet_port"]) == (0, 0)
+            ready_file = tmp_path / session / "ready.json"
+            assert process_launcher.start_directory([
+                "--site-config", str(site_path),
+                "--run-dir", str(tmp_path / session),
+                "--name", directory["name"],
+                "--host", directory["host"],
+                "--listen-port", str(directory["port"]),
+                "--telnet-port", str(directory["telnet_port"]),
+                "--ready-file", str(ready_file),
+            ]) == 0
+            record = {"endpoint": directory["endpoint"]}
+            service_plane._adopt_directory_ports(
+                directory, record, ready_file)
+            endpoints.append(record["endpoint"])
+    finally:
+        for listener in held:
+            listener.close()
+
+    assert len(set(ports)) == 4
+    assert endpoints == [f"localhost:{port}" for port in ports[::2]]

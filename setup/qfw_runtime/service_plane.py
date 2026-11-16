@@ -535,10 +535,13 @@ def _port_base(local, key):
 def _resolve_directory(site, site_path, local, allocation, scope,
                        override_node, dry_run, run_dir):
     if scope == "application":
-        name, host, port, _endpoint = qfw_config.allocate_local_endpoint(
-            local, dry_run=dry_run)
-        telnet_port = qfw_config.allocate_local_telnet_port(
-            local, host, port, dry_run=dry_run)
+        dirsvc = local.get("dirsvc") or {}
+        name = str(dirsvc.get("name", "qfw-local-dirsvc"))
+        port = _port_base(dirsvc, "port")
+        telnet_port = _port_base(dirsvc, "telnet-port")
+        if port and port == telnet_port:
+            raise ServicePlaneError(
+                "local directory listen and telnet ports must differ")
         host = allocation["group1"][0]
         return {
             "name": name,
@@ -762,11 +765,21 @@ def _start_directory(state, timeout):
         record["pid"] = _read_pid(pid_file)
         record["process_identity"] = _require_process_identity(
             record["pid"], record.get("node"), state["allocation"])
+        if not (directory["port"] and directory["telnet_port"]):
+            _adopt_directory_ports(directory, record, ready_file)
     record["state"] = "ready"
     record["ready"] = True
     record["ready_at_ns"] = time.time_ns()
     state["updated_at_ns"] = record["ready_at_ns"]
     _write_state(state)
+
+
+def _adopt_directory_ports(directory, record, ready_file):
+    with ready_file.open("r", encoding="utf-8") as stream:
+        ready = json.load(stream)
+    directory["port"] = ready["listen_port"]
+    directory["telnet_port"] = ready["telnet_port"]
+    directory["endpoint"] = record["endpoint"] = ready["endpoint"]
 
 
 def _start_qpm(state, service, timeout, service_environment=None):

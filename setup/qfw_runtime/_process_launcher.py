@@ -102,10 +102,9 @@ def start_directory(argv):
     dirsvc_host = args.host or site_host or socket.gethostname()
     dirsvc_port = (
         args.listen_port if args.listen_port is not None else
-        site_dir.get("listen_port") or site_port
-    )
-    if not dirsvc_port:
-        dirsvc_port = 8090
+        site_dir.get("listen_port") or site_port or 8090
+    ) or _unused_tcp_port(())
+    telnet_port = args.telnet_port or _unused_tcp_port((dirsvc_port,))
     startup_timeout = (
         args.timeout if args.timeout is not None else
         int(site_dir.get("connect_timeout_seconds", 40))
@@ -125,7 +124,7 @@ def start_directory(argv):
     env.update({
         "DEFW_AGENT_NAME": dirsvc_name,
         "DEFW_LISTEN_PORT": str(dirsvc_port),
-        "DEFW_TELNET_PORT": str(args.telnet_port),
+        "DEFW_TELNET_PORT": str(telnet_port),
         "DEFW_ONLY_LOAD_MODULE": "svc_dirsvc",
         "DEFW_LOAD_NO_INIT": "",
         "DEFW_SHELL_TYPE": "daemon",
@@ -153,6 +152,8 @@ def start_directory(argv):
             "role": "dirsvc",
             "name": dirsvc_name,
             "endpoint": endpoint,
+            "listen_port": dirsvc_port,
+            "telnet_port": telnet_port,
             "startup_timeout": startup_timeout,
         },
         lambda: _tcp_endpoint_ready(endpoint),

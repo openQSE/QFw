@@ -88,9 +88,10 @@ Directory launch settings. Common keys are
 .BR port ,
 and
 .BR telnet-port .
-The value
-.B auto
-selects an available port during a live application-scope launch.
+.BR auto ,
+the default for both ports, lets the directory take a free port on its node
+when it starts, so several runtimes can share a node; clients read the chosen
+endpoint from the directory-service connection file.
 .TP
 .B prte
 PRTE launch settings. A
