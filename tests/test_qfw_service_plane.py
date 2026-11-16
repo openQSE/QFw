@@ -431,6 +431,46 @@ def test_application_configuration_controls_optional_prte(tmp_path):
     assert state["services"][0]["provider_launch"]["type"] == "internal"
 
 
+def test_a_qpm_records_only_the_directory_its_connection_file_names(
+        tmp_path):
+    site, manifest = write_site_configuration(tmp_path, [
+        ("fake-iqm", "svc_fake_iqm_qpm", "internal"),
+    ])
+    runtime = write_runtime_configuration(
+        tmp_path, prte=False, services=["fake-iqm"])
+    with runtime.open("a", encoding="utf-8") as stream:
+        stream.write(f"  service-manifest: {manifest}\n")
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "localhost:49960",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+
+    state = service_plane.start(parse_role_start_args(
+        "qpm",
+        "--run-dir", str(tmp_path / "qpm-run"),
+        "--site-config", str(site),
+        "--runtime-config", str(runtime),
+        "--scope", "application",
+        "--service-id", "fake-iqm",
+        "--directory-service-info", str(connection_file),
+        "--dry-run",
+    ))
+
+    assert state["directory"] == {
+        "name": "test-dirsvc",
+        "host": "localhost",
+        "port": 49960,
+        "endpoint": "localhost:49960",
+        "target": "localhost",
+        "connection_file": str(connection_file),
+        "connect_timeout_seconds": 300,
+    }
+
+
 def test_application_service_manifest_enables_required_prte(tmp_path):
     site, manifest = write_site_configuration(tmp_path, [
         ("mpi-smoke", "svc_mpi_smoke", "mpi"),

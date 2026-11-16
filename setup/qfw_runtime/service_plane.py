@@ -601,7 +601,6 @@ def _resolve_existing_directory(site, site_path, scope, connection_file):
         "name": configured["name"],
         "host": host,
         "port": port,
-        "telnet_port": port + 1,
         "endpoint": configured["endpoint"],
         "target": host,
         "connection_file": str(configured.get("connection_file") or ""),
