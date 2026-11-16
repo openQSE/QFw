@@ -111,7 +111,7 @@ fi
 
 if [[ "${selected_tests}" != "all" ]]; then
 	IFS=',' read -r -a requested_cases <<<"${selected_tests}"
-	for requested_case in "${requested_cases[@]}"; do
+	for requested_case in ${requested_cases[@]+"${requested_cases[@]}"}; do
 		case "${requested_case}" in
 			init-test|shim-smoke|qiskit-simple|ghz-qiskit|ghz-pennylane|\
 			pennylane|qaoa|qiskit-vqe|supermarq|job-stream|chemistry|ibm-simple) ;;

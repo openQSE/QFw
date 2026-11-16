@@ -5,7 +5,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
 qfw_example_parse_execution_options "$@"
-set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
+set -- ${QFW_EXAMPLE_REMAINING_ARGS[@]+"${QFW_EXAMPLE_REMAINING_ARGS[@]}"}
 
 usage() {
 	cat <<EOF
@@ -122,4 +122,4 @@ qfw_example_slurm_driver \
 	--qubits "${qubits}" \
 	--shots "${shots}" \
 	--circuits "${circuits}" \
-	"${app_args[@]}"
+	${app_args[@]+"${app_args[@]}"}

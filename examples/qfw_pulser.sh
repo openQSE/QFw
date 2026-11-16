@@ -5,7 +5,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
 qfw_example_parse_common_options "$@"
-set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
+set -- ${QFW_EXAMPLE_REMAINING_ARGS[@]+"${QFW_EXAMPLE_REMAINING_ARGS[@]}"}
 
 usage() {
 	cat <<EOF
@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 IFS=, read -r -a lib_list <<< "${libs}"
-for lib in "${lib_list[@]}"; do
+for lib in ${lib_list[@]+"${lib_list[@]}"}; do
 	if [[ "${lib}" != "qrmi" && "${lib}" != "qdmi" ]]; then
 		echo "ERROR: Pasqal devices run through qrmi or qdmi, got '${lib}'" >&2
 		exit 1
