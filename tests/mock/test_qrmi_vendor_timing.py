@@ -1,10 +1,11 @@
 # The QRMI driver's vendor timing: behind the flag, IQM only, one task_logs
 # request per completed job, parsed into the phases the telemetry records.
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "services"))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "services"))
 
 from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 from util import instrumentation  # noqa: E402
