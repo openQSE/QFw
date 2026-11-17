@@ -102,10 +102,9 @@ def start_directory(argv):
     dirsvc_host = args.host or site_host or socket.gethostname()
     dirsvc_port = (
         args.listen_port if args.listen_port is not None else
-        site_dir.get("listen_port") or site_port
-    )
-    if not dirsvc_port:
-        dirsvc_port = 8090
+        site_dir.get("listen_port") or site_port or 8090
+    ) or _unused_tcp_port(())
+    telnet_port = args.telnet_port or _unused_tcp_port((dirsvc_port,))
     startup_timeout = (
         args.timeout if args.timeout is not None else
         int(site_dir.get("connect_timeout_seconds", 40))
@@ -125,7 +124,7 @@ def start_directory(argv):
     env.update({
         "DEFW_AGENT_NAME": dirsvc_name,
         "DEFW_LISTEN_PORT": str(dirsvc_port),
-        "DEFW_TELNET_PORT": str(args.telnet_port),
+        "DEFW_TELNET_PORT": str(telnet_port),
         "DEFW_ONLY_LOAD_MODULE": "svc_dirsvc",
         "DEFW_LOAD_NO_INIT": "",
         "DEFW_SHELL_TYPE": "daemon",
@@ -153,6 +152,8 @@ def start_directory(argv):
             "role": "dirsvc",
             "name": dirsvc_name,
             "endpoint": endpoint,
+            "listen_port": dirsvc_port,
+            "telnet_port": telnet_port,
             "startup_timeout": startup_timeout,
         },
         lambda: _tcp_endpoint_ready(endpoint),
@@ -241,7 +242,10 @@ def start_qpm(argv):
         target = str(service.get("host", ""))
     service_host = str(service.get(
         "bind-host", service.get("host", target or "127.0.0.1")))
-    service_port = int(service.get("listen-port", args.listen_port))
+    service_port = int(service.get("listen-port", args.listen_port)) or (
+        _unused_tcp_port(()))
+    telnet_port = int(service.get("telnet-port", args.telnet_port)) or (
+        _unused_tcp_port((service_port,)))
     assigned_hosts = (
         os.environ.get("QFW_SERVICE_ASSIGNED_HOSTS") or
         _resolve_host_policy(service.get("assigned-hosts"), allocation)
@@ -252,7 +256,7 @@ def start_qpm(argv):
     env.update({
         "DEFW_AGENT_NAME": service_id,
         "DEFW_LISTEN_PORT": str(service_port),
-        "DEFW_TELNET_PORT": str(service.get("telnet-port", args.telnet_port)),
+        "DEFW_TELNET_PORT": str(telnet_port),
         "DEFW_ONLY_LOAD_MODULE": load_modules,
         "DEFW_LOAD_NO_INIT": "",
         "DEFW_SHELL_TYPE": "daemon",
@@ -335,6 +339,7 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
 
     _require_free_defw_ports(name, env)
     qfw_process_state.stop_request_path(pid_file).unlink(missing_ok=True)
+    qfw_process_state.exit_status_path(pid_file).unlink(missing_ok=True)
     defw_python = _command_path("defw-python", env=env)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
@@ -379,6 +384,15 @@ def _require_free_defw_ports(name, env):
                 "from an earlier run")
 
 
+def _unused_tcp_port(taken):
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("", 0))
+            port = int(sock.getsockname()[1])
+        if port not in taken:
+            return port
+
+
 def _tcp_port_free(port):
     # DEFw sets SO_REUSEADDR on its listener. Probe the same way, so a port
     # still in TIME_WAIT after a clean stop reads as free and only a live
@@ -405,6 +419,8 @@ def _wait_foreground(process, pid_file, ready_file):
         returncode = process.wait()
         if qfw_process_state.stop_request_path(pid_file).exists():
             return 0
+        qfw_process_state.exit_status_path(pid_file).write_text(
+            f"{returncode}\n", encoding="utf-8")
         return returncode
     finally:
         signal.signal(signal.SIGINT, old_int)

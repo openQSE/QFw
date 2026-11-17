@@ -30,6 +30,9 @@ _STEP_VARIABLES_UNSET = (
 STEP_START_GRACE_SECONDS = 60
 SLURM_MODES = frozenset({"slurm", "heterogeneous"})
 STEP_LOG_TAIL_LINES = 5
+ENDED_LIVENESS = frozenset({"dead", "identity-mismatch"})
+DEFW_LOG_NAME = "defw_py.log"
+AUTO_PORT = "auto"
 _STEPS = {}
 
 
@@ -222,6 +225,13 @@ def status(run_dir):
         if directory_component:
             _publish_directory_connection(
                 state, ready=directory_component.get("ready", False))
+        ended = [
+            component["ended"]
+            for component in state.get("components", {}).values()
+            if "ended" in component
+        ]
+        if ended and not all_ready:
+            state["error"] = "; ".join(ended)
         if all_ready:
             state["state"] = "ready"
         elif "stale" in observed_states:
@@ -299,7 +309,8 @@ def run(args):
             current = status(args.run_dir)
             if current["state"] != "ready":
                 current["state"] = "error"
-                current["error"] = "an owned service-plane component stopped"
+                current["error"] = current.get("error") or (
+                    "an owned service-plane component stopped")
                 current["updated_at_ns"] = time.time_ns()
                 _write_state(current)
                 _stop_components(current)
@@ -472,8 +483,8 @@ def _selected_service_ids(explicit, local, manifest_services):
 
 def _resolve_services(selected, manifest_services, local, allocation, args,
                       qpm_node, default_target, runtime_service_id=None):
-    listen_port = int(local.get("service-listen-port-base", 8290))
-    telnet_port = int(local.get("service-telnet-port-base", 8291))
+    listen_port = _port_base(local, "service-listen-port-base")
+    telnet_port = _port_base(local, "service-telnet-port-base")
     stride = int(local.get("service-port-stride", 100))
     resolved = []
     manifest_indexes = {
@@ -494,9 +505,9 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
         if not assigned_hosts:
             assigned_hosts = target
         service_listen = int(service.get(
-            "listen-port", listen_port + index * stride))
+            "listen-port", listen_port and listen_port + index * stride))
         service_telnet = int(service.get(
-            "telnet-port", telnet_port + index * stride))
+            "telnet-port", telnet_port and telnet_port + index * stride))
         resolved.append({
             "service_id": runtime_service_id or service_name,
             "manifest_service_name": service_name,
@@ -516,13 +527,21 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
     return resolved
 
 
+def _port_base(local, key):
+    value = str(local.get(key, AUTO_PORT)).strip().lower()
+    return 0 if value == AUTO_PORT else int(value)
+
+
 def _resolve_directory(site, site_path, local, allocation, scope,
                        override_node, dry_run, run_dir):
     if scope == "application":
-        name, host, port, _endpoint = qfw_config.allocate_local_endpoint(
-            local, dry_run=dry_run)
-        telnet_port = qfw_config.allocate_local_telnet_port(
-            local, host, port, dry_run=dry_run)
+        dirsvc = local.get("dirsvc") or {}
+        name = str(dirsvc.get("name", "qfw-local-dirsvc"))
+        port = _port_base(dirsvc, "port")
+        telnet_port = _port_base(dirsvc, "telnet-port")
+        if port and port == telnet_port:
+            raise ServicePlaneError(
+                "local directory listen and telnet ports must differ")
         host = allocation["group1"][0]
         return {
             "name": name,
@@ -582,7 +601,6 @@ def _resolve_existing_directory(site, site_path, scope, connection_file):
         "name": configured["name"],
         "host": host,
         "port": port,
-        "telnet_port": port + 1,
         "endpoint": configured["endpoint"],
         "target": host,
         "connection_file": str(configured.get("connection_file") or ""),
@@ -746,11 +764,21 @@ def _start_directory(state, timeout):
         record["pid"] = _read_pid(pid_file)
         record["process_identity"] = _require_process_identity(
             record["pid"], record.get("node"), state["allocation"])
+        if not (directory["port"] and directory["telnet_port"]):
+            _adopt_directory_ports(directory, record, ready_file)
     record["state"] = "ready"
     record["ready"] = True
     record["ready_at_ns"] = time.time_ns()
     state["updated_at_ns"] = record["ready_at_ns"]
     _write_state(state)
+
+
+def _adopt_directory_ports(directory, record, ready_file):
+    with ready_file.open("r", encoding="utf-8") as stream:
+        ready = json.load(stream)
+    directory["port"] = ready["listen_port"]
+    directory["telnet_port"] = ready["telnet_port"]
+    directory["endpoint"] = record["endpoint"] = ready["endpoint"]
 
 
 def _start_qpm(state, service, timeout, service_environment=None):
@@ -948,7 +976,8 @@ def _observed_component_state(component, state, ready):
         return "stale"
     liveness = _component_process_status(component, state)
     component["liveness"] = liveness
-    if liveness in {"dead", "identity-mismatch"}:
+    _record_ended_component(component, liveness)
+    if liveness in ENDED_LIVENESS:
         return "dead"
     if liveness != "alive":
         return "stale"
@@ -975,7 +1004,9 @@ def _stop_components(state):
                 # component stopped here is what let a teardown which never
                 # reached the node report success and then discard the state
                 # naming a process that is still running.
-                if _verified_component_status(component, state) == "alive":
+                liveness = _verified_component_status(component, state)
+                _record_ended_component(component, liveness)
+                if liveness == "alive":
                     _request_stop(component)
                     _terminate_pid(
                         int(component["pid"]), component.get("node"),
@@ -990,6 +1021,78 @@ def _stop_components(state):
             component["error"] = str(exc)
             errors.append(f"{key}: {exc}")
     return errors
+
+
+def _record_ended_component(component, liveness):
+    if liveness in ENDED_LIVENESS and "ended" not in component:
+        component["ended"] = _ended_component_report(component)
+
+
+def _ended_component_report(component):
+    label = _component_label(component)
+    status = (
+        qfw_process_state.read_exit_status(component["pid_file"])
+        if component.get("pid_file") else None)
+    if status is None:
+        ended = f"{label} ended"
+    elif status < 0:
+        ended = f"{label} was killed by signal {-status}"
+    else:
+        ended = f"{label} exited with status {status}"
+    return ". ".join([
+        ended,
+        *(f"{path} ends: {_log_tail(path)}"
+          for path in _component_logs(component)),
+    ])
+
+
+def _component_label(component):
+    if component["role"] == "qpm":
+        return f"QPM service {component.get('service_id', '')}".rstrip()
+    if component["role"] == "directory":
+        return f"directory service {component.get('name', '')}".rstrip()
+    return "PRTE DVM"
+
+
+def _component_logs(component):
+    logs = []
+    if component.get("step"):
+        logs.append(Path(component["step"]["log"]))
+    if component.get("log_dir"):
+        log_dir = Path(component["log_dir"])
+        logs.extend(sorted(log_dir.glob("*.stderr.log")))
+        logs.append(log_dir / DEFW_LOG_NAME)
+    return [path for path in logs if path.exists()]
+
+
+def ended_component_reports(run_dir):
+    state = _read_state(run_dir, required=False) or {}
+    return [
+        component["ended"]
+        for component in state.get("components", {}).values()
+        if "ended" in component
+    ]
+
+
+def ended_service_report(service_id, run_dir=None):
+    try:
+        runtime = qfw_config.read_state(run_dir)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    for manager in runtime.get("service_managers") or []:
+        if manager.get("service_id") != service_id:
+            continue
+        try:
+            state = _read_state(manager["run_dir"], required=False) or {}
+        except ServicePlaneError:
+            return None
+        component = state.get("components", {}).get(f"qpm:{service_id}")
+        if not component or not component.get("pid_file"):
+            return None
+        if qfw_process_state.read_exit_status(component["pid_file"]) is None:
+            return None
+        return component.get("ended") or _ended_component_report(component)
+    return None
 
 
 def _request_stop(component):
@@ -1016,7 +1119,9 @@ def _stop_prte(component, state, environment=None):
         return
     # Both probes run before anything is discarded, so a DVM whose liveness
     # could not be established keeps its uri and pid files for the retry.
-    live = _verified_component_status(component, state) == "alive"
+    liveness = _verified_component_status(component, state)
+    _record_ended_component(component, liveness)
+    live = liveness == "alive"
     if live and uri_path.exists():
         environment = environment or os.environ.copy()
         command = [

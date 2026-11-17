@@ -778,3 +778,42 @@ def test_qpm_startup_wait_for_startup_times_out(monkeypatch):
 	startup.wait_for_startup(FakeDefw(), "ready", timeout=0)
 
 	assert uq.qpm_initialized is False
+
+
+class UnbuildableQPM:
+	def __init__(self, start=False):
+		from defw_exception import DEFwExecutionError
+		raise DEFwExecutionError(
+			"aer needs a device-id or num-qubits for its width")
+
+
+class UnbuildableDefw(QueriedDefw):
+	services = [("qpm", SimpleNamespace(
+		svc_info={"name": "QPM"}, service_classes=[UnbuildableQPM]))]
+
+
+def test_a_qpm_whose_service_cannot_be_built_exits_with_the_reason(
+		monkeypatch, capfd):
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+
+	reset_qpm_state(uq)
+	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
+	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
+
+	shut_down = []
+
+	def exit_process(status):
+		raise SystemExit((status, list(shut_down)))
+	monkeypatch.setattr(startup.os, "_exit", exit_process)
+	monkeypatch.setattr(
+		startup.logging, "shutdown", lambda: shut_down.append(True))
+
+	with pytest.raises(SystemExit) as exited:
+		startup._ensure_local_registration(
+			UnbuildableDefw(dirsvc=FakeSiteDirSvc()))
+
+	assert exited.value.code == (1, [True])
+	assert capfd.readouterr().err == (
+		f"{__name__}.UnbuildableQPM cannot be built: "
+		"aer needs a device-id or num-qubits for its width\n")
