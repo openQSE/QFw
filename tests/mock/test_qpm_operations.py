@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from defw_exception import DEFwExecutionError
 from tests.mock.fakes import FakeSchedulerContext
 from tests.mock.test_qpm_admission import (
@@ -553,6 +555,84 @@ def test_unregistered_endpoint_is_never_pushed_to(monkeypatch):
 	assert sinks["class-gone"].put_calls == 0
 	assert "class-gone" not in qpm.controller.event_endpoints
 	assert qpm.unregister_event_notification(gone["registration_id"]) is False
+
+
+def _qpm_with_two_clients(monkeypatch, target_id):
+	_setup(monkeypatch)
+	qpm = AdmissionQPM(target_id=target_id)
+	sinks = {}
+
+	def event_api_factory(class_id=None, target=None):
+		sink = CapturingEventAPI(class_id=class_id, target=target)
+		sinks[class_id] = sink
+		return sink
+
+	monkeypatch.setattr(util_qpm, "BaseEventAPI", event_api_factory)
+	reservation_id = qpm.reserve(request={"num_qubits": 2})["reservation_id"]
+	for client in ("class-a", "class-b"):
+		qpm.register_event_notification(
+			f"endpoint-{client}", "circ-result", client)
+	return qpm, sinks, reservation_id
+
+
+def _submit_as(qpm, reservation_id, completion_event_class_id):
+	info = {
+		"qasm": "OPENQASM 2.0;",
+		"num_qubits": 2,
+		"reservation_id": reservation_id,
+	}
+	if completion_event_class_id is not None:
+		info["completion_event_class_id"] = completion_event_class_id
+	return qpm.async_run(info)
+
+
+def test_completion_event_goes_only_to_the_submitting_client(monkeypatch):
+	qpm, sinks, reservation_id = _qpm_with_two_clients(
+		monkeypatch, "ops-events-submitter")
+	response = _submit_as(qpm, reservation_id, "class-a")
+
+	delivered = qpm.controller.dispatch_completion_event(CompletionEvent(
+		"circ-result",
+		{"cid": response["cid"], "qtask_id": response["qtask_id"]}))
+
+	assert delivered is True
+	assert [event["cid"] for event in sinks["class-a"].events] == [
+		response["cid"]]
+	assert sinks["class-b"].events == []
+	assert "completion_event_class_id" not in (
+		qpm.circuits[response["cid"]].info)
+
+
+def test_cancelled_task_completion_goes_only_to_the_submitting_client(
+		monkeypatch):
+	qpm, sinks, reservation_id = _qpm_with_two_clients(
+		monkeypatch, "ops-events-submitter-cancel")
+	response = _submit_as(qpm, reservation_id, "class-b")
+
+	cancelled = qpm.cancel_task(
+		cid=response["cid"], reservation_id=reservation_id)
+
+	assert cancelled["outcome"] == "CANCELLED"
+	assert sinks["class-a"].events == []
+	assert [event["cid"] for event in sinks["class-b"].events] == [
+		response["cid"]]
+
+
+@pytest.mark.parametrize("completion_event_class_id", [None, "class-gone"])
+def test_completion_event_without_a_registered_submitter_goes_to_every_client(
+		monkeypatch, completion_event_class_id):
+	qpm, sinks, reservation_id = _qpm_with_two_clients(
+		monkeypatch, "ops-events-no-submitter")
+	response = _submit_as(qpm, reservation_id, completion_event_class_id)
+
+	qpm.controller.dispatch_completion_event(CompletionEvent(
+		"circ-result",
+		{"cid": response["cid"], "qtask_id": response["qtask_id"]}))
+
+	assert [event["cid"] for event in sinks["class-a"].events] == [
+		response["cid"]]
+	assert [event["cid"] for event in sinks["class-b"].events] == [
+		response["cid"]]
 
 
 def test_completion_events_keep_reservation_scope_after_cleanup(monkeypatch):
