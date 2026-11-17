@@ -489,3 +489,104 @@ def test_service_launcher_ignores_defw_placeholders(tmp_path, monkeypatch):
         CALLER_SETTINGS["DEFW_EXTERNAL_SERVICES_PATH"])
     # The launcher's caller sets the run variables a service needs.
     assert env["QFW_SERVICE_SCOPE"] == "site"
+
+
+def _profile_with_manifest(tmp_path, manifest_text, selected=None):
+    manifest_path = tmp_path / "local-services.yaml"
+    manifest_path.write_text(manifest_text, encoding="utf-8")
+    runtime_path = tmp_path / "runtime.yaml"
+    runtime_path.write_text(
+        "local-services:\n"
+        f"  service-manifest: {manifest_path}\n"
+        + "".join(
+            ["  services:\n"] + [f"    - {name}\n" for name in selected]
+            if selected else []),
+        encoding="utf-8",
+    )
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(f"install:\n  qfw-prefix: {tmp_path}\n",
+                         encoding="utf-8")
+    return site_path, runtime_path
+
+
+def test_qfw_services_lists_the_manifest_through_defw_python(
+        tmp_path, monkeypatch, capsys):
+    site_path, runtime_path = _profile_with_manifest(
+        tmp_path,
+        "services:\n"
+        "  - name: aer-gpu\n"
+        "    module: svc_aer_qpm\n"
+        "    credential-mode: no-secret\n"
+        "    aer:\n"
+        "      device: GPU\n"
+        "  - name: nwqsim\n"
+        "    module: svc_nwqsim_qpm\n"
+        "    credential-mode: no-secret\n",
+        selected=["aer-gpu"],
+    )
+    records = [{"service": "aer-gpu", "provider": "aer", "device_id": None,
+                "accelerator": "gpu"}]
+    captured = {}
+
+    def fake_run(command, env, **_kwargs):
+        captured["command"] = command
+        captured["env"] = dict(env)
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps(records))
+
+    _set_environment(monkeypatch, DEFW_IMPORT_PLACEHOLDERS)
+    monkeypatch.setattr(
+        commands, "_command_path", lambda name, env=None: Path("/bin") / name)
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    assert commands.main([
+        "qfw-services", "--site-config", str(site_path),
+        "--runtime-config", str(runtime_path), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == records
+    defw_python, listing, entries = captured["command"]
+    assert defw_python == "/bin/defw-python"
+    assert listing == str(
+        _REPO_ROOT / "services" / "util" / "service_listing.py")
+    assert [entry["name"] for entry in json.loads(entries)] == ["aer-gpu"]
+    assert "DEFW_AGENT_NAME" not in captured["env"]
+
+
+def test_qfw_services_prints_a_line_per_service(
+        tmp_path, monkeypatch, capsys):
+    site_path, runtime_path = _profile_with_manifest(
+        tmp_path,
+        "services:\n"
+        "  - name: fake-iqm\n"
+        "    module: svc_fake_iqm_qpm\n"
+        "    credential-mode: no-secret\n"
+        "    device-id: fake-iqm-20q\n",
+    )
+    records = [{"service": "fake-iqm", "provider": "fake-iqm",
+                "device_id": "fake-iqm-20q", "accelerator": None}]
+    monkeypatch.setattr(
+        commands, "_command_path", lambda name, env=None: Path("/bin") / name)
+    monkeypatch.setattr(
+        commands.subprocess, "run",
+        lambda command, env, **_kwargs: types.SimpleNamespace(
+            returncode=0, stdout=json.dumps(records)))
+
+    assert commands.main([
+        "qfw-services", "--site-config", str(site_path),
+        "--runtime-config", str(runtime_path)]) == 0
+    assert capsys.readouterr().out == "fake-iqm fake-iqm fake-iqm-20q -\n"
+
+
+def test_qfw_services_refuses_a_profile_without_local_services(
+        tmp_path, capsys):
+    runtime_path = tmp_path / "runtime.yaml"
+    runtime_path.write_text("resolver:\n  scope-order: [site]\n",
+                            encoding="utf-8")
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(f"install:\n  qfw-prefix: {tmp_path}\n",
+                         encoding="utf-8")
+
+    assert commands.main([
+        "qfw-services", "--site-config", str(site_path),
+        "--runtime-config", str(runtime_path)]) == 1
+    assert capsys.readouterr().err == (
+        f"qfw-services: {runtime_path} has no local-services\n")
+

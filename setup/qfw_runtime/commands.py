@@ -15,6 +15,7 @@ from . import service_plane as qfw_service_plane
 
 
 COMMANDS = {
+    "qfw-services",
     "qfw-setup",
     "qfw-status",
     "qfw-srun",
@@ -36,6 +37,8 @@ def main(argv=None):
         return 2
     command = argv.pop(0)
     try:
+        if command == "qfw-services":
+            return qfw_services(argv)
         if command == "qfw-setup":
             return qfw_setup(argv)
         if command == "qfw-status":
@@ -73,14 +76,7 @@ def qfw_setup(argv):
         )
         qfw_config.discard_inherited_environment()
 
-    site_path = qfw_config.resolve_site_config(args.site_config)
-    site = qfw_config.load_yaml(site_path)
-    prefixes = qfw_config.site_install_prefixes(site)
-    runtime_path = qfw_config.resolve_runtime_config(
-        explicit=args.runtime_config,
-        profile=args.profile,
-        qfw_prefix_override=prefixes["qfw_prefix"],
-    )
+    site_path, site, prefixes, runtime_path = _site_and_runtime(args)
     runtime = qfw_config.load_yaml(runtime_path)
     state = qfw_config.prepare_run_state(
         site_path,
@@ -111,6 +107,55 @@ def qfw_setup(argv):
         raise
 
     print(state["run_dir"])
+    return 0
+
+
+def _site_and_runtime(args):
+    site_path = qfw_config.resolve_site_config(args.site_config)
+    site = qfw_config.load_yaml(site_path)
+    prefixes = qfw_config.site_install_prefixes(site)
+    runtime_path = qfw_config.resolve_runtime_config(
+        explicit=args.runtime_config,
+        profile=args.profile,
+        qfw_prefix_override=prefixes["qfw_prefix"],
+    )
+    return site_path, site, prefixes, runtime_path
+
+
+def qfw_services(argv):
+    parser = argparse.ArgumentParser(prog="qfw-services")
+    parser.add_argument("--site-config")
+    parser.add_argument("--runtime-config")
+    parser.add_argument("--profile")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    _site_path, _site, prefixes, runtime_path = _site_and_runtime(args)
+    local_config = qfw_config.local_services(
+        qfw_config.load_yaml(runtime_path))
+    if not local_config:
+        raise ValueError(f"{runtime_path} has no local-services")
+    manifest = qfw_config.load_service_manifest(
+        qfw_config.service_manifest_path(
+            local_config, qfw_prefix_value=prefixes["qfw_prefix"]))
+    selected = set(qfw_config.selected_service_names(local_config, manifest))
+    entries = [entry for entry in manifest if entry.get("name") in selected]
+    env = qfw_config.launch_environment(run_state=False)
+    listing = subprocess.run(
+        [str(_command_path("defw-python", env=env)),
+         importlib.util.find_spec("util.service_listing").origin,
+         json.dumps(entries)],
+        env=env, stdout=subprocess.PIPE, text=True)
+    if listing.returncode:
+        return listing.returncode
+    records = json.loads(listing.stdout)
+    if args.json:
+        print(json.dumps(records, indent=2))
+    else:
+        for record in records:
+            print(" ".join(
+                str(record[key] or "-") for key in
+                ("service", "provider", "device_id", "accelerator")))
     return 0
 
 

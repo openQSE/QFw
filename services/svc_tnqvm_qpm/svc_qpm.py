@@ -14,14 +14,14 @@ class QPM(UTIL_QPM):
 			max_shots=MAX_TNQVM_SHOTS)
 
 	def query(self):
-		from . import SERVICE_NAME, SERVICE_DESC
+		from . import SERVICE_NAME, SERVICE_DESC, svc_info
 		from api_qpm_common import QPMType, QPMCapability
 		info = self.query_helper(
 			QPMType.QPM_TYPE_SIMULATOR,
 			QPMCapability.QPM_CAP_TENSORNETWORK,
 			SERVICE_NAME, SERVICE_DESC,
 			properties={
-				"provider": "tnqvm",
+				**svc_info["properties"],
 				"num_qubits": MAX_TNQVM_QUBITS,
 				"max_shots": MAX_TNQVM_SHOTS,
 			})
