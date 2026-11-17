@@ -175,6 +175,31 @@ qfw_example_teardown
     ) == "native log\n"
 
 
+def test_example_teardown_without_arguments_under_nounset(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    script = f"""
+set -u
+source examples/qfw_example_common.sh
+qfw-teardown() {{ printf 'teardown:%s\\n' "$#"; }}
+QFW_EXAMPLE_SETUP_STARTED=1
+QFW_EXAMPLE_TEARDOWN_DONE=0
+QFW_RUN_TMP_PATH={run_dir}
+QFW_EXAMPLE_LOG_ARCHIVE_DIR={tmp_path / "archive"}
+qfw_example_teardown
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "teardown:0" in result.stdout
+
+
 def test_example_finish_removes_the_files_an_example_wrote(tmp_path):
     # An example's own generated inputs, such as the shim smoke test's copy
     # of its service manifest, go with the run instead of piling up in

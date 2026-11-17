@@ -1,3 +1,4 @@
+import importlib.machinery
 import pathlib
 import subprocess
 import sys
@@ -34,6 +35,9 @@ def _install_qfw_package_stub():
 
 	package = types.ModuleType("qfw_qiskit")
 	package.__path__ = [str(REPO_ROOT / "backends" / "qfw_qiskit")]
+	package.__spec__ = importlib.machinery.ModuleSpec(
+		"qfw_qiskit", None, is_package=True)
+	package.__spec__.submodule_search_locations = package.__path__
 	sys.modules["qfw_qiskit"] = package
 
 
