@@ -260,12 +260,13 @@ the credential files, and the environment the service needs.
 
 ### IBM
 
-IBM QDMI 1.0 supports IBM Cloud Qiskit Runtime
-(`IBMQiskitRuntimeService`) and requires Python 3.11 or newer. For other
-IBM resource types, set `libraries: [qrmi]`. Omitting `libraries` enables
-both QRMI and QDMI and routes device queries to QDMI by default.
+The IBM QDMI device supports IBM Cloud Qiskit Runtime
+(`IBMQiskitRuntimeService`).
+For other IBM resource types, set `libraries: [qrmi]`. Omitting `libraries`
+enables both QRMI and QDMI and routes device queries to QDMI by default.
 
-Install the provider packages from `setup/qdmi-requirements.txt`, then
+Install the provider packages from
+[`setup/qdmi-requirements.txt`](../setup/qdmi-requirements.txt), then
 configure an IBM backend:
 
 ```yaml
@@ -304,10 +305,11 @@ that cover each classical bit once, in bit order.
 
 ### Pasqal
 
-Install `pasqal-qdmi[mqt-core,pulser]==1.2.0` from PyPI through
-`setup/qdmi-requirements.txt` (Python 3.11 or newer). Pasqal uses native
-Pulser JSON through QDMI; bind variables and register mappings and include a
-measurement before calling `Sequence.to_abstract_repr()`. The shim advertises
+Install the provider packages from
+[`setup/qdmi-requirements.txt`](../setup/qdmi-requirements.txt), which includes
+the Pasqal provider's Pulser integration. Pasqal uses native Pulser JSON through
+QDMI; bind variables and register mappings and include a measurement before
+calling `Sequence.to_abstract_repr()`. The shim advertises
 `pulser-abstract-repr` and submits it as QDMI `ProgramFormat.CUSTOM1`.
 
 The existing reservation-bound `api_key`/`token` and `project_id` fields
@@ -320,6 +322,40 @@ serves the same `pulser_devices` record as QRMI, so the existing
 `qfw_pulser.QFwConnection(lib="qdmi")` client works unchanged. The
 [Pasqal recipe](recipes/run-against-pasqal.md) covers configuration, atom order,
 and submission through the existing QPM API.
+
+### MQV
+
+MQV's QDMI device hands a circuit to MQV's Munich Quantum Software Stack
+(MQSS) deployment, which runs it on a machine behind it, such as IQM at LRZ,
+planqc or Amazon Braket. MQV ships the device library as `mqss-qdmi-mqv` on
+PyPI, pinned in `setup/qdmi-requirements.txt`. It comes only as an x86_64
+Linux wheel for Python 3.11 and newer, so other machines skip it. The profile
+needs MQT Core 4.2 or newer. The package registers three catalogue entries
+with MQT Core: `mqv.eqe1` (IQM at LRZ), `mqv.maqcs` (planqc) and `mqv.aws`
+(Amazon Braket SV1). `qdmi-device-id` names the one a device uses. QFw has no
+default for it.
+
+```yaml
+qpus:
+  mqv-eqe1:
+    provider: mqv
+    qdmi-device-id: mqv.eqe1         # a catalogue entry MQV's package registers
+    url: https://mqss.example/api    # optional when the entry names the endpoint
+    credential-db: /etc/openqse/qfw/device/qpu-users.json
+    libraries: [qdmi]
+    preference: qdmi
+    execution-owner: qdmi
+    job-timeout-seconds: 3600
+```
+
+Under each user's `devices.mqv-eqe1` entry in the credential database, set
+`enabled: true` and the `api_key` the MQSS session opens with. The
+reservation's key comes first, then `QFW_API_KEY` in the QPM's environment.
+The same order applies to the endpoint, then the device's `url`. MQV ships no
+Qiskit backend, so QFw opens MQT Core's generic `QDMIBackend` around the
+device, compiles each circuit to the target the device reports, and submits
+it as OpenQASM 2, or as OpenQASM 3 when the device takes only that. Bind all
+parameters before submission.
 
 ## Step 4. Add a QPM Shim Service
 

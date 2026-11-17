@@ -3,13 +3,6 @@ mpi-launch:
   allow-run-as-root: auto
   export-env:
     - LD_LIBRARY_PATH
-  bind-to: core
-  map-by: ppr:1:l3cache
-  mca:
-    btl: ^tcp,ofi,vader,openib
-    pml: ^ucx
-    mtl: ofi
-    opal_common_ofi_provider_include: shm+cxi:linkx
 
 services:
   - name: nwqsim

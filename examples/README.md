@@ -273,6 +273,26 @@ circuit.
 ./qfw_qiskit_simple_w_mqt.sh 4
 ```
 
+A program can also leave the choice to its batch script. A
+`QFwBackend.compile()` call that names no compiler uses `QFW_COMPILER`, which
+is `qiskit` or `mqt`. With the variable unset, Qiskit compiles. So a program
+that calls
+
+```python
+qc = backend.compile(qc)
+```
+
+compiles with MQT Core when its batch script sets
+
+```bash
+export QFW_COMPILER=mqt
+```
+
+A compiler named in the call wins over the variable, so
+`qfw_qiskit_simple_w_mqt.sh` always uses MQT. `qfw_qiskit_simple.sh` never
+calls `compile()`, so the variable does not change it. Any other value is an
+error.
+
 ### `qfw_ghz.sh`
 
 Runs the GHZ example through either the Qiskit or PennyLane frontend.

@@ -36,6 +36,11 @@ QFW_RUN_CONTEXT_OPTIONS = (
 	"cancel_on_timeout",
 )
 
+# The compilers QFwBackend.compile() can use, the first being the default,
+# and the variable that picks one for a call that does not name it.
+QFW_COMPILERS = ("qiskit", "mqt")
+COMPILER_ENV = "QFW_COMPILER"
+
 
 class CircuitMetrics:
 	def __init__(self, window_size=4096):
@@ -317,18 +322,38 @@ class QFwBackend(BackendV2):
 			lib=None,
 		)
 
-	def compile(self, circuits, compiler='qiskit', **kwargs):
+	def compile(self, circuits, compiler=None, **kwargs):
+		"""Compile circuits for this backend's target.
+
+		compiler is "qiskit" (qiskit.transpile) or "mqt" (MQT Core's
+		mlir.compile_program). Without one, QFW_COMPILER picks it, so a
+		batch script can switch a program that does not name a compiler;
+		with neither, Qiskit compiles. Other keyword arguments go to the
+		chosen compiler."""
+		compiler = self._compiler(compiler)
 		if compiler == 'qiskit':
 			from qiskit import transpile
 			return transpile(circuits, target=self.target, **kwargs)
-		elif compiler == 'mqt':
-			from mqt.core import mlir
+		from mqt.core import mlir
 
-			return mlir.compile_program(
-				circuits, target=self.target, **kwargs)
-		else:
+		return mlir.compile_program(
+			circuits, target=self.target, **kwargs)
+
+	def _compiler(self, compiler=None):
+		# The compiler a compile() call uses: the argument, else
+		# QFW_COMPILER, else Qiskit. An empty variable counts as unset.
+		source = ""
+		if compiler is None:
+			compiler = os.environ.get(COMPILER_ENV, "").strip()
+			if not compiler:
+				return QFW_COMPILERS[0]
+			source = f" (from {COMPILER_ENV})"
+		name = str(compiler).strip().lower()
+		if name not in QFW_COMPILERS:
 			raise ValueError(
-				f"unknown compiler '{compiler}'; expected 'qiskit' or 'mqt'")
+				f"unknown compiler '{compiler}'{source}; expected "
+				f"{' or '.join(repr(c) for c in QFW_COMPILERS)}")
+		return name
 
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:

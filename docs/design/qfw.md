@@ -75,7 +75,9 @@ Relevant implementation points:
   reservation execution context options `reservation_id`, `token`, `timeout`,
   and `cancel_on_timeout` when constructing a `QFwJob`. Its `lib` option
   (default `QFW_SHIM_LIB`) names the shim library, `qrmi` or `qdmi`, that
-  `QFwJob` puts in each circuit's `info`.
+  `QFwJob` puts in each circuit's `info`. Its `compile()` compiles against
+  the backend's target with `qiskit` or `mqt`. A call that names no compiler
+  takes `QFW_COMPILER`, else Qiskit.
 - `backends/qfw_qiskit/qfw_job.py` calls `qpm.async_run(info, **context)` and
   rejects unreserved execution when the launcher did not provide
   `reservation_id`.
@@ -1442,6 +1444,11 @@ sequenceDiagram
     QRC-->>EventEP: completion event for registered cid or event type
     EventEP-->>Client: application-level notification handling
 ```
+
+A circuit whose `info` sets `completion_event_class_id` has its completion
+sent only to the matching registrations with that class ID. `QFwJob` sets it
+to its event API's class ID. Without it, or when no matching registration has
+that class ID, every matching registration gets the completion.
 
 Local out-of-resource handling happens in `UTIL_QPM` before provider
 submission. The notification path avoids unbounded polling while preserving

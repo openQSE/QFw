@@ -1230,7 +1230,7 @@ def _launch(record, node, command, detach_flag, env, allocation, ready,
         _wait_for(ready, timeout, description)
         return
     step_log = Path(record["pid_file"]).with_name("step.log")
-    cpus = _job_cpus_on(node, allocation)
+    cpus = _step_cpus_on(node, allocation)
     step_options = [f"--cpus-per-task={cpus}"] if cpus else []
     step = _start_step(
         _node_launch(
@@ -1352,7 +1352,7 @@ def _node_launch(node, command, allocation, step_options=()):
     return launch
 
 
-def _job_cpus_on(node, allocation):
+def _step_cpus_on(node, allocation):
     suffix = ""
     if allocation.get("mode") == "heterogeneous":
         suffix = f"_HET_GROUP_{_group_for_node(node, allocation)}"
@@ -1361,7 +1361,9 @@ def _job_cpus_on(node, allocation):
         os.environ.get(f"SLURM_JOB_CPUS_PER_NODE{suffix}"))
     if counts is None or len(counts) != len(nodes) or node not in nodes:
         return None
-    return counts[nodes.index(node)]
+    cpus = counts[nodes.index(node)]
+    per_task = os.environ.get(f"SLURM_CPUS_PER_TASK{suffix}", "")
+    return min(cpus, int(per_task)) if per_task.isdigit() else cpus
 
 
 def _expand_cpu_counts(value):

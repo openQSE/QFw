@@ -14,6 +14,8 @@ REQUEST_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
+COMPLETION_EVENT_CLASS_KEY = "completion_event_class_id"
+
 SCOPED_METADATA_KEYS = (
 	"owner",
 	"job_id",
@@ -36,6 +38,7 @@ class QPMRequestContext:
 	cancel_on_timeout: bool = False
 	metadata: Dict[str, Any] = field(default_factory=dict)
 	auth_disabled: bool = True
+	completion_event_class_id: Optional[str] = None
 
 	def as_payload_fields(self):
 		fields = {}
@@ -67,7 +70,8 @@ def auth_disabled():
 def parse_execution_request(info, **overrides):
 	payload = dict(info or {})
 	context = _context_from_payload(payload, overrides)
-	for key in REQUEST_CONTEXT_KEYS + SCOPED_METADATA_KEYS:
+	for key in (REQUEST_CONTEXT_KEYS + SCOPED_METADATA_KEYS +
+			(COMPLETION_EVENT_CLASS_KEY,)):
 		payload.pop(key, None)
 	for key in tuple(payload):
 		if key.startswith("_qfw_"):
@@ -86,6 +90,8 @@ def _context_from_payload(payload, overrides):
 			values["reservation_id"])
 	values["cancel_on_timeout"] = bool(values["cancel_on_timeout"])
 	values["metadata"] = _scoped_metadata(payload, overrides)
+	values["completion_event_class_id"] = _request_value(
+		COMPLETION_EVENT_CLASS_KEY, payload, overrides)
 	values["auth_disabled"] = auth_disabled()
 	return QPMRequestContext(**values)
 

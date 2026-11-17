@@ -1,5 +1,8 @@
-mqt-core[qiskit]==4.2.0
-amazon-braket-qdmi[qiskit]==1.4.0
-iqm-qdmi[qiskit]==1.6.0
-ibm-qdmi[qiskit]==1.1.0
-pasqal-qdmi[mqt-core,pulser]==1.2.0
+mqt-core[qiskit]==4.2.1
+amazon-braket-qdmi[qiskit]==1.4.1
+iqm-qdmi[qiskit]==1.6.1
+ibm-qdmi[qiskit]==1.1.1
+pasqal-qdmi[mqt-core,pulser]==1.2.1
+# MQV publishes its device only as an x86_64 Linux wheel for Python 3.11 and
+# newer, so other machines skip it.
+mqss-qdmi-mqv==0.1.4; platform_machine == "x86_64" and python_version >= "3.11"
