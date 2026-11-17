@@ -139,6 +139,26 @@ def qiskit_input(info):
 	return data
 
 
+def logical_circuit_payload(info):
+	logical = (info or {}).get("logical_circuit")
+	if logical is None:
+		return None
+	return circuit_payload({"circuit": logical})
+
+
+def load_circuit(fmt, data):
+	if fmt == QPY:
+		return load_qpy(data)
+	if fmt == OPENQASM2:
+		try:
+			from qiskit import qasm2
+			return qasm2.loads(data)
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"could not load the OpenQASM 2 circuit: {exc}") from exc
+	raise DEFwExecutionError(f"cannot load a {fmt} circuit with Qiskit")
+
+
 def pulser_sequence(info):
 	# Return the Pulser sequence as abstract representation JSON text, for
 	# QPMs that run Pulser sequences.
@@ -291,6 +311,13 @@ def encode_qiskit_circuit(circuit, properties=None):
 		raise DEFwExecutionError(
 			f"this QPM reads {reads}, and the circuit cannot be written as "
 			f"OpenQASM 2: {exc}") from exc
+
+
+def encode_logical_circuit(circuit, properties=None):
+	fields = encode_qiskit_circuit(circuit, properties)
+	if "circuit" in fields:
+		return {"logical_circuit": fields["circuit"]}
+	return {"logical_circuit": {"format": OPENQASM2, "data": fields["qasm"]}}
 
 
 def encode_pulser_sequence(sequence):
