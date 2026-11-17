@@ -35,12 +35,15 @@ The entry's
 or null.
 .TP
 .B accelerator
-.B gpu
-when the entry's settings run it on a GPU, such as an
+The device the entry's settings run it on,
+.B cpu
+or
+.BR gpu ,
+such as an
 .B aer
-entry with
-.BR "device: GPU" ,
-otherwise null.
+entry's
+.BR device ,
+or null when the service names none.
 .PP
 The command imports each entry's module through
 .BR defw-python (1).

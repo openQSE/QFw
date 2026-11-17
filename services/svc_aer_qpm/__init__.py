@@ -21,9 +21,7 @@ service_classes = [QPM]
 
 
 def accelerator(service_entry):
-	if aer_settings_from_service_entry(service_entry).device == "GPU":
-		return "gpu"
-	return None
+	return aer_settings_from_service_entry(service_entry).device.lower()
 
 
 def initialize():
