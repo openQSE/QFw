@@ -695,6 +695,23 @@ GPU needs a GPU build of Aer in place of `qiskit-aer`, and QFw pins
 Linux) but no `qiskit-aer-gpu` (CUDA 12) 0.17.2. Elsewhere, build Aer 0.17.2
 from source with `-DAER_THRUST_BACKEND=CUDA`.
 
+The `nwqsim` service reads its own `nwqsim` block:
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `backend` | The NWQ-Sim backend every circuit runs on: `CPU`, `OPENMP` or `MPI` on the CPU, `NVGPU`, `NVGPU_MPI` or `AMDGPU` on a GPU. | `OPENMP` |
+
+```yaml
+services:
+  - name: nwqsim
+    module: svc_nwqsim_qpm
+    nwqsim:
+      backend: NVGPU
+```
+
+The service refuses to start when `circuit_runner.nwqsim -backend_list` does
+not list its backend. A circuit's own `backend` is ignored.
+
 </details>
 
 <details>
