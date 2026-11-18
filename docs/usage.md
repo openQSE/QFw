@@ -709,8 +709,7 @@ services:
       backend: NVGPU
 ```
 
-The service refuses to start when `circuit_runner.nwqsim -backend_list` does
-not list its backend. A circuit's own `backend` is ignored.
+A circuit's own `backend` is ignored.
 
 </details>
 

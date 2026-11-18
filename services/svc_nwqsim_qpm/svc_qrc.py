@@ -11,7 +11,7 @@ from util.qpm.statevector import (
 	QFwStatevector,
 	statevector_payload_size_summary,
 )
-from .settings import check_backend_is_compiled, nwqsim_backend
+from .settings import nwqsim_backend
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
@@ -28,9 +28,6 @@ def _split_planar_doubles(doubles):
 
 class QRC(UTIL_QRC):
 	def __init__(self, start=True):
-		self.backend = nwqsim_backend(this_service_entry())
-		if start:
-			check_backend_is_compiled(self.backend)
 		super().__init__(start=start)
 
 	def parse_result(self, out):
@@ -136,7 +133,8 @@ class QRC(UTIL_QRC):
 		if "num_shots" in info:
 			executable_args.extend(['-shots', info["num_shots"]])
 
-		executable_args.extend(['-backend', self.backend])
+		executable_args.extend(
+			['-backend', nwqsim_backend(this_service_entry())])
 
 		if "method" in info:
 			executable_args.extend(['-sim', info["method"]])

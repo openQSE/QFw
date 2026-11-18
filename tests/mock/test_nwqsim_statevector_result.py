@@ -6,13 +6,6 @@ from defw_exception import DEFwError
 from svc_nwqsim_qpm.svc_qrc import QRC, _split_planar_doubles
 
 
-@pytest.fixture(autouse=True)
-def services(tmp_path, monkeypatch):
-	path = tmp_path / "services.yaml"
-	path.write_text('{"services": []}')
-	monkeypatch.setenv("QFW_SERVICE_CONFIG", str(path))
-
-
 class _Statevector:
 	def to_dict(self):
 		from util.qpm.statevector import encode_statevector_payload
