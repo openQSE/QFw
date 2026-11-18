@@ -1,3 +1,4 @@
+from .settings import BACKEND_ACCELERATORS, nwqsim_backend
 from .svc_qpm import QPM
 import defw
 import util.qpm.startup as qpm_startup
@@ -26,6 +27,10 @@ svc_info = {
 #	reserve()
 #	release()
 service_classes = [QPM]
+
+
+def accelerator(service_entry):
+	return BACKEND_ACCELERATORS[nwqsim_backend(service_entry)]
 
 
 def initialize():

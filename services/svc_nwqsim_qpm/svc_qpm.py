@@ -1,4 +1,5 @@
 import logging
+from .settings import EXECUTABLE
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
@@ -46,7 +47,7 @@ class QPM(UTIL_QPM):
 		return info
 
 	def prepare_circuit(self, info):
-		info['qfw_backend'] = 'circuit_runner.nwqsim'
+		info['qfw_backend'] = EXECUTABLE
 		return info
 
 	def get_backend_info(self, lib=None, token=None, reservation_id=None):
