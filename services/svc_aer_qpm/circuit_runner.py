@@ -4,6 +4,7 @@ import sys
 import traceback
 
 import qiskit.qasm2
+from qiskit.circuit import CONTROL_FLOW_OP_NAMES
 from qiskit.circuit.equivalence_library import SessionEquivalenceLibrary
 from qiskit.circuit.library import get_standard_gate_name_mapping
 from qiskit.transpiler import PassManager
@@ -20,7 +21,7 @@ def aer_simulator(mode="ideal", device_id=None, **options):
 
 
 def translate_to_simulator_gates(circuit, simulator):
-	standard = get_standard_gate_name_mapping()
+	standard = {*get_standard_gate_name_mapping(), *CONTROL_FLOW_OP_NAMES}
 	basis_gates = [name for name in simulator.configuration().basis_gates
 		if name in standard]
 	return PassManager([

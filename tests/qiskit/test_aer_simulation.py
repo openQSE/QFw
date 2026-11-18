@@ -228,6 +228,18 @@ def test_an_ideal_runner_transpiles_gates_its_method_lacks():
 	assert sum(counts.values()) == 100
 
 
+@pytest.mark.parametrize("method", ["automatic", "matrix_product_state"])
+def test_an_ideal_runner_keeps_classically_conditioned_gates(method):
+	qasm = (
+		'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\n'
+		"x q[0];\nmeasure q[0] -> c[0];\nif(c==1) x q[1];\n"
+		"measure q[1] -> c[1];\n")
+
+	counts = circuit_runner.sample_counts(qasm, 100, method=method)
+
+	assert counts == {"11": 100}
+
+
 def test_a_records_file_samples_like_its_fake_backend(tmp_path, bell_on_fez):
 	configuration, properties = device.ibm_device_records("FakeFez")
 	records = tmp_path / "fez.json"
