@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -566,3 +567,39 @@ def test_file_profile_stitches_a_trace_across_the_rpc_boundary(
                 for metric in scope_metrics["metrics"]:
                     names.add(metric["name"])
     assert {"qfw.qpm.duration", "qfw.app.job.count"} <= names
+
+
+_COUNT_ONE_JOB = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import qfw_telemetry as telemetry
+telemetry.configure("qfw-qpm", "0.1", role="qpm")
+telemetry.counter("qfw.app.job.count").add(1, {"qfw.outcome": "completed"})
+telemetry.shutdown()
+"""
+
+
+def _metric_resources(path):
+    resources = []
+    for line in path.read_text().splitlines():
+        if line.strip():
+            resources.extend(
+                _attrs(resource_metrics["resource"]["attributes"])
+                for resource_metrics in json.loads(line)["resourceMetrics"])
+    return resources
+
+
+def test_metrics_of_two_processes_share_one_resource(tmp_path, monkeypatch):
+    monkeypatch.setenv(telemetry.TELEMETRY_ENV, telemetry.PROFILE_FILE)
+    monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
+    for _ in range(2):
+        subprocess.run(
+            [sys.executable, "-c", _COUNT_ONE_JOB,
+             str(_REPO_ROOT / "backends")], check=True)
+
+    exports = sorted(tmp_path.glob("qfw-qpm-*.metrics.jsonl"))
+    assert len(exports) == 2
+    first, second = (_metric_resources(path) for path in exports)
+    assert first and first == second
+    assert "service.instance.id" not in first[0]
+    assert first[0]["service.name"] == "qfw-qpm"

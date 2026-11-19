@@ -317,6 +317,15 @@ def _build_resource(service_name, service_version, role, attributes=None):
 	return Resource.create(values)
 
 
+def _metric_resource(resource):
+	from opentelemetry.sdk.resources import Resource
+
+	return Resource(
+		{key: value for key, value in resource.attributes.items()
+		 if key != "service.instance.id"},
+		resource.schema_url)
+
+
 def _open_export_stream(service_name, kind):
 	"""Open one node-local export file, named so parallel ranks do not collide."""
 	directory = _export_dir()
@@ -607,7 +616,7 @@ def configure(service_name, service_version=None, role=None, attributes=None):
 		_trace.set_tracer_provider(tracer_provider)
 
 		meter_provider = MeterProvider(
-			resource=resource,
+			resource=_metric_resource(resource),
 			metric_readers=[_build_metric_reader(service_name, profile)])
 		_metrics.set_meter_provider(meter_provider)
 
