@@ -1,7 +1,9 @@
 import logging
+from .settings import nwqsim_backend
 from .svc_qrc import QRC
 from util.qpm.util_qpm import UTIL_QPM
 from util.qpm.util_circuit import set_max_qubits_pp
+from util.mpi import this_service_entry
 
 MAX_NWQSIM_QUBITS = 32
 MAX_NWQSIM_SHOTS = 1_000_000
@@ -23,7 +25,8 @@ NWQSIM_INSTRUCTIONS = (
 
 class QPM(UTIL_QPM):
 	def __init__(self, start=True):
-		super().__init__(QRC(start=start), start=start)
+		super().__init__(
+			QRC(nwqsim_backend(this_service_entry()), start=start), start=start)
 		set_max_qubits_pp(MAX_NWQSIM_QUBITS)
 		self.configure_device_profile(
 			max_qubits=MAX_NWQSIM_QUBITS,

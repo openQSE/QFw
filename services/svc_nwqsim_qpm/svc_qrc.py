@@ -9,6 +9,7 @@ from util.qpm.statevector import (
 	QFwStatevector,
 	statevector_payload_size_summary,
 )
+from .settings import DEFAULT_BACKEND
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
@@ -24,7 +25,8 @@ def _split_planar_doubles(doubles):
 
 
 class QRC(UTIL_QRC):
-	def __init__(self, start=True):
+	def __init__(self, backend=DEFAULT_BACKEND, start=True):
+		self.backend = backend
 		super().__init__(start=start)
 
 	def parse_result(self, out):
@@ -130,10 +132,7 @@ class QRC(UTIL_QRC):
 		if "num_shots" in info:
 			executable_args.extend(['-shots', info["num_shots"]])
 
-		if "backend" in info:
-			executable_args.extend(['-backend', info["backend"]])
-		else:
-			executable_args.extend(['-backend', 'OPENMP'])
+		executable_args.extend(['-backend', self.backend])
 
 		if "method" in info:
 			executable_args.extend(['-sim', info["method"]])

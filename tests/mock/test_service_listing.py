@@ -73,5 +73,5 @@ def test_the_listing_prints_one_record_per_entry(capsys):
 		{"service": "aer", "provider": "aer", "device_id": None,
 		 "accelerator": "gpu"},
 		{"service": "nwqsim", "provider": "nwqsim", "device_id": None,
-		 "accelerator": None},
+		 "accelerator": "cpu"},
 	]
