@@ -113,6 +113,9 @@ DEFAULT_TELEMETRY_DIRNAME = "qfw-telemetry"
 DEFAULT_METRIC_EXPORT_INTERVAL_MS = 10_000
 METRIC_EXPORT_INTERVAL_ENV = "OTEL_METRIC_EXPORT_INTERVAL"
 
+DEFAULT_METRIC_TEMPORALITY = "delta"
+METRIC_TEMPORALITY_ENV = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"
+
 # Bucket boundaries for the duration histograms, in seconds. The SDK's
 # default boundaries (5, 10, 25, ... 10000) are sized for milliseconds, so
 # every sub-second hop of a job would land in the first bucket and a quantile
@@ -499,21 +502,35 @@ def _metric_export_interval_ms():
 	return interval
 
 
+def _metric_temporality():
+	preference = _env(METRIC_TEMPORALITY_ENV) or DEFAULT_METRIC_TEMPORALITY
+	if preference.lower() != "delta":
+		return None
+	from opentelemetry.sdk.metrics import Counter, Histogram, ObservableCounter
+	from opentelemetry.sdk.metrics.export import AggregationTemporality
+
+	return dict.fromkeys(
+		(Counter, Histogram, ObservableCounter), AggregationTemporality.DELTA)
+
+
 def _build_metric_reader(service_name, profile):
 	from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+	temporality = _metric_temporality()
 
 	if profile == PROFILE_OTLP:
 		from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
 			OTLPMetricExporter)
 
 		exporter = OTLPMetricExporter(
-			endpoint=_otlp_endpoint("v1/metrics"))
+			endpoint=_otlp_endpoint("v1/metrics"),
+			preferred_temporality=temporality)
 	else:
 		from ._otlp_json import OtlpJsonFileMetricExporter
 
 		stream = _open_export_stream(service_name, "metrics")
 		_STATE.streams.append(stream)
-		exporter = OtlpJsonFileMetricExporter(stream)
+		exporter = OtlpJsonFileMetricExporter(stream, temporality)
 	return PeriodicExportingMetricReader(
 		exporter, export_interval_millis=_metric_export_interval_ms())
 

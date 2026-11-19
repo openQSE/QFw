@@ -32,7 +32,8 @@ def clean_telemetry_env(monkeypatch):
                  telemetry.TELEMETRY_DIR_ENV,
                  telemetry.TELEMETRY_SAMPLE_ENV,
                  telemetry.TELEMETRY_TRANSPORT_ENV,
-                 telemetry.TELEMETRY_ENDPOINT_ENV):
+                 telemetry.TELEMETRY_ENDPOINT_ENV,
+                 telemetry.METRIC_TEMPORALITY_ENV):
         monkeypatch.delenv(name, raising=False)
     yield
     telemetry.shutdown()
@@ -593,9 +594,7 @@ def test_metrics_of_two_processes_share_one_resource(tmp_path, monkeypatch):
     monkeypatch.setenv(telemetry.TELEMETRY_ENV, telemetry.PROFILE_FILE)
     monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
     for _ in range(2):
-        subprocess.run(
-            [sys.executable, "-c", _COUNT_ONE_JOB,
-             str(_REPO_ROOT / "backends")], check=True)
+        _count_one_job_in_a_child(_REPO_ROOT / "backends")
 
     exports = sorted(tmp_path.glob("qfw-qpm-*.metrics.jsonl"))
     assert len(exports) == 2
@@ -603,3 +602,38 @@ def test_metrics_of_two_processes_share_one_resource(tmp_path, monkeypatch):
     assert first and first == second
     assert "service.instance.id" not in first[0]
     assert first[0]["service.name"] == "qfw-qpm"
+
+
+def _count_one_job_in_a_child(backends_dir):
+    subprocess.run(
+        [sys.executable, "-c", _COUNT_ONE_JOB, str(backends_dir)], check=True)
+
+
+def _job_count_temporalities(path):
+    temporalities = set()
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        for resource_metrics in json.loads(line)["resourceMetrics"]:
+            for scope_metrics in resource_metrics["scopeMetrics"]:
+                for metric in scope_metrics["metrics"]:
+                    if metric["name"] == "qfw.app.job.count":
+                        temporalities.add(
+                            metric["sum"]["aggregationTemporality"])
+    return temporalities
+
+
+@pytest.mark.parametrize("preference, expected", [
+    (None, "AGGREGATION_TEMPORALITY_DELTA"),
+    ("cumulative", "AGGREGATION_TEMPORALITY_CUMULATIVE"),
+])
+def test_metrics_export_delta_unless_the_otel_preference_says_otherwise(
+        tmp_path, monkeypatch, preference, expected):
+    monkeypatch.setenv(telemetry.TELEMETRY_ENV, telemetry.PROFILE_FILE)
+    monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
+    if preference:
+        monkeypatch.setenv(telemetry.METRIC_TEMPORALITY_ENV, preference)
+    _count_one_job_in_a_child(_REPO_ROOT / "backends")
+
+    (export,) = tmp_path.glob("qfw-qpm-*.metrics.jsonl")
+    assert _job_count_temporalities(export) == {expected}

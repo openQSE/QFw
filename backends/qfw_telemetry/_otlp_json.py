@@ -102,9 +102,9 @@ class OtlpJsonFileSpanExporter(SpanExporter):
 class OtlpJsonFileMetricExporter(MetricExporter):
 	"""Writes each collection cycle of metrics as one OTLP/JSON line."""
 
-	def __init__(self, stream):
+	def __init__(self, stream, preferred_temporality=None):
 		super().__init__(
-			preferred_temporality={},
+			preferred_temporality=preferred_temporality or {},
 			preferred_aggregation={})
 		self._stream = stream
 		self._lock = threading.Lock()

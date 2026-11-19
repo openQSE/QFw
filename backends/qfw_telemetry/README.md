@@ -37,7 +37,9 @@ Keep them dimensional: a resource attribute may become a metric label in a
 store downstream.
 Metrics carry that resource without the SDK's random per-process
 `service.instance.id`, so every process of a service adds to the same
-series; spans and log records keep it.
+series; spans and log records keep it. The sum relies on delta export, QFw's
+default: under `cumulative`, processes that run at once overwrite each other's
+totals.
 
 Nothing here is required. With no OpenTelemetry SDK installed, or with the
 profile off, every accessor degrades to a no-op and QFw runs unchanged.
