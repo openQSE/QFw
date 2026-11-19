@@ -35,11 +35,11 @@ counter("qfw.app.job.count").add(1, {"qfw.outcome": "completed"})
 once per process rather than on every span, such as the device a QPM serves.
 Keep them dimensional: a resource attribute may become a metric label in a
 store downstream.
-Metrics carry that resource without the SDK's random per-process
-`service.instance.id`, so every process of a service adds to the same
-series; spans and log records keep it. The sum relies on delta export, QFw's
-default: under `cumulative`, processes that run at once overwrite each other's
-totals.
+Under delta export, QFw's default, metrics carry that resource without the
+SDK's random per-process `service.instance.id`, so every process of a service
+adds to the same series. Under any other temporality they keep it, so
+processes that run at once do not overwrite each other's totals. Spans and log
+records always keep it.
 
 Nothing here is required. With no OpenTelemetry SDK installed, or with the
 profile off, every accessor degrades to a no-op and QFw runs unchanged.

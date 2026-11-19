@@ -590,20 +590,6 @@ def _metric_resources(path):
     return resources
 
 
-def test_metrics_of_two_processes_share_one_resource(tmp_path, monkeypatch):
-    monkeypatch.setenv(telemetry.TELEMETRY_ENV, telemetry.PROFILE_FILE)
-    monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
-    for _ in range(2):
-        _count_one_job_in_a_child(_REPO_ROOT / "backends")
-
-    exports = sorted(tmp_path.glob("qfw-qpm-*.metrics.jsonl"))
-    assert len(exports) == 2
-    first, second = (_metric_resources(path) for path in exports)
-    assert first and first == second
-    assert "service.instance.id" not in first[0]
-    assert first[0]["service.name"] == "qfw-qpm"
-
-
 def _count_one_job_in_a_child(backends_dir):
     subprocess.run(
         [sys.executable, "-c", _COUNT_ONE_JOB, str(backends_dir)], check=True)
@@ -623,17 +609,29 @@ def _job_count_temporalities(path):
     return temporalities
 
 
-@pytest.mark.parametrize("preference, expected", [
-    (None, "AGGREGATION_TEMPORALITY_DELTA"),
-    ("cumulative", "AGGREGATION_TEMPORALITY_CUMULATIVE"),
+_DELTA = "AGGREGATION_TEMPORALITY_DELTA"
+_CUMULATIVE = "AGGREGATION_TEMPORALITY_CUMULATIVE"
+
+
+@pytest.mark.parametrize("preference, temporality, merged", [
+    (None, _DELTA, True),
+    ("delta", _DELTA, True),
+    ("cumulative", _CUMULATIVE, False),
 ])
-def test_metrics_export_delta_unless_the_otel_preference_says_otherwise(
-        tmp_path, monkeypatch, preference, expected):
+def test_processes_share_a_metric_resource_only_under_delta_export(
+        tmp_path, monkeypatch, preference, temporality, merged):
     monkeypatch.setenv(telemetry.TELEMETRY_ENV, telemetry.PROFILE_FILE)
     monkeypatch.setenv(telemetry.TELEMETRY_DIR_ENV, str(tmp_path))
     if preference:
         monkeypatch.setenv(telemetry.METRIC_TEMPORALITY_ENV, preference)
-    _count_one_job_in_a_child(_REPO_ROOT / "backends")
+    for _ in range(2):
+        _count_one_job_in_a_child(_REPO_ROOT / "backends")
 
-    (export,) = tmp_path.glob("qfw-qpm-*.metrics.jsonl")
-    assert _job_count_temporalities(export) == {expected}
+    exports = sorted(tmp_path.glob("qfw-qpm-*.metrics.jsonl"))
+    assert len(exports) == 2
+    for export in exports:
+        assert _job_count_temporalities(export) == {temporality}
+    first, second = (_metric_resources(export)[0] for export in exports)
+    assert first["service.name"] == second["service.name"] == "qfw-qpm"
+    assert (first == second) is merged
+    assert ("service.instance.id" in first) is not merged

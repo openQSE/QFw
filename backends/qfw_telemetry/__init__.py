@@ -502,9 +502,13 @@ def _metric_export_interval_ms():
 	return interval
 
 
-def _metric_temporality():
+def _metrics_export_delta():
 	preference = _env(METRIC_TEMPORALITY_ENV) or DEFAULT_METRIC_TEMPORALITY
-	if preference.lower() != "delta":
+	return preference.lower() == "delta"
+
+
+def _metric_temporality():
+	if not _metrics_export_delta():
 		return None
 	from opentelemetry.sdk.metrics import Counter, Histogram, ObservableCounter
 	from opentelemetry.sdk.metrics.export import AggregationTemporality
@@ -633,7 +637,8 @@ def configure(service_name, service_version=None, role=None, attributes=None):
 		_trace.set_tracer_provider(tracer_provider)
 
 		meter_provider = MeterProvider(
-			resource=_metric_resource(resource),
+			resource=(_metric_resource(resource) if _metrics_export_delta()
+				else resource),
 			metric_readers=[_build_metric_reader(service_name, profile)])
 		_metrics.set_meter_provider(meter_provider)
 
