@@ -50,6 +50,11 @@ def test_a_backend_nwqsim_lacks_is_refused():
 		nwqsim_backend({"nwqsim": {"backend": "TPU"}})
 
 
+def test_an_unknown_nwqsim_setting_is_refused():
+	with pytest.raises(DEFwExecutionError, match="unknown nwqsim settings: backned"):
+		nwqsim_backend({"nwqsim": {"backned": "NVGPU"}})
+
+
 def test_the_runner_runs_the_entrys_backend_whatever_the_circuit_asks(command):
 	formed = command({"backend": "OPENMP"}, backend="NVGPU")
 
