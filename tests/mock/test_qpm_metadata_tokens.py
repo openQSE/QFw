@@ -1,6 +1,16 @@
 import inspect
+import json
 import sys
 import types
+
+import pytest
+
+
+@pytest.fixture
+def no_service_entries(tmp_path, monkeypatch):
+	path = tmp_path / "services.yaml"
+	path.write_text(json.dumps({"services": []}))
+	monkeypatch.setenv("QFW_SERVICE_CONFIG", str(path))
 
 
 def test_qpm_telemetry_api_accepts_token_placeholders():
@@ -24,7 +34,8 @@ def test_qpm_telemetry_api_accepts_token_placeholders():
 		assert list(signature.parameters) == parameters
 
 
-def test_simulator_metadata_methods_accept_token_placeholder(monkeypatch):
+def test_simulator_metadata_methods_accept_token_placeholder(
+		monkeypatch, no_service_entries):
 	from svc_nwqsim_qpm.svc_qpm import QPM as NWQSimQPM
 	from svc_tnqvm_qpm.svc_qpm import QPM as TNQVMQPM
 
@@ -65,7 +76,7 @@ def _assert_full_metadata_category_shape(qpm, backend):
 
 
 def test_non_shim_provider_metadata_methods_accept_full_category_shape(
-		monkeypatch):
+		monkeypatch, no_service_entries):
 	from svc_iqm_qpm.svc_qpm import QPM as IQMQPM
 	from svc_nwqsim_qpm.svc_qpm import QPM as NWQSimQPM
 	_install_qb_import_stubs()

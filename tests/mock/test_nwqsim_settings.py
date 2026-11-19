@@ -5,26 +5,35 @@ import pytest
 
 from defw_exception import DEFwExecutionError
 from svc_nwqsim_qpm.settings import nwqsim_backend
-from svc_nwqsim_qpm.svc_qrc import QRC
+from svc_nwqsim_qpm.svc_qpm import QPM
 from util import service_listing
 
 
 @pytest.fixture
-def command(tmp_path, monkeypatch):
+def service(tmp_path, monkeypatch):
+	monkeypatch.setenv("QFW_QPM_ASSIGNED_HOSTS", "localhost:1")
 	monkeypatch.setenv("QFW_QPM_SERVICE_NAME", "nwqsim")
 	monkeypatch.delenv("QFW_DVM_URI_PATH", raising=False)
-	monkeypatch.setattr("shutil.which", lambda name: f"/opt/bin/{name}")
 
-	def form(circuit_info, **nwqsim):
+	def start(**nwqsim):
 		entry = {"name": "nwqsim", "module": "svc_nwqsim_qpm"}
 		if nwqsim:
 			entry["nwqsim"] = nwqsim
 		path = tmp_path / "services.yaml"
 		path.write_text(json.dumps({"services": [entry]}))
 		monkeypatch.setenv("QFW_SERVICE_CONFIG", str(path))
+		return QPM(start=False)
+	return start
+
+
+@pytest.fixture
+def command(service, monkeypatch):
+	monkeypatch.setattr("shutil.which", lambda name: f"/opt/bin/{name}")
+
+	def form(circuit_info, **nwqsim):
 		circuit = types.SimpleNamespace(info={
 			"qfw_backend": "circuit_runner.nwqsim", "np": 1, **circuit_info})
-		return QRC(start=False).form_cmd(circuit, "c.qasm")
+		return service(**nwqsim).qrc.form_cmd(circuit, "c.qasm")
 	return form
 
 
@@ -53,6 +62,11 @@ def test_a_backend_nwqsim_lacks_is_refused():
 def test_an_unknown_nwqsim_setting_is_refused():
 	with pytest.raises(DEFwExecutionError, match="unknown nwqsim settings: backned"):
 		nwqsim_backend({"nwqsim": {"backned": "NVGPU"}})
+
+
+def test_the_service_refuses_a_bad_backend_when_it_starts(service):
+	with pytest.raises(DEFwExecutionError, match="nwqsim backend must be one of"):
+		service(backend="TPU")
 
 
 def test_the_runner_runs_the_entrys_backend_whatever_the_circuit_asks(command):

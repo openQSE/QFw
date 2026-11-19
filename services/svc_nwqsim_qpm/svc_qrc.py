@@ -3,15 +3,13 @@ import os
 import logging
 import numpy as np
 from defw_exception import DEFwError, DEFwExecutionError
-from util.mpi import (
-	backend_config, backend_wrapper, build_mpi_command_string,
-	this_service_entry)
+from util.mpi import backend_config, backend_wrapper, build_mpi_command_string
 from util.qpm.util_qrc import UTIL_QRC
 from util.qpm.statevector import (
 	QFwStatevector,
 	statevector_payload_size_summary,
 )
-from .settings import nwqsim_backend
+from .settings import DEFAULT_BACKEND
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
 
@@ -27,7 +25,8 @@ def _split_planar_doubles(doubles):
 
 
 class QRC(UTIL_QRC):
-	def __init__(self, start=True):
+	def __init__(self, backend=DEFAULT_BACKEND, start=True):
+		self.backend = backend
 		super().__init__(start=start)
 
 	def parse_result(self, out):
@@ -133,8 +132,7 @@ class QRC(UTIL_QRC):
 		if "num_shots" in info:
 			executable_args.extend(['-shots', info["num_shots"]])
 
-		executable_args.extend(
-			['-backend', nwqsim_backend(this_service_entry())])
+		executable_args.extend(['-backend', self.backend])
 
 		if "method" in info:
 			executable_args.extend(['-sim', info["method"]])
