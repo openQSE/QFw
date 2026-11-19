@@ -60,6 +60,32 @@ services:
     provider-launch:
       type: internal
 
+  # Software cluster. No device-id on purpose - see local-services.yaml.
+  - name: qblox-dummy
+    credential-mode: no-secret
+    module: svc_qblox_qpm
+    load-modules: svc_qblox_qpm,api_launcher
+    agent-prefix: qpm_qblox_dummy
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    listen-port: 9090
+    telnet-port: 9091
+    provider-launch:
+      type: internal
+
+  # The real instrument.
+  - name: qblox-cluster
+    credential-mode: no-secret
+    operation-mode: long-running
+    module: svc_qblox_qpm
+    load-modules: svc_qblox_qpm,api_launcher
+    agent-prefix: qpm_qblox_cluster
+    device-id: qblox-cluster
+    listen-port: 9190
+    telnet-port: 9191
+    provider-launch:
+      type: internal
+
   - name: iqm-ornl-20q
     credential-mode: required
     module: svc_iqm_qpm
