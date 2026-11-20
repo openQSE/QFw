@@ -143,6 +143,7 @@ endif()
 
 set(QFW_PYTHON_LIB_DIRS_SHELL "")
 if(QFW_BUILD_BUNDLED_DEFW)
+	enable_language(C)
 	find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Embed)
 	foreach(qfw_python_dir IN LISTS Python3_LIBRARY_DIRS)
 		if(qfw_python_dir MATCHES "^/(usr/)?lib(32|64|x32)?/?$")
