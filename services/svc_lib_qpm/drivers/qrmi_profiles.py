@@ -4,6 +4,7 @@ from .provider_profile import ProviderProfile
 from defw_exception import DEFwExecutionError
 from util import instrumentation
 import json
+import logging
 import os
 
 
@@ -449,6 +450,22 @@ class IbmQrmiProfile(QrmiProfile):
 
 	def run_circuit(self, driver, source):
 		return self._run_ibm_circuit(driver, source)
+
+	def vendor_timing(self, driver, job_id, credential=None):
+		type_name = (driver._descriptor.get("resource_type")
+			or driver._descriptor.get("resource-type"))
+		if type_name != "IBMQiskitRuntimeService":
+			return {}
+		settings, _ = self._ibm_settings(
+			driver, IBM_RESOURCE_ENV_KINDS[type_name],
+			driver._qc_alias(credential=credential), credential=credential)
+		try:
+			metrics = _runtime_job_metrics(settings, job_id)
+		except Exception as exc:
+			logging.warning(
+				"shim: IBM job metrics for job %s failed: %s", job_id, exc)
+			return {}
+		return _queue_duration(metrics.get("timestamps") or {})
 
 	def resource_settings(self, driver, type_name, backend, credential=None):
 		kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
@@ -918,3 +935,22 @@ def profile_for_resource_type(type_name, descriptor):
 		if type_name in profile.resource_types:
 			return profile(descriptor)
 	return None
+
+
+def _runtime_job_metrics(settings, job_id):
+	from qiskit_ibm_runtime import QiskitRuntimeService
+	endpoint = settings["QRMI_IBM_QRS_ENDPOINT"]
+	service = QiskitRuntimeService(
+		channel="ibm_quantum_platform",
+		token=settings["QRMI_IBM_QRS_IAM_APIKEY"],
+		instance=settings["QRMI_IBM_QRS_SERVICE_CRN"],
+		url_resolver=lambda *_: endpoint)
+	return service.job(job_id).metrics()
+
+
+def _queue_duration(timestamps):
+	from dateutil.parser import isoparse
+	if not (timestamps.get("created") and timestamps.get("running")):
+		return {}
+	queued = isoparse(timestamps["running"]) - isoparse(timestamps["created"])
+	return {"queue": queued.total_seconds()}
