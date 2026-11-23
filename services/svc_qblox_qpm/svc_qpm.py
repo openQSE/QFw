@@ -2,16 +2,17 @@ import logging
 import os
 
 from .svc_qrc import QRC
-from .util_qblox import device_qubit_count, strip_quotes
+from .util_qblox import device_qubit_count, resolve_service_identity
 from util.qpm.util_circuit import set_max_qubits_pp
 from util.qpm.util_qpm import UTIL_QPM
 from util.circuit_payload import qiskit_circuit_formats
 
 QBLOX_PROVIDER = "qblox"
 
-# One module, two identities: which one this process is comes from whether
-# a cluster address is configured.
-QBLOX_IS_DUMMY = not strip_quotes(os.environ.get("QBLOX_CLUSTER_IP"))
+# One module, two identities, decided at startup from whichever config
+# source resolves an address, so a service advertises what it drives.
+QBLOX_IDENTITY = resolve_service_identity()
+QBLOX_IS_DUMMY = QBLOX_IDENTITY["is_dummy"]
 QBLOX_TARGET_ID = os.environ.get(
 	"QFW_QBLOX_TARGET_ID",
 	"qblox-dummy" if QBLOX_IS_DUMMY else "qblox-cluster")
@@ -19,7 +20,9 @@ QBLOX_TARGET_ID = os.environ.get(
 # Read at import: UTIL_QPM needs a static count before HardwareAgent exists,
 # and the agent empties "elements" when constructed.
 QBLOX_MAX_QUBITS = int(
-	os.environ.get("QFW_QBLOX_MAX_QUBITS") or device_qubit_count() or 0)
+	os.environ.get("QFW_QBLOX_MAX_QUBITS")
+	or device_qubit_count(QBLOX_IDENTITY["device_config"])
+	or 0)
 QBLOX_MAX_SHOTS = int(os.environ.get("QFW_QBLOX_MAX_SHOTS", "10000"))
 
 
@@ -71,6 +74,14 @@ class QPM(UTIL_QPM):
 			target_id=QBLOX_TARGET_ID,
 			admission_context_factory=admission_context_factory,
 			scheduler_context_factory=scheduler_context_factory)
+		# Logged here rather than at import, where the service's logging is
+		# not configured yet. Which identity this process took, and what
+		# decided it, is the first thing to check when a backend key
+		# resolves to no QPM.
+		logging.info(
+			f"Qblox QPM is {QBLOX_TARGET_ID} "
+			f"({'dummy' if QBLOX_IS_DUMMY else 'hardware'}), "
+			f"address from: {QBLOX_IDENTITY['source']}")
 		set_max_qubits_pp(QBLOX_MAX_QUBITS)
 		device_id = self.controller.canonicalize_external_id(
 			"device_id", QBLOX_TARGET_ID)

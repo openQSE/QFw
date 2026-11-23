@@ -107,14 +107,11 @@ services:
     provider-launch:
       type: qrmi-qdmi
 
-  # One service, either mode. With no cluster address it runs
-  # qblox-scheduler's built-in software cluster, which needs no device
-  # access; set QBLOX_CLUSTER_IP to drive a real instrument. Site
-  # deployments split this into qblox-dummy and qblox-cluster instead.
-  # Deliberately no device-id - QFw turns that into QFW_QPU_DEVICE_ID,
-  # which the service reads as "resolve my address from
-  # device-access.yaml", and select_qpu() requires every entry there to
-  # carry a url and a credential source.
+  # One service, either mode: with no cluster address it runs
+  # qblox-scheduler's built-in software cluster. No device-id on purpose,
+  # since QFw turns that into QFW_QPU_DEVICE_ID, which means "resolve my
+  # address from device-access.yaml", and select_qpu() requires a url and
+  # a credential source there.
   - name: qblox
     credential-mode: no-secret
     module: svc_qblox_qpm

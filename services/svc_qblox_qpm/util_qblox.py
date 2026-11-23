@@ -4,6 +4,7 @@ from importlib.metadata import version as package_version
 from util.circuit_payload import qiskit_input
 from util.device_access import (
 	QPU_DEVICE_ENV, resolve_device_access, resolve_qpu_user)
+import concurrent.futures
 import json
 import logging
 import math
@@ -243,10 +244,8 @@ def load_qblox_service_config(credential=None):
 			"user": resolve_qpu_user(),
 		}
 
-	# Service manifests have no environment block, so device-access.yaml is
-	# the only way a site-deployed cluster's address reaches the service.
-	# QFw sets QFW_QPU_DEVICE_ID from device-id and points
-	# QFW_DEVICE_ACCESS_CFG at the file.
+	# Service manifests have no environment block, so device-access.yaml
+	# is the only route for a site cluster's address.
 	device_id = credential.get("device_id") or os.environ.get(QPU_DEVICE_ENV)
 	if device_id and os.environ.get("QFW_DEVICE_ACCESS_CFG"):
 		access = resolve_device_access(
@@ -282,32 +281,103 @@ def load_qblox_service_config(credential=None):
 	}
 
 
+def resolve_service_identity():
+	"""
+	Which identity this process is, from whichever config source resolves
+	an address. A site cluster service gets its address only from
+	device-access.yaml, so reading QBLOX_CLUSTER_IP alone reports it as
+	the simulator.
+
+	Returns {"is_dummy", "cluster_ip", "device_config", "source"}. Never
+	raises; a service that cannot resolve a config still has to start.
+	"""
+	try:
+		config = load_qblox_service_config()
+	except Exception as exc:
+		logging.warning(
+			f"could not resolve a Qblox configuration at startup ({exc}); "
+			"advertising the dummy cluster")
+		return {
+			"is_dummy": True,
+			"cluster_ip": None,
+			"device_config": None,
+			"source": "unresolved",
+		}
+
+	cluster_ip = config.get("cluster_ip")
+	if cluster_ip:
+		if strip_quotes(os.environ.get("QBLOX_CLUSTER_IP")):
+			source = "environment"
+		else:
+			source = "device-access"
+	else:
+		source = "none"
+	return {
+		"is_dummy": not cluster_ip,
+		"cluster_ip": cluster_ip,
+		"device_config": config.get("device_config"),
+		"source": source,
+	}
+
+
 def rad_to_deg(radians):
 	return radians * 180.0 / math.pi
 
 
-def build_schedule(circuit, shots):
+def device_coupling_map(device_cfg):
 	"""
-	Basis-gate rewrite to rx+ry+cz, not u/rz+rx: this hardware has no NCO,
-	and Rz only means anything as an NCO phase shift (ShiftClockPhase).
-	rx and ry are two non-parallel axes, so Qiskit can synthesise any
-	single-qubit gate from them alone (Euler's rotation theorem), which
-	makes this valid for arbitrary circuits, not just GHZ.
+	The device's two-qubit edges as Qiskit transpiler indices.
+
+	dev_cfg names edges "q0_q1" over the element names; the transpiler wants
+	integer pairs indexed the same way the element order is. Returns both
+	directions, as CZ is symmetric and Qiskit's CouplingMap is directed.
+	"""
+	elements = list(device_cfg.get("elements", {}).keys())
+	index_of = {name: index for index, name in enumerate(elements)}
+	coupling = []
+	for edge in device_cfg.get("edges", {}):
+		parts = str(edge).split("_")
+		if len(parts) == 2 and all(part in index_of for part in parts):
+			left, right = index_of[parts[0]], index_of[parts[1]]
+			coupling.append([left, right])
+			coupling.append([right, left])
+	return coupling
+
+
+def build_schedule(circuit, shots, coupling_map=None, qubit_names=None):
+	"""
+	Lower a Qiskit circuit to a Qblox Schedule.
+
+	Returns (schedule, acq_channel_to_clbit).
+
+	Basis is rx+ry+cz, not u+rz: no NCO, so Rz has nothing to lower to.
+	coupling_map and qubit_names must be indexed the same way, which is
+	why the client reads both from dev_cfg in one step.
 	"""
 	from qiskit.compiler import transpile as qiskit_transpile
 	from qblox_scheduler import Schedule
 	from qblox_scheduler.operations import Reset, Rxy, CZ, Measure
 
 	adapted = qiskit_transpile(
-		circuit, basis_gates=["rx", "ry", "cz"], optimization_level=1)
-	qubit_names = [f"q{i}" for i in range(adapted.num_qubits)]
+		circuit, basis_gates=["rx", "ry", "cz"],
+		coupling_map=coupling_map or None, optimization_level=1)
+
+	if qubit_names is None:
+		qubit_names = [f"q{i}" for i in range(adapted.num_qubits)]
+	elif len(qubit_names) < adapted.num_qubits:
+		raise DEFwExecutionError(
+			f"circuit needs {adapted.num_qubits} qubits after transpiling, "
+			f"but the device config names only {len(qubit_names)}: "
+			f"{qubit_names}")
 
 	schedule = Schedule(f"circuit_{id(circuit)}", repetitions=shots)
 	schedule.add(Reset(*qubit_names))
 
+	acq_channel_to_clbit = {}
+
 	for instruction in adapted.data:
 		gate_name = instruction.operation.name
-		qubits = [adapted.qubits.index(q) for q in instruction.qubits]
+		qubits = [adapted.find_bit(q).index for q in instruction.qubits]
 		params = instruction.operation.params
 
 		if gate_name == "rx":
@@ -321,13 +391,18 @@ def build_schedule(circuit, shots):
 		elif gate_name == "cz":
 			schedule.add(CZ(qubit_names[qubits[0]], qubit_names[qubits[1]]))
 		elif gate_name == "measure":
-			# bin_mode="append" gives one value per repetition; the
-			# default averages them into a single bin.
-			# ThresholdedAcquisition makes the FPGA apply dev_cfg's
-			# acq_rotation/acq_threshold and return a 0/1 bit - without it
-			# this returns raw SSB integration amplitude instead.
+			# One acq_channel per measurement, handed out in schedule
+			# order, so a circuit that measures only some qubits - or the
+			# same qubit twice - still gets one unambiguous channel each.
+			acq_channel = len(acq_channel_to_clbit)
+			acq_channel_to_clbit[acq_channel] = adapted.find_bit(
+				instruction.clbits[0]).index
+			# "append" keeps one value per repetition; the default
+			# averages them. ThresholdedAcquisition has the FPGA apply
+			# dev_cfg's acq_rotation/acq_threshold and return a bit,
+			# not raw integration amplitude.
 			schedule.add(Measure(
-				qubit_names[qubits[0]], acq_channel=qubits[0], acq_index=0,
+				qubit_names[qubits[0]], acq_channel=acq_channel, acq_index=0,
 				bin_mode="append", acq_protocol="ThresholdedAcquisition"))
 		elif gate_name == "barrier":
 			pass
@@ -335,38 +410,46 @@ def build_schedule(circuit, shots):
 			raise DEFwExecutionError(
 				f"unsupported gate {gate_name!r} after basis rewrite")
 
-	return schedule
+	return schedule, acq_channel_to_clbit
 
 
-def extract_channel_values(dataset, num_qubits):
+def extract_channel_values(dataset, acq_channels):
 	"""
-	Pull one array per acq_channel (qubit) out of the dataset returned by
-	HardwareAgent.run(). Tries int then str keys; fails loudly with the
-	dataset's real variable names otherwise, rather than reading the wrong
-	channel silently.
+	One array per acq_channel from HardwareAgent.run()'s dataset. Tries
+	int then str keys, and fails loudly rather than reading the wrong
+	channel. Only channels the schedule acquired on, so measuring a
+	subset of the qubits works.
 	"""
 	channel_values = {}
-	for qubit_idx in range(num_qubits):
-		if qubit_idx in dataset.data_vars:
-			var = dataset[qubit_idx]
-		elif str(qubit_idx) in dataset.data_vars:
-			var = dataset[str(qubit_idx)]
+	for channel in acq_channels:
+		if channel in dataset.data_vars:
+			var = dataset[channel]
+		elif str(channel) in dataset.data_vars:
+			var = dataset[str(channel)]
 		else:
 			raise DEFwExecutionError(
-				f"acq_channel {qubit_idx} not found in dataset. Available "
+				f"acq_channel {channel} not found in dataset. Available "
 				f"data variables: {list(dataset.data_vars)}")
-		channel_values[qubit_idx] = np.asarray(var.values).squeeze()
+		channel_values[channel] = np.asarray(var.values).squeeze()
 	return channel_values
 
 
-def build_counts(channel_values, shots):
-	# Thresholded acquisition returns -1 for |0> and +1 for |1>, not 0/1.
-	num_qubits = len(channel_values)
+def build_counts(channel_values, shots, acq_channel_to_clbit, num_clbits):
+	"""
+	Qiskit's bit order: classical bit 0 is the rightmost character of a
+	counts key, so an X on the qubit feeding clbit 0 reads as "001" on three
+	bits, not "100". Classical bits no measurement wrote to stay 0, which is
+	what Qiskit reports for them too.
+	"""
+	# Thresholded acquisition returns -1 for |0> and +1 for |1> through the
+	# scheduler dataset, and 0/1 from raw QRM bins; "> 0" covers both.
 	counts = {}
 	for shot in range(shots):
-		bitstring = "".join(
-			"1" if float(channel_values[q][shot]) > 0 else "0"
-			for q in range(num_qubits))
+		bits = ["0"] * num_clbits
+		for channel, clbit in acq_channel_to_clbit.items():
+			value = float(channel_values[channel][shot])
+			bits[num_clbits - 1 - clbit] = "1" if value > 0 else "0"
+		bitstring = "".join(bits)
 		counts[bitstring] = counts.get(bitstring, 0) + 1
 	return counts
 
@@ -388,6 +471,7 @@ class QbloxServiceClient:
 		self._execute_lock = threading.Lock()
 		self._config = None
 		self._num_qubits = 0
+		self._topology = None
 		self._job_timeout = get_env_float(
 			"QFW_QBLOX_JOB_TIMEOUT", DEFAULT_JOB_TIMEOUT)
 		self._wait_done_timeout = get_env_float(
@@ -453,12 +537,91 @@ class QbloxServiceClient:
 	def num_qubits(self):
 		if self._num_qubits:
 			return self._num_qubits
-		return device_qubit_count()
+		if self._config is not None:
+			return device_qubit_count(self._config.get("device_config"))
+		return device_qubit_count(
+			resolve_service_identity()["device_config"])
 
 	def is_dummy(self):
+		# No resolved config before the agent is built, so use the same
+		# resolver the service used at startup.
 		if self._config is None:
-			return not strip_quotes(os.environ.get("QBLOX_CLUSTER_IP"))
+			return resolve_service_identity()["is_dummy"]
 		return self._config.get("cluster_ip") is None
+
+	def _device_topology(self):
+		"""
+		The device's element names and edges, read once from dev_cfg and
+		cached together. Together, because the edge list is indexed by
+		position in the element list: reading them separately is how the
+		two drift apart.
+		"""
+		if self._topology is None:
+			config = self._config or load_qblox_service_config()
+			device_cfg = read_json_config(config["device_config"], "device")
+			self._topology = {
+				"elements": list(device_cfg.get("elements", {}).keys()),
+				"coupling": device_coupling_map(device_cfg),
+			}
+		return self._topology
+
+	def coupling_map(self):
+		"""
+		The device's edges. Empty list means "no edges declared", which the
+		transpiler reads as all-to-all - the pre-existing behaviour.
+		"""
+		return self._device_topology()["coupling"]
+
+	def element_names(self):
+		"""
+		The device's element names, in the order coupling_map() indexed
+		them. build_schedule() names qubits from this rather than assuming
+		q0..qN-1, so a dev_cfg that orders or names its elements
+		differently still addresses the right hardware.
+		"""
+		return self._device_topology()["elements"]
+
+	def _run_with_timeout(self, agent, schedule):
+		"""
+		agent.run() takes no timeout, so it runs on a worker waited for
+		with one. On expiry the instrument is stopped and the agent
+		dropped, so the next circuit rebuilds.
+
+		Bounds the caller and the execute lock, not the orphaned worker;
+		CPython cannot kill a thread.
+		"""
+		if not self._job_timeout or self._job_timeout <= 0:
+			return agent.run(schedule)
+
+		# Not a "with" block: __exit__ is shutdown(wait=True), which
+		# joins the worker and would block for the whole hung run.
+		pool = concurrent.futures.ThreadPoolExecutor(
+			max_workers=1, thread_name_prefix="qblox-run")
+		try:
+			future = pool.submit(agent.run, schedule)
+			try:
+				return future.result(timeout=self._job_timeout)
+			except concurrent.futures.TimeoutError:
+				self._abandon_agent(agent)
+				raise DEFwExecutionError(
+					f"Qblox execution exceeded "
+					f"{self._job_timeout:g}s "
+					f"(QFW_QBLOX_JOB_TIMEOUT); the instrument was left "
+					f"mid-acquisition and the agent has been dropped")
+		finally:
+			# Returns immediately whether or not the worker is still
+			# running; the orphan keeps its own reference to the pool and
+			# the pool is collected once it exits.
+			pool.shutdown(wait=False)
+
+	def _abandon_agent(self, agent):
+		try:
+			agent.instrument_coordinator.stop(allow_failure=True)
+		except Exception as exc:
+			logging.warning(f"could not stop instrument coordinator: {exc}")
+		with self._agent_lock:
+			if self._agent is agent:
+				self._agent = None
 
 	def evict_reservation(self, reservation_id):
 		# One agent bound to one instrument: no per-reservation client to
@@ -470,7 +633,7 @@ class QbloxServiceClient:
 		Manually replicates qblox_scheduler.experiments.schedules.
 		ExecuteSchedule.run() - what agent.run() calls internally - timing
 		each step separately: agent.run() only exposes the total. Returns
-		(dataset, stage_timings_ms).
+		(dataset, acq_channel_to_clbit, stage_timings_ms).
 		"""
 		from qblox_scheduler.backends.graph_compilation import SerialCompiler
 
@@ -482,7 +645,9 @@ class QbloxServiceClient:
 			timings_ms[label] = (time.time() - start) * 1000
 			return result
 
-		schedule = timed("schedule", build_schedule, circuit, shots)
+		schedule, acq_channel_to_clbit = timed(
+			"schedule", build_schedule, circuit, shots,
+			self.coupling_map(), self.element_names())
 
 		agent.connect_clusters()
 
@@ -503,7 +668,7 @@ class QbloxServiceClient:
 		dataset = timed("retrieve_acquisition", inst_coord.retrieve_acquisition)
 
 		timings_ms["total"] = sum(timings_ms.values())
-		return dataset, timings_ms
+		return dataset, acq_channel_to_clbit, timings_ms
 
 	def _log_compiled_schedule(self, agent):
 		"""
@@ -541,18 +706,22 @@ class QbloxServiceClient:
 			exec_started = time.monotonic()
 			stage_timings_ms = None
 			if self._profile_stages:
-				dataset, stage_timings_ms = self._run_staged(
-					agent, circuit, shots)
+				dataset, acq_channel_to_clbit, stage_timings_ms = (
+					self._run_staged(agent, circuit, shots))
 			else:
-				schedule = build_schedule(circuit, shots)
-				dataset = agent.run(schedule)
+				schedule, acq_channel_to_clbit = build_schedule(
+					circuit, shots, self.coupling_map(),
+					self.element_names())
+				dataset = self._run_with_timeout(agent, schedule)
 			self._log_compiled_schedule(agent)
 			exec_seconds = time.monotonic() - exec_started
 
 		# Raw per-shot values distinguish "acquisition varies but always
 		# thresholds the same way" from "acquisition is not varying".
-		channel_values = extract_channel_values(dataset, circuit.num_qubits)
-		counts = build_counts(channel_values, shots)
+		channel_values = extract_channel_values(
+			dataset, acq_channel_to_clbit.keys())
+		counts = build_counts(
+			channel_values, shots, acq_channel_to_clbit, circuit.num_clbits)
 		total_seconds = time.monotonic() - start
 
 		timing = {
@@ -578,12 +747,17 @@ class QbloxServiceClient:
 			"input": {
 				"shots": shots,
 				"num_qubits": circuit.num_qubits,
+				"num_clbits": circuit.num_clbits,
 			},
 			"results": {
 				"counts": counts,
+				# Keyed by acq_channel. acq_channel_to_clbit says which
+				# classical bit each one lands on, which is not the
+				# identity once routing permutes qubits.
+				"acq_channel_to_clbit": dict(acq_channel_to_clbit),
 				"per_shot_channel_values": {
-					qubit: values.tolist()
-					for qubit, values in channel_values.items()
+					channel: values.tolist()
+					for channel, values in channel_values.items()
 				},
 			},
 			"timing": timing,
@@ -653,12 +827,11 @@ class QbloxServiceClient:
 		config = self._config or load_qblox_service_config()
 		device_cfg = read_json_config(config["device_config"], "device")
 		elements = list(device_cfg.get("elements", {}).keys())
-		index_of = {name: index for index, name in enumerate(elements)}
-		couplings = []
-		for edge in device_cfg.get("edges", {}):
-			parts = str(edge).split("_")
-			if len(parts) == 2 and all(part in index_of for part in parts):
-				couplings.append([index_of[parts[0]], index_of[parts[1]]])
+		# One direction per edge here; device_coupling_map() returns both,
+		# as Qiskit's CouplingMap is directed.
+		couplings = [
+			pair for pair in device_coupling_map(device_cfg)
+			if pair[0] < pair[1]]
 		return {
 			"backend": "qblox",
 			"calibration_set_id": calibration_set_id,

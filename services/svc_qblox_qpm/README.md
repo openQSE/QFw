@@ -14,15 +14,39 @@ A QPM service for the Qblox control stack, built on `qblox-scheduler`'s
 `svc_qrc.py` is provider-agnostic plumbing and is near-identical to IQM's.
 Everything that knows what Qblox is lives in `util_qblox.py`.
 
+## Installing
+
+The Qblox stack is **not** in `setup/requirements.txt`. It is optional, the
+way Pulser and the QDMI adapters are, because `qblox-scheduler` pulls in
+PyQt5 and pyqtgraph and its import needs a system OpenGL library:
+
+```bash
+pip install -r setup/qblox-requirements.txt -c setup/requirements.txt
+```
+
+The import is not headless — `qblox_scheduler/__init__` reaches
+`quantify_core.visualization` → `pyqtgraph` → `PyQt5.QtGui`, which dlopens
+`libGL.so.1`. Install the system package too: `mesa-libGL` on Rocky,
+`libgl1` on Debian. Without the stack the service reports a clear error
+through `check_qblox_packages()`; the rest of QFw is unaffected.
+
 ## Two service IDs, one module
 
-Which identity the process takes is decided by whether a cluster address is
-configured:
+Which identity the process takes is decided **at startup**, from whichever
+configuration source actually resolves a cluster address — the environment,
+a `.env`, or `device-access.yaml`. `resolve_service_identity()` does this,
+and the answer sets both the advertised `QPMType` and the target ID:
 
 | Service | Address source | QPM type | Lifecycle |
 |---|---|---|---|
 | `qblox-dummy` | none | simulator | allocation-local, like `fake-iqm` |
 | `qblox-cluster` | `device-access.yaml` | hardware | `operation-mode: long-running` |
+
+Reading `QBLOX_CLUSTER_IP` alone is not enough: a site deployment gives the
+cluster service its address only through `device-access.yaml`, so a service
+driving real hardware would advertise itself as the simulator, the
+`qblox-cluster` backend key would match no QPM, and `qblox-dummy` could be
+dispatched to the instrument.
 
 The dummy is `qblox-scheduler`'s built-in software cluster: pure software,
 no device access, no route to an instrument.
@@ -65,6 +89,8 @@ Resolution order, highest first:
 | `QFW_QBLOX_MAX_QUBITS` | Override the count read from `dev_cfg.json`. |
 | `QFW_QBLOX_MAX_SHOTS` | Shot ceiling, default 10000. |
 | `QFW_QBLOX_TARGET_ID` | Override the service target id. |
+| `QFW_QBLOX_JOB_TIMEOUT` | Seconds a single circuit may run, default 300. `0` disables it. |
+| `QFW_QBLOX_WAIT_DONE_TIMEOUT` | Seconds to wait for acquisition, default 10. |
 
 Relative config paths resolve against `configs/`, never the working
 directory: a QFw service starts in a generated run directory, on a different
@@ -98,6 +124,13 @@ corrupt each other's acquisition. Enforced in three places:
   rejected by admission, which is correct.
 - **No cancellation.** Qblox has no mid-schedule abort, so `cancel()` can
   only stop a queued task from starting.
+- **`QFW_QBLOX_JOB_TIMEOUT` bounds the caller, not the instrument.**
+  `agent.run()` takes no timeout, so it runs on a worker that is waited for
+  with one. On expiry the instrument coordinator is stopped and the agent is
+  dropped, which frees the execute lock and makes the next circuit rebuild
+  from scratch — but CPython cannot kill the worker, so an orphaned run may
+  still be winding down. Dropping the agent is what stops it being the one
+  that answers next.
 - **Dummy readout is degenerate.** `set_dummy_binned_acquisition_data` is not
   wired up, so the dummy is a plumbing test, not a believable GHZ
   distribution.

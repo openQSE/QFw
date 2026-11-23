@@ -68,8 +68,8 @@ services:
     agent-prefix: qpm_qblox_dummy
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
-    listen-port: 9090
-    telnet-port: 9091
+    listen-port: 9190
+    telnet-port: 9191
     provider-launch:
       type: internal
 
@@ -81,8 +81,8 @@ services:
     load-modules: svc_qblox_qpm,api_launcher
     agent-prefix: qpm_qblox_cluster
     device-id: qblox-cluster
-    listen-port: 9190
-    telnet-port: 9191
+    listen-port: 9290
+    telnet-port: 9291
     provider-launch:
       type: internal
 
