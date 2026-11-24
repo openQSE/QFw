@@ -22,6 +22,7 @@ PYTHONPYCACHEPREFIX=/tmp/qfw-pyc python -m pytest tests/mock -q
 # runs in ci-pulser.
 echo "--- ci-mock unit tests ---"
 PYTHONPYCACHEPREFIX=/tmp/qfw-pyc python -m pytest tests -q \
-	--ignore=tests/mock --ignore=tests/qiskit --ignore=tests/pulser
+	--ignore=tests/mock --ignore=tests/qiskit --ignore=tests/pulser \
+	--ignore=tests/qblox
 
 echo "ci-mock passed."

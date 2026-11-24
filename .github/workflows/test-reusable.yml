@@ -98,6 +98,36 @@ jobs:
     - name: Test the Pulser client against real Pulser
       run: python -m pytest -q tests/pulser
 
+  ci-qblox:
+    name: ci-qblox (released Qblox stack)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive  # DEFw's Python modules
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install the OpenGL library qblox-scheduler's import needs
+      # qblox_scheduler/__init__ reaches quantify_core.visualization ->
+      # pyqtgraph -> PyQt5.QtGui, which dlopens libGL at import time.
+      run: sudo apt-get update && sudo apt-get install -y libgl1
+    - name: Install the Qblox stack against the core pins
+      run: python -m pip install -r setup/qblox-requirements.txt -c setup/requirements.txt qiskit pyyaml pytest
+    - name: Require the Qblox stack to import headless
+      # The service's tests skip when it is missing, so fail here instead.
+      run: |
+        python - <<'PY'
+        from qblox_scheduler import Schedule
+        from qblox_scheduler.operations import Reset, Rxy, CZ, Measure
+        import qblox_instruments
+        PY
+    - name: Test the Qblox service against the real scheduler
+      # tests/mock/test_qblox_qpm.py covers the pure-Python half and runs in
+      # ci-mock; it cannot test build_schedule, as that suite's conftest
+      # stubs Qiskit and NumPy.
+      run: python -m pytest -q tests/qblox
+
   ci-syntax:
     name: ci-syntax (Python ${{ matrix.python-version }})
     strategy:

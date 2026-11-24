@@ -113,3 +113,19 @@ services:
     device-id: iqm-garnet-mock
     provider-launch:
       type: qrmi-qdmi
+
+  # One service, either mode: with no cluster address it runs
+  # qblox-scheduler's built-in software cluster. No device-id on purpose,
+  # since QFw turns that into QFW_QPU_DEVICE_ID, which means "resolve my
+  # address from device-access.yaml", and select_qpu() requires a url and
+  # a credential source there.
+  - name: qblox
+    credential-mode: no-secret
+    module: svc_qblox_qpm
+    load-modules: svc_qblox_qpm,api_launcher
+    agent-prefix: qpm_qblox
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    provider-launch:
+      type: internal

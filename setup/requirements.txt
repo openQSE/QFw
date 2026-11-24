@@ -19,7 +19,12 @@ qiskit-ibm-runtime
 ibm-platform-services>=0.59
 iqm-client==34.0.1
 iqm-data-definitions==2.24
-iqm-exa-common==27.5.1
+# 27.5.4 rather than 27.5.1: 27.5.1 pins ruamel-yaml==0.17.32, which cannot
+# coexist with the ruamel.yaml>=0.18.0 that setup/qblox-requirements.txt
+# needs, so the two stacks could not share a venv. 27.5.4 relaxes it to
+# ruamel-yaml<0.20,>=0.17.32. Patch bump within 27.5.x; iqm-client stays on
+# the 34.0.1 that svc_iqm_qpm/util_iqm.py enforces.
+iqm-exa-common==27.5.4
 iqm-pulse==13.0.1
 iqm-station-control-client==12.1.1
 qiskit_nature
