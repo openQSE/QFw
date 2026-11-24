@@ -791,7 +791,10 @@ timeline only as the text of `task_logs`, which the shim reads after a
 completed job (`util/iqm_timeline.py`); that is one more request to the
 provider per job, so the extension is flag-guarded,
 `QFW_TELEMETRY_VENDOR=1`, like the transport spans, and a QRMI change that
-returns the timeline with the result lets the text route go. QDMI's job
+returns the timeline with the result lets the text route go. QRMI returns
+no timestamps for an IBM job, so for IBM's Qiskit Runtime Service the shim
+asks `qiskit-ibm-runtime` for the job's metrics and reports `queue`, from
+`created` to `running`; QRMI's other IBM services report no phases. QDMI's job
 interface exposes counts and a queue position and nothing with a timestamp,
 so the QDMI path carries no vendor timeline, and the histogram's QDMI series
 is absent: a fair statement about the two libraries.
