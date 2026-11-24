@@ -55,9 +55,9 @@ def load_modules(modules, environment):
             f"{detail or f'modulecmd exited with {result.returncode}'}")
 
     export_script = (
-        result.stdout
-        + "\nimport json, os\n"
-        + "print(json.dumps(dict(os.environ), sort_keys=True))\n"
+        "import json, os\n"
+        + result.stdout
+        + "\nprint(json.dumps(dict(os.environ), sort_keys=True))\n"
     )
     resolved = subprocess.run(
         [sys.executable, "-c", export_script],
