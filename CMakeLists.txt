@@ -141,6 +141,23 @@ if(QFW_LIBFABRIC_LIB_DIRS_SHELL)
 		"QFw activate will add libfabric: ${QFW_LIBFABRIC_LIB_DIRS_SHELL}")
 endif()
 
+set(QFW_PYTHON_LIB_DIRS_SHELL "")
+if(QFW_BUILD_BUNDLED_DEFW)
+	enable_language(C)
+	find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Embed)
+	foreach(qfw_python_dir IN LISTS Python3_LIBRARY_DIRS)
+		if(qfw_python_dir IN_LIST CMAKE_C_IMPLICIT_LINK_DIRECTORIES)
+			continue()
+		endif()
+		string(APPEND QFW_PYTHON_LIB_DIRS_SHELL " \"${qfw_python_dir}\"")
+	endforeach()
+endif()
+string(STRIP "${QFW_PYTHON_LIB_DIRS_SHELL}" QFW_PYTHON_LIB_DIRS_SHELL)
+if(QFW_PYTHON_LIB_DIRS_SHELL)
+	message(STATUS
+		"QFw activate will add the Python library: ${QFW_PYTHON_LIB_DIRS_SHELL}")
+endif()
+
 configure_file(
 	cmake/qfw-activate.in
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
