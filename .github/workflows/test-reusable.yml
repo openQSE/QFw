@@ -143,6 +143,9 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    - name: Install what configuring the bundled DEFw needs
+      run: sudo apt-get update && sudo apt-get install -y swig uuid-dev python3-dev
+
     - name: Install pytest
       # PyYAML is needed as well: the mock suite drives example scripts whose
       # preflight parses the site and device-access YAML, so without it
