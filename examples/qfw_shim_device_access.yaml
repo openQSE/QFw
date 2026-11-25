@@ -23,6 +23,32 @@ qpus:
     preference: qdmi
     execution-owner: qdmi
 
+  # Rigetti's Cepheus-1-108Q through Braket, in us-west-1: a real QPU,
+  # billed per task and per shot. max-shots refuses a larger request before
+  # a task exists, and job-timeout-seconds is how long a queued task is
+  # waited for before it is cancelled: two hours, because a prioritized
+  # hybrid job can hold the QPU for an hour inside an execution window. A
+  # site sets s3-results-uri to its own
+  # bucket for the task results; Braket wants it in the device's Region, and
+  # AmazonBraketFullAccess covers buckets named amazon-braket-*. Without it
+  # the library creates a default bucket, which needs S3 permissions the
+  # Braket policy alone does not grant.
+  aws-cepheus:
+    provider: aws
+    provider-device-id: arn:aws:braket:us-west-1::device/qpu/rigetti/Cepheus-1-108Q
+    qdmi-device-id: amazon.braket.rigetti.cepheus-1-108q
+    aws-region: us-west-1
+    # s3-results-uri: s3://amazon-braket-<your-bucket>/qfw/cepheus
+    url: https://braket.us-west-1.amazonaws.com
+    num-qubits: 108
+    max-shots: 1024
+    job-timeout-seconds: 7200
+    credential-provider: shim-no-secret
+    libraries:
+      - qdmi
+    preference: qdmi
+    execution-owner: qdmi
+
 credential-providers:
   shim-no-secret:
     type: no-secret

@@ -1,3 +1,4 @@
+import atexit
 import os
 import time
 import logging
@@ -8,12 +9,20 @@ from collections import deque
 
 from qiskit.providers import BackendV2, Options
 
-from .qfw_job import QFwJob, normalize_reservation_id, normalize_shim_library
+from .qfw_job import (
+	QFwJob, QFW_INFO_PASSTHROUGH_OPTIONS, SHIM_LIB_ENV,
+	normalize_reservation_id, normalize_shim_library)
 from .qfw_metadata import get_qubit_mapping, set_qubit_mapping
-from .qfw_target import QFW_NUM_QUBITS, build_qfw_target, qfw_basis_gates
+from .qfw_target import (
+	QFW_NUM_QUBITS,
+	build_qfw_target,
+	qfw_basis_gates,
+	target_from_telemetry,
+)
+from .qfw_telemetry import QFwTelemetry
 from defw_exception import DEFwDumper
 from defw import me
-from .qfw_lookup_service import get_qpm
+from .qfw_lookup_service import get_qpm, get_qpm_telemetry
 from .qpm_selection import qpm_selection_for_provider
 from api_qpm_common import QPMCapability
 from defw_event_baseapi import BaseEventAPI
@@ -27,10 +36,10 @@ QFW_RUN_CONTEXT_OPTIONS = (
 	"cancel_on_timeout",
 )
 
-# The shim library (qrmi or qdmi) a job runs through when neither run() nor
-# the backend's options name one, so a batch script can choose it for a Qiskit
-# program it does not edit.
-SHIM_LIB_ENV = "QFW_SHIM_LIB"
+# The compilers QFwBackend.compile() can use, the first being the default,
+# and the variable that picks one for a call that does not name it.
+QFW_COMPILERS = ("qiskit", "mqt")
+COMPILER_ENV = "QFW_COMPILER"
 
 
 class CircuitMetrics:
@@ -64,7 +73,8 @@ class CircuitMetrics:
 	def dump(self):
 		import copy
 
-		dbcopy = copy.deepcopy(self.db)
+		with self.lock:
+			dbcopy = copy.deepcopy(self.db)
 		for k, v in dbcopy.items():
 			del v['window']
 		logging.defw_app("QFw Backend statistics")
@@ -79,7 +89,6 @@ EVENT_TYPE_CIRC_RESULT = 1
 class QFwBackend(BackendV2):
 	BACKEND_NAME = "QFw Backend"
 	BACKEND_VERSION = "1.0"
-	COMPLETION_TIMEOUT_SEC = 200
 
 	def __init__(self, betype=-1, capability=-1, target=None, properties=None,
 				 num_qubits=QFW_NUM_QUBITS, lookup_timeout=None,
@@ -110,6 +119,11 @@ class QFwBackend(BackendV2):
 			**lookup_kwargs)
 		self._qpm_lifecycle_binding = getattr(
 			self.qpm, "lifecycle_binding", None)
+		# The QPM's telemetry API, bound next to the execution API on the
+		# same managed binding. It describes the device behind self.target.
+		self._telemetry_api = get_qpm_telemetry(self.qpm)
+		self._telemetry = None
+		self._target_source = None
 		self.event_api = BaseEventAPI()
 		self.event_api.register_external()
 		self._event_endpoint = me.my_endpoint()
@@ -135,6 +149,7 @@ class QFwBackend(BackendV2):
 		self.options.set_validator("seed_simulator", int)
 		self.options.set_validator("seed", int)
 		self.register_completion_events()
+		atexit.register(self._unregister_completion_events)
 
 	def __copy__(self):
 		return self
@@ -159,18 +174,42 @@ class QFwBackend(BackendV2):
 		if self._qpm_lifecycle_binding is not None:
 			self._qpm_lifecycle_binding.remove_reconnect_listener(
 				self._handle_qpm_reconnect)
+		self._unregister_completion_events()
+		if self._qpm_lifecycle_binding is not None:
 			self._qpm_lifecycle_binding.close()
 		me.exit()
+
+	def _unregister_completion_events(self):
+		with self._event_registration_lock:
+			registration = self._completion_event_registration
+			self._completion_event_registered = False
+			self._completion_event_registration = None
+		self._unregister_registration(registration)
+
+	def _unregister_registration(self, registration):
+		registration_id = (
+			registration.get("registration_id")
+			if isinstance(registration, dict) else None)
+		if registration_id is None:
+			return
+		try:
+			self.qpm.unregister_event_notification(registration_id)
+		except Exception:
+			pass
 
 	def configuration(self):
 		# LEGACY (BackendV1): Return configuration dict for backward compatibility
 		# BackendV2 doesn't require this method but some legacy code may use it
+		target = self.target
+		coupling_map = target.build_coupling_map()
 		configuration_dict = {
 			"backend_name": self.my_name(),
 			"backend_version": self.my_version(),
-			"n_qubits": self._num_qubits,
-			"basis_gates": qfw_basis_gates(),
-			"coupling_map": None,
+			"n_qubits": target.num_qubits,
+			"basis_gates": sorted(target.operation_names) or qfw_basis_gates(),
+			"coupling_map": (
+				None if coupling_map is None else
+				[list(edge) for edge in coupling_map.get_edges()]),
 			"simulator": True,
 			"local": True,
 			"conditional": True,
@@ -188,12 +227,83 @@ class QFwBackend(BackendV2):
 		return self._options_properties
 
 	@property
-	def target(self):
-		if self._target is not None:
-			return self._target
+	def telemetry(self):
+		"""The QPM's telemetry API (QFwTelemetry), or None when the QPM
+		connection carries no managed binding to select it from."""
+		if self._telemetry is None and self._telemetry_api is not None:
+			self._telemetry = QFwTelemetry(
+				self._telemetry_api, context=self._telemetry_context)
+		return self._telemetry
 
-		self._target = build_qfw_target(self._num_qubits)
+	def _telemetry_context(self):
+		# What every telemetry call carries: the shim library a run would
+		# use, so the device described is the one the circuits reach, and
+		# the reservation context when the run context holds one.
+		context = {"lib": self._shim_library()}
+
+		reservation_id = getattr(self.options, "reservation_id", None)
+		if reservation_id is not None:
+			context["reservation_id"] = reservation_id
+
+		token = getattr(self.options, "token", None)
+		if token is not None:
+			context["token"] = token
+		return context
+
+	@property
+	def target(self):
+		"""The device target: what the QPM's telemetry describes, built once
+		per backend, else QFw's generic target (see target_source)."""
+		if self._target is None:
+			self._target = self._build_target()
 		return self._target
+
+	@property
+	def target_source(self):
+		"""Where self.target came from: "device: <provider> <device>" or
+		"generic: <reason>"; None until the target has been built."""
+		return self._target_source
+
+	def _build_target(self):
+		generic = f"the generic {self._num_qubits}-qubit QFw target"
+		instructions = (getattr(self.qpm, "qpm_properties", None)
+			or {}).get("instructions")
+		telemetry = self.telemetry
+		if telemetry is None:
+			reason = "the QPM connection has no telemetry binding"
+			logging.info(f"QFw backend: {reason}; using {generic}")
+			self._target_source = f"generic: {reason}"
+			return build_qfw_target(self._num_qubits, instructions)
+		try:
+			info = telemetry.get_backend_info() or {}
+			target = target_from_telemetry(telemetry, backend_info=info)
+		except Exception as exc:
+			reason = f"the QPM's device telemetry failed: {exc}"
+			logging.warning(f"QFw backend: {reason}; using {generic}")
+			self._target_source = f"generic: {reason}"
+			return build_qfw_target(self._num_qubits, instructions)
+		if target is None:
+			name = info.get("backend") or self._provider or "default"
+			reason = f"QPM {name} reports no device metadata"
+			logging.info(f"QFw backend: {reason}; using {generic}")
+			self._target_source = f"generic: {reason}"
+			return build_qfw_target(self._num_qubits, instructions)
+		self._target_source = f"device: {target.description}"
+		logging.info(f"QFw backend: {target.description}: "
+			     f"{target.num_qubits} qubits, "
+			     f"{len(target.operation_names)} operations")
+		return target
+
+	def _shim_library(self, lib=None):
+		# The shim library (qrmi or qdmi) a run goes through: the run()
+		# argument, else the backend option, else QFW_SHIM_LIB, else the
+		# shim's own default (None).
+		if lib is None:
+			lib = self.options.lib
+		if lib is None:
+			lib = os.environ.get(SHIM_LIB_ENV)
+		return normalize_shim_library(
+			lib, getattr(self.qpm, "qpm_properties", None))
 
 	@property
 	def max_circuits(self):
@@ -204,7 +314,7 @@ class QFwBackend(BackendV2):
 		return Options(
 			shots=1024,
 			seed=334,
-			seed_simulator=334,
+			seed_simulator=None,
 			reservation_id=None,
 			token=None,
 			timeout=None,
@@ -212,10 +322,44 @@ class QFwBackend(BackendV2):
 			lib=None,
 		)
 
+	def compile(self, circuits, compiler=None, **kwargs):
+		"""Compile circuits for this backend's target.
+
+		compiler is "qiskit" (qiskit.transpile) or "mqt" (MQT Core's
+		mlir.compile_program). Without one, QFW_COMPILER picks it, so a
+		batch script can switch a program that does not name a compiler;
+		with neither, Qiskit compiles. Other keyword arguments go to the
+		chosen compiler."""
+		compiler = self._compiler(compiler)
+		if compiler == 'qiskit':
+			from qiskit import transpile
+			return transpile(circuits, target=self.target, **kwargs)
+		from mqt.core import mlir
+
+		return mlir.compile_program(
+			circuits, target=self.target, **kwargs)
+
+	def _compiler(self, compiler=None):
+		# The compiler a compile() call uses: the argument, else
+		# QFW_COMPILER, else Qiskit. An empty variable counts as unset.
+		source = ""
+		if compiler is None:
+			compiler = os.environ.get(COMPILER_ENV, "").strip()
+			if not compiler:
+				return QFW_COMPILERS[0]
+			source = f" (from {COMPILER_ENV})"
+		name = str(compiler).strip().lower()
+		if name not in QFW_COMPILERS:
+			raise ValueError(
+				f"unknown compiler '{compiler}'{source}; expected "
+				f"{' or '.join(repr(c) for c in QFW_COMPILERS)}")
+		return name
+
 	def run(self, circuits, **kwargs):
 		for kwarg in kwargs:
 			if (not hasattr(self.options, kwarg) and
-				kwarg not in QFW_RUN_CONTEXT_OPTIONS):
+				kwarg not in QFW_RUN_CONTEXT_OPTIONS and
+				kwarg not in QFW_INFO_PASSTHROUGH_OPTIONS):
 				print("Option ", kwarg, " is not used by this backend")
 		options = {
 			"seed_simulator": kwargs.get("seed_simulator", self.options.seed_simulator),
@@ -233,13 +377,12 @@ class QFwBackend(BackendV2):
 		if "reservation_id" in options:
 			options["reservation_id"] = normalize_reservation_id(
 				options["reservation_id"])
-		lib = kwargs.get("lib", self.options.lib)
-		if lib is None:
-			lib = os.environ.get(SHIM_LIB_ENV)
-		lib = normalize_shim_library(
-			lib, getattr(self.qpm, "qpm_properties", None))
+		lib = self._shim_library(kwargs.get("lib"))
 		if lib is not None:
 			options["lib"] = lib
+		for key in QFW_INFO_PASSTHROUGH_OPTIONS:
+			if key in kwargs:
+				options[key] = kwargs[key]
 		self._qfw_job = QFwJob(self, self.qpm, self.event_api, circuits, options)
 		self._qfw_job.submit()
 		return self._qfw_job
@@ -258,9 +401,11 @@ class QFwBackend(BackendV2):
 
 	def _handle_qpm_reconnect(self, state):
 		with self._event_registration_lock:
+			previous = self._completion_event_registration
 			self._completion_event_registered = False
 			self._completion_event_registration = None
 		if state.get("same_runtime"):
+			self._unregister_registration(previous)
 			self.register_completion_events()
 
 	def log_statistics(self, res):

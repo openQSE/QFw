@@ -14,10 +14,28 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
 		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
+	"backline": {
+		"provider": "backline",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_QEC,
+	},
 	"shim": {
 		"provider": "shim",
 		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
 		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
+	# The IQM Garnet mock device, served by a shim QPM.
+	"iqm-garnet-mock": {
+		"provider": "shim",
+		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
+	# A shim QPM serving a neutral-atom device. The Pulser client also checks
+	# the QPM reads Pulser sequences (circuit_formats).
+	"pasqal": {
+		"provider": "shim",
+		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
+		"qpm_capabilities": QPMCapability.QPM_CAP_NEUTRAL_ATOM,
 	},
 	"nwqsim": {
 		"provider": "nwqsim",
@@ -29,10 +47,37 @@ QPM_PROVIDER_SELECTIONS = {
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_TENSORNETWORK,
 	},
+	# A noisy superconducting device emulated by the proxy sampler. It returns
+	# no statevector.
+	"proxy": {
+		"provider": "proxy",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
+	# Qiskit Aer, noiseless or emulating a named device under its noise.
+	"aer": {
+		"provider": "aer",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
 	"qb": {
 		"provider": "qb",
 		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
 		"qpm_capabilities": QPMCapability.QPM_CAP_STATEVECTOR,
+	},
+	# One service module serves both, advertising HARDWARE when a cluster
+	# address resolves and SIMULATOR when none does, so the two keys select
+	# between them the same way "iqm" and "fake-iqm" do. No statevector
+	# capability: Qblox returns thresholded shots.
+	"qblox-cluster": {
+		"provider": "qblox",
+		"qpm_type": QPMType.QPM_TYPE_HARDWARE,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
+	},
+	"qblox-dummy": {
+		"provider": "qblox",
+		"qpm_type": QPMType.QPM_TYPE_SIMULATOR,
+		"qpm_capabilities": QPMCapability.QPM_CAP_SUPERCONDUCTING,
 	},
 }
 

@@ -25,6 +25,14 @@ same prepared runtime before
 In a heterogeneous Slurm allocation, the application defaults to group 0.
 Application-owned directory, QPM, and simulator services are placed separately
 by setup according to the runtime profile.
+.PP
+Each in-job service runs in an
+.B srun --overlap
+step that holds its node's CPUs, so the application step is launched with
+.BR --overlap .
+Under Slurm 20.11 a step without it, such as a plain
+.B srun
+in the job script, waits until teardown.
 .SH OPTIONS
 .TP
 .BI --run-dir " directory"
@@ -43,7 +51,9 @@ Restrict the generated Slurm launch to these hosts.
 Select an explicit heterogeneous group. Group 0 is the default.
 .TP
 .B --exclusive
-Request an exclusive Slurm step.
+Request an exclusive Slurm step in place of
+.BR --overlap .
+It waits for CPUs no service step holds.
 .SH EXIT STATUS
 The application or Slurm step exit status is returned. An incomplete or
 missing runtime returns nonzero without launching the application.

@@ -1,0 +1,18 @@
+# Device access for the shim-garnet-mock local service (iqm-garnet-mock).
+#
+# Copy this file and qfw_garnet_mock_creds.json.example to a directory you
+# own, drop the .example suffix from the credentials copy, replace the
+# API-key placeholder and username in it, and point
+# QFW_EXAMPLE_DEVICE_ACCESS_CONFIG at your copy of this file.
+#
+# The credentials file holds a live API key; be sure to not commit it.
+
+qpus:
+  iqm-garnet-mock:
+    provider: iqm
+    # IQM Resonance's noiseless mock simulator for the 20-qubit Garnet device.
+    # This is the alias Resonance expects, not the QFw device id above it.
+    provider-device-id: "garnet:mock"
+    url: https://resonance.iqm.tech
+    # Resolved relative to this file.
+    credential-db: qfw_garnet_mock_creds.json

@@ -1,12 +1,14 @@
 from api_events import Event
 from defw_util import print_thread_stack_trace_to_logger
 import logging
+import math
 import time
 import queue
+import signal
 import threading
+import traceback
 import sys
 import os
-import psutil
 from defw_exception import DEFwExecutionError, DEFwInProgress, DEFwOutOfResources
 import svc_launcher
 import cdefw_global
@@ -14,6 +16,75 @@ from util.circuit_payload import openqasm2_text
 from util import instrumentation
 
 sys.path.append(os.path.split(os.path.abspath(__file__))[0])
+
+# A circuit's runner gets this long before the QPM kills it and fails the
+# circuit. PRTE can lose a finished runner's exit, and with nothing to stop
+# it the launcher then waits forever while every later circuit queues
+# behind it (openQSE/QFw#196). Set qpm.circuit-time-limit-seconds in the
+# site file to change it; 0 turns the limit off.
+SITE_CONFIG_ENV = "QFW_SITE_CONFIG"
+CIRCUIT_TIME_LIMIT_KEY = "circuit-time-limit-seconds"
+DEFAULT_CIRCUIT_TIME_LIMIT_SEC = 600
+
+
+SITE_CIRCUIT_TIME_LIMIT = f"qpm.{CIRCUIT_TIME_LIMIT_KEY}"
+
+# Killing the launcher does not reach a runner that a DVM started (mpirun
+# --dvm). That runner is a child of the DVM's prte, so it would keep running
+# until teardown. Each launch therefore also gives mpirun the limit through
+# MPIEXEC_TIMEOUT, and the DVM ends the job's processes itself, on every
+# host. The DVM's limit is a few seconds longer than the QPM's, so the QPM
+# still fails the circuit first, with a message that names the limit.
+MPIEXEC_TIMEOUT_ENV = "MPIEXEC_TIMEOUT"
+DVM_TIME_LIMIT_GRACE_SEC = 5
+
+
+def circuit_time_limit_and_source(path=None, service=None):
+	if service is None:
+		service = _this_service_entry()
+	if CIRCUIT_TIME_LIMIT_KEY in service:
+		source = f"services[{service.get('name')}].{CIRCUIT_TIME_LIMIT_KEY}"
+		return _time_limit(service[CIRCUIT_TIME_LIMIT_KEY], source), source
+	if path is None:
+		path = os.environ.get(SITE_CONFIG_ENV, "").strip()
+	value = None
+	if path and os.path.exists(path):
+		try:
+			import yaml
+			with open(path, "r", encoding="utf-8") as stream:
+				data = yaml.safe_load(stream) or {}
+		except Exception:
+			# As for the completion-queue settings, a file this cannot
+			# read leaves the defaults.
+			data = {}
+		qpm = data.get("qpm") if isinstance(data, dict) else None
+		if isinstance(qpm, dict):
+			value = qpm.get(CIRCUIT_TIME_LIMIT_KEY)
+	if value is None:
+		return DEFAULT_CIRCUIT_TIME_LIMIT_SEC, SITE_CIRCUIT_TIME_LIMIT
+	return _time_limit(value, SITE_CIRCUIT_TIME_LIMIT), SITE_CIRCUIT_TIME_LIMIT
+
+
+def _this_service_entry():
+	from util.mpi import this_service_entry
+	try:
+		return this_service_entry()
+	except RuntimeError:
+		return {}
+
+
+def _time_limit(value, source):
+	if isinstance(value, bool):
+		raise ValueError(f"invalid {source}: {value!r}")
+	try:
+		limit = float(value)
+	except (TypeError, ValueError):
+		raise ValueError(f"invalid {source}: {value!r}") from None
+	if limit < 0 or limit != limit:
+		raise ValueError(
+			f"{source} must be a number of seconds, or 0 for no limit: "
+			f"{value!r}")
+	return limit or None
 
 
 class UTIL_QRC:
@@ -33,8 +104,9 @@ class UTIL_QRC:
 		self.worker_pool_rr = 0
 		self.num_workers = num_workers
 		self.num_worker_tasks = num_worker_tasks
-		self.num_cores = psutil.cpu_count(logical=False)
-		logging.debug(f'num_cores = {self.num_cores} start = {start}')
+		self.circuit_time_limit, self.circuit_time_limit_source = (
+			circuit_time_limit_and_source())
+		logging.debug(f'start = {start}')
 		if start:
 			self.launcher = svc_launcher.Launcher()
 			for x in range(0, self.num_workers):
@@ -70,83 +142,160 @@ class UTIL_QRC:
 				#stdout, stderr, rc = task_info['launcher'].status(task_info['pid'])
 				stdout, stderr, rc = self.launcher.status(task_info['pid'])
 			except DEFwInProgress:
+				self._enforce_time_limit(task_info)
 				continue
 			except Exception as e:
 				raise e
 
 			# at this point, it already has a return code!
 			complete.append(task_info)
-
-			circ = task_info['circ']
-			cid = circ.get_cid()
-			qasm_file = task_info['qasm_file']
-
-			error = None
 			try:
-				if rc == 0:
-					try:
-						output = self.parse_task_result(stdout, circ, task_info)
-						circ.set_exec_done()
-					except Exception as e:
-						logging.critical(f"parse result failure = {e}")
-						output = "{result: missing, exception: " + f"{e}" + "}"
-						circ.set_fail()
-						error = e
-				else:
-					stdout = stdout.decode('utf-8')
-					stderr = stderr.decode('utf-8')
-					res = stdout + '\n' + stderr
-					output = "{result: " + f"{res}" + "}"
-					circ.set_fail()
-					error = DEFwExecutionError(f"circuit runner exited {rc}")
-			finally:
-				self.cleanup_task(circ, task_info)
-				instrumentation.finish_backend_execution(
-					task_info.get('telemetry'), circ, error=error)
-
-			try:
-				os.remove(qasm_file)
-			except OSError:
-				pass
-
-			r = {
-				'cid': cid,
-				'result': output,
-				'rc': rc,
-				'launch_time': circ.launch_time,
-				'creation_time': circ.creation_time,
-				'exec_time': circ.exec_time,
-				'completion_time': circ.completion_time,
-				'resources_consumed_time': circ.resources_consumed_time,
-				'cq_enqueue_time': time.time(),
-				'cq_dequeue_time': -1
-			}
-
-			logging.defw_service(f"QPM task result: {r}")
-			circ.free_resources(circ, result=r)
-			self._push_or_store_result(r)
+				self._finish_task(task_info, stdout, stderr, rc)
+			except Exception:
+				# The error belongs to this circuit. If it escaped,
+				# this runner would die with its other tasks, and the
+				# QPM would stop running circuits (openQSE/QFw#196).
+				logging.critical(
+					"finishing circuit "
+					f"{task_info['circ'].get_cid()} failed:\n"
+					f"{traceback.format_exc()}")
 
 		for task_info in complete:
 			self.worker_pool[wid]['active_tasks'].remove(task_info)
+
+	def _enforce_time_limit(self, task_info):
+		"""Kill a runner that has outlived the circuit time limit.
+
+		The launcher then reports the exit, and the circuit fails like
+		any other whose runner was killed.
+		"""
+		limit = self.circuit_time_limit
+		if not limit or task_info.get('time_limit_hit'):
+			return
+		started = task_info.get('started')
+		if started is None or time.monotonic() - started < limit:
+			return
+		pid = task_info['pid']
+		# A launch on another host returns 0, and killpg(0) would
+		# kill this process's own group.
+		if not isinstance(pid, int) or pid <= 0:
+			return
+		task_info['time_limit_hit'] = limit
+		logging.critical(
+			f"circuit {task_info['circ'].get_cid()} has run for more "
+			f"than {limit:g} s ({self.circuit_time_limit_source}); killing "
+			f"its launcher, pid {pid}")
+		try:
+			# The launcher runs in a session of its own, so this reaches
+			# what it started itself on this host. A runner that a DVM
+			# started is the DVM's child, and the DVM ends it
+			# (MPIEXEC_TIMEOUT_ENV).
+			os.killpg(pid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+
+	def _launch_env(self):
+		"""What a runner's launcher adds to its environment: the DVM's
+		own time limit, a little longer than the QPM's.
+
+		mpirun reads MPIEXEC_TIMEOUT as its --timeout, which a DVM
+		enforces even after the launcher is gone. Without a QPM limit the
+		launcher's environment is left as it is.
+		"""
+		limit = self.circuit_time_limit
+		if not limit:
+			return None
+		seconds = math.ceil(limit) + DVM_TIME_LIMIT_GRACE_SEC
+		return {MPIEXEC_TIMEOUT_ENV: str(seconds)}
+
+	def _finish_task(self, task_info, stdout, stderr, rc):
+		circ = task_info['circ']
+		cid = circ.get_cid()
+		qasm_file = task_info['qasm_file']
+
+		error = None
+		try:
+			if rc == 0:
+				try:
+					output = self.parse_task_result(stdout, circ, task_info)
+					circ.set_exec_done()
+				except Exception as e:
+					logging.critical(f"parse result failure = {e}")
+					output = "{result: missing, exception: " + f"{e}" + "}"
+					circ.set_fail()
+					error = e
+			else:
+				stdout = stdout.decode('utf-8')
+				stderr = stderr.decode('utf-8')
+				res = stdout + '\n' + stderr
+				limit = task_info.get('time_limit_hit')
+				if limit:
+					message = (
+						f"circuit runner killed after {limit:g} s, the "
+						f"QPM's circuit time limit "
+						f"({self.circuit_time_limit_source})")
+					res = message + '\n' + res
+					error = DEFwExecutionError(message)
+				else:
+					error = DEFwExecutionError(
+						f"circuit runner exited {rc}")
+				output = self.runner_failure_output(task_info, res, stdout)
+				circ.set_fail()
+		finally:
+			self.cleanup_task(circ, task_info)
+			instrumentation.finish_backend_execution(
+				task_info.get('telemetry'), circ, error=error)
+
+		try:
+			os.remove(qasm_file)
+		except OSError:
+			pass
+
+		r = {
+			'cid': cid,
+			'result': output,
+			'rc': rc,
+			'launch_time': circ.launch_time,
+			'creation_time': circ.creation_time,
+			'exec_time': circ.exec_time,
+			'completion_time': circ.completion_time,
+			'resources_consumed_time': circ.resources_consumed_time,
+			'cq_enqueue_time': time.time(),
+			'cq_dequeue_time': -1
+		}
+
+		logging.defw_service(f"QPM task result: {r}")
+		try:
+			circ.free_resources(circ, result=r)
+		finally:
+			# The client gets its result even if the QPM's own
+			# bookkeeping for it failed.
+			self._push_or_store_result(r)
+
+	def runner_failure_output(self, task_info, res, stdout):
+		return "{result: " + f"{res}" + "}"
+
+	def write_circuit_file(self, circ):
+		qasm_c = openqasm2_text(circ.info)
+		tmp_dir = cdefw_global.get_defw_tmp_dir()
+		qasm_file = os.path.join(tmp_dir, str(circ.get_cid()) + ".qasm")
+		with open(qasm_file, 'w') as f:
+			f.write(qasm_c)
+		return qasm_file
 
 	def runner(self, my_id):
 		# get the next available entry on the queue
 		# if one is available run it
 		# check on currently running tasks to see if any of them complete
 		# Add completed tasks to the results dictionary
-		super_affinity = os.sched_getaffinity(0)
+		super_affinity = sorted(os.sched_getaffinity(0))
 		with self.worker_pool_lock:
 			my_queue = self.worker_pool[my_id]['queue']
 			# bind to core
 			# We can enhance this more to avoid core 0 in every l3 cache
-			bound_core = (my_id + 1) % self.num_cores
-			if bound_core not in super_affinity:
-				tmp = bound_core + 1
-				while tmp != bound_core:
-					if tmp in super_affinity:
-						bound_core = tmp
-						break
-					tmp = (tmp + 1) % len(super_affinity)
+			# The processes a runner launches inherit its core. Choose from
+			# the cores this process may use, which need not start at 0.
+			bound_core = super_affinity[(my_id + 1) % len(super_affinity)]
 			try:
 				logging.debug(
 					f'binding {threading.get_ident()} to '
@@ -157,9 +306,15 @@ class UTIL_QRC:
 				raise e
 
 		while not self.shutdown_workers:
+			# Poll only while launched tasks may finish. An idle runner
+			# blocks until async_run() or shutdown() fills its queue.
+			if self.worker_pool[my_id]['active_tasks']:
+				timeout = 0.001
+			else:
+				timeout = None
 			empty = False
 			try:
-				circ = my_queue.get(timeout=0.001)  # sleep
+				circ = my_queue.get(timeout=timeout)
 				if circ is None:
 					self.shutdown_workers = True
 					continue
@@ -250,14 +405,7 @@ class UTIL_QRC:
 		return None
 
 	def run_circuit_async(self, circ):
-		cid = circ.get_cid()
-
-		tmp_dir = cdefw_global.get_defw_tmp_dir()
-
-		qasm_c = openqasm2_text(circ.info)
-		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
-		with open(qasm_file, 'w') as f:
-			f.write(qasm_c)
+		qasm_file = self.write_circuit_file(circ)
 
 		cmd = self.form_cmd(circ, qasm_file)
 		# The run spans two visits by the worker: the launch here and the
@@ -269,8 +417,9 @@ class UTIL_QRC:
 		circ.set_launching()
 		try:
 			task_info = {}
-			logging.debug(f"Running -- {cmd}")
-			pid = self.launcher.launch(cmd)
+			env = self._launch_env()
+			logging.debug(f"Running -- {cmd} -- adding {env}")
+			pid = self.launcher.launch(cmd, env=env)
 			logging.debug(f"Running -- {cmd} -- with pid {pid}")
 			circ.set_running()
 		except Exception as e:
@@ -282,19 +431,14 @@ class UTIL_QRC:
 		task_info['circ'] = circ
 		task_info['qasm_file'] = qasm_file
 		task_info['pid'] = pid
+		task_info['started'] = time.monotonic()
 		task_info['telemetry'] = execution
 
 		return task_info
 
 	def run_circuit(self, circ):
 		cid = circ.get_cid()
-
-		tmp_dir = cdefw_global.get_defw_tmp_dir()
-
-		qasm_c = openqasm2_text(circ.info)
-		qasm_file = os.path.join(tmp_dir, str(cid) + ".qasm")
-		with open(qasm_file, 'w') as f:
-			f.write(qasm_c)
+		qasm_file = self.write_circuit_file(circ)
 
 		launcher = svc_launcher.Launcher()
 
@@ -392,3 +536,7 @@ class UTIL_QRC:
 		logging.critical("shutdown called")
 		self.launcher.shutdown()
 		self.shutdown_workers = True
+		# Wake the runners blocked on an empty queue.
+		with self.worker_pool_lock:
+			for v in self.worker_pool:
+				v['queue'].put(None)

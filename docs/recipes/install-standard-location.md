@@ -21,18 +21,18 @@ export QFW_CURRENT=/opt/openqse/qfw/current
 ## 2. Prepare site-owned directories and the Python environment
 
 Run these commands as the account responsible for the QFw installation. The
-exact ownership policy is site-specific.
+exact ownership policy is site-specific. Install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) first if it is
+not already available.
 
 ```bash
 sudo install -d -o "${USER}" -g "$(id -gn)" \
   "$(dirname "${QFW_RELEASE_PREFIX}")" \
   "$(dirname "${QFW_VENV}")"
 
-python3 -m venv "${QFW_VENV}"
+uv venv "${QFW_VENV}"
 source "${QFW_VENV}/bin/activate"
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r "${QFW_SRC}/setup/build-requirements.txt"
-python -m pip install -r "${QFW_SRC}/setup/requirements.txt"
+uv pip install -r "${QFW_SRC}/setup/build-requirements.txt" -r "${QFW_SRC}/setup/requirements.txt" --override "${QFW_SRC}/setup/overrides.txt"
 ```
 
 Install provider and simulator dependencies in the venv or supply them through

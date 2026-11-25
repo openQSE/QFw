@@ -164,6 +164,27 @@ def build_timing_summary(record):
 	}
 
 
+# The vendor telemetry's phases, by the names the shim's iqm_timeline uses,
+# from the summary's durations.
+VENDOR_PHASES = (
+	("queue", "queue_wait_received_to_validation_started"),
+	("validation", "validation"),
+	("compilation", "compilation"),
+	("execution", "execution"),
+	("post_processing", "post_processing"),
+	("total", "server_total_created_to_completed"),
+)
+
+
+def vendor_phases(timing_summary):
+	"""The timing summary's durations as the vendor telemetry's phases."""
+	durations = (timing_summary or {}).get("durations_seconds") or {}
+	return {
+		phase: durations[key]
+		for phase, key in VENDOR_PHASES
+		if durations.get(key) is not None}
+
+
 def fetch_iqm_section(name, func):
 	try:
 		return {
@@ -563,6 +584,7 @@ class IQMServiceClient:
 			},
 		}
 		timing_summary = build_timing_summary(record)
+		instrumentation.record_vendor_timing(vendor_phases(timing_summary))
 		qhw_result = self.normalize_qhw(
 			"result", raw_payload, include_raw=self._include_raw_results)
 		record["qhw_result"] = qhw_result

@@ -108,6 +108,9 @@ The aggregate runner intentionally excludes `qfw_mpi_smoke.sh`; MPI validation
 has its own placement and task-count contract and remains a separate command.
 The shim smoke test runs only in local mode because it owns a specialized
 service. VQE is skipped for backends without the required statevector result.
+The `ibm-simple` case runs only with `QFW_RUN_ALL_IBM=1`, since it needs access
+to an IBM device. With `--service-mode local` it also needs
+`QFW_IBM_LOCAL_DEVICE_CONFIG`; without it the case is skipped.
 Every selected case must emit a successful terminal wrapper record to pass.
 
 The fake IQM stress fixture is also run separately because it exercises a
@@ -181,6 +184,45 @@ With no choice the shim runs the circuit through the device's execution owner,
 which is QRMI unless its device-access entry says otherwise. Naming a library
 for a QPM that is not the shim is an error.
 
+### `qfw_pulser.sh`
+
+Runs one Pulser program on a Pasqal device through the shim QPM, with Pulser's
+own `QPUBackend` and `qfw_pulser.QFwConnection`, and prints the results. It
+starts the shim service from `qfw_pulser_services.yaml` bound to a device in
+`qfw_pulser_device_access.yaml` and reserves it. The application environment
+needs `setup/pulser-requirements.txt`.
+
+The program fetches the device's Pulser specs through the QPM and places its
+atoms on a calibrated layout, at least 15 um apart. A global drive of
+pi rad/us runs for 500 ns, a pi/2 pulse that spreads each atom evenly over its
+two states, and then for 1000 ns, a pi pulse that flips every atom. An
+emulator accepts programs built for any real device it reports; `--build-on`
+picks which (FRESNEL_CAN1 by default). A device can require its layout to be
+filled to a minimum fraction: FRESNEL needs 42 atoms on its 120 traps, which
+then interact, so run it with `--atoms 42`.
+
+`pasqal-emu-free` is Pasqal Cloud's EMU_FREE and `pasqal-fresnel` the FRESNEL
+QPU. The QPM service opens them with the token in `QFW_API_KEY`, billed to
+`QFW_PASQAL_PROJECT_ID`:
+
+```bash
+QFW_API_KEY=... QFW_PASQAL_PROJECT_ID=... ./qfw_pulser.sh
+QFW_API_KEY=... QFW_PASQAL_PROJECT_ID=... \
+	./qfw_pulser.sh --device-id pasqal-fresnel --atoms 42
+```
+
+Install `setup/qdmi-requirements.txt` in the service environment to use the
+released Pasqal QDMI device. The same example runs through QDMI, or compares
+both libraries, with the same token and project:
+
+```bash
+./qfw_pulser.sh --libs qdmi
+./qfw_pulser.sh --libs qrmi,qdmi
+```
+
+See the [Pasqal QDMI recipe](../docs/recipes/run-against-pasqal.md) for
+native service-account authentication and site configuration.
+
 ### `measure_shim_introspection.py`
 
 Measures what device introspection costs through each shim library, cold and
@@ -218,6 +260,38 @@ argument is the number of qubits.
 ```bash
 ./qfw_qiskit_simple.sh 4
 ```
+
+### `qfw_qiskit_simple_w_mqt.sh`
+
+Runs the same circuit as `qfw_qiskit_simple.sh`, but first compiles it with the
+MQT compiler.
+
+The argument passed to the script is the number of qubits for the GHZ-style
+circuit.
+
+```bash
+./qfw_qiskit_simple_w_mqt.sh 4
+```
+
+A program can also leave the choice to its batch script. A
+`QFwBackend.compile()` call that names no compiler uses `QFW_COMPILER`, which
+is `qiskit` or `mqt`. With the variable unset, Qiskit compiles. So a program
+that calls
+
+```python
+qc = backend.compile(qc)
+```
+
+compiles with MQT Core when its batch script sets
+
+```bash
+export QFW_COMPILER=mqt
+```
+
+A compiler named in the call wins over the variable, so
+`qfw_qiskit_simple_w_mqt.sh` always uses MQT. `qfw_qiskit_simple.sh` never
+calls `compile()`, so the variable does not change it. Any other value is an
+error.
 
 ### `qfw_ghz.sh`
 
@@ -366,3 +440,61 @@ The command does not source state from a service manager run directory.
 
 Long-running site-service startup, application validation, and interruption
 recovery are documented in `docs/recipes`.
+
+### `qfw_ibm_simple.sh`
+
+Runs a simple parameterized 3-qubit qiskit circuit against an IBM device.
+
+The circuit's `param_values` run option is a mapping of parameter name to value.
+Qiskit `Parameter` keys are accepted and converted to their names before the
+job is sent to the QPM.
+
+Variables override:
+
+```text
+QFW_IBM_SHOTS: number of shots per circuit. Default is 64.
+QFW_IBM_LOCAL_DEVICE_CONFIG: path to device access manifest.
+QFW_IBM_DEVICE: IBM device to run the circuit. Default is "ibm-fake-lagos"
+```
+
+Example of how to run it against a site QPM (inside slurm allocation).
+
+```bash
+./qfw_ibm_simple.sh --service-mode site
+```
+
+Example of how to run it against a local QPM. Inside a slurm allocation, the
+reservations the allocation holds (`QFW_RESERVATIONS`) are dropped so the job
+reserves through the local QPM. The device manifest is assumed to be in
+`~/device-access.yaml`:
+
+```bash
+QFW_IBM_LOCAL_DEVICE_CONFIG=~/device-access.yaml ./qfw_ibm_simple.sh
+```
+
+### `qfw_qrmi_ibm.sh`
+
+Local smoke test for IBM devices. No QPM is involved, the QFw Frontend is called
+directly to test the `qrmi_driver` capabilities against an IBM device.
+
+Variables override:
+
+```text
+QFW_IBM_LOCAL_DEVICE_CONFIG: path to device access manifest.
+QFW_IBM_DEVICE: IBM device to test. Default is "ibm-fake-lagos"
+```
+
+Example running it outside a slurm allocation.
+
+```bash
+QFW_IBM_LOCAL_DEVICE_CONFIG=~/device-access.yaml ./qfw_qrmi_ibm.sh
+```
+
+## IQM Garnet Mock
+
+`--backend iqm-garnet-mock` can be used to run examples in local mode against IQM
+Resonance's noiseless 20-qubit Garnet mock API. The templates
+`qfw_garnet_mock_device_access.yaml` and `qfw_garnet_mock_creds.json.example`
+in this directory are used for that. For setup steps, see
+[Run QFw Against the IQM Garnet Mock](../docs/recipes/run-against-iqm-garnet-mock.md).
+

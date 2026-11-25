@@ -32,6 +32,8 @@ Environment overrides:
   QFW_RUN_ALL_SHIM_LIB=<qrmi|qdmi>    Shim library for shim smoke test
   QFW_RUN_ALL_STREAM_JOBS=<n>         Jobs for the job stream (default: 3)
   QFW_RUN_ALL_CHEM_APP=<script.py>    Optional chemistry app script
+  QFW_RUN_ALL_IBM=1                   Enable ibm-simple (local mode also needs
+                                      QFW_IBM_LOCAL_DEVICE_CONFIG)
 EOF
 }
 
@@ -109,10 +111,10 @@ fi
 
 if [[ "${selected_tests}" != "all" ]]; then
 	IFS=',' read -r -a requested_cases <<<"${selected_tests}"
-	for requested_case in "${requested_cases[@]}"; do
+	for requested_case in ${requested_cases[@]+"${requested_cases[@]}"}; do
 		case "${requested_case}" in
 			init-test|shim-smoke|qiskit-simple|ghz-qiskit|ghz-pennylane|\
-			pennylane|qaoa|qiskit-vqe|supermarq|job-stream|chemistry) ;;
+			pennylane|qaoa|qiskit-vqe|supermarq|job-stream|chemistry|ibm-simple) ;;
 			*)
 				echo "ERROR: unknown --tests case: ${requested_case:-<empty>}" >&2
 				exit 2
@@ -258,6 +260,15 @@ run_case supermarq ./qfw_supermarq.sh "${common_args[@]}" \
 	sync 1 "${qubits}" "${shots}" false ghz "${backend}"
 run_case job-stream ./qfw_job_stream.sh "${common_args[@]}" \
 	--jobs "${stream_jobs}" --interval 0 --qubits "2-${qubits}" --shots "${shots}"
+
+if [[ -z "${QFW_RUN_ALL_IBM:-}" ]]; then
+	skip_case ibm-simple "requires QFW_RUN_ALL_IBM=1"
+elif [[ "${service_mode}" == "local" &&
+	-z "${QFW_IBM_LOCAL_DEVICE_CONFIG:-}" ]]; then
+	skip_case ibm-simple "local mode requires QFW_IBM_LOCAL_DEVICE_CONFIG"
+else
+	run_case ibm-simple ./qfw_ibm_simple.sh "${common_args[@]}"
+fi
 
 if [[ -n "${QFW_RUN_ALL_CHEM_APP:-}" ]]; then
 	run_case chemistry ./qfw_chem_app.sh \

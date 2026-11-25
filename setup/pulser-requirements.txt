@@ -1,0 +1,3 @@
+# The Pulser frontend (backends/qfw_pulser) for programs that run on Pasqal
+# devices through the shim QPM. Only applications that use it need this.
+pulser-core==1.9.1

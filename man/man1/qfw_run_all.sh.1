@@ -50,8 +50,9 @@ Run a comma-separated subset. Valid names are
 .BR qaoa ,
 .BR qiskit-vqe ,
 .BR supermarq ,
+.BR chemistry ,
 and
-.BR chemistry .
+.BR ibm-simple .
 .TP
 .B --verbose
 Enable shell tracing in the selected wrappers.
@@ -82,6 +83,15 @@ or
 .TP
 .B QFW_RUN_ALL_CHEM_APP
 Chemistry script name. The chemistry case is skipped when this is unset.
+.TP
+.B QFW_RUN_ALL_IBM
+Set to 1 to run the
+.B ibm-simple
+case, which needs access to an IBM device. The case is skipped otherwise. With
+.B --service-mode local
+it also needs
+.B QFW_IBM_LOCAL_DEVICE_CONFIG
+to name the device access manifest.
 .TP
 .B QFW_RUN_ALL_TESTS
 Default comma-separated selection for

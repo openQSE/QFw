@@ -1,4 +1,5 @@
 import argparse
+import importlib.util
 import json
 import os
 import shlex
@@ -14,9 +15,11 @@ from . import service_plane as qfw_service_plane
 
 
 COMMANDS = {
+    "qfw-services",
     "qfw-setup",
     "qfw-status",
     "qfw-srun",
+    "qfw-target",
     "qfw-teardown",
 }
 PATH_ENVIRONMENT_VARS = {
@@ -34,12 +37,16 @@ def main(argv=None):
         return 2
     command = argv.pop(0)
     try:
+        if command == "qfw-services":
+            return qfw_services(argv)
         if command == "qfw-setup":
             return qfw_setup(argv)
         if command == "qfw-status":
             return qfw_status(argv)
         if command == "qfw-srun":
             return qfw_srun(argv)
+        if command == "qfw-target":
+            return qfw_target(argv)
         if command == "qfw-teardown":
             return qfw_teardown(argv)
     except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
@@ -60,14 +67,16 @@ def qfw_setup(argv):
     parser.add_argument("--no-start-services", action="store_true")
     args = parser.parse_args(argv)
 
-    site_path = qfw_config.resolve_site_config(args.site_config)
-    site = qfw_config.load_yaml(site_path)
-    prefixes = qfw_config.site_install_prefixes(site)
-    runtime_path = qfw_config.resolve_runtime_config(
-        explicit=args.runtime_config,
-        profile=args.profile,
-        qfw_prefix_override=prefixes["qfw_prefix"],
-    )
+    inherited = qfw_config.inherited_variables()
+    if inherited:
+        print(
+            "qfw-setup: ignoring inherited " + ", ".join(inherited) +
+            ": they describe another DEFw process or QFw run",
+            file=sys.stderr,
+        )
+        qfw_config.discard_inherited_environment()
+
+    site_path, site, prefixes, runtime_path = _site_and_runtime(args)
     runtime = qfw_config.load_yaml(runtime_path)
     state = qfw_config.prepare_run_state(
         site_path,
@@ -101,6 +110,55 @@ def qfw_setup(argv):
     return 0
 
 
+def _site_and_runtime(args):
+    site_path = qfw_config.resolve_site_config(args.site_config)
+    site = qfw_config.load_yaml(site_path)
+    prefixes = qfw_config.site_install_prefixes(site)
+    runtime_path = qfw_config.resolve_runtime_config(
+        explicit=args.runtime_config,
+        profile=args.profile,
+        qfw_prefix_override=prefixes["qfw_prefix"],
+    )
+    return site_path, site, prefixes, runtime_path
+
+
+def qfw_services(argv):
+    parser = argparse.ArgumentParser(prog="qfw-services")
+    parser.add_argument("--site-config")
+    parser.add_argument("--runtime-config")
+    parser.add_argument("--profile")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    _site_path, _site, prefixes, runtime_path = _site_and_runtime(args)
+    local_config = qfw_config.local_services(
+        qfw_config.load_yaml(runtime_path))
+    if not local_config:
+        raise ValueError(f"{runtime_path} has no local-services")
+    manifest = qfw_config.load_service_manifest(
+        qfw_config.service_manifest_path(
+            local_config, qfw_prefix_value=prefixes["qfw_prefix"]))
+    selected = set(qfw_config.selected_service_names(local_config, manifest))
+    entries = [entry for entry in manifest if entry.get("name") in selected]
+    env = qfw_config.launch_environment(run_state=False)
+    listing = subprocess.run(
+        [str(_command_path("defw-python", env=env)),
+         importlib.util.find_spec("util.service_listing").origin,
+         json.dumps(entries)],
+        env=env, stdout=subprocess.PIPE, text=True)
+    if listing.returncode:
+        return listing.returncode
+    records = json.loads(listing.stdout)
+    if args.json:
+        print(json.dumps(records, indent=2))
+    else:
+        for record in records:
+            print(" ".join(
+                str(record[key] or "-") for key in
+                ("service", "provider", "device_id", "accelerator")))
+    return 0
+
+
 def qfw_status(argv):
     parser = argparse.ArgumentParser(prog="qfw-status")
     parser.add_argument("--run-dir")
@@ -129,17 +187,9 @@ def qfw_srun(argv):
     if not args.application:
         parser.error("application command is required")
 
-    state = qfw_config.read_state(args.run_dir)
-    if not state.get("setup_complete"):
-        print(
-            f"QFw runtime setup is incomplete: {state.get('run_dir')}",
-            file=sys.stderr,
-        )
+    env, allocation = _application_run_environment(args.run_dir)
+    if env is None:
         return 1
-    env = _application_environment(state)
-    allocation = _allocation_context_from_env(env)
-    _publish_allocation_environment(env, allocation)
-    _configure_application_defw_environment(env, state)
     defw_python = _command_path(
         qfw_config.defw_python_command(env), env=env)
     command = _application_launch_command(
@@ -156,8 +206,67 @@ def qfw_srun(argv):
     return subprocess.run(command, env=env).returncode
 
 
+def qfw_target(argv):
+    parser = argparse.ArgumentParser(prog="qfw-target", add_help=False)
+    parser.add_argument("--run-dir")
+    parser.add_argument("--service-id")
+    args, query_args = parser.parse_known_args(argv)
+    if {"-h", "--help"} & set(query_args):
+        return subprocess.run(
+            [sys.executable, str(_target_query_script()), "--help"]).returncode
+    env, _allocation = _application_run_environment(args.run_dir)
+    if env is None:
+        return 1
+    return _run_on_this_node_without_srun(
+        [str(_command_path("defw-python", env=env)),
+         str(_target_query_script()), *query_args,
+         *_runtime_service_id_args(
+             args.service_id, qfw_config.read_state(args.run_dir))],
+        env)
+
+
+def _runtime_service_id_args(service_id, state):
+    if not service_id:
+        return []
+    for manager in state.get("service_managers") or []:
+        if (manager.get("role") == "qpm"
+                and manager.get("manifest_service_name") == service_id):
+            return ["--service-id", manager["service_id"]]
+    return ["--service-id", service_id]
+
+
+def _run_on_this_node_without_srun(command, env):
+    return subprocess.run(command, env=env).returncode
+
+
+def _target_query_script():
+    spec = importlib.util.find_spec("qfw_qiskit")
+    if spec is None or not spec.submodule_search_locations:
+        raise RuntimeError("qfw-target: the qfw_qiskit package is not installed")
+    return Path(spec.submodule_search_locations[0]) / "qfw_target_query.py"
+
+
+def _application_run_environment(run_dir):
+    state = qfw_config.read_state(run_dir)
+    if not state.get("setup_complete"):
+        print(
+            f"QFw runtime setup is incomplete: {state.get('run_dir')}",
+            file=sys.stderr,
+        )
+        return None, None
+    env = _application_environment(state)
+    allocation = _allocation_context_from_env(env)
+    _publish_allocation_environment(env, allocation)
+    _configure_application_defw_environment(env, state)
+    return env, allocation
+
+
 def _application_environment(state):
-    caller_env = os.environ.copy()
+    # The application's DEFw identity, its directory and the run's own
+    # variables come from this run's state, never from the caller: a job
+    # submitted by a process that imported DEFw inherits that process's
+    # placeholders (openQSE/QFw#187).
+    caller_env = qfw_config.launch_environment()
     runtime_env = state.get("environment") or {}
     env = dict(caller_env)
     env.update(runtime_env)
@@ -206,10 +315,28 @@ def qfw_teardown(argv):
             file=sys.stderr,
         )
         return 1
+    ended = _ended_service_reports(state)
     qfw_config.clear_current_run(state)
-    if not args.keep_run_dir:
+    for report in ended:
+        print(f"qfw-teardown: {report}", file=sys.stderr)
+    if ended:
+        print(
+            "qfw-teardown: a service ended before teardown, so its records "
+            f"and logs were kept in {state['run_dir']}",
+            file=sys.stderr,
+        )
+    elif not args.keep_run_dir:
         shutil.rmtree(state["run_dir"], ignore_errors=True)
     return 0
+
+
+def _ended_service_reports(state):
+    return [
+        report
+        for manager in state.get("service_managers") or []
+        for report in qfw_service_plane.ended_component_reports(
+            manager["run_dir"])
+    ]
 
 
 def _runtime_status(state):
@@ -239,6 +366,8 @@ def _runtime_status(state):
             manager_state = qfw_service_plane.status(record["run_dir"])
             record["state"] = manager_state.get("state", "unknown")
             record["status"] = manager_state
+            if manager_state.get("error"):
+                record["error"] = manager_state["error"]
         except (OSError, RuntimeError, ValueError) as exc:
             record["state"] = "unavailable"
             record["error"] = str(exc)
@@ -310,7 +439,8 @@ def _print_runtime_status(report):
             label = manager["role"] or "service"
             if manager.get("service_id"):
                 label = f"{label}:{manager['service_id']}"
-            print(f"    {label}: {manager['state']}")
+            detail = f": {manager['error']}" if manager.get("error") else ""
+            print(f"    {label}: {manager['state']}{detail}")
     else:
         print("  service-managers: none")
     required = "yes" if report["teardown_required"] else "no"
@@ -454,6 +584,9 @@ def _application_launch_command(command, allocation, launch_options=None):
 
 
 def _configure_application_defw_environment(env, state=None):
+    # env holds no inherited DEFw process variables (see
+    # qfw_config.DEFW_PROCESS_VARIABLES), so every value set here comes from
+    # the run's state.
     if state and not env.get("DEFW_LOG_DIR"):
         env["DEFW_LOG_DIR"] = str(
             Path(state["run_dir"]) / "application" / "logs")
@@ -462,14 +595,12 @@ def _configure_application_defw_environment(env, state=None):
         return
     parent_host, parent_port, parent_name = parent
     env["DEFW_DISABLE_DIRSVC"] = "no"
-    env.setdefault("DEFW_AGENT_TYPE", "agent")
-    env.setdefault("DEFW_SHELL_TYPE", "cmdline")
-    env.setdefault("DEFW_PARENT_HOSTNAME", parent_host)
-    env.setdefault("DEFW_PARENT_PORT", str(parent_port))
-    env.setdefault("DEFW_PARENT_NAME", parent_name)
-    parent_host = env.get("DEFW_PARENT_HOSTNAME", "")
-    parent_addr = env.get("DEFW_PARENT_ADDR", "")
-    if parent_host and parent_addr in {"", "0.0.0.0", "None"}:
+    env["DEFW_AGENT_TYPE"] = "agent"
+    env["DEFW_SHELL_TYPE"] = "cmdline"
+    env["DEFW_PARENT_HOSTNAME"] = parent_host
+    env["DEFW_PARENT_PORT"] = str(parent_port)
+    env["DEFW_PARENT_NAME"] = parent_name
+    if parent_host:
         env["DEFW_PARENT_ADDR"] = _resolve_host_address(parent_host)
     if _int_value(env.get("DEFW_LISTEN_PORT"), 0) <= 0:
         env["DEFW_LISTEN_PORT"] = str(_free_tcp_port(""))
@@ -485,6 +616,8 @@ def _application_srun_options(launch_options):
         srun.extend(["--nodelist", str(launch_options["nodelist"])])
     if launch_options.get("exclusive"):
         srun.append("--exclusive")
+    else:
+        srun.append("--overlap")
     return srun
 
 

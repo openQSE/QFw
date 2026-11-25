@@ -7,14 +7,13 @@ import pytest
 from tests.mock.fakes import (
 	FakeEventAPI,
 	FakeQPM,
+	FakeRuntime,
 	FakeSlurmDriver,
 	make_result_event,
 )
 
 
 class FakeBackend:
-	COMPLETION_TIMEOUT_SEC = 5
-
 	def __init__(self, statevector=False):
 		self.logged_results = []
 		self.dump_called = False
@@ -24,6 +23,10 @@ class FakeBackend:
 		return self._statevector
 
 	def log_statistics(self, result):
+		timing = ("creation_time", "launch_time", "resources_consumed_time",
+			"exec_time", "completion_time", "cq_enqueue_time",
+			"cq_dequeue_time")
+		assert all(key in result for key in timing), result
 		self.logged_results.append(result)
 
 	def dump_statistics(self):
@@ -77,6 +80,8 @@ def test_qfw_job_submit_builds_expected_payload(monkeypatch):
 		"num_qubits": 3,
 		"num_shots": 17,
 		"compiler": "staq",
+		"completion_event_class_id": "event-api-1",
+		"seed_simulator": 11,
 		"reservation_id": 1,
 	}
 	assert len(job._cid_list) == 1
@@ -117,28 +122,177 @@ def test_qfw_job_result_maps_counts_into_qiskit_result(monkeypatch):
 	assert result_entry["data"]["memory"] == ["0x0", "0x0", "0x3"]
 
 
-def test_qfw_job_result_raises_when_no_results(monkeypatch):
+def _submitted_job(monkeypatch, fake_qpm, event_api, circuits, **options):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	monkeypatch.setattr(
+		qfw_job.select, "select",
+		lambda readable, writable, exceptional, timeout: (readable, [], []))
+	_stub_qasm(monkeypatch)
+	job = qfw_job.QFwJob(
+		FakeBackend(), fake_qpm, event_api, circuits,
+		_driver_options(shots=2, seed=1, seed_simulator=1, **options))
+	job.submit()
+	return job
+
+
+def test_qfw_job_result_names_the_circuits_unfinished_at_its_timeout(
+		monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="done"),
+		qfw_job.QuantumCircuit(1, name="late"),
+	]
+	fake_qpm = FakeQPM(cids=["cid-1", "cid-2"])
+	event_api = FakeEventAPI(events=[make_result_event("cid-1", {"0": 2})])
+	job = _submitted_job(
+		monkeypatch, fake_qpm, event_api, circuits, timeout=0)
+
+	with pytest.raises(
+			qfw_job.JobTimeoutError,
+			match=r"1 of 2 circuit\(s\) unfinished: cid-2 \(late\)$"):
+		job.result()
+	assert job.status() == qfw_job.JobStatus.ERROR
+	assert fake_qpm.cancelled == []
+
+
+def test_qfw_job_cancels_the_unfinished_circuits_on_timeout_when_asked(
+		monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	circuit = qfw_job.QuantumCircuit(1, name="late")
+	fake_qpm = FakeQPM(cids=["cid-1"])
+	job = _submitted_job(
+		monkeypatch, fake_qpm, FakeEventAPI(), circuit,
+		timeout=0, cancel_on_timeout=True)
+
+	with pytest.raises(qfw_job.JobTimeoutError, match="1 of 1 circuit"):
+		job.result()
+	assert fake_qpm.cancelled == [{
+		"cid": "cid-1", "reservation_id": 1, "token": None,
+		"reason": "job-timeout",
+	}]
+
+
+def test_qfw_job_times_out_and_cancels_the_rest_when_a_cancel_is_refused(
+		monkeypatch):
 	import qfw_qiskit.qfw_job as qfw_job
 	from defw_exception import DEFwError
 
-	fake_qpm = FakeQPM(cids=["cid-1"])
-	event_api = FakeEventAPI()  # no result events ever arrive
-	backend = FakeBackend()
-	circuit = qfw_job.QuantumCircuit(1, name="timeout-path")
-	options = _driver_options(shots=2, seed=1, seed_simulator=1)
+	class RefusingQPM(FakeQPM):
+		def cancel_task(self, cid=None, **kwargs):
+			super().cancel_task(cid=cid, **kwargs)
+			raise DEFwError(f"reservation 1 has expired, {cid} not cancelled")
 
-	_stub_qasm(monkeypatch)
-	# COMPLETION_TIMEOUT_SEC == 0 makes _result_reader return immediately with no
-	# completed circuits -- a real timeout without the wall-clock wait.
-	monkeypatch.setattr(backend, "COMPLETION_TIMEOUT_SEC", 0)
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="first"),
+		qfw_job.QuantumCircuit(1, name="second"),
+	]
+	fake_qpm = RefusingQPM(cids=["cid-1", "cid-2"])
+	job = _submitted_job(
+		monkeypatch, fake_qpm, FakeEventAPI(), circuits,
+		timeout=0, cancel_on_timeout=True)
 
-	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
-	job.submit()
-
-	# With no results the per-circuit `out` never binds; result() must fail
-	# with a clear error naming the cause, not a bare NameError.
-	with pytest.raises(DEFwError, match="no QPM circuit results"):
+	with pytest.raises(qfw_job.JobTimeoutError, match="2 of 2 circuit"):
 		job.result()
+	assert sorted(c["cid"] for c in fake_qpm.cancelled) == ["cid-1", "cid-2"]
+	assert job.status() == qfw_job.JobStatus.ERROR
+
+
+def test_qfw_job_fails_when_its_qpm_stops_answering(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from defw_exception import DEFwError
+
+	class GoneQPM(FakeQPM):
+		def task_status(self, cid=None, **kwargs):
+			raise DEFwError("connection refused")
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	circuit = qfw_job.QuantumCircuit(1, name="orphan")
+	job = _submitted_job(
+		monkeypatch, GoneQPM(cids=["cid-1"]), FakeEventAPI(), circuit)
+
+	with pytest.raises(
+			qfw_job.JobError,
+			match=r"could not reach its QPM with 1 of 1 circuit\(s\) "
+			r"unfinished: cid-1 \(orphan\): connection refused"):
+		job.result()
+	assert job.status() == qfw_job.JobStatus.ERROR
+
+
+def test_qfw_job_whose_qpm_ended_says_how(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+	from defw_exception import DEFwError
+
+	class EndedQPM(FakeQPM):
+		lifecycle_binding = types.SimpleNamespace(service_id="aer-run1")
+
+		def task_status(self, cid=None, **kwargs):
+			raise DEFwError("QPM 'aer-run1' is unavailable")
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	monkeypatch.setattr(
+		qfw_job, "ended_service_report",
+		lambda service_id: f"QPM service {service_id} was killed by signal 9")
+	job = _submitted_job(
+		monkeypatch, EndedQPM(cids=["cid-1"]), FakeEventAPI(),
+		qfw_job.QuantumCircuit(1, name="orphan"))
+
+	with pytest.raises(
+			qfw_job.JobError,
+			match=r"unfinished: cid-1 \(orphan\): QPM 'aer-run1' is unavailable\. "
+			r"QPM service aer-run1 was killed by signal 9$"):
+		job.result()
+
+
+def test_qfw_job_keeps_waiting_while_its_qpm_answers(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	class SlowEventAPI(FakeEventAPI):
+		def __init__(self, batches):
+			super().__init__()
+			self.batches = list(batches)
+
+		def get(self):
+			return self.batches.pop(0) if self.batches else []
+
+	monkeypatch.setattr(qfw_job, "QPM_STATUS_CHECK_INTERVAL_SEC", 0)
+	circuit = qfw_job.QuantumCircuit(1, name="slow")
+	fake_qpm = FakeQPM(cids=["cid-1"])
+	event_api = SlowEventAPI([[], [], [make_result_event("cid-1", {"0": 2})]])
+	job = _submitted_job(monkeypatch, fake_qpm, event_api, circuit)
+
+	assert job.result().get_counts() == {"0": 2}
+	assert fake_qpm.status_requests == [
+		{"cid": "cid-1", "reservation_id": 1, "token": None}] * 2
+
+
+def test_qfw_job_without_a_timeout_waits_for_every_circuit(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	class SlowEventAPI(FakeEventAPI):
+		def __init__(self, batches):
+			super().__init__()
+			self.batches = list(batches)
+
+		def get(self):
+			return self.batches.pop(0) if self.batches else []
+
+	circuits = [
+		qfw_job.QuantumCircuit(1, name="first"),
+		qfw_job.QuantumCircuit(1, name="second"),
+	]
+	event_api = SlowEventAPI(
+		[[], [make_result_event("cid-1", {"0": 2})], [], [],
+		 [make_result_event("cid-2", {"1": 2})]])
+	job = _submitted_job(
+		monkeypatch, FakeQPM(cids=["cid-1", "cid-2"]), event_api, circuits)
+
+	result = job.result()
+
+	assert result.get_counts() == [{"0": 2}, {"1": 2}]
+	assert job.status() == qfw_job.JobStatus.DONE
 
 
 def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
@@ -166,6 +320,38 @@ def test_qfw_job_result_ignores_unrelated_completion_events(monkeypatch):
 	assert result.get_counts(circuit) == {"11": 2}
 	assert job.status() == qfw_job.JobStatus.DONE
 	assert len(backend.logged_results) == 1
+
+
+def test_qfw_job_result_keeps_the_order_circuits_were_sent(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	circuits = [
+		qfw_job.QuantumCircuit(1, name=name)
+		for name in ("x-basis", "y-basis", "z-basis")]
+	# The z circuit's completion overtakes the y circuit's.
+	arrival = [("cid-x", {"0": 1}), ("cid-z", {"0": 3}), ("cid-y", {"0": 2})]
+	event_api = FakeEventAPI(
+		events=[make_result_event(cid, counts) for cid, counts in arrival],
+		fd=42)
+	options = _driver_options(shots=1, seed_simulator=1)
+
+	monkeypatch.setattr(
+		qfw_job.select, "select",
+		lambda readable, writable, exceptional, timeout: (readable, [], []))
+	monkeypatch.setattr(
+		qfw_job.Result, "from_dict", lambda result: result, raising=False)
+	_stub_qasm(monkeypatch)
+
+	job = qfw_job.QFwJob(
+		FakeBackend(), FakeQPM(cids=["cid-x", "cid-y", "cid-z"]), event_api,
+		circuits, options)
+	job.submit()
+	results = job.result()["results"]
+
+	assert [r["header"]["name"] for r in results] == [
+		"x-basis", "y-basis", "z-basis"]
+	assert [r["data"]["counts"] for r in results] == [
+		{"0": 1}, {"0": 2}, {"0": 3}]
 
 
 def test_qfw_job_decodes_compact_statevector_payload():
@@ -249,6 +435,78 @@ def test_qfw_job_result_raises_job_error_for_provider_failure(monkeypatch):
 	assert job.status() == qfw_job.JobStatus.ERROR
 	assert backend.dump_called is True
 	assert len(backend.logged_results) == 1
+
+
+def test_qfw_job_result_raises_job_error_for_a_qpm_side_failure(monkeypatch):
+	# A task the QPM itself fails, before or around the provider, completes
+	# with outcome FAILED and the cause under "error", and no rc or result
+	# (controller._fail_scheduled_task_locked).
+	import qfw_qiskit.qfw_job as qfw_job
+	from tests.mock.fakes import FakeEvent
+
+	fake_qpm = FakeQPM(cids=["cid-failed"])
+	circuit = qfw_job.QuantumCircuit(1, name="qpm-failure")
+	backend = FakeBackend()
+	event_api = FakeEventAPI(events=[FakeEvent({
+		"cid": "cid-failed",
+		"outcome": "FAILED",
+		"reason": "provider-submission-failed",
+		"error": {
+			"reason": "provider-submission-failed",
+			"error": "401 Unauthorized",
+			"error_type": "DEFwExecutionError",
+		},
+		"completion_ready": True,
+		"cq_enqueue_time": 1.5,
+		"cq_dequeue_time": -1,
+	})], fd=44)
+	options = _driver_options(shots=2, seed=7, seed_simulator=13)
+
+	monkeypatch.setattr(
+		qfw_job.select, "select", lambda readable, *_: (readable, [], []))
+	_stub_qasm(monkeypatch)
+
+	job = qfw_job.QFwJob(backend, fake_qpm, event_api, circuit, options)
+	job.submit()
+
+	with pytest.raises(qfw_job.JobError) as exc_info:
+		job.result()
+
+	message = str(exc_info.value)
+	assert "cid-failed" in message
+	assert "provider-submission-failed" in message
+	assert "error_type=DEFwExecutionError" in message
+	assert "401 Unauthorized" in message
+	assert job.status() == qfw_job.JobStatus.ERROR
+
+
+def test_qfw_job_result_raises_job_error_for_a_cancelled_task(monkeypatch):
+	# A task cancelled by the QPM, for instance when its reservation is
+	# released, completes with outcome CANCELLED and a reason, and no rc,
+	# result or timing (controller._task_status_locked).
+	import qfw_qiskit.qfw_job as qfw_job
+	from tests.mock.fakes import FakeEvent
+
+	fake_qpm = FakeQPM(cids=["cid-cancelled"])
+	circuit = qfw_job.QuantumCircuit(1, name="qpm-cancel")
+	event_api = FakeEventAPI(events=[FakeEvent({
+		"cid": "cid-cancelled",
+		"outcome": "CANCELLED",
+		"reason": "reservation-released",
+		"completion_ready": True,
+	})], fd=44)
+	options = _driver_options(shots=2, seed=7, seed_simulator=13)
+
+	monkeypatch.setattr(
+		qfw_job.select, "select", lambda readable, *_: (readable, [], []))
+	_stub_qasm(monkeypatch)
+
+	job = qfw_job.QFwJob(FakeBackend(), fake_qpm, event_api, circuit, options)
+	job.submit()
+
+	with pytest.raises(qfw_job.JobError, match="reservation-released"):
+		job.result()
+	assert job.status() == qfw_job.JobStatus.ERROR
 
 
 def test_qfw_job_result_names_the_circuit_runner_failure(monkeypatch):
@@ -514,3 +772,202 @@ def test_qfw_job_sends_gzipped_qpy_when_the_qpm_declares_it(monkeypatch):
 	assert gzip.decompress(
 		base64.b64decode(payload["circuit"]["data"])) == b"QPY16"
 	assert "qasm" not in payload
+
+
+# --- param_values / compilation_options passthrough --------------------------
+
+PASSTHROUGH_PARAM_VALUES = {"th[0]": 0.1, "th[1]": 0.2}
+PASSTHROUGH_COMPILATION_OPTIONS = {"optimization_level": 1}
+
+
+def _submit_with_options(monkeypatch, **options):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	_stub_qasm(monkeypatch)
+	fake_qpm = FakeQPM(cids=["cid-passthrough"])
+	circuit = qfw_job.QuantumCircuit(1, name="passthrough")
+	job = qfw_job.QFwJob(
+		FakeBackend(), fake_qpm, FakeEventAPI(), circuit,
+		_driver_options(shots=4, **options))
+	job.submit()
+	return fake_qpm.submitted_payloads[0]
+
+
+def test_qfw_job_forwards_param_values_and_compilation_options(monkeypatch):
+	payload = _submit_with_options(
+		monkeypatch,
+		param_values=PASSTHROUGH_PARAM_VALUES,
+		compilation_options=PASSTHROUGH_COMPILATION_OPTIONS)
+
+	assert payload["param_values"] == PASSTHROUGH_PARAM_VALUES
+	assert payload["compilation_options"] == PASSTHROUGH_COMPILATION_OPTIONS
+
+
+def test_qfw_job_forwards_each_passthrough_option_on_its_own(monkeypatch):
+	only_params = _submit_with_options(
+		monkeypatch, param_values=PASSTHROUGH_PARAM_VALUES)
+	assert only_params["param_values"] == PASSTHROUGH_PARAM_VALUES
+	assert "compilation_options" not in only_params
+
+	only_compile = _submit_with_options(
+		monkeypatch, compilation_options=PASSTHROUGH_COMPILATION_OPTIONS)
+	assert only_compile["compilation_options"] == \
+		PASSTHROUGH_COMPILATION_OPTIONS
+	assert "param_values" not in only_compile
+
+
+def test_qfw_job_forwards_the_simulator_seed(monkeypatch):
+	payload = _submit_with_options(monkeypatch, seed_simulator=7)
+	assert payload["seed_simulator"] == 7
+
+
+def test_qfw_job_leaves_passthrough_options_out_when_unset(monkeypatch):
+	payload = _submit_with_options(monkeypatch)
+	assert "param_values" not in payload
+	assert "compilation_options" not in payload
+	assert "seed_simulator" not in payload
+
+
+def test_qfw_job_leaves_passthrough_options_out_when_none(monkeypatch):
+	payload = _submit_with_options(
+		monkeypatch, param_values=None, compilation_options=None)
+	assert "param_values" not in payload
+	assert "compilation_options" not in payload
+
+
+def test_qfw_job_forwards_falsy_passthrough_values(monkeypatch):
+	# Only None means "not set": an empty dict is still the caller's value.
+	payload = _submit_with_options(
+		monkeypatch, param_values={}, compilation_options={})
+	assert payload["param_values"] == {}
+	assert payload["compilation_options"] == {}
+
+
+class _NamedParameter:
+	# Stands in for a qiskit Parameter or ParameterVectorElement: hashable
+	# and carrying a name, but not a str.
+	def __init__(self, name):
+		self.name = name
+
+
+def test_qfw_job_keys_param_values_by_parameter_name(monkeypatch):
+	payload = _submit_with_options(
+		monkeypatch,
+		param_values={
+			_NamedParameter("th[0]"): 0.1,
+			_NamedParameter("th[1]"): 0.2,
+		})
+
+	assert payload["param_values"] == {"th[0]": 0.1, "th[1]": 0.2}
+	assert all(type(key) is str for key in payload["param_values"])
+
+
+def test_qfw_job_accepts_mixed_name_and_parameter_keys(monkeypatch):
+	payload = _submit_with_options(
+		monkeypatch,
+		param_values={"a": 1.0, _NamedParameter("b"): 2.0})
+
+	assert payload["param_values"] == {"a": 1.0, "b": 2.0}
+
+
+def test_qfw_job_rejects_param_values_that_is_not_a_mapping(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	with pytest.raises(qfw_job.DEFwError, match="mapping"):
+		_submit_with_options(monkeypatch, param_values=[0.1, 0.2])
+
+
+def test_qfw_job_rejects_param_values_with_duplicate_names(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	with pytest.raises(qfw_job.DEFwError, match="more than once"):
+		_submit_with_options(
+			monkeypatch,
+			param_values={"th[0]": 0.1, _NamedParameter("th[0]"): 0.2})
+
+
+def test_qfw_job_rejects_param_values_keys_without_a_name(monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	with pytest.raises(qfw_job.DEFwError, match="keys must be"):
+		_submit_with_options(monkeypatch, param_values={0: 0.1})
+
+
+def test_qfw_job_validates_param_values_before_serializing_the_circuit(
+		monkeypatch):
+	import qfw_qiskit.qfw_job as qfw_job
+
+	def must_not_run(*args, **kwargs):
+		raise AssertionError("the circuit was serialized first")
+
+	monkeypatch.setattr(qfw_job, "encode_qiskit_circuit", must_not_run)
+
+	with pytest.raises(qfw_job.DEFwError, match="mapping"):
+		_submit_with_options(monkeypatch, param_values=[0.1])
+
+
+def test_qfw_job_does_not_mutate_the_callers_param_values(monkeypatch):
+	caller_values = {_NamedParameter("th[0]"): 0.1}
+	keys_before = list(caller_values)
+
+	_submit_with_options(monkeypatch, param_values=caller_values)
+
+	assert list(caller_values) == keys_before
+
+
+def _passthrough_backend(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	class RecordingJob:
+		def __init__(self, backend, qpm, event_api, circuits, options):
+			self.options = options
+
+		def submit(self):
+			pass
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (FakeQPM(), None))
+	monkeypatch.setattr(
+		qfw_simulator, "BaseEventAPI", lambda: FakeEventAPI())
+	monkeypatch.setattr(
+		qfw_simulator, "me", FakeRuntime(endpoint="endpoint-passthrough"))
+	monkeypatch.setattr(qfw_simulator, "QFwJob", RecordingJob)
+	return qfw_simulator.QFwBackend()
+
+
+def test_backend_run_hands_passthrough_options_to_the_job(
+		monkeypatch, capsys):
+	backend = _passthrough_backend(monkeypatch)
+
+	job = backend.run(
+		object(), shots=8,
+		param_values=PASSTHROUGH_PARAM_VALUES,
+		compilation_options=PASSTHROUGH_COMPILATION_OPTIONS)
+
+	assert job.options["param_values"] == PASSTHROUGH_PARAM_VALUES
+	assert job.options["compilation_options"] == \
+		PASSTHROUGH_COMPILATION_OPTIONS
+	assert "is not used by this backend" not in capsys.readouterr().out
+
+
+def test_backend_run_omits_passthrough_options_that_were_not_given(
+		monkeypatch):
+	backend = _passthrough_backend(monkeypatch)
+
+	job = backend.run(object(), shots=8)
+
+	assert "param_values" not in job.options
+	assert "compilation_options" not in job.options
+
+
+def test_backend_run_still_warns_about_unknown_options(monkeypatch, capsys):
+	backend = _passthrough_backend(monkeypatch)
+
+	backend.run(
+		object(), shots=8, param_values=PASSTHROUGH_PARAM_VALUES,
+		bogus_option=1)
+
+	out = capsys.readouterr().out
+	assert "bogus_option" in out
+	assert "param_values" not in out

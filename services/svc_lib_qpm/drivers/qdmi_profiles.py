@@ -1,30 +1,9 @@
-# Provider profiles for the QDMI driver.
-#
-# QDMI is one C interface, but each device library behind it fills the
-# vendor-defined parts differently: how a session is opened and from which
-# settings, which program format a job takes, what the CUSTOM session, job
-# and device slots mean, and how a counts histogram is keyed. The driver
-# (qdmi_driver.py) keeps the session and job lifecycle in one place and asks
-# the resource's profile for those parts. A profile is chosen from the
-# resource descriptor's provider (descriptor.py), so adding a provider means
-# adding a profile here and nothing in the driver.
-#
-# The IQM profile is the driver's behavior from before profiles existed,
-# moved here unchanged: QDMI-on-IQM opens on a server URL, an API token and
-# a quantum computer alias, takes an IQM_JSON program, and publishes the
-# active calibration set id in device CUSTOM1.
-#
-# The Braket profile drives MQSC's Amazon Braket device library: a session is
-# one device ARN, a job is one Braket quantum task, the program is Braket's
-# OpenQASM 3, results come back through S3, and the AWS identity is the
-# service process's own (the AWS SDK credential chain), never a token QFw
-# holds. Its CUSTOM1 is the supported-operations list, not a calibration id.
-#
-# Every import of a device library or of mqt.core is deferred to the call
-# that needs it, so a service builds and routes where the libraries are
-# absent, and so a cancel that arrives before submission needs none of them.
+# QFw settings and policy for the MQT Core-backed provider adapters.
+# Imports stay lazy so services can start without a live device or credentials.
 
-from . import fomac_normalize
+from . import qdmi_normalize
+from .login import resolve_login
+from .provider_profile import ProviderProfile
 from defw_exception import DEFwExecutionError
 import os
 
@@ -37,7 +16,7 @@ IQM_IMPLEMENTATION = "qdmi"
 
 
 def iqm_architecture(topology, calibration_set_id):
-	# The IQM dynamic quantum architecture rebuilt from FoMaC topology, for
+	# The IQM dynamic quantum architecture rebuilt from QDMI topology, for
 	# util.iqm_transcode to transpile against. QDMI-on-IQM builds its
 	# operations from IQM's own architecture, so each operation's name and
 	# loci are IQM's gate name and loci. Each gate gets a single
@@ -50,7 +29,7 @@ def iqm_architecture(topology, calibration_set_id):
 	#   - no measure gate, without which IQMBackendBase raises a KeyError
 	#     rather than a DEFwExecutionError the caller would fall back on;
 	#   - a locus naming a component that is not a qubit. That is a
-	#     computational resonator, and FoMaC does not say which sites are
+	#     computational resonator, and QDMI does not say which sites are
 	#     resonators, so a device with them is not modeled here.
 	qubits = [str(qubit) for qubit in topology.get("qubits") or []]
 	bare = {"qubits": qubits}
@@ -80,41 +59,31 @@ def iqm_architecture(topology, calibration_set_id):
 	}
 
 
-class QdmiProfile:
-	# The descriptor provider this profile serves.
-	provider = None
+class QdmiProfile(ProviderProfile):
 	# The package that supplies the device library, named in import errors.
 	requires = "a QDMI device library"
 	# The QDMI device-property CUSTOM slot that carries the provider's
 	# calibration set identifier, as a mqt.core.qdmi.CustomProperty attribute
-	# name, or None when the provider publishes none. fomac_normalize reads
+	# name, or None when the provider publishes none. qdmi_normalize reads
 	# it; a wrong slot would read some other vendor-defined value as an id.
 	calibration_set_slot = None
 
-	def __init__(self, descriptor=None):
-		self._descriptor = dict(descriptor or {})
-
-	def access(self, credential=None):
-		"""The settings this resource's session opens with (a dict).
-
-		credential is the reservation's bound provider credential, the
-		circuit's provider_credential, or None for a call made outside a
-		reservation."""
-		raise NotImplementedError
-
-	def definition(self, access):
-		"""The mqt.core.qdmi.driver.DeviceDefinition to register."""
-		raise NotImplementedError
-
-	def open_kwargs(self, access):
-		"""Keyword arguments for mqt.core.qdmi.driver.open_device."""
+	def open_backend(self, access):
+		"""Open the provider's MQT Core QDMI backend."""
 		raise NotImplementedError
 
 	def describe(self, access):
 		# What to log once the session is open.
 		return access.get("qc_alias") or access.get("base_url")
 
-	def encode(self, driver, source, info, device):
+	def backend_info(self, device):
+		return None
+
+	def circuit_source(self, info):
+		from util.circuit_payload import qiskit_input
+		return qiskit_input(info)
+
+	def encode(self, driver, source, info, backend):
 		"""Encode a circuit for the device library.
 
 		Returns (program, program_format, measurement): the program as the
@@ -130,21 +99,26 @@ class QdmiProfile:
 		return {}
 
 	def check_shots(self, shots):
-		# A provider with a shot cap rejects here, before anything is billed.
-		return None
+		# Enforce the device's shot cap before a provider job exists.
+		cap = self._descriptor.get("max_shots")
+		if cap not in (None, "") and int(shots) > int(cap):
+			raise DEFwExecutionError(
+				f"{shots} shots is over the {cap}-shot cap for device "
+				f"{self._descriptor.get('id')!r} (max-shots in device-access config)")
 
 	def timeout_seconds(self, info):
-		# How long run_circuit waits for the job before cancelling it.
-		return float(info.get("timeout", DEFAULT_TIMEOUT_SECONDS))
+		# A client timeout overrides the device's wait before cancellation.
+		default = self._descriptor.get("job_timeout_seconds")
+		if default in (None, ""):
+			default = DEFAULT_TIMEOUT_SECONDS
+		return float(info.get("timeout", default))
 
 	def result_counts(self, counts, measurement):
-		# Key the device library's histogram the way the circuit's classical
-		# bits are ordered. Identity where they already agree.
-		return counts
-
-	def technology(self):
-		# The qhw-device-v1 technology family, or None to leave it unset.
-		return None
+		if measurement is None:
+			return counts
+		from mqt.core.mlir import decode_counts
+		return decode_counts(counts, measurement.result_width,
+			sum(counts.values()), measurement.result_layout)
 
 
 class IqmQdmiProfile(QdmiProfile):
@@ -162,44 +136,19 @@ class IqmQdmiProfile(QdmiProfile):
 		# anything else would open the session as the service's account.
 		# Then the env vars the native svc_iqm_qpm honors, then the shared
 		# device-access config, resolved for the credential's user.
-		credential = dict(credential or {})
 		provider = self._descriptor.get("provider", DEFAULT_PROVIDER)
-		device_id = credential.get("device_id") or self._descriptor.get("id")
-		provider_device_id = (
-			credential.get("provider_device_id")
-			or credential.get("quantum_computer")
-			or self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
-		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
-		token = (
-			credential.get("api_key")
-			or credential.get("token")
-			or os.environ.get("QFW_API_KEY"))
-		if not (base_url and token):
-			try:
-				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(
-					provider=provider,
-					device_id=device_id,
-					user=credential.get("user"),
-					credential_hint=credential.get("credential_hint"),
-					credential_handle=credential.get("credential_handle"))
-			except Exception as exc:
-				raise DEFwExecutionError(
-					"QDMI driver could not resolve device access for "
-					f"provider {provider!r}: set QFW_QC_URL/QFW_API_KEY or "
-					f"configure device access: {exc}") from exc
-			base_url = base_url or cfg.get("url")
-			token = token or cfg.get("api_key")
-			device_id = device_id or cfg.get("device_id")
-			provider_device_id = (
-				provider_device_id
-				or cfg.get("provider_device_id")
-				or cfg.get("quantum_computer"))
+		login = resolve_login(
+			self._descriptor, credential, provider,
+			lambda login: not (login["base_url"] and login["token"]),
+			"QDMI driver could not resolve device access for provider "
+			f"{provider!r}: set QFW_QC_URL/QFW_API_KEY or configure device "
+			"access")
+		base_url = login["base_url"]
+		token = login["token"]
 		# The IQM QDMI library refuses to initialize a device session without a
 		# base URL + token, and every device-property query then fails with a
 		# bad-session-state error. Catch the missing credentials here so the
-		# failure names what to set instead of surfacing deep inside FoMaC.
+		# failure names what to set instead of surfacing deep inside QDMI.
 		missing = []
 		if not base_url:
 			missing.append("base URL (QFW_QC_URL or device-access url)")
@@ -215,30 +164,27 @@ class IqmQdmiProfile(QdmiProfile):
 		return {
 			"base_url": base_url,
 			"token": token,
-			"qc_alias": provider_device_id or device_id,
+			"qc_alias": login["provider_device_id"] or login["device_id"],
 		}
 
-	def definition(self, access):
-		# The IQM device library is registered under the stable device ID
-		# iqm-qdmi publishes.
-		from iqm.qdmi import (IQM_QDMI_DEVICE_ID, IQM_QDMI_LIBRARY_PATH,
-				IQM_QDMI_PREFIX)
-		from mqt.core.qdmi.driver import DeviceDefinition
-		return DeviceDefinition(
-			IQM_QDMI_DEVICE_ID,
-			str(IQM_QDMI_LIBRARY_PATH),
-			IQM_QDMI_PREFIX)
+	def technology(self):
+		# IQM builds superconducting processors; qhw_iqm records the same
+		# family for the QRMI path, so the two device records agree.
+		return "superconducting"
 
-	def open_kwargs(self, access):
-		# qc_alias is passed as the device session's custom2 parameter (as
-		# iqm.qdmi.qiskit does).
-		return {
-			"base_url": access.get("base_url"),
-			"token": access.get("token"),
-			"custom2": access.get("qc_alias"),
-		}
+	def open_backend(self, access):
+		# The released adapter also reads process-wide IQM session defaults.
+		for variable in (
+				"IQM_TOKENS_FILE", "IQM_QC_ID", "IQM_QUANTUM_COMPUTER", "IQM_QC_ALIAS"):
+			if os.environ.get(variable):
+				raise DEFwExecutionError(
+					f"Unset {variable}; QFw binds IQM access per reservation")
+		from iqm.qdmi.qiskit import IQMBackend
+		return IQMBackend(
+			base_url=access["base_url"], token=access["token"],
+			qc_alias=access.get("qc_alias"))
 
-	def encode(self, driver, source, info, device):
+	def encode(self, driver, source, info, backend):
 		# Transcode to an IQM circuit with the shared util and serialize it as
 		# the single-circuit IQM_JSON program QDMI-on-IQM takes. Note the
 		# QRMI/QDMI difference: QDMI's IQM_JSON program is a SINGLE circuit,
@@ -247,12 +193,13 @@ class IqmQdmiProfile(QdmiProfile):
 		# The transcode needs the device's architecture to transpile a circuit
 		# that is not already native, h and cx for instance. QDMI has no raw
 		# dynamic-architecture dict like QRMI's target(), so it is rebuilt
-		# from FoMaC topology and the calibration set id (iqm_architecture).
+		# from QDMI topology and the calibration set id (iqm_architecture).
 		# Serialization stays a driver method, so a test can stand in for it.
 		from util.iqm_transcode import build_iqm_circuit
 		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
-		topo = fomac_normalize.extract_topology(device)
-		dynamic = iqm_architecture(topo, fomac_normalize._calibration_set_id(
+		device = backend.device
+		topo = qdmi_normalize.extract_topology(device)
+		dynamic = iqm_architecture(topo, qdmi_normalize._calibration_set_id(
 			device, self.calibration_set_slot))
 		iqm_circuit = build_iqm_circuit(source, dynamic, mapping)
 		return driver._serialize_program(iqm_circuit), "IQM_JSON", None
@@ -293,41 +240,25 @@ class BraketQdmiProfile(QdmiProfile):
 			"reservation_arn": self._descriptor.get("reservation_arn") or None,
 		}
 
-	def definition(self, access):
-		from amazon.braket.qdmi import (AMAZON_BRAKET_QDMI_LIBRARY_PATH,
-				AMAZON_BRAKET_QDMI_PREFIX)
-		from mqt.core.qdmi.driver import DeviceDefinition
-		return DeviceDefinition(
-			access["qdmi_device_id"],
-			str(AMAZON_BRAKET_QDMI_LIBRARY_PATH),
-			AMAZON_BRAKET_QDMI_PREFIX)
-
-	def open_kwargs(self, access):
-		# The library's session parameters are aliases of QDMI's: DEVICEARN is
-		# BASEURL, REGION is CUSTOM2 and RESERVATION_ARN is CUSTOM3
-		# (amazon-braket-qdmi-device/constants.hpp). The Region defaults to
-		# the one in the ARN, and a reservation ARN makes the device status
-		# ignore public execution windows.
-		kwargs = {"base_url": access["base_url"]}
-		if access.get("region"):
-			kwargs["custom2"] = access["region"]
-		if access.get("reservation_arn"):
-			kwargs["custom3"] = access["reservation_arn"]
-		return kwargs
+	def open_backend(self, access):
+		from amazon.braket.qdmi.qiskit import AmazonBraketBackend
+		return AmazonBraketBackend(
+			device_id=access["qdmi_device_id"], device_arn=access["base_url"],
+			region=access.get("region"),
+			reservation_arn=access.get("reservation_arn"))
 
 	def describe(self, access):
 		return access.get("base_url")
 
-	def encode(self, driver, source, info, device):
+	def encode(self, driver, source, info, backend):
 		# Braket's OpenQASM 3, in the gate names this device accepts. The
 		# measurement map comes back so result_counts can key the histogram
 		# onto the circuit's classical bits.
-		from util.braket_transcode import (accepted_operation_names,
-				to_braket_qasm3)
+		from util.braket_transcode import to_braket_qasm3
 		from util.iqm_transcode import load_qiskit_circuit
 		circuit = load_qiskit_circuit(source)
 		program, measurement = to_braket_qasm3(
-			circuit, accepted_operation_names(device))
+			circuit, backend)
 		return program, "QASM3", measurement
 
 	def job_kwargs(self, info):
@@ -344,30 +275,6 @@ class BraketQdmiProfile(QdmiProfile):
 			kwargs["custom3"] = str(reservation)
 		return kwargs
 
-	def check_shots(self, shots):
-		# Every Braket task is billed, so a device can carry a shot cap in
-		# device-access config and anything above it is refused here, before
-		# a task exists.
-		cap = self._descriptor.get("max_shots")
-		if cap in (None, ""):
-			return None
-		cap = int(cap)
-		if int(shots) > cap:
-			raise DEFwExecutionError(
-				f"{shots} shots is over the {cap}-shot cap for device "
-				f"{self._descriptor.get('id')!r} (max-shots in device-access "
-				"config)")
-		return None
-
-	def timeout_seconds(self, info):
-		# A Braket QPU queues tasks behind other customers', so the wait the
-		# driver allows before cancelling comes from the device's
-		# job-timeout-seconds. A timeout the client sends still wins.
-		default = self._descriptor.get("job_timeout_seconds")
-		if default in (None, ""):
-			default = DEFAULT_TIMEOUT_SECONDS
-		return float(info.get("timeout", default))
-
 	def result_counts(self, counts, measurement):
 		from util.braket_transcode import remap_counts
 		return remap_counts(counts, measurement)
@@ -379,9 +286,287 @@ class BraketQdmiProfile(QdmiProfile):
 			or self._descriptor.get("provider-device-id"))
 
 
+class IbmQdmiProfile(QdmiProfile):
+	provider = "ibm"
+	requires = "ibm-qdmi"
+	DEFAULT_QDMI_DEVICE_ID = "ibm.default"
+
+	def access(self, credential=None):
+		resource_type = (self._descriptor.get("resource_type")
+			or self._descriptor.get("resource-type"))
+		if resource_type and resource_type != "IBMQiskitRuntimeService":
+			raise DEFwExecutionError(
+				f"IBM QDMI cannot serve resource-type {resource_type!r}. "
+				"Set libraries: [qrmi] in device-access config for this IBM resource")
+		env_crn = os.environ.get("QFW_IBM_SERVICE_CRN")
+		descriptor_crn = self._descriptor.get("service_crn")
+
+		def incomplete(login):
+			return not (login["base_url"] and login["token"]
+				and login["provider_device_id"]
+				and (login["service_crn"] or env_crn or descriptor_crn))
+
+		login = resolve_login(
+			self._descriptor, credential, self.provider, incomplete,
+			"QDMI driver could not resolve IBM device access: configure "
+			"device access or QFW_QC_URL/QFW_API_KEY",
+			extras=("service_crn",))
+		base_url = login["base_url"]
+		api_key = login["token"]
+		backend_name = login["provider_device_id"]
+		instance_crn = (
+			(credential or {}).get("service_crn") or env_crn
+			or login["service_crn"] or descriptor_crn)
+		missing = [name for name, value in (
+			("base URL", base_url), ("API key", api_key),
+			("provider-device-id", backend_name),
+			("service-crn", instance_crn)) if not value]
+		if missing:
+			raise DEFwExecutionError(
+				"IBM QDMI requires " + ", ".join(missing))
+		# Existing QRMI configurations include /v1; IBM QDMI adds it itself.
+		base_url = base_url.rstrip("/")
+		if base_url.endswith("/v1"):
+			base_url = base_url[:-3]
+		auth_url = (os.environ.get("QFW_IBM_IAM_ENDPOINT")
+			or self._descriptor.get("iam_endpoint"))
+		if auth_url:
+			auth_url = auth_url.rstrip("/")
+			if not auth_url.endswith("/identity/token"):
+				auth_url += "/identity/token"
+		return {
+			"qdmi_device_id": (self._descriptor.get("qdmi_device_id")
+				or self.DEFAULT_QDMI_DEVICE_ID),
+			"base_url": base_url, "api_key": api_key,
+			"backend_name": backend_name, "instance_crn": instance_crn,
+			"auth_url": auth_url,
+		}
+
+	def open_backend(self, access):
+		from ibm.qdmi.qiskit import IBMBackend
+		return IBMBackend(
+			device_id=access["qdmi_device_id"],
+			base_url=access["base_url"], api_key=access["api_key"],
+			backend_name=access["backend_name"],
+			instance_crn=access["instance_crn"], auth_url=access["auth_url"])
+
+	def describe(self, access):
+		return access.get("backend_name")
+
+	def encode(self, driver, source, info, backend):
+		from mqt.core.mlir import TargetEnvironment, serialize_program
+		from mqt.core.plugins.qiskit.exceptions import UnsupportedOperationError
+		from mqt.core.qdmi import ProgramFormat
+		from qiskit import transpile
+		from util.iqm_transcode import load_qiskit_circuit
+		circuit = load_qiskit_circuit(source)
+		if circuit.parameters:
+			raise DEFwExecutionError("IBM circuits must have bound parameters")
+		if [bit for register in circuit.cregs for bit in register] != circuit.clbits:
+			raise DEFwExecutionError(
+				"IBM circuits require classical registers that partition "
+				"the classical bits in order")
+		circuit = backend._preprocess_circuit(circuit)
+		try:
+			backend.validate_circuit(circuit, native=True)
+		except UnsupportedOperationError:
+			circuit = transpile(circuit, backend=backend, optimization_level=1)
+			backend.validate_circuit(circuit, native=True)
+		environment = TargetEnvironment.from_device(
+			backend.device, program_format=ProgramFormat.QASM3)
+		program = serialize_program(circuit, target=environment)
+		return program.payload, program.program_format.name, program
+
+	def check_shots(self, shots):
+		if shots <= 0:
+			raise DEFwExecutionError("IBM shots must be positive")
+		return super().check_shots(shots)
+
+	def technology(self):
+		return "superconducting"
+
+
+class PasqalQdmiProfile(QdmiProfile):
+	provider = "pasqal"
+	requires = "pasqal-qdmi"
+	DEFAULT_QDMI_DEVICE_ID = "pasqal.default"
+
+	def access(self, credential=None):
+		resource_type = self._descriptor.get("resource_type") or self._descriptor.get("resource-type")
+		if resource_type and resource_type != "PasqalCloud":
+			raise DEFwExecutionError(
+				f"Pasqal QDMI cannot serve resource-type {resource_type!r}; use PasqalCloud")
+		login = resolve_login(
+			self._descriptor, credential, self.provider,
+			lambda login: False, "", extras=("project_id",))
+		backend = login["provider_device_id"]
+		if not backend:
+			raise DEFwExecutionError(
+				"a Pasqal device needs its backend type (e.g. EMU_FREE) "
+				"as provider-device-id in device-access config")
+		project = login["project_id"] or self._descriptor.get("project_id")
+		return {
+			"qdmi_device_id": self._descriptor.get("qdmi_device_id") or self.DEFAULT_QDMI_DEVICE_ID,
+			"base_url": login["base_url"] or self._descriptor.get("url"),
+			"token": login["token"],
+			"custom1": str(backend).upper(),
+			"custom3": str(project) if project else None,
+		}
+
+	def open_backend(self, access):
+		settings = dict(access)
+		if settings.get("token"):
+			for variable in ("PASQAL_EMAIL", "PASQAL_PASSWORD"):
+				if os.environ.get(variable):
+					raise DEFwExecutionError(
+						f"Unset {variable}; a Pasqal token session must not refresh as the service account")
+			# Suppress native login-file fallback for reservation-bound tokens.
+			settings["auth_file"] = os.devnull
+		from pasqal.qdmi import PASQAL_QDMI_DEVICE_ID
+		from mqt.core.qdmi import builtin_driver
+		from types import SimpleNamespace
+		device_id = settings.pop("qdmi_device_id", None) or PASQAL_QDMI_DEVICE_ID
+		# Pasqal has a native Pulser interface, with no Qiskit backend.
+		return SimpleNamespace(device=builtin_driver.open_device(device_id, **settings))
+
+	def describe(self, access):
+		return access["custom1"]
+
+	def backend_info(self, device):
+		import json
+		from mqt.core.qdmi import CustomProperty
+		from .base_driver import pasqal_backend_info
+		entries = json.loads(device.query_custom_property(CustomProperty.CUSTOM1, str))
+		return pasqal_backend_info(device.name(), entries)
+
+	def circuit_source(self, info):
+		from util.circuit_payload import pulser_sequence
+		return pulser_sequence(info)
+
+	def encode(self, driver, source, info, backend):
+		from pulser import Sequence
+		try:
+			sequence = Sequence.from_abstract_repr(source)
+		except Exception as exc:
+			raise DEFwExecutionError(f"invalid Pasqal Pulser JSON: {exc}") from exc
+		if sequence.is_parametrized() or sequence.is_register_mappable():
+			raise DEFwExecutionError(
+				"Pasqal sequences must have bound variables and a mapped register")
+		if not sequence.is_measured():
+			raise DEFwExecutionError("Pasqal sequences must include a measurement")
+		return source, "CUSTOM1", None
+
+	def check_shots(self, shots):
+		if shots <= 0:
+			raise DEFwExecutionError("Pasqal shots must be positive")
+		return super().check_shots(shots)
+
+	def result_counts(self, counts, measurement):
+		# Core puts atom zero on the right; Pulser reads insertion order left to right.
+		return {key[::-1]: value for key, value in counts.items()}
+
+	def technology(self):
+		return "neutral-atom"
+
+
+class MqvQdmiProfile(QdmiProfile):
+	"""MQV's QDMI device, the Munich Quantum Software Stack (MQSS) as one device.
+
+	A circuit goes to MQV's MQSS deployment, which runs it on a machine
+	behind it (IQM at LRZ, planqc, Amazon Braket). MQV ships the device
+	library and no Qiskit backend, so the session is MQT Core's generic
+	QDMIBackend around it, as Pasqal's is a bare device.
+	"""
+	provider = "mqv"
+	requires = "MQV's QDMI device package (mqss-qdmi-mqv)"
+	# OpenQASM 2 first, which the LRZ devices behind MQSS take, then 3.
+	PROGRAM_FORMATS = ("QASM2", "QASM3")
+
+	def access(self, credential=None):
+		# The reservation's token first, then QFW_API_KEY, then the user's
+		# credential DB entry, as for IQM. The endpoint comes from the same
+		# places or from the device's url; MQV's catalogue entry may also
+		# set it, so it is not required here. The catalogue entry itself
+		# must be named, since QFw knows no default for MQV.
+		login = resolve_login(
+			self._descriptor, credential, self.provider,
+			lambda login: not login["token"],
+			"QDMI driver could not resolve MQV device access: set "
+			"QFW_API_KEY or configure device access")
+		device_id = self._descriptor.get("qdmi_device_id")
+		missing = []
+		if not device_id:
+			missing.append("its QDMI device id (qdmi-device-id in device-access config)")
+		if not login["token"]:
+			missing.append("a token (QFW_API_KEY or device-access api_key)")
+		if missing:
+			raise DEFwExecutionError(
+				"an MQV device session needs " + " and ".join(missing))
+		base_url = login["base_url"] or self._descriptor.get("url")
+		return {
+			"qdmi_device_id": str(device_id),
+			"base_url": base_url.rstrip("/") if base_url else None,
+			"token": login["token"],
+		}
+
+	def open_backend(self, access):
+		from mqt.core.qdmi import builtin_driver
+		device_id = access["qdmi_device_id"]
+		if device_id not in builtin_driver.registered_device_ids():
+			raise DEFwExecutionError(
+				f"no QDMI device {device_id!r} is registered; install "
+				f"{self.requires}, which registers MQV's catalogue entries")
+		from mqt.core.plugins.qiskit import QDMIBackend
+		settings = {key: value for key, value in access.items()
+			if key != "qdmi_device_id" and value not in (None, "")}
+		device = builtin_driver.open_device(device_id, **settings)
+		return QDMIBackend(device=device, device_id=device_id)
+
+	def describe(self, access):
+		return access.get("qdmi_device_id")
+
+	def encode(self, driver, source, info, backend):
+		# The circuit is compiled to the device's own target, which MQSS
+		# reports, then serialized in the first format the device takes.
+		device = backend.device
+		supported = {fmt.name for fmt in device.supported_program_formats()}
+		name = next((fmt for fmt in self.PROGRAM_FORMATS if fmt in supported), None)
+		if name is None:
+			raise DEFwExecutionError(
+				f"MQV device {device.name()!r} takes none of "
+				f"{', '.join(self.PROGRAM_FORMATS)}; it reports "
+				f"{sorted(supported) or 'no program formats'}")
+		from mqt.core.mlir import TargetEnvironment, serialize_program
+		from mqt.core.plugins.qiskit.exceptions import UnsupportedOperationError
+		from mqt.core.qdmi import ProgramFormat
+		from qiskit import transpile
+		from util.iqm_transcode import load_qiskit_circuit
+		circuit = load_qiskit_circuit(source)
+		if circuit.parameters:
+			raise DEFwExecutionError("MQV circuits must have bound parameters")
+		circuit = backend._preprocess_circuit(circuit)
+		try:
+			backend.validate_circuit(circuit, native=True)
+		except UnsupportedOperationError:
+			circuit = transpile(circuit, backend=backend, optimization_level=1)
+			backend.validate_circuit(circuit, native=True)
+		environment = TargetEnvironment.from_device(
+			device, program_format=getattr(ProgramFormat, name))
+		program = serialize_program(circuit, target=environment)
+		return program.payload, program.program_format.name, program
+
+	def check_shots(self, shots):
+		if shots <= 0:
+			raise DEFwExecutionError("MQV shots must be positive")
+		return super().check_shots(shots)
+
+
 PROFILES = {
 	IqmQdmiProfile.provider: IqmQdmiProfile,
 	BraketQdmiProfile.provider: BraketQdmiProfile,
+	IbmQdmiProfile.provider: IbmQdmiProfile,
+	PasqalQdmiProfile.provider: PasqalQdmiProfile,
+	MqvQdmiProfile.provider: MqvQdmiProfile,
 }
 
 

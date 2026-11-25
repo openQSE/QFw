@@ -424,6 +424,53 @@ def test_transport_spans_cover_the_way_in_and_the_way_back(monkeypatch, recordin
 		assert "qfw.qpm.cid" not in attributes
 
 
+def _vendor_on(monkeypatch):
+	# Like the transport flag: read when providers are adopted, so flip the
+	# state directly.
+	monkeypatch.setattr(qfw_telemetry._STATE, "vendor_timing", True)
+
+
+def test_vendor_timing_is_off_unless_asked_for(recording):
+	circuit = types.SimpleNamespace(
+		info={"qtask_id": 1, "num_qubits": 2, "num_shots": 10},
+		get_cid=lambda: "cid-v", creation_time=1.0, resources_consumed_time=2.0)
+	with instrumentation.backend_execution(circuit, "qrmi", device="q20"):
+		instrumentation.record_vendor_timing({"execution": 2.5, "total": 5.0})
+	(execute,) = recording.spans_by_name()["qfw.backend.execute"]
+	assert "qfw.vendor.execution_s" not in execute.attributes
+	assert recording.points("qfw.vendor.duration") == []
+
+
+def test_vendor_timing_lands_on_the_execute_span_and_its_histogram(
+		monkeypatch, recording):
+	_vendor_on(monkeypatch)
+	circuit = types.SimpleNamespace(
+		info={"qtask_id": 1, "num_qubits": 2, "num_shots": 10},
+		get_cid=lambda: "cid-v", creation_time=1.0, resources_consumed_time=2.0)
+	with instrumentation.backend_execution(
+			circuit, "qrmi", device="q20", backend_kind="iqm"):
+		with instrumentation.backend_phase("collect"):
+			pass
+		# After the phases, as a driver does it: the execute span is current.
+		instrumentation.record_vendor_timing(
+			{"queue": 0.05, "execution": 2.5, "total": 5.0, "validation": None})
+	(execute,) = recording.spans_by_name()["qfw.backend.execute"]
+	assert execute.attributes["qfw.vendor.execution_s"] == 2.5
+	assert execute.attributes["qfw.vendor.total_s"] == 5.0
+	assert "qfw.vendor.validation_s" not in execute.attributes
+
+	points = recording.points("qfw.vendor.duration")
+	by_phase = {a["qfw.vendor.phase"]: (a, p) for a, p in points}
+	assert set(by_phase) == {"queue", "execution", "total"}
+	attributes, point = by_phase["execution"]
+	assert point.count == 1 and point.sum == 2.5
+	# Labelled like the backend metrics, so a dashboard reads it per api path
+	# and device.
+	assert attributes["qfw.stack.api_path"] == "qrmi"
+	assert attributes["qfw.device.name"] == "q20"
+	assert attributes["qfw.backend.kind"] == "iqm"
+
+
 class _RecordingEndpoint:
 	"""Stands in for the client's remote event API, the thing the QPM pushes to."""
 	instances = []

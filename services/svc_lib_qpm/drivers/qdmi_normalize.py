@@ -1,21 +1,13 @@
-# FoMaC Device -> qhw normalization for the device-introspection facet.
+# Normalize MQT Core QDMI Device queries into qhw records.
 #
-# QDMI is vendor-neutral: its FoMaC Device API (mqt.core.qdmi in Python) already
-# exposes the real qubit names, connectivity, gate loci, and calibration (T1/T2,
-# gate fidelity) through the QDMI query interface. The QDMI driver reads that
-# directly -- no Qiskit Target, no raw vendor JSON -- and this builds the same
-# provider-neutral qhw-data records the native / QRMI paths emit, so a consumer
-# sees one device/coupling record regardless of which library served the call.
-#
-# Split so normalization is testable without hardware or credentials:
-#   - extract_topology(device): the only part that touches a live FoMaC Device
-#     (duck-typed: regular_sites(), operations(), coupling_map());
-#   - to_device_record / to_coupling_record: pure functions over the extracted
-#     dict, building qhw-device-v1 / qhw-coupling-v1 with the qhw_data builders.
-#
-# qhw_data is imported lazily inside the record builders (as the native IQM path
-# defers qhw-iqm) so the driver imports and the Frontend routes even where
-# qhw-data is not installed; only a real introspection call needs it.
+# Extraction reads device queries directly, without a Qiskit Target or raw
+# vendor JSON. Record builders use the extracted dicts so normalization can
+# be tested without hardware or credentials. They defer qhw_data imports so
+# the service can start without that package installed.
+
+from math import isfinite
+
+from defw_exception import DEFwExecutionError
 
 _COUPLING_SOURCE = "qdmi.fomac.coupling_map"
 
@@ -31,16 +23,13 @@ _CALIBRATION_SET_ID_SLOT = "CUSTOM1"
 
 
 def extract_topology(device):
-	"""Read a provider-neutral topology dict off a FoMaC Device.
+	"""Read a provider-neutral topology dict off a QDMI Device.
 
 	Returns a dict with:
 	  num_qubits: int
 	  qubits:     list[str]  -- real device labels (e.g. "QB1"), via QDMI
 	  edges:      list[[str, str]]  -- undirected, de-duplicated coupling edges
 	  operations: dict[str, list[list[str]]]  -- gate name -> supported loci
-
-	Only this function depends on the FoMaC Device object; everything else in
-	this module is pure and can be exercised with a synthetic topology dict.
 	"""
 	sites = list(device.regular_sites() or [])
 	qubits = [_site_label(site) for site in sites]
@@ -55,7 +44,7 @@ def extract_topology(device):
 
 
 def extract_calibration(device, calibration_set_slot=_CALIBRATION_SET_ID_SLOT):
-	"""Read provider-neutral calibration metrics off a FoMaC Device.
+	"""Read provider-neutral calibration metrics off a QDMI Device.
 
 	Returns a dict with:
 	  qubits:        list[str]  -- real device labels (e.g. "QB1")
@@ -66,28 +55,28 @@ def extract_calibration(device, calibration_set_slot=_CALIBRATION_SET_ID_SLOT):
 	  calibration_set_id: str | None -- provider calibration set identity
 
 	QDMI exposes coherence (QDMI_SITE_PROPERTY_T1/T2) per site and fidelity /
-	duration per operation locus; this reads them vendor-neutrally. Like
-	extract_topology, this is the only calibration function that touches the
-	live FoMaC Device -- to_calibration_record is pure over the returned dict.
+	duration per operation locus. Times include the device's duration scale
+	factor. Record builders use only the returned dict.
 
 	`calibration_set_slot` names the device CUSTOM slot the provider keeps
 	its calibration set id in (see _CALIBRATION_SET_ID_SLOT); None reads none.
 	"""
 	sites = list(device.regular_sites() or [])
+	duration_scale = _duration_scale_factor(device)
 	qubit_metrics = []
 	for site in sites:
 		entry = {"qubit": _site_label(site)}
 		t1 = _site_metric(site, "t1")
 		if t1 is not None:
-			entry["t1"] = t1
+			entry["t1"] = t1 * duration_scale
 		t2 = _site_metric(site, "t2")
 		if t2 is not None:
-			entry["t2"] = t2
+			entry["t2"] = t2 * duration_scale
 		qubit_metrics.append(entry)
 	return {
 		"qubits": [_site_label(site) for site in sites],
 		"qubit_metrics": qubit_metrics,
-		"gate_metrics": _operation_metrics(device),
+		"gate_metrics": _operation_metrics(device, duration_scale),
 		"duration_unit": _device_duration_unit(device),
 		"calibration_set_id": _calibration_set_id(
 			device, calibration_set_slot),
@@ -104,11 +93,12 @@ def to_device_record(topo, provider, device_id, include_raw=False,
 	"""
 	from qhw_data import new_device
 	qubits = topo.get("qubits") or []
-	device_fields = {"num_qubits": len(qubits)}
+	capacity = topo.get("num_qubits", len(qubits))
+	device_fields = {"num_qubits": capacity}
 	if technology:
 		device_fields["technology"] = technology
 	builder = (
-		new_device(provider, device_id, num_qubits=len(qubits))
+		new_device(provider, device_id, num_qubits=capacity)
 		.device(device_id, **device_fields)
 		.qubits(qubits)
 		.metadata({"source": "qdmi", "via": "mqt.core.qdmi"})
@@ -148,7 +138,7 @@ def to_calibration_record(cal, provider, device_id, include_raw=False,
 		validate=True):
 	"""Build a `qhw-calibration-v1` record from an extracted calibration dict.
 
-	QDMI (via FoMaC) reports the current per-qubit coherence and per-gate
+	QDMI reports the current per-qubit coherence and per-gate
 	fidelity rather than IQM's calibration/quality observation sets, so the
 	record carries counts + summaries in the core fields and the measured
 	values under the `qdmi.fomac.v1` extension. It also carries the provider's
@@ -196,7 +186,7 @@ def to_result_record(counts, shots, provider, device_id, job_id=None,
 		status="completed", queue_position=None, validate=True):
 	"""Build a `qhw-result-v1` record from a QDMI counts histogram.
 
-	QDMI (via FoMaC) returns a plain {bitstring: count} histogram from
+	QDMI returns a plain {bitstring: count} histogram from
 	`Job.get_counts()`; normalize it to the same `qhw-result-v1` the QRMI/native
 	path produces via qhw-iqm, so a consumer sees one result shape regardless of
 	which library executed the circuit. Pure over the counts dict.
@@ -227,7 +217,7 @@ def to_result_record(counts, shots, provider, device_id, job_id=None,
 	return builder.build(validate_schema=validate)
 
 
-# --- FoMaC Device extraction helpers (duck-typed) ------------------------
+# --- QDMI Device extraction helpers (duck-typed) ------------------------
 
 def _site_label(site):
 	# Prefer the device's real label (QDMI_SITE_PROPERTY_NAME, e.g. "QB1"); fall
@@ -261,35 +251,11 @@ def _operations(device):
 
 
 def _operation_loci(op):
-	# A FoMaC Operation exposes the loci it supports: site_pairs() for local
-	# 2-qubit operations, otherwise sites() (each site is a 1-qubit locus).
-	loci = []
-	seen = set()
-	pairs = None
-	try:
-		pairs = op.site_pairs()
-	except Exception:
-		pairs = None
-	if pairs:
-		for pair in pairs:
-			locus = [_site_label(pair[0]), _site_label(pair[1])]
-			key = tuple(locus)
-			if key not in seen:
-				seen.add(key)
-				loci.append(locus)
-		return sorted(loci, key=_locus_key)
-	sites = None
-	try:
-		sites = op.sites()
-	except Exception:
-		sites = None
-	for site in (sites or []):
-		locus = [_site_label(site)]
-		key = tuple(locus)
-		if key not in seen:
-			seen.add(key)
-			loci.append(locus)
-	return sorted(loci, key=_locus_key)
+	# Topology and calibration must use the same ordered site tuples.
+	loci = {
+		tuple(_site_label(site) for site in locus)
+		for locus in _operation_loci_sites(op) if locus}
+	return sorted((list(locus) for locus in loci), key=_locus_key)
 
 
 def _site_metric(site, attr):
@@ -303,7 +269,18 @@ def _site_metric(site, attr):
 		return None
 
 
-def _operation_metrics(device):
+def _duration_scale_factor(device):
+	getter = getattr(device, "duration_scale_factor", None)
+	scale = getter() if getter is not None else None
+	if scale is None:
+		return 1.0
+	if not isfinite(scale) or scale <= 0:
+		raise DEFwExecutionError(
+			f"QDMI duration scale factor must be positive and finite, got {scale!r}")
+	return scale
+
+
+def _operation_metrics(device, duration_scale):
 	# Per-operation-locus fidelity/duration. Mirrors _operations() but keeps the
 	# Site objects so the metric accessors can be queried per locus. Only loci
 	# that actually report a metric are recorded.
@@ -327,7 +304,7 @@ def _operation_metrics(device):
 				entry["fidelity"] = fidelity
 			duration = _op_metric(op, "duration", locus_sites)
 			if duration is not None:
-				entry["duration"] = duration
+				entry["duration"] = duration * duration_scale
 			if "fidelity" in entry or "duration" in entry:
 				metrics.append(entry)
 	return sorted(metrics,
@@ -335,7 +312,7 @@ def _operation_metrics(device):
 
 
 def _operation_loci_sites(op):
-	# The loci an operation supports, as lists of FoMaC Site objects (parallel
+	# The loci an operation supports, as lists of QDMI Site objects (parallel
 	# to _operation_loci, which returns labels). An operation with neither
 	# site_pairs() nor sites() is treated as a single global locus ([]).
 	pairs = None
@@ -351,7 +328,20 @@ def _operation_loci_sites(op):
 	except Exception:
 		sites = None
 	if sites:
-		return [[site] for site in sites]
+		# QDMI flattens ordered tuples for every arity, not just pairs.
+		# Older duck-typed callers provide only single-site operations.
+		try:
+			arity = op.qubits_num()
+		except AttributeError:
+			arity = 1
+		except Exception:
+			return [[]]
+		# Unknown arity cannot decode placements; keep only global metadata.
+		if arity is None or arity == 0:
+			return [[]]
+		if arity < 1 or len(sites) % arity:
+			raise DEFwExecutionError("QDMI operation has incomplete or unknown site tuples")
+		return [list(sites[i:i + arity]) for i in range(0, len(sites), arity)]
 	return [[]]
 
 
@@ -366,6 +356,12 @@ def _op_metric(op, attr, locus_sites):
 		return getter()
 	except Exception:
 		return None
+
+
+def calibration_set_id(device, slot=_CALIBRATION_SET_ID_SLOT):
+	"""The provider's calibration set id from the device's custom slot, or
+	None when the provider publishes none (slot None) or the query fails."""
+	return _calibration_set_id(device, slot)
 
 
 def _calibration_set_id(device, slot=_CALIBRATION_SET_ID_SLOT):

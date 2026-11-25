@@ -19,6 +19,14 @@ reports each failure, keeps the current-run marker and the run directory, and
 prints the command that retries the teardown. The kept state records the
 processes that still need to be stopped.
 .PP
+If an application-owned service ended before teardown,
+.B qfw-teardown
+prints how it ended, such as
+.BR "QPM service aer-1 exited with status 121" ,
+with the end of its logs, and keeps the run directory, which holds its
+.B exit-status
+file and its logs.
+.PP
 Site-owned directory services, DVMs, and QPMs are outside this ownership
 boundary and are never stopped by application teardown.
 .SH OPTIONS
@@ -29,7 +37,7 @@ runtime is selected.
 .TP
 .B --keep-run-dir
 Keep generated state and logs after stopping application-owned services and
-clearing the current-run marker.
+clearing the current-run marker, also when no service ended.
 .SH EXIT STATUS
 Zero indicates that all application-owned components stopped successfully.
 Incomplete cleanup or unreadable runtime state returns nonzero.

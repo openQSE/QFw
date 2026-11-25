@@ -11,13 +11,15 @@
 #
 # The device library, mqt.core and the Qiskit transcode are stood in for, so
 # no qiskit, amazon-braket-qdmi or mqt-core install is needed. The real
-# OpenQASM 3 output is covered by tests/qiskit/test_braket_qasm3.py.
+# OpenQASM 3 output is covered by tests/qiskit/test_braket_qdmi.py.
 
 import pathlib
 import sys
 import types
 
 import pytest
+
+from tests.mock.fakes import stub_qdmi_session
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -88,78 +90,30 @@ def test_access_needs_a_device_arn():
 		profile_for(_descriptor(provider_device_id=None)).access()
 
 
-def test_the_session_parameters_follow_the_library_aliases():
-	profile = profile_for(_descriptor(
+def test_the_device_opens_through_the_packaged_backend(monkeypatch):
+	opened = []
+
+	def AmazonBraketBackend(**kwargs):
+		opened.append(kwargs)
+		return types.SimpleNamespace(device="braket-device")
+
+	monkeypatch.setitem(sys.modules, "amazon.braket.qdmi.qiskit", _module(
+		"amazon.braket.qdmi.qiskit", AmazonBraketBackend=AmazonBraketBackend))
+	driver = QdmiDriver(_descriptor(
 		qdmi_device_id="amazon.braket.sv1", aws_region="us-east-1",
 		reservation_arn="arn:aws:braket:us-east-1:123:reservation/r1"))
 
-	access = profile.access()
-
-	assert access["qdmi_device_id"] == "amazon.braket.sv1"
-	# DEVICEARN is BASEURL, REGION is CUSTOM2, RESERVATION_ARN is CUSTOM3.
-	assert profile.open_kwargs(access) == {
-		"base_url": SV1_ARN,
-		"custom2": "us-east-1",
-		"custom3": "arn:aws:braket:us-east-1:123:reservation/r1",
-	}
-	# Without a Region or a reservation, neither slot is set, so the library
-	# takes the Region from the ARN.
-	assert profile_for(_descriptor()).open_kwargs(
-		profile_for(_descriptor()).access()) == {"base_url": SV1_ARN}
-
-
-def test_the_device_opens_through_the_braket_library(monkeypatch):
-	opened, registered = [], []
-
-	class Definition:
-		def __init__(self, device_id, library_path, prefix):
-			self.device_id = device_id
-			self.library_path = library_path
-			self.prefix = prefix
-
-	def open_device(device_id, **kwargs):
-		opened.append((device_id, kwargs))
-		return "braket-device"
-
-	monkeypatch.setitem(sys.modules, "amazon", _module("amazon"))
-	monkeypatch.setitem(sys.modules, "amazon.braket", _module("amazon.braket"))
-	monkeypatch.setitem(sys.modules, "amazon.braket.qdmi", _module(
-		"amazon.braket.qdmi",
-		AMAZON_BRAKET_QDMI_LIBRARY_PATH="/opt/libamazon-braket-qdmi-device.so",
-		AMAZON_BRAKET_QDMI_PREFIX="AMAZON_BRAKET"))
-	monkeypatch.setitem(sys.modules, "mqt", _module("mqt"))
-	monkeypatch.setitem(sys.modules, "mqt.core", _module("mqt.core"))
-	monkeypatch.setitem(sys.modules, "mqt.core.qdmi", _module("mqt.core.qdmi"))
-	monkeypatch.setitem(sys.modules, "mqt.core.qdmi.driver", _module(
-		"mqt.core.qdmi.driver",
-		DeviceDefinition=Definition,
-		register_device_if_absent=lambda d: registered.append(d) or True,
-		open_device=open_device))
-	driver = QdmiDriver(_descriptor(
-		qdmi_device_id="amazon.braket.sv1", aws_region="us-east-1"))
-
 	assert driver._device() == "braket-device"
-
-	assert [(d.device_id, d.library_path, d.prefix) for d in registered] == [
-		("amazon.braket.sv1", "/opt/libamazon-braket-qdmi-device.so",
-			"AMAZON_BRAKET")]
-	assert opened == [("amazon.braket.sv1", {
-		"base_url": SV1_ARN, "custom2": "us-east-1"})]
-	assert "token" not in opened[0][1]
+	assert driver._device() == "braket-device"
+	assert opened == [{
+		"device_id": "amazon.braket.sv1", "device_arn": SV1_ARN,
+		"region": "us-east-1",
+		"reservation_arn": "arn:aws:braket:us-east-1:123:reservation/r1"}]
 
 
 def test_a_missing_braket_library_names_its_package(monkeypatch):
-	monkeypatch.setitem(sys.modules, "mqt", _module("mqt"))
-	monkeypatch.setitem(sys.modules, "mqt.core", _module("mqt.core"))
-	monkeypatch.setitem(sys.modules, "mqt.core.qdmi", _module("mqt.core.qdmi"))
-	monkeypatch.setitem(sys.modules, "mqt.core.qdmi.driver", _module(
-		"mqt.core.qdmi.driver",
-		open_device=lambda *a, **k: None,
-		register_device_if_absent=lambda d: True))
-	monkeypatch.setitem(sys.modules, "amazon", None)
-	monkeypatch.setitem(sys.modules, "amazon.braket.qdmi", None)
-
-	with pytest.raises(DEFwExecutionError, match="Install amazon-braket-qdmi"):
+	monkeypatch.setitem(sys.modules, "amazon.braket.qdmi.qiskit", None)
+	with pytest.raises(DEFwExecutionError, match="amazon-braket-qdmi"):
 		QdmiDriver(_descriptor())._device()
 
 
@@ -202,30 +156,27 @@ def test_no_calibration_slot_and_a_technology_from_the_arn():
 		provider_device_id=CEPHEUS_ARN)).technology() == "superconducting"
 
 
-def test_encode_hands_the_transcoder_the_device_vocabulary(monkeypatch):
+def test_encode_hands_the_transcoder_the_packaged_backend(monkeypatch):
 	seen = {}
 
-	def to_braket_qasm3(circuit, accepted):
+	def to_braket_qasm3(circuit, backend):
 		seen["circuit"] = circuit
-		seen["accepted"] = accepted
+		seen["backend"] = backend
 		return "OPENQASM 3.0;", {"num_clbits": 1, "map": [(0, 0)]}
 
 	monkeypatch.setattr(braket_transcode, "to_braket_qasm3", to_braket_qasm3)
-	monkeypatch.setattr(
-		braket_transcode, "accepted_operation_names",
-		lambda device: {"rx", "ry", "cz"})
 	import util.iqm_transcode as iqm_transcode
 	monkeypatch.setattr(
 		iqm_transcode, "load_qiskit_circuit", lambda source: ("loaded", source))
 
 	encoded = profile_for(_descriptor()).encode(
-		None, "OPENQASM 2.0;", {}, object())
+		object(), "OPENQASM 2.0;", {}, "braket-backend")
 
 	assert encoded == (
 		"OPENQASM 3.0;", "QASM3", {"num_clbits": 1, "map": [(0, 0)]})
 	assert seen == {
 		"circuit": ("loaded", "OPENQASM 2.0;"),
-		"accepted": {"rx", "ry", "cz"},
+		"backend": "braket-backend",
 	}
 
 
@@ -264,7 +215,7 @@ def test_run_circuit_submits_qasm3_and_remaps_the_counts(monkeypatch):
 		return {"schema": "qhw-result-v1"}
 
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "to_result_record", to_result_record)
+		qdmi_driver.qdmi_normalize, "to_result_record", to_result_record)
 	monkeypatch.setitem(sys.modules, "mqt", _module("mqt"))
 	monkeypatch.setitem(sys.modules, "mqt.core", _module("mqt.core"))
 	monkeypatch.setitem(sys.modules, "mqt.core.qdmi", _module(
@@ -278,7 +229,7 @@ def test_run_circuit_submits_qasm3_and_remaps_the_counts(monkeypatch):
 
 	driver = QdmiDriver(_descriptor(
 		s3_results_uri="s3://results/qfw/sv1", max_shots="1000"))
-	driver._device = lambda credential=None: types.SimpleNamespace(submit_job=submit_job)
+	stub_qdmi_session(driver, types.SimpleNamespace(submit_job=submit_job))
 	circuit = types.SimpleNamespace(
 		info={"qasm": "OPENQASM 2.0;", "num_shots": 10, "poll_interval": 0.0},
 		get_cid=lambda: "cid-3")
@@ -299,8 +250,8 @@ def test_run_circuit_refuses_shots_over_the_cap_before_submitting(monkeypatch):
 	monkeypatch.setattr(iqm_transcode, "load_qiskit_circuit", lambda s: s)
 	submitted = []
 	driver = QdmiDriver(_descriptor(max_shots="100"))
-	driver._device = lambda credential=None: types.SimpleNamespace(
-		submit_job=lambda *a, **k: submitted.append(a))
+	stub_qdmi_session(driver, types.SimpleNamespace(
+		submit_job=lambda *a, **k: submitted.append(a)))
 	circuit = types.SimpleNamespace(
 		info={"qasm": "OPENQASM 2.0;", "num_shots": 101}, get_cid=lambda: "c")
 
@@ -423,6 +374,24 @@ def test_remap_counts_merges_keys_that_land_on_one_bit_pattern():
 		{"10": 4, "11": 6}, measurement) == {"1": 10}
 
 
+def test_remap_counts_fills_every_bit_a_qubit_was_measured_into():
+	# One qubit measured into bits 0 and 2 of a 3-bit register: the program
+	# measures it once, and its value lands in both bits.
+	measurement = {"num_clbits": 3, "map": [(0, 0), (0, 2)]}
+
+	assert braket_transcode.remap_counts(
+		{"1": 10}, measurement) == {"101": 10}
+
+
+def test_remap_counts_lets_the_last_measurement_into_a_bit_win():
+	# Bit 0 takes qubit 0, then qubit 1; bit 1 takes qubit 0. Library key
+	# "01" is q1 = 0, q0 = 1, so bit 0 reads qubit 1's 0 and bit 1 reads 1.
+	measurement = {"num_clbits": 2, "map": [(0, 0), (1, 0), (0, 1)]}
+
+	assert braket_transcode.remap_counts(
+		{"01": 10}, measurement) == {"10": 10}
+
+
 def test_remap_counts_rejects_a_key_of_the_wrong_width():
 	measurement = {"num_clbits": 2, "map": [(0, 0), (1, 1)]}
 
@@ -435,3 +404,13 @@ def test_remap_counts_passes_through_without_a_map(measurement):
 	counts = {"01": 10}
 
 	assert braket_transcode.remap_counts(counts, measurement) is counts
+
+
+def test_remap_counts_preserves_multiple_destinations_of_one_qubit():
+	measurement = {"num_clbits": 2, "map": [(0, 0), (0, 1)]}
+	assert braket_transcode.remap_counts({"1": 10}, measurement) == {"11": 10}
+
+
+def test_remap_counts_uses_the_last_write_to_each_classical_bit():
+	measurement = {"num_clbits": 2, "map": [(0, 0), (0, 1), (1, 0)]}
+	assert braket_transcode.remap_counts({"01": 10}, measurement) == {"10": 10}

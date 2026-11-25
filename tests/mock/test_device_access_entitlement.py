@@ -49,6 +49,59 @@ def test_missing_or_disabled_entitlement_is_rejected(database):
 			database, "alice", device_id="device-a")
 
 
+# --- which of the five rejections it was ------------------------------------
+#
+# The five cases above all raised the same sentence, which names an absent
+# API key even when the real cause is a disabled entry or a device that is
+# not listed. The message now says which step failed.
+
+@pytest.mark.parametrize("database,expected", [
+	(_database(user_enabled=False), "user entry is not enabled"),
+	(_database(device_enabled=False), "'device-a' is not enabled"),
+	(_database(api_key=""), "'device-a' has no usable api_key"),
+	(_database(api_key="   "), "'device-a' has no usable api_key"),
+	({"users": {"alice": {
+		"enabled": True,
+		"devices": {"device-b": {"enabled": True, "api_key": "secret"}},
+	}}}, "no device named 'device-a'"),
+	({"users": {"alice": {"enabled": True}}}, "no devices mapping"),
+	({"users": {"bob": {"enabled": True}}}, "'alice' has no entry"),
+	({"users": {"alice": "not-a-mapping"}}, "entry is not a mapping"),
+])
+def test_rejection_says_which_step_failed(database, expected):
+	with pytest.raises(DEFwExecutionError) as raised:
+		device_access.select_user_record(
+			database, "alice", device_id="device-a")
+
+	assert expected in str(raised.value)
+	# The first line callers and docs already quote stays intact.
+	assert "does not contain an enabled entitlement and API key" in str(
+		raised.value)
+
+
+def test_provider_device_id_is_named_when_neither_matches():
+	database = {"users": {"alice": {"enabled": True, "devices": {}}}}
+
+	with pytest.raises(DEFwExecutionError) as raised:
+		device_access.select_user_record(
+			database, "alice", device_id="device-a",
+			provider_device_id="qpu:device-a")
+
+	assert "'device-a' or 'qpu:device-a'" in str(raised.value)
+
+
+def test_entitlement_only_rejection_does_not_mention_api_key():
+	# select_entitled_record binds no API key, so an empty one is not a
+	# reason to reject and must not show up in its diagnosis.
+	with pytest.raises(DEFwExecutionError) as raised:
+		device_access.select_entitled_record(
+			_database(api_key="", device_enabled=False), "alice",
+			device_id="device-a")
+
+	assert "'device-a' is not enabled" in str(raised.value)
+	assert "api_key" not in str(raised.value)
+
+
 # --- a user's IBM service instance ------------------------------------------
 #
 # An IBM instance (CRN) is shared by its users rather than tied to one device,

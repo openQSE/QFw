@@ -79,6 +79,7 @@ IBM_QS_DEVICE = dict(IBM_DEVICE, **{
 # count and shot cap are what the service advertises and enforces for a
 # device whose library does not say before a session opens.
 SV1_ARN = "arn:aws:braket:::device/quantum-simulator/amazon/sv1"
+CEPHEUS_ARN = "arn:aws:braket:us-west-1::device/qpu/rigetti/Cepheus-1-108Q"
 AWS_DEVICE = {
 	"provider": "aws",
 	"provider-device-id": SV1_ARN,
@@ -94,10 +95,31 @@ AWS_DEVICE = {
 	"execution-owner": "qdmi",
 }
 
+# A Pasqal device. The Pasqal Cloud project is the default for users whose
+# credential entry names none.
+PASQAL_DEVICE = {
+	"provider": "pasqal",
+	"provider-device-id": "EMU_FREE",
+	"url": "https://apis.pasqal.cloud",
+	"credential-db": "creds.json",
+	"resource-type": "PasqalCloud",
+	"project-id": "proj-device",
+}
+
+# A device whose provider rate-limits caps how many of its circuits are at the
+# provider at once, and can poll their status less often. The shim reads both
+# off the descriptor, so they have to pass both fixed key sets like the keys
+# above.
+RATE_LIMITED_DEVICE = dict(BARE_DEVICE, **{
+	"max-concurrent-jobs": 2,
+	"poll-interval-seconds": 3,
+})
+
 DESCRIPTOR_KEYS = (
 	"libraries", "preference", "caps", "execution_owner",
 	"service-crn", "iam-endpoint", "qdmi-device-id", "aws-region",
-	"s3-results-uri", "reservation-arn", "num-qubits", "max-shots")
+	"s3-results-uri", "reservation-arn", "num-qubits", "max-shots",
+	"max-concurrent-jobs", "poll-interval-seconds", "project-id")
 
 
 def _config(device, device_id="dev"):
@@ -137,9 +159,63 @@ def test_shim_example_uses_no_secret_credential_provider():
 	assert sv1["credential-provider"] == "shim-no-secret"
 	assert sv1["libraries"] == ["qdmi"]
 	assert sv1["execution-owner"] == "qdmi"
+	# The Rigetti QPU entry: a billed device, so it carries the shot cap and
+	# the queue wait, and no results bucket, which is a site's own.
+	cepheus = config["qpus"]["aws-cepheus"]
+	assert cepheus["provider"] == "aws"
+	assert cepheus["provider-device-id"] == CEPHEUS_ARN
+	assert cepheus["qdmi-device-id"] == "amazon.braket.rigetti.cepheus-1-108q"
+	assert cepheus["aws-region"] == "us-west-1"
+	assert cepheus["num-qubits"] == 108
+	assert cepheus["max-shots"] == 1024
+	assert cepheus["job-timeout-seconds"] == 7200
+	assert "s3-results-uri" not in cepheus
+	assert cepheus["credential-provider"] == "shim-no-secret"
+	assert cepheus["libraries"] == ["qdmi"]
+	assert cepheus["execution-owner"] == "qdmi"
+	# Both Braket entries select by device id (two aws devices make the
+	# provider alone ambiguous) and forward the fields the profile reads.
+	for name, region in (("aws-sv1", "us-east-1"), ("aws-cepheus", "us-west-1")):
+		selected = device_access.select_qpu(
+			dict(config), str(config_path), provider="aws", device_id=name)
+		assert selected["aws-region"] == region
+		assert selected["qdmi-device-id"] == config["qpus"][name]["qdmi-device-id"]
+	assert selected["max-shots"] == 1024
 
 
 # --- select_qpu(): the fix site --------------------------------------------
+
+@pytest.mark.parametrize("device_id,provider_device_id", [
+	("pasqal-emu-free", "EMU_FREE"),
+	("pasqal-fresnel", "FRESNEL"),
+])
+def test_pulser_example_devices_reach_the_driver(
+		monkeypatch, device_id, provider_device_id):
+	# The config qfw_pulser.sh builds: its project filled in, read the way
+	# the shim service reads it.
+	text = (REPO_ROOT / "examples" / "qfw_pulser_device_access.yaml") \
+		.read_text(encoding="utf-8") \
+		.replace("QFW_PASQAL_PROJECT_ID", "proj")
+	manifest = yaml.safe_load(
+		(REPO_ROOT / "examples" / "qfw_pulser_services.yaml")
+		.read_text(encoding="utf-8"))
+	descriptor = _load_descriptor()
+	monkeypatch.setattr(
+		device_access, "device_access_config_path", lambda: "cfg.yaml")
+	monkeypatch.setattr(
+		device_access, "load_yaml_config", lambda path: yaml.safe_load(text))
+
+	resolved = descriptor.resolve_descriptor(device_id)
+
+	assert manifest["services"][0]["credential-mode"] == "no-secret"
+	assert resolved["provider"] == "pasqal"
+	assert resolved["provider_device_id"] == provider_device_id
+	assert resolved["resource_type"] == "PasqalCloud"
+	assert resolved["libraries"] == ["qrmi", "qdmi"]
+	assert resolved["caps"]["get_backend_info"] == ["qrmi", "qdmi"]
+	assert resolved["caps"]["run_circuit"] == ["qrmi", "qdmi"]
+	assert resolved["project_id"] == "proj"
+
 
 def test_select_qpu_passes_through_descriptor_fields(monkeypatch):
 	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
@@ -372,6 +448,48 @@ def test_resolve_descriptor_carries_the_braket_fields(monkeypatch):
 	assert resolved["execution_owner"] == "qdmi"
 
 
+def test_resolve_descriptor_carries_the_pasqal_fields(monkeypatch):
+	descriptor = _load_descriptor()
+	monkeypatch.setattr(
+		device_access, "device_access_config_path", lambda: "cfg.yaml")
+	monkeypatch.setattr(
+		device_access, "load_yaml_config",
+		lambda path: _config(PASQAL_DEVICE))
+	monkeypatch.setenv(device_access.QPU_DEVICE_ENV, "dev")
+
+	resolved = descriptor.resolve_descriptor()
+	assert resolved["provider"] == "pasqal"
+	assert resolved["provider_device_id"] == "EMU_FREE"
+	assert resolved["resource_type"] == "PasqalCloud"
+	assert resolved["project_id"] == "proj-device"
+
+
+def test_select_qpu_passes_through_the_rate_limit_fields(monkeypatch):
+	monkeypatch.delenv(device_access.QPU_DEVICE_ENV, raising=False)
+	selected = device_access.select_qpu(
+		_config(RATE_LIMITED_DEVICE), "cfg.yaml", provider="iqm")
+	assert selected["max-concurrent-jobs"] == 2
+	assert selected["poll-interval-seconds"] == 3
+
+
+@pytest.mark.parametrize("device,expected", [
+	(RATE_LIMITED_DEVICE, (2, 3)),
+	(BARE_DEVICE, (None, None)),
+])
+def test_resolve_descriptor_carries_the_rate_limit_fields(
+		monkeypatch, device, expected):
+	descriptor = _load_descriptor()
+	monkeypatch.setattr(
+		device_access, "device_access_config_path", lambda: "cfg.yaml")
+	monkeypatch.setattr(
+		device_access, "load_yaml_config", lambda path: _config(device))
+	monkeypatch.setenv(device_access.QPU_DEVICE_ENV, "dev")
+
+	resolved = descriptor.resolve_descriptor()
+	assert (resolved["max_concurrent_jobs"],
+		resolved["poll_interval_seconds"]) == expected
+
+
 def test_resolve_descriptor_leaves_the_braket_fields_unset_when_unconfigured(
 		monkeypatch):
 	descriptor = _load_descriptor()
@@ -383,7 +501,7 @@ def test_resolve_descriptor_leaves_the_braket_fields_unset_when_unconfigured(
 
 	resolved = descriptor.resolve_descriptor()
 	for key in ("qdmi_device_id", "aws_region", "s3_results_uri",
-			"reservation_arn", "num_qubits", "max_shots"):
+			"reservation_arn", "num_qubits", "max_shots", "project_id"):
 		assert resolved[key] is None
 
 

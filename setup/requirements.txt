@@ -1,14 +1,30 @@
-qiskit==2.2.3
+# Pin a Qiskit minor supported by MQT Core's native compiler.
+qiskit==2.6.2
 qiskit_aer==0.17.2
 qiskit-algorithms
 qiskit-optimization
 supermarq
 pennylane
-pennylane-qiskit
+pennylane-qiskit==0.45.1
 qiskit-ibm-runtime
+# qiskit-ibm-runtime asks for ibm-platform-services>=0.22.6, and iqm-client
+# below pins requests==2.32.3 exactly. ibm-platform-services 0.77.0 moved to
+# ibm-cloud-sdk-core>=3.24.4, which needs requests>=2.32.4, so the two cannot
+# both be satisfied and the resolver walks back down the platform-services
+# versions. Without a floor it reaches 0.55.2, the one version in that range
+# published as an sdist only, whose build imports pkg_resources without
+# declaring setuptools and so fails. This floor keeps the resolution on 0.66.1,
+# the version QFw has been building with. It can go once iqm-client stops
+# pinning requests to a single version.
+ibm-platform-services>=0.59
 iqm-client==34.0.1
 iqm-data-definitions==2.24
-iqm-exa-common==27.5.1
+# 27.5.4 rather than 27.5.1: 27.5.1 pins ruamel-yaml==0.17.32, which cannot
+# coexist with the ruamel.yaml>=0.18.0 that setup/qblox-requirements.txt
+# needs, so the two stacks could not share a venv. 27.5.4 relaxes it to
+# ruamel-yaml<0.20,>=0.17.32. Patch bump within 27.5.x; iqm-client stays on
+# the 34.0.1 that svc_iqm_qpm/util_iqm.py enforces.
+iqm-exa-common==27.5.4
 iqm-pulse==13.0.1
 iqm-station-control-client==12.1.1
 qiskit_nature

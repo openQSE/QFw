@@ -2,3 +2,10 @@ docs/**/*.jsonl
 docs/json/
 **/__pycache__/
 **/*.swp
+
+# Live IQM Resonance API key copied from the .example template, in case the
+# user copies it next to the template.
+examples/qfw_garnet_mock_creds.json
+
+# Site-local Qblox configuration (real cluster address)
+services/svc_qblox_qpm/.env

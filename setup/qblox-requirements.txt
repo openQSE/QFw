@@ -1,0 +1,21 @@
+# The Qblox control stack for services/svc_qblox_qpm. Only sites that drive
+# Qblox hardware, or that want the service's built-in dummy cluster, need
+# this. The service imports it lazily and reports a clear error through
+# check_qblox_packages() when it is absent, so QFw installs and runs without
+# it.
+#
+# Kept out of setup/requirements.txt deliberately: qblox-scheduler pulls in
+# PyQt5 and pyqtgraph, and importing it is not headless - its __init__
+# reaches quantify_core.visualization -> pyqtgraph -> PyQt5.QtGui, which
+# dlopens libGL. A site that installs this also needs the system OpenGL
+# library (mesa-libGL on Rocky, libgl1 on Debian).
+#
+# Install against the core pins, so the shared venv resolves once:
+#   pip install -r setup/qblox-requirements.txt -c setup/requirements.txt
+#
+# qblox-scheduler needs ruamel.yaml>=0.18.0, which is why
+# setup/requirements.txt carries iqm-exa-common==27.5.4 rather than 27.5.1.
+# 1.0.0b4 is a beta: it is the first release carrying the HardwareAgent API
+# this service is written against.
+qblox-scheduler==1.0.0b4
+qblox-instruments==1.2.1

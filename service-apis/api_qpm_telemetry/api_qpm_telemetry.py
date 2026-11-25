@@ -2,7 +2,7 @@ from api_qpm_common import QPMRemoteBase
 
 
 class QPMTelemetry(QPMRemoteBase):
-	def get_backend_info(self, lib=None, token=None):
+	def get_backend_info(self, lib=None, token=None, reservation_id=None):
 		pass
 
 	def get_device_info(self, lib=None, token=None):

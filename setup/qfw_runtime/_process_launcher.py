@@ -13,7 +13,10 @@ import time
 from pathlib import Path
 
 from . import config as qfw_config
+from . import process_state as qfw_process_state
 from util import device_access
+
+STDERR_TAIL_LINES = 5
 
 
 def _service_env_suffix(service_id):
@@ -99,10 +102,9 @@ def start_directory(argv):
     dirsvc_host = args.host or site_host or socket.gethostname()
     dirsvc_port = (
         args.listen_port if args.listen_port is not None else
-        site_dir.get("listen_port") or site_port
-    )
-    if not dirsvc_port:
-        dirsvc_port = 8090
+        site_dir.get("listen_port") or site_port or 8090
+    ) or _unused_tcp_port(())
+    telnet_port = args.telnet_port or _unused_tcp_port((dirsvc_port,))
     startup_timeout = (
         args.timeout if args.timeout is not None else
         int(site_dir.get("connect_timeout_seconds", 40))
@@ -116,11 +118,13 @@ def start_directory(argv):
     pid_file = Path(args.pid_file) if args.pid_file else run_dir / "pid"
     ready_file = (
         Path(args.ready_file) if args.ready_file else run_dir / "ready.json")
-    env = os.environ.copy()
+    # The caller's own DEFw process variables would otherwise reach the
+    # service wherever this launcher does not set them (openQSE/QFw#187).
+    env = qfw_config.launch_environment(run_state=False)
     env.update({
         "DEFW_AGENT_NAME": dirsvc_name,
         "DEFW_LISTEN_PORT": str(dirsvc_port),
-        "DEFW_TELNET_PORT": str(args.telnet_port),
+        "DEFW_TELNET_PORT": str(telnet_port),
         "DEFW_ONLY_LOAD_MODULE": "svc_dirsvc",
         "DEFW_LOAD_NO_INIT": "",
         "DEFW_SHELL_TYPE": "daemon",
@@ -152,6 +156,8 @@ def start_directory(argv):
             "role": "dirsvc",
             "name": dirsvc_name,
             "endpoint": endpoint,
+            "listen_port": dirsvc_port,
+            "telnet_port": telnet_port,
             "startup_timeout": startup_timeout,
         },
         lambda: _tcp_endpoint_ready(endpoint),
@@ -240,16 +246,21 @@ def start_qpm(argv):
         target = str(service.get("host", ""))
     service_host = str(service.get(
         "bind-host", service.get("host", target or "127.0.0.1")))
-    service_port = int(service.get("listen-port", args.listen_port))
+    service_port = int(service.get("listen-port", args.listen_port)) or (
+        _unused_tcp_port(()))
+    telnet_port = int(service.get("telnet-port", args.telnet_port)) or (
+        _unused_tcp_port((service_port,)))
     assigned_hosts = (
         os.environ.get("QFW_SERVICE_ASSIGNED_HOSTS") or
         _resolve_host_policy(service.get("assigned-hosts"), allocation)
     )
-    env = os.environ.copy()
+    # The caller's own DEFw process variables would otherwise reach the
+    # service wherever this launcher does not set them (openQSE/QFw#187).
+    env = qfw_config.launch_environment(run_state=False)
     env.update({
         "DEFW_AGENT_NAME": service_id,
         "DEFW_LISTEN_PORT": str(service_port),
-        "DEFW_TELNET_PORT": str(service.get("telnet-port", args.telnet_port)),
+        "DEFW_TELNET_PORT": str(telnet_port),
         "DEFW_ONLY_LOAD_MODULE": load_modules,
         "DEFW_LOAD_NO_INIT": "",
         "DEFW_SHELL_TYPE": "daemon",
@@ -265,6 +276,7 @@ def start_qpm(argv):
         ),
         "QFW_QPM_OPERATION_MODE": operation_mode,
         "QFW_QPM_SERVICE_ID": service_id,
+        "QFW_QPM_SERVICE_NAME": str(service.get("name") or service_id),
         "QFW_QPM_SERVICE_MODULE": module,
         "QFW_QPM_CREDENTIAL_MODE": credential_mode,
         "QFW_QPM_RUN_DIR": str(run_dir),
@@ -372,9 +384,12 @@ def _start_defw_owned_process(name, env, role, pid_file, ready_file,
         return 0
 
     _require_free_defw_ports(name, env)
+    qfw_process_state.stop_request_path(pid_file).unlink(missing_ok=True)
+    qfw_process_state.exit_status_path(pid_file).unlink(missing_ok=True)
     command = _defw_command(env, role)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
+    stderr_path = Path(stderr_log.name)
     try:
         process = subprocess.Popen(
             command,
@@ -388,7 +403,8 @@ def _start_defw_owned_process(name, env, role, pid_file, ready_file,
         stderr_log.close()
     pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
     try:
-        _wait_process_ready(process, timeout, name, ready_probe)
+        _wait_process_ready(
+            process, timeout, name, ready_probe, stderr_path=stderr_path)
         _write_ready(ready_file, ready_payload)
         if background:
             return 0
@@ -416,6 +432,15 @@ def _require_free_defw_ports(name, env):
                 "from an earlier run")
 
 
+def _unused_tcp_port(taken):
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("", 0))
+            port = int(sock.getsockname()[1])
+        if port not in taken:
+            return port
+
+
 def _tcp_port_free(port):
     # DEFw sets SO_REUSEADDR on its listener. Probe the same way, so a port
     # still in TIME_WAIT after a clean stop reads as free and only a live
@@ -439,7 +464,12 @@ def _wait_foreground(process, pid_file, ready_file):
     old_int = signal.signal(signal.SIGINT, terminate)
     old_term = signal.signal(signal.SIGTERM, terminate)
     try:
-        return process.wait()
+        returncode = process.wait()
+        if qfw_process_state.stop_request_path(pid_file).exists():
+            return 0
+        qfw_process_state.exit_status_path(pid_file).write_text(
+            f"{returncode}\n", encoding="utf-8")
+        return returncode
     finally:
         signal.signal(signal.SIGINT, old_int)
         signal.signal(signal.SIGTERM, old_term)
@@ -447,6 +477,7 @@ def _wait_foreground(process, pid_file, ready_file):
             _terminate_process(process.pid)
         pid_file.unlink(missing_ok=True)
         ready_file.unlink(missing_ok=True)
+        qfw_process_state.stop_request_path(pid_file).unlink(missing_ok=True)
 
 
 def _open_process_log(env, name, stream_name):
@@ -466,14 +497,15 @@ def _default_process_log_dir():
     return qfw_config.qfw_run_base_dir() / "logs"
 
 
-def _wait_process_ready(process, timeout, name, ready_probe):
+def _wait_process_ready(process, timeout, name, ready_probe, stderr_path=None):
     deadline = time.monotonic() + max(0, timeout)
     last_error = None
     while True:
         returncode = process.poll()
         if returncode is not None:
             raise RuntimeError(
-                f"{name} exited during startup with status {returncode}")
+                f"{name} exited during startup with status {returncode}"
+                + _stderr_detail(stderr_path))
         try:
             if ready_probe():
                 return
@@ -484,6 +516,18 @@ def _wait_process_ready(process, timeout, name, ready_probe):
             raise TimeoutError(
                 f"{name} readiness timed out after {timeout} seconds{detail}")
         time.sleep(0.1)
+
+
+def _stderr_detail(path):
+    if path is None:
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+    except OSError:
+        return f". Its stderr would be in {path}, which cannot be read"
+    tail = " | ".join(
+        [line for line in lines if line.strip()][-STDERR_TAIL_LINES:])
+    return f". {path} ends: {tail}" if tail else f". {path} is empty"
 
 
 def _write_ready(path, payload):

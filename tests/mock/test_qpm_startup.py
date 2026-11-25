@@ -1,5 +1,36 @@
 from types import SimpleNamespace
 
+import importlib
+import threading
+
+import pytest
+
+
+@pytest.mark.parametrize("module_name,provider,imports_qiskit", [
+	("svc_iqm_qpm", "iqm", True),
+	("svc_lib_qpm", "iqm", True),
+	("svc_lib_qpm", "pasqal", False),
+])
+def test_qiskit_initializes_before_service_workers(
+		monkeypatch, module_name, provider, imports_qiskit):
+	service = importlib.import_module(module_name)
+	events = []
+
+	def load_qiskit():
+		assert threading.current_thread() is threading.main_thread()
+		events.append("qiskit")
+
+	monkeypatch.setattr(service, "qiskit_circuit_formats", load_qiskit)
+	monkeypatch.setattr(service.qpm_startup, "initialize_qpm_service",
+		lambda *args: events.append("workers"))
+	if module_name == "svc_lib_qpm":
+		from svc_lib_qpm import descriptor
+		monkeypatch.setattr(descriptor, "resolve_descriptor",
+			lambda: {"provider": provider})
+
+	service.initialize()
+	assert events == (["qiskit", "workers"] if imports_qiskit else ["workers"])
+
 
 def site_qpm_record():
 	return {
@@ -747,3 +778,42 @@ def test_qpm_startup_wait_for_startup_times_out(monkeypatch):
 	startup.wait_for_startup(FakeDefw(), "ready", timeout=0)
 
 	assert uq.qpm_initialized is False
+
+
+class UnbuildableQPM:
+	def __init__(self, start=False):
+		from defw_exception import DEFwExecutionError
+		raise DEFwExecutionError(
+			"aer needs a device-id or num-qubits for its width")
+
+
+class UnbuildableDefw(QueriedDefw):
+	services = [("qpm", SimpleNamespace(
+		svc_info={"name": "QPM"}, service_classes=[UnbuildableQPM]))]
+
+
+def test_a_qpm_whose_service_cannot_be_built_exits_with_the_reason(
+		monkeypatch, capfd):
+	import util.qpm.startup as startup
+	import util.qpm.util_qpm as uq
+
+	reset_qpm_state(uq)
+	monkeypatch.delenv("QFW_QPM_OPERATION_MODE", raising=False)
+	monkeypatch.delenv("QFW_SITE_DIRSVC_ENDPOINTS", raising=False)
+
+	shut_down = []
+
+	def exit_process(status):
+		raise SystemExit((status, list(shut_down)))
+	monkeypatch.setattr(startup.os, "_exit", exit_process)
+	monkeypatch.setattr(
+		startup.logging, "shutdown", lambda: shut_down.append(True))
+
+	with pytest.raises(SystemExit) as exited:
+		startup._ensure_local_registration(
+			UnbuildableDefw(dirsvc=FakeSiteDirSvc()))
+
+	assert exited.value.code == (1, [True])
+	assert capfd.readouterr().err == (
+		f"{__name__}.UnbuildableQPM cannot be built: "
+		"aer needs a device-id or num-qubits for its width\n")

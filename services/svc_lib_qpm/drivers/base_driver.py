@@ -15,6 +15,59 @@ def reservation_cache_key(reservation_id):
 	return ("reservation", str(reservation_id))
 
 
+# How long a driver waits between status polls of a provider job. A circuit
+# that names a poll_interval is polled at that fixed interval, as before.
+# Otherwise the first wait is the device's poll-interval-seconds, else
+# DEFAULT_POLL_INTERVAL, and each poll that finds the job unfinished doubles
+# it, up to MAX_POLL_INTERVAL, which is how IQM's own QDMI library waits for a
+# job. A provider that limits its request rate counts every poll, and a job
+# that queues for minutes would otherwise be polled every second throughout.
+DEFAULT_POLL_INTERVAL = 1.0
+MAX_POLL_INTERVAL = 60.0
+
+
+def poll_schedule(info, descriptor):
+	# The first wait between polls, and whether later waits double. Read
+	# before anything is submitted, so a bad value fails with nothing at the
+	# provider.
+	value = info.get("poll_interval")
+	backoff = value is None
+	if backoff:
+		value = descriptor.get("poll_interval_seconds")
+	if value in (None, ""):
+		value = DEFAULT_POLL_INTERVAL
+	try:
+		wait = float(value)
+	except (TypeError, ValueError):
+		raise DEFwExecutionError(
+			f"the poll interval must be a number of seconds, not {value!r} "
+			"(poll-interval-seconds or the client's poll_interval)") from None
+	return max(wait, 0.0), backoff
+
+
+def next_poll_wait(wait, backoff):
+	# The wait after the next poll that finds the job unfinished. A first
+	# wait above the cap stays where it is.
+	if not backoff:
+		return wait
+	return max(wait, min(MAX_POLL_INTERVAL, wait * 2))
+
+
+def pasqal_backend_info(device_type, entries):
+	# get_backend_info for a Pasqal device: the Pulser devices it runs, by
+	# name, in Pulser's abstract representation. entries are Pasqal Cloud's
+	# [{"device_type", "specs"}], the one device for a QPU and the real
+	# devices' public specs for an emulator, which runs a sequence built for
+	# any of them.
+	return {
+		"backend": "pasqal",
+		"metadata_supported": True,
+		"device_type": device_type,
+		"pulser_devices": {
+			str(entry["device_type"]): entry["specs"] for entry in entries},
+	}
+
+
 class JobRecords:
 	# The jobs a driver ran, by cid, for get_task_timing and
 	# get_task_metadata. A lookup names its cid, so one user's call never
@@ -50,6 +103,57 @@ class JobRecords:
 		return job
 
 
+class Sessions:
+	# One lock per login: threads sharing a login open one session, and other
+	# logins do not wait. The one session matters because a QRMI resource keeps
+	# its own runtime threads (four each on qrmi 0.26.0) until it is dropped.
+	def __init__(self):
+		self.opened = {}
+		self.locks = {}
+		self._locks_guard = threading.Lock()
+
+	@staticmethod
+	def key(credential=None):
+		credential = dict(credential or {})
+		if not credential:
+			return ("default",)
+		reservation_id = credential.get("reservation_id")
+		if reservation_id is not None:
+			return reservation_cache_key(reservation_id)
+		return (
+			credential.get("url"),
+			credential.get("provider_device_id"),
+			credential.get("device_id"),
+			credential.get("user"),
+			credential.get("api_key") or credential.get("token"),
+			credential.get("service_crn"),
+			credential.get("project_id"),
+			credential.get("aws_access_key_id"),
+		)
+
+	def lock(self, key):
+		with self._locks_guard:
+			return self.locks.setdefault(key, threading.Lock())
+
+	def open(self, key, build):
+		session = self.opened.get(key)
+		if session is not None:
+			return session
+		with self.lock(key):
+			session = self.opened.get(key)
+			if session is None:
+				session = build()
+				self.opened[key] = session
+		return session
+
+	def drop(self, key):
+		with self.lock(key):
+			session = self.opened.pop(key, None)
+		with self._locks_guard:
+			self.locks.pop(key, None)
+		return session
+
+
 class BaseDriver:
 	# Subclasses set `name` (the library key used for routing/preference) and
 	# `CAPABILITIES` (the subset of contract calls they cover).
@@ -58,6 +162,9 @@ class BaseDriver:
 
 	def implements(self, call):
 		return call in self.CAPABILITIES
+
+	def _credential_cache_key(self, credential=None):
+		return Sessions.key(credential)
 
 	def evict_reservation(self, reservation_id):
 		# Drop what this driver opened for a reservation that has ended. The

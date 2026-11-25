@@ -276,9 +276,10 @@ def select_qpu(device_config, path, provider=None, device_id=None):
 	for key in ("libraries", "preference", "caps", "resource-type",
 			"resource_type", "service-crn", "iam-endpoint",
 			"s3-endpoint", "s3-endpoint-for-qsapi", "s3-bucket",
-			"s3-region", "job-timeout-seconds",
+			"s3-region", "job-timeout-seconds", "poll-interval-seconds",
 			"qdmi-device-id", "aws-region", "s3-results-uri",
-			"reservation-arn", "num-qubits", "max-shots"):
+			"reservation-arn", "num-qubits", "max-shots",
+			"max-concurrent-jobs", "project-id"):
 		if key in device:
 			selected[key] = device[key]
 	if "execution-owner" in device:
@@ -321,8 +322,9 @@ def select_user_record(
 		credential_db, user, device_id=None, provider_device_id=None,
 		credential_hint=None, credential_handle=None):
 	users = get_user_records(credential_db)
-	for record_key in _credential_record_candidates(
-			users, user, credential_hint, credential_handle):
+	candidates = _credential_record_candidates(
+		users, user, credential_hint, credential_handle)
+	for record_key in candidates:
 		record = users.get(record_key)
 		if record is None:
 			continue
@@ -330,7 +332,9 @@ def select_user_record(
 			return record_key, record
 	raise DEFwExecutionError(
 		f"QPU credential DB does not contain an enabled entitlement and "
-		f"API key for user {user!r} and device {device_id!r}")
+		f"API key for user {user!r} and device {device_id!r}" +
+		_entitlement_detail(
+			users, candidates, device_id, provider_device_id, True))
 
 
 def select_entitled_record(
@@ -341,8 +345,9 @@ def select_entitled_record(
 	# true. No API key is looked for, because an entitlement credential
 	# provider has none to bind (see ENTITLEMENT_PROVIDER_TYPES).
 	users = get_user_records(credential_db)
-	for record_key in _credential_record_candidates(
-			users, user, credential_hint, credential_handle):
+	candidates = _credential_record_candidates(
+		users, user, credential_hint, credential_handle)
+	for record_key in candidates:
 		record = users.get(record_key)
 		if record is None:
 			continue
@@ -351,7 +356,9 @@ def select_entitled_record(
 			return record_key, record
 	raise DEFwExecutionError(
 		f"QPU credential DB does not contain an enabled entitlement for "
-		f"user {user!r} and device {device_id!r}")
+		f"user {user!r} and device {device_id!r}" +
+		_entitlement_detail(
+			users, candidates, device_id, provider_device_id, False))
 
 
 def _credential_record_candidates(
@@ -421,11 +428,73 @@ def _entitled_device_record(record, device_id, provider_device_id=None):
 	return None
 
 
-def get_api_key_from_user_record(record, device_id, provider_device_id=None):
+def _entitlement_problem(record, device_id, provider_device_id=None,
+		need_api_key=True):
+	# Why _entitled_device_record rejected this user record, as a phrase for
+	# an error message. None when the record is usable.
+	#
+	# The checks mirror that function step for step. The message they explain
+	# covers five distinct causes, and the most common one is an api_key that
+	# is present but empty, which reads as "does not contain ... API key".
+	if not isinstance(record, dict):
+		return "its entry is not a mapping"
+	if record.get("enabled") is not True:
+		return ("the user entry is not enabled; enabled must be the JSON "
+			"boolean true")
+	devices = record.get("devices")
+	if not isinstance(devices, dict):
+		return "the user entry has no devices mapping"
+	for key in (device_id, provider_device_id):
+		if not key or key not in devices:
+			continue
+		device_record = devices[key]
+		if not isinstance(device_record, dict):
+			return f"the entry for {key!r} is not a mapping"
+		if device_record.get("enabled") is not True:
+			return (f"the entry for {key!r} is not enabled; enabled must be "
+				"the JSON boolean true")
+		if need_api_key and not str(
+				device_record.get("api_key") or "").strip():
+			return (f"the entry for {key!r} has no usable api_key; an empty "
+				"string counts as missing, and the packaged file ships "
+				"empty placeholders to fill in")
+		return None
+	wanted = [key for key in (device_id, provider_device_id) if key]
+	if not wanted:
+		return "the lookup named no device"
+	return ("the user entry has no device named " +
+		" or ".join(repr(key) for key in wanted))
+
+
+def _entitlement_detail(users, candidates, device_id, provider_device_id,
+		need_api_key):
+	# One phrase per candidate record the lookup tried, so the error says
+	# which step failed rather than only that something did.
+	reasons = []
+	for record_key in candidates:
+		record = users.get(record_key)
+		if record is None:
+			reasons.append(f"{record_key!r} has no entry")
+			continue
+		problem = _entitlement_problem(
+			record, device_id, provider_device_id,
+			need_api_key=need_api_key)
+		if problem is not None:
+			reasons.append(f"{record_key!r}: {problem}")
+	if not reasons:
+		return ""
+	return ": " + "; ".join(reasons)
+
+
+def _user_device_value(record, device_id, provider_device_id, key):
 	device_record = _entitled_device_record(
 		record, device_id, provider_device_id) or {}
-	value = device_record.get("api_key")
+	value = device_record.get(key)
 	return str(value).strip() if value else None
+
+
+def get_api_key_from_user_record(record, device_id, provider_device_id=None):
+	return _user_device_value(record, device_id, provider_device_id, "api_key")
 
 
 def get_service_crn_from_user_record(
@@ -434,10 +503,18 @@ def get_service_crn_from_user_record(
 	# than tied to one device, and a user can be assigned to several
 	# instances, so a user's entry can name the one to run under. Without one,
 	# the device's service-crn in device-access config applies.
-	device_record = _entitled_device_record(
-		record, device_id, provider_device_id) or {}
-	value = device_record.get("service_crn")
-	return str(value).strip() if value else None
+	return _user_device_value(
+		record, device_id, provider_device_id, "service_crn")
+
+
+def get_project_id_from_user_record(
+		record, device_id, provider_device_id=None):
+	# Optional, for Pasqal devices. A Pasqal Cloud job is billed to a project,
+	# and a user can belong to several, so a user's entry can name the one to
+	# run under. Without one, the device's project-id in device-access config
+	# applies.
+	return _user_device_value(
+		record, device_id, provider_device_id, "project_id")
 
 
 # The object storage QRMI's IBM Quantum System stages results through. The
@@ -493,6 +570,8 @@ def resolve_qpu_credentials(device, user=None, credential_hint=None,
 		"api_key": api_key,
 		"service_crn": get_service_crn_from_user_record(
 			record, device["device_id"], device.get("provider_device_id")),
+		"project_id": get_project_id_from_user_record(
+			record, device["device_id"], device.get("provider_device_id")),
 	}
 	resolved.update(get_object_storage_from_user_record(
 		record, device["device_id"], device.get("provider_device_id")))
@@ -510,14 +589,20 @@ def _entitlement_credentials(device, user, credential_db_path,
 			f"credential provider {device.get('credential_provider')!r}, "
 			"which needs a credential-db to read entitlements from")
 	credential_db = load_json_config(credential_db_path)
-	user, _record = select_entitled_record(
+	user, record = select_entitled_record(
 		credential_db,
 		user,
 		device_id=device["device_id"],
 		provider_device_id=device.get("provider_device_id"),
 		credential_hint=credential_hint,
 		credential_handle=credential_handle)
-	return {"user": user, "api_key": None, "service_crn": None}
+	# No key, but a user's entry can still name the Pasqal project to run
+	# under, as with a file credential DB.
+	return {
+		"user": user, "api_key": None, "service_crn": None,
+		"project_id": get_project_id_from_user_record(
+			record, device["device_id"], device.get("provider_device_id")),
+	}
 
 
 def _credentials_without_a_database(device, user):
@@ -570,6 +655,7 @@ def resolve_device_access(provider=None, device_id=None, user=None,
 		"user": credentials["user"],
 		"quantum_computer": device["provider_device_id"],
 		"service_crn": credentials.get("service_crn"),
+		"project_id": credentials.get("project_id"),
 	}
 	for key in OBJECT_STORAGE_SECRET_KEYS:
 		if credentials.get(key):

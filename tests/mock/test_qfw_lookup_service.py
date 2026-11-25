@@ -15,6 +15,14 @@ QPM_BINDINGS = (
 		"service_class": "QPM",
 		"version": 1,
 	},
+	{
+		"binding_name": "telemetry",
+		"client_module": "api_qpm_telemetry",
+		"client_class": "QPMTelemetry",
+		"service_module": "svc_iqm_qpm.svc_qpm",
+		"service_class": "QPM",
+		"version": 1,
+	},
 )
 
 
@@ -230,6 +238,37 @@ def test_get_qpm_selects_requested_provider(monkeypatch):
 	result.lifecycle_binding.close()
 
 
+def test_get_qpm_connects_the_named_service_without_reservations(monkeypatch):
+	# Two services fit the lookup and no reservation is exported, so the
+	# service the caller names is the one connected, not an ambiguity.
+	import qfw_qiskit.qfw_lookup_service as lookup_service
+
+	first = qpm_directory_record("iqm-a", FakeQPM(), provider="iqm")
+	second = qpm_directory_record("iqm-b", FakeQPM(), provider="iqm")
+	dirsvc = FakeDirectoryService([first, second])
+	fake_defw = BindingDefwModule([first, second])
+
+	monkeypatch.delenv("QFW_RESERVATIONS", raising=False)
+	monkeypatch.setenv("QFW_QPM_IMPL", "iqm")
+	monkeypatch.setattr(
+		lookup_service, "defw_get_directory_service",
+		lambda timeout=None: dirsvc)
+	monkeypatch.setattr(lookup_service, "defw", fake_defw)
+
+	result = lookup_service.get_qpm(
+		qpm_type=DEFAULT_QPM_TYPE,
+		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
+		service_id="iqm-b",
+	)
+
+	assert result.test() == "ok"
+	assert [
+		item["service_record"]["service_id"]
+		for item in fake_defw.binding_connections
+	] == ["iqm-b"]
+	result.lifecycle_binding.close()
+
+
 def test_get_qpm_rejects_unavailable_requested_provider(monkeypatch):
 	import qfw_qiskit.qfw_lookup_service as lookup_service
 	from qfw_qiskit.qpm_resolver import QPMProviderPolicyError
@@ -376,4 +415,43 @@ def test_get_qpm_keeps_the_declared_properties_on_the_client(monkeypatch):
 	assert declared is not None, "the client lost the declared properties"
 	assert declared["circuit_formats"] == ["qpy", "openqasm2"]
 	assert declared["qpy_version"] == 16
+	result.lifecycle_binding.close()
+
+
+def test_get_qpm_telemetry_binds_on_the_same_service_record(monkeypatch):
+	# The telemetry API is selected from the service record the execution
+	# client's lifecycle binding already holds: a second connection to the
+	# same QPM, no second directory resolution.
+	import qfw_qiskit.qfw_lookup_service as lookup_service
+
+	fake_qpm = FakeQPM()
+	record = qpm_directory_record("qpm-iqm", fake_qpm)
+	dirsvc = FakeDirectoryService([record])
+	fake_defw = BindingDefwModule([record])
+
+	monkeypatch.setattr(
+		lookup_service, "defw_get_directory_service",
+		lambda timeout=None: dirsvc)
+	monkeypatch.setattr(lookup_service, "defw", fake_defw)
+
+	result = lookup_service.get_qpm(
+		qpm_type=DEFAULT_QPM_TYPE,
+		qpm_capabilities=DEFAULT_QPM_CAPABILITIES,
+	)
+	assert result.test() == "ok"
+	queries = len(dirsvc.queries)
+	telemetry = lookup_service.get_qpm_telemetry(result)
+
+	assert telemetry.test() == "ok"
+	assert len(dirsvc.queries) == queries
+	assert [
+		item["selected_binding"]["binding_name"]
+		for item in fake_defw.binding_connections
+	] == ["execution", "telemetry"]
+	assert fake_defw.binding_connections[1]["service_record"]["service_id"] == \
+		"qpm-iqm"
+	assert fake_defw.binding_connections[1]["selected_binding"]["client_class"] == \
+		"QPMTelemetry"
+	# A client that is not a managed binding has no telemetry to offer.
+	assert lookup_service.get_qpm_telemetry(FakeQPM()) is None
 	result.lifecycle_binding.close()

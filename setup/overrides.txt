@@ -1,0 +1,7 @@
+# Dependency overrides, passed as `uv pip install --override` alongside the
+# requirements files. An override replaces a package's declared constraint
+# everywhere in the resolution, so keep this list short and justified.
+
+# IMPORTANT: Please do not remove this file even if there are no
+# remaining overrides: every build passes --override and will fail
+# if this file is missing.

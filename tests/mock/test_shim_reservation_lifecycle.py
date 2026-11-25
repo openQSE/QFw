@@ -89,7 +89,7 @@ def test_qrmi_drops_an_ended_reservation_resource():
 	for key in (ended, other, ("default",)):
 		driver._resource_objs[key] = object()
 		driver._target_cache[key] = {}
-	driver._resource_lock(ended)
+	driver._sessions.lock(ended)
 
 	assert driver.evict_reservation(7) is True
 

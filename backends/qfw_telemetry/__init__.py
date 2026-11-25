@@ -58,6 +58,7 @@ TELEMETRY_ENV = "QFW_TELEMETRY"
 TELEMETRY_DIR_ENV = "QFW_TELEMETRY_DIR"
 TELEMETRY_SAMPLE_ENV = "QFW_TELEMETRY_SAMPLE"
 TELEMETRY_TRANSPORT_ENV = "QFW_TELEMETRY_TRANSPORT"
+TELEMETRY_VENDOR_ENV = "QFW_TELEMETRY_VENDOR"
 TELEMETRY_ENDPOINT_ENV = "QFW_TELEMETRY_ENDPOINT"
 TELEMETRY_LOGS_ENV = "QFW_TELEMETRY_LOGS"
 
@@ -145,6 +146,7 @@ class _State(object):
 		self.counters = {}
 		self.streams = []
 		self.transport_spans = False
+		self.vendor_timing = False
 		self.defw_hooks = False
 		self.logger_provider = None
 		self.log_handler = None
@@ -566,6 +568,8 @@ def configure(service_name, service_version=None, role=None, attributes=None):
 
 		_STATE.transport_spans = _env(
 			TELEMETRY_TRANSPORT_ENV, "0").lower() in ("1", "yes", "true", "on")
+		_STATE.vendor_timing = _env(
+			TELEMETRY_VENDOR_ENV, "0").lower() in ("1", "yes", "true", "on")
 
 		profile = _profile()
 		if profile != PROFILE_OFF and not OTEL_AVAILABLE:
@@ -584,6 +588,7 @@ def configure(service_name, service_version=None, role=None, attributes=None):
 			# receive it. Clearing this keeps guarded call sites at the
 			# cost of a boolean test.
 			_STATE.transport_spans = False
+			_STATE.vendor_timing = False
 			return _STATE.profile
 
 		from opentelemetry.sdk.trace import TracerProvider
@@ -648,6 +653,16 @@ def enabled():
 	still not recording. Guard attributes with span.is_recording() instead.
 	"""
 	return _STATE.profile != PROFILE_OFF
+
+
+def vendor_timing_enabled():
+	"""
+	True when a provider's own phase times should be attached to the job.
+
+	Flag-guarded like the transport spans: on the QRMI path the times cost
+	one more request to the provider per job.
+	"""
+	return _STATE.vendor_timing
 
 
 def transport_spans_enabled():
@@ -756,6 +771,8 @@ def use_providers(tracer_provider, meter_provider=None, profile=PROFILE_FILE,
 	with _LOCK:
 		_STATE.transport_spans = _env(
 			TELEMETRY_TRANSPORT_ENV, "0").lower() in ("1", "yes", "true", "on")
+		_STATE.vendor_timing = _env(
+			TELEMETRY_VENDOR_ENV, "0").lower() in ("1", "yes", "true", "on")
 		_STATE.profile = profile
 		_STATE.tracer_provider = tracer_provider
 		_STATE.meter_provider = meter_provider

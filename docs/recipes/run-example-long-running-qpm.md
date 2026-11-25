@@ -76,7 +76,7 @@ Inside the allocation, verify the injected context with an ordinary Slurm
 step:
 
 ```bash
-srun /usr/bin/env | grep '^QFW_RESERVATIONS='
+srun --overlap /usr/bin/env | grep '^QFW_RESERVATIONS='
 qfw-status
 ```
 

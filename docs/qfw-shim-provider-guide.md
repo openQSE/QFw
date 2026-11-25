@@ -137,6 +137,63 @@ caps:
 For QDMI-backed machines, use `qdmi` in `libraries`, `preference`, and the
 capability map only after the provider QDMI path can open a real device session.
 
+Amazon Braket devices are QDMI-backed machines with their own keys
+(`qdmi-device-id`, `aws-region`, `s3-results-uri`, `max-shots`, and so on).
+The [Amazon Braket recipe](recipes/run-against-aws-braket.md) lists them with
+a complete entry.
+
+### Providers that rate-limit
+
+A provider can refuse requests with HTTP 429 Too Many Requests. IQM blocks
+an account that runs over its request quota for 30 seconds, so a status poll
+can be refused as well as a submission.
+
+On the QRMI path the shim waits a 429 out. A refused submission, status poll
+or result fetch is tried again after a wait that doubles from 2 to 60
+seconds, with jitter. It gives up once the job's timeout runs out. That is
+the circuit's own `timeout`, else the device's `job-timeout-seconds`, else
+300 seconds. The timeout covers the whole job, so time spent waiting out a
+rate limit comes off it. A Pasqal device without `job-timeout-seconds` keeps
+trying until the job goes through or is cancelled. QRMI passes on no
+`Retry-After`, so the shim cannot honor one. IBM Quantum System resources
+retry a 429 inside QRMI, without a limit, so the job timeout does not bound
+that wait.
+
+On the QDMI path the device libraries handle a 429 themselves. QDMI-on-IQM
+waits out IQM's `Retry-After` and slows down before the quota runs out, and
+the Braket library retries throttling through the AWS SDK. IBM QDMI does not
+retry a refused job submission. QDMI reports that failure without its HTTP
+status, so the shim cannot tell it from any other.
+
+Status polls count against a provider's request limit too. Unless a circuit
+names its own `poll_interval`, the shim waits `poll-interval-seconds` before
+the first poll of a job, 1 second when unset. Each poll that finds the job
+unfinished doubles the wait, up to 60 seconds, which is how IQM's own QDMI
+library polls. Both libraries poll this way. Raise `poll-interval-seconds`
+for a device whose limit is tight. The cost is that a job is noticed to have
+finished later, by up to the wait then in force.
+
+`max-concurrent-jobs` caps how many of the device's circuits are at the
+provider at once:
+
+```yaml
+qpus:
+  xyz-qpu:
+    provider: xyz
+    # ...
+    max-concurrent-jobs: 1
+```
+
+The QPM holds the other circuits in its queue and sends the next as one
+finishes. It also applies its operator limit, `max_inflight`, and the smaller
+of the two wins. That limit is 1 unless an operator raises it with
+`configure_dispatch_limits` ([QPM APIs](qpmd-supported-apis.md)), so by
+default a QPM already sends a device one job at a time. Set
+`max-concurrent-jobs` on a rate-limited device to keep it to its own limit
+once an operator raises the QPM's. Unset, the device adds no limit of its
+own. The value must be a whole number, at least 1, or the service fails to
+start.
+
 ## Step 3. Add Provider Credentials
 
 Credentials should be resolved per user and per device. Secrets belong in the
@@ -181,6 +238,125 @@ database. The logical contract should stay the same: QPM resolves a
 reservation-bound credential for the selected user and machine, and the provider
 adapter receives only the credential material it needs.
 
+### IQM
+
+For IQM, store each user's API token in the `api_key` field shown above.
+The native IQM service and the shim's QRMI and QDMI paths use the same
+device-access settings and per-user credentials.
+If you don't want to run on actual IQM hardware, the [IQM Garnet mock
+recipe](recipes/run-against-iqm-garnet-mock.md) shows this with IQM Resonance's
+mock API.
+
+### Amazon Braket
+
+Amazon Braket devices are the exception to the per-user key. The Braket QDMI
+device library authenticates through the AWS SDK's own credential chain in the
+service process, so QFw holds no AWS secret, and none belongs in the
+device-access file or the credential database. Use the `no-secret` provider
+for a smoke, or a provider of type `entitlement` on a site plane, which checks
+that the user and the device are enabled without binding a key. The
+[Amazon Braket recipe](recipes/run-against-aws-braket.md) covers the account,
+the credential files, and the environment the service needs.
+
+### IBM
+
+The IBM QDMI device supports IBM Cloud Qiskit Runtime
+(`IBMQiskitRuntimeService`).
+For other IBM resource types, set `libraries: [qrmi]`. Omitting `libraries`
+enables both QRMI and QDMI and routes device queries to QDMI by default.
+
+Install the provider packages from
+[`setup/qdmi-requirements.txt`](../setup/qdmi-requirements.txt), then
+configure an IBM backend:
+
+```yaml
+qpus:
+  ibm-torino:
+    provider: ibm
+    provider-device-id: ibm_torino
+    url: https://quantum.cloud.ibm.com/api/v1
+    credential-db: /etc/openqse/qfw/device/qpu-users.json
+    libraries: [qdmi]
+    preference: qdmi
+    execution-owner: qdmi
+    job-timeout-seconds: 3600
+```
+
+Set `job-timeout-seconds` to cover the expected queue and execution time.
+The default is 300 seconds; QFw cancels the job when it expires, even while
+queued. A circuit's `timeout` overrides this device setting.
+
+Under each user's `devices.ibm-torino` entry in the credential database, set:
+
+```json
+{
+  "enabled": true,
+  "api_key": "REDACTED",
+  "service_crn": "REDACTED"
+}
+```
+
+The API key and service-instance CRN are bound to the reservation. A device's
+`service-crn` can provide a default CRN when the user record omits it. Set
+`iam-endpoint` only when using a custom IAM endpoint. QFw uses the packaged
+`IBMBackend` to open the session and accepts circuits in QPY format through
+the existing shim service. Bind all parameters and use classical registers
+that cover each classical bit once, in bit order.
+
+### Pasqal
+
+Install the provider packages from
+[`setup/qdmi-requirements.txt`](../setup/qdmi-requirements.txt), which includes
+the Pasqal provider's Pulser integration. Pasqal uses native Pulser JSON through
+QDMI; bind variables and register mappings and include a measurement before
+calling `Sequence.to_abstract_repr()`. The shim advertises
+`pulser-abstract-repr` and submits it as QDMI `ProgramFormat.CUSTOM1`.
+
+The existing reservation-bound `api_key`/`token` and `project_id` fields
+configure the QDMI session. The device's `project-id` supplies a default.
+Alternatively, the native library authenticates as the service account. Set
+`PASQAL_EMAIL`, `PASQAL_PASSWORD` and `PASQAL_PROJECT_ID` securely in the QPM
+process, or use a private `PASQAL_AUTHFILE`. Use an `entitlement` credential
+provider to authorize service-account reservations. `get_backend_info`
+serves the same `pulser_devices` record as QRMI, so the existing
+`qfw_pulser.QFwConnection(lib="qdmi")` client works unchanged. The
+[Pasqal recipe](recipes/run-against-pasqal.md) covers configuration, atom order,
+and submission through the existing QPM API.
+
+### MQV
+
+MQV's QDMI device hands a circuit to MQV's Munich Quantum Software Stack
+(MQSS) deployment, which runs it on a machine behind it, such as IQM at LRZ,
+planqc or Amazon Braket. MQV ships the device library as `mqss-qdmi-mqv` on
+PyPI, pinned in `setup/qdmi-requirements.txt`. It comes only as an x86_64
+Linux wheel for Python 3.11 and newer, so other machines skip it. The profile
+needs MQT Core 4.2 or newer. The package registers three catalogue entries
+with MQT Core: `mqv.eqe1` (IQM at LRZ), `mqv.maqcs` (planqc) and `mqv.aws`
+(Amazon Braket SV1). `qdmi-device-id` names the one a device uses. QFw has no
+default for it.
+
+```yaml
+qpus:
+  mqv-eqe1:
+    provider: mqv
+    qdmi-device-id: mqv.eqe1         # a catalogue entry MQV's package registers
+    url: https://mqss.example/api    # optional when the entry names the endpoint
+    credential-db: /etc/openqse/qfw/device/qpu-users.json
+    libraries: [qdmi]
+    preference: qdmi
+    execution-owner: qdmi
+    job-timeout-seconds: 3600
+```
+
+Under each user's `devices.mqv-eqe1` entry in the credential database, set
+`enabled: true` and the `api_key` the MQSS session opens with. The
+reservation's key comes first, then `QFW_API_KEY` in the QPM's environment.
+The same order applies to the endpoint, then the device's `url`. MQV ships no
+Qiskit backend, so QFw opens MQT Core's generic `QDMIBackend` around the
+device, compiles each circuit to the target the device reports, and submits
+it as OpenQASM 2, or as OpenQASM 3 when the device takes only that. Bind all
+parameters before submission.
+
 ## Step 4. Add a QPM Shim Service
 
 Add a service entry that uses the shim module and points at the logical machine.
@@ -224,6 +400,24 @@ service name is what the QFw directory advertises and what qfw-slurm maps to.
 Machine-specific behavior belongs in the selected QRMI resource implementation
 or QDMI device implementation. The QFw shim should consume the QRMI or QDMI
 contract and remain provider-agnostic.
+
+The introspection facet is what the Qiskit client builds its device target
+from. `QFwBackend.target` asks the QPM's telemetry API: `get_backend_info()`
+reports `metadata_supported: true` for a machine with a device to describe,
+and `get_device_info()`, `get_coupling_graph()` and
+`get_calibration_snapshot()` are read as qhw records: the qubits, the coupling
+edges, the native operations with their loci, and the errors and durations per
+locus. The QRMI and the QDMI driver both serve these four calls, so a machine
+wired for one library only, such as a Braket entry on QDMI, describes itself
+from that library. For an IBM resource the backend-info record also carries the raw
+`BackendConfiguration` (`static_architecture`) and `BackendProperties`
+(`backend_properties`), which the client converts the way the driver's own ISA
+compilation does. A machine therefore supports target-aware transpilation once
+its QRMI resource or QDMI device serves those queries. A library that serves
+none should answer `metadata_supported: false`, and the client keeps QFw's
+generic target. On a `credential-mode: required` device those calls resolve
+the credential record of the user the QPM runs as, so that user needs an
+enabled record for the device. See the Device Target section of `usage.md`.
 
 If adding a machine requires machine-specific changes in the shim, treat that
 as an architecture gap to clean up separately, not as normal machine onboarding.

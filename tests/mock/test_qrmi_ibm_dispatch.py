@@ -31,6 +31,7 @@ if SERVICES not in sys.path:
 
 from defw_exception import DEFwExecutionError  # noqa: E402
 import svc_lib_qpm.drivers.qrmi_driver as qd   # noqa: E402
+import svc_lib_qpm.drivers.qrmi_profiles as qrmi_profiles   # noqa: E402
 from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 
 
@@ -96,7 +97,7 @@ def test_num_shots_prefers_num_shots_over_shots():
 
 
 def test_num_shots_uses_default_when_absent():
-	assert qd.num_shots({}) == qd.DEFAULT_SHOTS
+	assert qd.num_shots({}) == qrmi_profiles.DEFAULT_SHOTS
 
 
 def test_num_shots_accepts_custom_default():
@@ -249,6 +250,200 @@ def test_target_caches_iqm_payload_regardless_of_content():
 	assert call_count[0] == 1, "IQM payload must be cached even without IBM keys"
 
 
+def _counting_target_driver(monkeypatch, ttl=None):
+	if ttl is None:
+		monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
+	else:
+		monkeypatch.setenv(qd.TARGET_TTL_ENV, ttl)
+	driver = _driver(provider="iqm")
+	call_count = [0]
+
+	def _qpu(credential=None):
+		call_count[0] += 1
+		return _qpu_returning({"dynamic_quantum_architecture": {}})
+
+	driver._qpu = _qpu
+	return driver, call_count
+
+
+def test_target_is_read_again_once_its_entry_expires(monkeypatch):
+	driver, call_count = _counting_target_driver(monkeypatch)
+	clock = [1000.0]
+	monkeypatch.setattr(qd.time, "monotonic", lambda: clock[0])
+
+	driver._target()
+	clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS - 1
+	driver._target()
+	assert call_count[0] == 1
+
+	clock[0] += 1
+	driver._target()
+	assert call_count[0] == 2
+
+
+def test_target_ttl_of_zero_reads_the_device_every_time(monkeypatch):
+	driver, call_count = _counting_target_driver(monkeypatch, ttl="0")
+
+	driver._target()
+	driver._target()
+
+	assert call_count[0] == 2
+
+
+def _expired_driver(monkeypatch, provider, first, refresh):
+	monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
+	driver = _driver(provider=provider)
+	clock = [1000.0]
+	monkeypatch.setattr(qd.time, "monotonic", lambda: clock[0])
+	driver._qpu = lambda credential=None: _qpu_returning(first)
+	driver._target()
+	clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
+	driver._qpu = refresh
+	driver.clock = clock
+	return driver
+
+
+def test_a_failed_refresh_keeps_the_last_good_target(monkeypatch, caplog):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+
+	def refresh(credential=None):
+		raise RuntimeError("device unreachable")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, refresh)
+
+	with caplog.at_level("WARNING"):
+		assert driver._target() == good
+	assert "device unreachable" in caplog.text
+
+
+def test_a_refresh_failing_as_any_defw_error_keeps_the_last_good_target(
+		monkeypatch, caplog):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+
+	def not_ready(credential=None):
+		raise qd.DEFwNotReady("device is busy")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, not_ready)
+
+	with caplog.at_level("WARNING"):
+		assert driver._target() == good
+	assert "device is busy" in caplog.text
+
+
+def test_an_incomplete_ibm_refresh_keeps_the_last_good_target(monkeypatch):
+	good = {"configuration": {"n_qubits": 5}, "properties": {"qubits": []}}
+	partial = {"configuration": {"n_qubits": 5}, "properties": None}
+	driver = _expired_driver(
+		monkeypatch, "ibm", good,
+		lambda credential=None: _qpu_returning(partial))
+
+	assert driver._target() == good
+
+
+def test_a_refresh_after_a_failure_replaces_the_target(monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	newer = {"dynamic_quantum_architecture": {"qubits": ["QB2"]}}
+
+	def refresh(credential=None):
+		raise RuntimeError("device unreachable")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, refresh)
+	driver._target()
+	driver._qpu = lambda credential=None: _qpu_returning(newer)
+
+	assert driver._target() == good
+	driver.clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
+	assert driver._target() == newer
+
+
+def test_a_reservation_ending_during_a_failed_refresh_still_serves_the_target(
+		monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	driver = _expired_driver(monkeypatch, "iqm", good, None)
+	cache_key = driver._credential_cache_key(None)
+
+	def evicted_while_reading(credential=None):
+		driver._target_cache.pop(cache_key)
+		driver._target_fetched_at.pop(cache_key)
+		raise RuntimeError("device unreachable")
+
+	driver._qpu = evicted_while_reading
+
+	assert driver._target() == good
+	assert cache_key not in driver._target_retry_after
+
+
+def test_an_iqm_job_pins_the_calibration_set_read_after_the_ttl(monkeypatch):
+	import util.circuit_payload as circuit_payload
+	import util.iqm_transcode as iqm_transcode
+
+	class Stop(Exception):
+		pass
+
+	pinned = []
+
+	def stop(iqm_circuit, shots, calibration_set_id):
+		pinned.append(calibration_set_id)
+		raise Stop()
+
+	recalibrated = {"dynamic_quantum_architecture": {
+		"calibration_set_id": "cal-2"}}
+	driver = _expired_driver(
+		monkeypatch, "iqm",
+		{"dynamic_quantum_architecture": {"calibration_set_id": "cal-1"}},
+		lambda credential=None: _qpu_returning(recalibrated))
+	monkeypatch.setattr(circuit_payload, "qiskit_input", lambda info: "circuit")
+	monkeypatch.setattr(
+		iqm_transcode, "build_iqm_circuit",
+		lambda circuit, dynamic, mapping: circuit)
+	driver._resource = lambda: object()
+	driver._build_iqmjson = stop
+
+	with pytest.raises(Stop):
+		driver._profile._run_iqm_circuit(driver, types.SimpleNamespace(
+			info={"num_shots": 1}, provider_credential=None))
+
+	assert pinned == ["cal-2"]
+
+
+def test_a_device_that_stays_down_is_asked_once_per_ttl(monkeypatch):
+	good = {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}
+	attempts = []
+
+	def refresh(credential=None):
+		attempts.append(credential)
+		raise RuntimeError("device unreachable")
+
+	driver = _expired_driver(monkeypatch, "iqm", good, refresh)
+	for _ in range(3):
+		driver._target()
+	assert len(attempts) == 1
+
+	driver.clock[0] += qd.DEFAULT_TARGET_TTL_SECONDS
+	driver._target()
+	assert len(attempts) == 2
+
+
+def test_a_failed_first_read_still_raises(monkeypatch):
+	monkeypatch.delenv(qd.TARGET_TTL_ENV, raising=False)
+	driver = _driver(provider="iqm")
+
+	def refused(credential=None):
+		raise RuntimeError("device unreachable")
+
+	driver._qpu = refused
+
+	with pytest.raises(DEFwExecutionError, match="target"):
+		driver._target()
+
+
+def test_target_ttl_must_be_a_whole_number(monkeypatch):
+	monkeypatch.setenv(qd.TARGET_TTL_ENV, "soon")
+
+	with pytest.raises(DEFwExecutionError, match=qd.TARGET_TTL_ENV):
+		qd.target_ttl_seconds()
+
+
 # ===========================================================================
 # IBM introspection dispatch
 # ===========================================================================
@@ -342,6 +537,9 @@ def test_get_backend_info_ibm_returns_composite_shape(monkeypatch):
 	assert result["backend"] == "ibm"
 	assert result["metadata_supported"] is True
 	assert result["static_architecture"] == config
+	# The raw properties ride along, so a client can build the same ISA
+	# target _build_backend_target does.
+	assert result["backend_properties"] == _PROPS
 	assert result["active_qubits"] == [0, 1, 2]
 	assert result["calibration_set_id"] is None
 	assert result["qhw_device"] == {"qubits": [0, 1, 2]}
@@ -365,6 +563,29 @@ def test_get_backend_info_ibm_raises_on_empty_configuration(monkeypatch):
 
 	with pytest.raises(DEFwExecutionError, match="QRMI failed to retrieve"):
 		driver.get_backend_info()
+
+
+@pytest.mark.parametrize("provider,target", (
+	("ibm", _FULL_TARGET),
+	("iqm", {"dynamic_quantum_architecture": {"qubits": ["QB1"]}}),
+))
+def test_get_backend_info_reads_the_target_with_the_credential(
+		monkeypatch, provider, target):
+	# A reservation-bound read opens the device with the reservation's
+	# credential on every provider, as it does for Pasqal.
+	_install_qhw_ibm_stub(monkeypatch)
+	iqm_stub = types.ModuleType("qhw_iqm")
+	iqm_stub.normalize_device = lambda *a, **k: {}
+	monkeypatch.setitem(sys.modules, "qhw_iqm", iqm_stub)
+	driver = _driver(provider=provider)
+	credentials = []
+	driver._target = lambda credential=None: (
+		credentials.append(credential) or target)
+	credential = {"reservation_id": 7, "token": "user-token"}
+
+	driver.get_backend_info(credential=credential)
+
+	assert credentials and all(c == credential for c in credentials)
 
 
 # Introspection methods must route to qhw_iqm (not qhw_ibm) for non-IBM.
