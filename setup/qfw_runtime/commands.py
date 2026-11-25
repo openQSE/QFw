@@ -142,7 +142,7 @@ def qfw_services(argv):
     entries = [entry for entry in manifest if entry.get("name") in selected]
     env = qfw_config.launch_environment(run_state=False)
     listing = subprocess.run(
-        [str(_command_path("defw-python", env=env)),
+        [str(_command_path(qfw_config.defw_python_command(env), env=env)),
          importlib.util.find_spec("util.service_listing").origin,
          json.dumps(entries)],
         env=env, stdout=subprocess.PIPE, text=True)
@@ -218,7 +218,7 @@ def qfw_target(argv):
     if env is None:
         return 1
     return _run_on_this_node_without_srun(
-        [str(_command_path("defw-python", env=env)),
+        [str(_command_path(qfw_config.defw_python_command(env), env=env)),
          str(_target_query_script()), *query_args,
          *_runtime_service_id_args(
              args.service_id, qfw_config.read_state(args.run_dir))],
