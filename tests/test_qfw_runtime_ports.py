@@ -615,7 +615,7 @@ def _fake_process_start(monkeypatch, expected_command):
     monkeypatch.setattr(
         process_launcher,
         "_wait_process_ready",
-        lambda process, timeout, name, ready_probe: None,
+        lambda process, timeout, name, ready_probe, stderr_path=None: None,
     )
     return captured
 
@@ -1329,8 +1329,8 @@ def test_two_sessions_of_one_user_start_their_directories_on_one_host(
     held = []
     ports = []
 
-    def start_service(name, env, pid_file, ready_file, timeout, background,
-                      dry_run, ready_payload, ready_probe):
+    def start_service(name, env, role, pid_file, ready_file, timeout,
+                      background, dry_run, ready_payload, ready_probe):
         process_launcher._require_free_defw_ports(name, env)
         for variable in ("DEFW_LISTEN_PORT", "DEFW_TELNET_PORT"):
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
