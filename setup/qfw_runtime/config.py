@@ -50,7 +50,14 @@ DEFW_PROCESS_VARIABLES = frozenset((
     "DEFW_DISABLE_DIRSVC",
     "DEFW_LOG_DIR",
     "DEFW_ONLY_LOAD_MODULE",
+    # Where DEFw v2 looks for its directory before it reads DEFW_PARENT_*.
+    "DEFW2_DIRSVC",
 ))
+# DEFw v2 takes an address of the form protocol://endpoint. With no endpoint,
+# as in na+sm:// or ofi+cxi://, it only chooses the transport, which a caller
+# may choose for a whole run. With an endpoint it is where one process
+# listens, and inherited from a caller it is that caller's own address.
+DEFW2_ADDRESS_ENV = "DEFW2_ADDRESS"
 # qfw-setup publishes these for one run. Inherited from a caller, they describe
 # the caller's run, so a new run ignores them and qfw-srun takes them from its
 # own run's state.
@@ -121,11 +128,19 @@ def _persist_caller_environment(environment):
             environment[name] = value
 
 
+def defw2_address_names_endpoint(value):
+    """Whether a DEFW2_ADDRESS value names where a process listens, and not
+    only the transport."""
+    value = str(value or "").strip()
+    return bool(value) and not value.endswith("://")
+
+
 def inherited_variables(environ=None, run_state=True):
     """Names in environ that describe another DEFw process or another run.
 
     With run_state False, only the DEFw process variables are returned, for a
-    launcher whose caller sets the run variables it needs.
+    launcher whose caller sets the run variables it needs. DEFW2_ADDRESS is
+    one of them only when it names an endpoint.
     """
     environ = os.environ if environ is None else environ
     names = DEFW_PROCESS_VARIABLES
@@ -133,7 +148,10 @@ def inherited_variables(environ=None, run_state=True):
         names = names | RUN_STATE_VARIABLES
         if environ.get("QFW_RUN_TMP_PATH"):
             names = names | RUN_INPUT_VARIABLES
-    return sorted(name for name in names if name in environ)
+    inherited = {name for name in names if name in environ}
+    if defw2_address_names_endpoint(environ.get(DEFW2_ADDRESS_ENV)):
+        inherited.add(DEFW2_ADDRESS_ENV)
+    return sorted(inherited)
 
 
 def launch_environment(environ=None, run_state=True):

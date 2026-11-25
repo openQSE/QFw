@@ -56,6 +56,12 @@ CALLER_SETTINGS = {
     "QFW_SITE_CONFIG": "/etc/openqse/qfw/site.yaml",
     "QFW_RESERVATIONS": '[["nwqsim","5"]]',
 }
+# What a process that QFw started on DEFw v2 carries, and a directory named
+# by hand.
+DEFW2_PROCESS = {
+    "DEFW2_ADDRESS": "ofi+tcp://qpm01:18494",
+    "DEFW2_DIRSVC": "ofi+tcp://dirsvc01:8190",
+}
 # A submitter inside a QFw run with an allocation-local directory.
 OTHER_RUN = {
     "QFW_RUN_ID": "submitter-run",
@@ -329,6 +335,39 @@ def test_qfw_setup_discards_another_process_and_another_run():
         "QFW_RUN_BASE_DIR": "/workspace/qfw-runs/job-42",
         "QFW_QPM_RESOLVER_SCOPE_ORDER": "site",
     }
+
+
+def test_qfw_setup_discards_another_v2_process():
+    environ = {**DEFW2_PROCESS, **CALLER_SETTINGS, "DEFW2_RPC_THREADS": "4"}
+
+    qfw_config.discard_inherited_environment(environ)
+
+    assert environ == {**CALLER_SETTINGS, "DEFW2_RPC_THREADS": "4"}
+
+
+@pytest.mark.parametrize("transport", ["na+sm://", "ofi+cxi://", "ofi+tcp://"])
+def test_qfw_setup_keeps_a_callers_choice_of_v2_transport(transport):
+    environ = {"DEFW2_ADDRESS": transport}
+
+    qfw_config.discard_inherited_environment(environ)
+
+    assert environ == {"DEFW2_ADDRESS": transport}
+
+
+def test_qfw_srun_ignores_another_v2_process(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    _site_only_state(run_dir)
+    _set_environment(
+        monkeypatch, DEFW2_PROCESS,
+        {"SLURM_JOB_ID": "42", "SLURM_JOB_NODELIST": "c1"})
+
+    env = _capture_qfw_srun(monkeypatch, run_dir)["env"]
+
+    # The application finds this run's directory and listens where DEFw
+    # puts it, not at the submitter's directory or address.
+    assert "DEFW2_DIRSVC" not in env
+    assert "DEFW2_ADDRESS" not in env
+    assert env["DEFW_PARENT_HOSTNAME"] == "slurmctld"
 
 
 def test_qfw_setup_keeps_a_caller_supplied_run_id():

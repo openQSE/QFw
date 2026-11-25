@@ -679,12 +679,17 @@ def test_private_process_launcher_v2_ignores_the_telnet_port(
     assert captured["argv"][1:] == ["--serve", "svc_fake_iqm_qpm"]
 
 
-@pytest.mark.parametrize("caller_address", [None, "na+sm://"])
+@pytest.mark.parametrize("caller_address, listens_at", [
+    (None, "ofi+tcp://127.0.0.1:18090"),
+    ("na+sm://", "na+sm://"),
+    ("ofi+tcp://submitter:41000", "ofi+tcp://127.0.0.1:18090"),
+])
 def test_private_directory_launcher_binds_v2_to_its_endpoint(
-        tmp_path, monkeypatch, caller_address):
+        tmp_path, monkeypatch, caller_address, listens_at):
     # Every QFw process finds the directory from the host and port it was
-    # given, so a v2 directory listens there, unless the caller chose an
-    # address of its own.
+    # given, so a v2 directory listens there, unless the caller chose
+    # another transport. An address with an endpoint is not that choice:
+    # it is where the caller itself listens, inherited.
     captured = {}
 
     def fake_start(name, env, role, *args):
@@ -709,8 +714,7 @@ def test_private_directory_launcher_binds_v2_to_its_endpoint(
 
     assert rc == 0
     assert captured["role"] == ("directory", None)
-    assert captured["env"]["DEFW2_ADDRESS"] == (
-        caller_address or "ofi+tcp://127.0.0.1:18090")
+    assert captured["env"]["DEFW2_ADDRESS"] == listens_at
 
 
 def test_private_qpm_launcher_serves_its_module_on_v2(tmp_path, monkeypatch):
