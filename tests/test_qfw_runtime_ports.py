@@ -28,6 +28,7 @@ except ImportError:
 from qfw_runtime import commands
 from qfw_runtime import config as qfw_config
 from qfw_runtime import _process_launcher as process_launcher
+from qfw_runtime import service_plane
 
 
 def allocation():
@@ -560,7 +561,7 @@ def test_private_process_launcher_uses_defw_python_wrapper(
     monkeypatch.setattr(
         process_launcher,
         "_wait_process_ready",
-        lambda process, timeout, name, ready_probe: None,
+        lambda process, timeout, name, ready_probe, **_kwargs: None,
     )
 
     rc = process_launcher._start_defw_owned_process(
@@ -614,7 +615,7 @@ def _fake_process_start(monkeypatch, expected_command):
     monkeypatch.setattr(
         process_launcher,
         "_wait_process_ready",
-        lambda process, timeout, name, ready_probe: None,
+        lambda process, timeout, name, ready_probe, stderr_path=None: None,
     )
     return captured
 
@@ -888,6 +889,7 @@ def test_qfw_srun_uses_group0_for_heterogeneous_allocation(
     assert captured["argv"] == [
         "srun",
         "--het-group=0",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
         "--shots", "10",
@@ -1053,6 +1055,7 @@ def test_qfw_srun_configures_application_defw_environment(
     assert captured["argv"] == [
         "srun",
         "--het-group=0",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
     ]
@@ -1109,6 +1112,7 @@ def test_qfw_srun_honors_slurm_application_placement(
         "--nodes", "1",
         "--ntasks", "1",
         "--nodelist", "client-b",
+        "--overlap",
         "/usr/bin/defw-python",
         "app.py",
     ]
@@ -1171,3 +1175,203 @@ def test_qfw_srun_configures_site_directory_defw_environment(
     assert captured["env"]["DEFW_PARENT_NAME"] == "qfw-site-dirsvc"
     assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.3"
     assert captured["env"]["DEFW_LISTEN_PORT"] == "45679"
+
+
+def test_a_process_that_exits_during_startup_names_its_stderr(tmp_path):
+    stderr = tmp_path / "dirsvc.stderr.log"
+    stderr.write_text(
+        "Traceback (most recent call last):\n"
+        "ModuleNotFoundError: No module named 'svc_iqm_qpm'\n")
+    exited = types.SimpleNamespace(poll=lambda: 3)
+
+    with pytest.raises(RuntimeError) as raised:
+        process_launcher._wait_process_ready(
+            exited, 5, "dirsvc", lambda: False, stderr_path=stderr)
+
+    assert str(raised.value) == (
+        f"dirsvc exited during startup with status 3. {stderr} ends: "
+        "Traceback (most recent call last): | "
+        "ModuleNotFoundError: No module named 'svc_iqm_qpm'")
+
+
+@pytest.mark.parametrize("launch_options, expected", [
+    ({}, ["srun", "--overlap", "app"]),
+    ({"exclusive": True}, ["srun", "--exclusive", "app"]),
+])
+def test_an_application_step_overlaps_the_held_service_steps(
+        launch_options, expected):
+    assert commands._application_launch_command(
+        ["app"], {"mode": "slurm"}, launch_options) == expected
+
+
+@pytest.mark.parametrize("stop_requested, status", [(True, 0), (False, -15)])
+def test_a_foreground_service_stopped_by_teardown_exits_zero(
+        tmp_path, stop_requested, status):
+    import signal
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    ready_file = tmp_path / "ready.json"
+    service = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    if stop_requested:
+        process_launcher.qfw_process_state.stop_request_path(pid_file).touch()
+    service.send_signal(signal.SIGTERM)
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, ready_file) == status
+    assert not process_launcher.qfw_process_state.stop_request_path(
+        pid_file).exists()
+
+
+
+def test_a_foreground_service_that_exits_on_its_own_records_its_status(
+        tmp_path):
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    service = subprocess.Popen([sys.executable, "-c", "raise SystemExit(121)"])
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, tmp_path / "ready.json") == 121
+    assert process_launcher.qfw_process_state.read_exit_status(pid_file) == 121
+
+
+def test_a_foreground_service_stopped_by_request_records_no_status(tmp_path):
+    import subprocess
+
+    pid_file = tmp_path / "pid"
+    service = subprocess.Popen([sys.executable, "-c", "raise SystemExit(121)"])
+    process_launcher.qfw_process_state.stop_request_path(pid_file).touch()
+
+    assert process_launcher._wait_foreground(
+        service, pid_file, tmp_path / "ready.json") == 0
+    assert process_launcher.qfw_process_state.read_exit_status(pid_file) is None
+
+
+def test_teardown_keeps_the_run_dir_of_a_service_that_ended(
+        tmp_path, monkeypatch, capsys):
+    run_base, run_dir = _write_application_runtime(tmp_path, monkeypatch)
+    report = "QPM service mpi-smoke exited with status 121. step.log ends: oom"
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "stop", lambda _run_dir: None)
+    monkeypatch.setattr(
+        commands.qfw_service_plane, "ended_component_reports",
+        lambda _run_dir: [report])
+
+    assert commands.qfw_teardown([]) == 0
+
+    stderr = capsys.readouterr().err
+    assert f"qfw-teardown: {report}" in stderr
+    assert f"kept in {run_dir}" in stderr
+    assert (run_dir / "state" / "runtime-state.json").exists()
+    assert not (run_base / "current").exists()
+
+
+def test_two_sessions_of_one_user_start_their_qpms_on_one_host(
+        tmp_path, monkeypatch):
+    manifest_path = tmp_path / "services.yaml"
+    manifest_path.write_text(
+        "services:\n"
+        "  - name: aer\n"
+        "    module: svc_aer_qpm\n"
+        "    credential-mode: no-secret\n",
+        encoding="utf-8",
+    )
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text(
+        "directory-service:\n"
+        "  endpoint: 127.0.0.1:8090\n"
+        "service:\n"
+        f"  manifest: {manifest_path}\n",
+        encoding="utf-8",
+    )
+    held = []
+
+    def start_service(name, env, *args):
+        process_launcher._require_free_defw_ports(name, env)
+        for variable in ("DEFW_LISTEN_PORT", "DEFW_TELNET_PORT"):
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("", int(env[variable])))
+            listener.listen(1)
+            held.append(listener)
+        return 0
+
+    monkeypatch.setenv("QFW_SERVICE_SCOPE", "site")
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", start_service)
+    manifest_services = qfw_config.load_yaml(manifest_path)["services"]
+
+    try:
+        for session in ("first", "second"):
+            [service] = service_plane._resolve_services(
+                ["aer"], manifest_services, {}, {"group1": ["localhost"]},
+                types.SimpleNamespace(scope="application"), None, None,
+                f"aer-{session}")
+            assert process_launcher.start_qpm([
+                "--service-id", service["service_id"],
+                "--manifest-service-name", "aer",
+                "--site-config", str(site_path),
+                "--run-dir", str(tmp_path / session),
+                "--listen-port", str(service["listen_port"]),
+                "--telnet-port", str(service["telnet_port"]),
+            ]) == 0
+    finally:
+        for listener in held:
+            listener.close()
+
+    assert len(held) == 4
+
+
+def test_two_sessions_of_one_user_start_their_directories_on_one_host(
+        tmp_path, monkeypatch):
+    site_path = tmp_path / "site.yaml"
+    site_path.write_text("{}\n", encoding="utf-8")
+    held = []
+    ports = []
+
+    def start_service(name, env, role, pid_file, ready_file, timeout,
+                      background, dry_run, ready_payload, ready_probe):
+        process_launcher._require_free_defw_ports(name, env)
+        for variable in ("DEFW_LISTEN_PORT", "DEFW_TELNET_PORT"):
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("", int(env[variable])))
+            listener.listen(1)
+            held.append(listener)
+            ports.append(listener.getsockname()[1])
+        process_launcher._write_ready(ready_file, ready_payload)
+        return 0
+
+    monkeypatch.setattr(
+        process_launcher, "_start_defw_owned_process", start_service)
+    planned = {
+        session: service_plane._resolve_directory(
+            {}, site_path, {"dirsvc": {"port": "auto"}},
+            {"group1": ["localhost"]}, "application", None, False,
+            tmp_path / session)
+        for session in ("first", "second")
+    }
+    endpoints = []
+
+    try:
+        for session, directory in planned.items():
+            assert (directory["port"], directory["telnet_port"]) == (0, 0)
+            ready_file = tmp_path / session / "ready.json"
+            assert process_launcher.start_directory([
+                "--site-config", str(site_path),
+                "--run-dir", str(tmp_path / session),
+                "--name", directory["name"],
+                "--host", directory["host"],
+                "--listen-port", str(directory["port"]),
+                "--telnet-port", str(directory["telnet_port"]),
+                "--ready-file", str(ready_file),
+            ]) == 0
+            record = {"endpoint": directory["endpoint"]}
+            service_plane._adopt_directory_ports(
+                directory, record, ready_file)
+            endpoints.append(record["endpoint"])
+    finally:
+        for listener in held:
+            listener.close()
+
+    assert len(set(ports)) == 4
+    assert endpoints == [f"localhost:{port}" for port in ports[::2]]

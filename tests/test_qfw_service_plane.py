@@ -24,6 +24,47 @@ def process_identity(pid):
     }
 
 
+SLURM_ALLOCATION = {
+    "mode": "slurm",
+    "group0": ["directory-a"],
+    "group1": ["qpm-a"],
+    "group0_nodelist": "directory-a",
+    "group1_nodelist": "qpm-a",
+}
+
+
+class HeldStep:
+    pids = iter(range(4100, 4200))
+
+    def __init__(self, launch, returncode=None):
+        self.launch = list(launch)
+        self.pid = next(self.pids)
+        self.returncode = returncode
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.returncode = 0
+        return 0
+
+
+def hold_steps(monkeypatch):
+    steps = []
+
+    def start_step(launch, env, step_log):
+        pid_file = Path(launch[launch.index("--pid-file") + 1])
+        ready_file = Path(launch[launch.index("--ready-file") + 1])
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text("3101\n", encoding="utf-8")
+        ready_file.write_text('{"ready": true}\n', encoding="utf-8")
+        steps.append(HeldStep(launch))
+        return steps[-1]
+
+    monkeypatch.setattr(service_plane, "_start_step", start_step)
+    return steps
+
+
 def write_site_configuration(tmp_path, services):
     manifest = tmp_path / "services.yaml"
     manifest.write_text(
@@ -390,6 +431,46 @@ def test_application_configuration_controls_optional_prte(tmp_path):
     assert state["services"][0]["provider_launch"]["type"] == "internal"
 
 
+def test_a_qpm_records_only_the_directory_its_connection_file_names(
+        tmp_path):
+    site, manifest = write_site_configuration(tmp_path, [
+        ("fake-iqm", "svc_fake_iqm_qpm", "internal"),
+    ])
+    runtime = write_runtime_configuration(
+        tmp_path, prte=False, services=["fake-iqm"])
+    with runtime.open("a", encoding="utf-8") as stream:
+        stream.write(f"  service-manifest: {manifest}\n")
+    connection_file = tmp_path / "directory-service.json"
+    connection_file.write_text(json.dumps({
+        "schema": "qfw-directory-service-v1",
+        "instance_id": "directory-1",
+        "name": "test-dirsvc",
+        "endpoint": "localhost:49960",
+        "ready": True,
+    }) + "\n", encoding="utf-8")
+
+    state = service_plane.start(parse_role_start_args(
+        "qpm",
+        "--run-dir", str(tmp_path / "qpm-run"),
+        "--site-config", str(site),
+        "--runtime-config", str(runtime),
+        "--scope", "application",
+        "--service-id", "fake-iqm",
+        "--directory-service-info", str(connection_file),
+        "--dry-run",
+    ))
+
+    assert state["directory"] == {
+        "name": "test-dirsvc",
+        "host": "localhost",
+        "port": 49960,
+        "endpoint": "localhost:49960",
+        "target": "localhost",
+        "connection_file": str(connection_file),
+        "connect_timeout_seconds": 300,
+    }
+
+
 def test_application_service_manifest_enables_required_prte(tmp_path):
     site, manifest = write_site_configuration(tmp_path, [
         ("mpi-smoke", "svc_mpi_smoke", "mpi"),
@@ -484,18 +565,7 @@ def test_directory_lifecycle_publishes_connection_record(
     ])
     runtime = tmp_path / "site-runtime.yaml"
     runtime.write_text("resolver:\n  scope-order:\n    - site\n")
-    calls = []
-
-    def fake_run_on_node(node, command, env, allocation, check=True):
-        calls.append((node, list(command)))
-        pid_file = Path(command[command.index("--pid-file") + 1])
-        ready_file = Path(command[command.index("--ready-file") + 1])
-        pid_file.parent.mkdir(parents=True, exist_ok=True)
-        pid_file.write_text("3101\n", encoding="utf-8")
-        ready_file.write_text('{"ready": true}\n', encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0)
-
-    monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
+    hold_steps(monkeypatch)
     monkeypatch.setattr(
         service_plane, "_read_process_identity",
         lambda pid, *_args: process_identity(pid))
@@ -524,6 +594,298 @@ def test_directory_lifecycle_publishes_connection_record(
     service_plane.stop(tmp_path / "dir-run")
     connection = json.loads(connection_file.read_text(encoding="utf-8"))
     assert connection["ready"] is False
+
+
+def test_a_slurm_service_runs_in_the_foreground_of_an_srun_step(
+        tmp_path, monkeypatch):
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text("resolver:\n  scope-order:\n    - site\n")
+    steps = hold_steps(monkeypatch)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda pid, *_args: process_identity(pid))
+    monkeypatch.setattr(service_plane, "_terminate_pid", lambda *args: None)
+    monkeypatch.setattr(
+        service_plane, "_allocation_context", lambda: SLURM_ALLOCATION)
+    args = parse_role_start_args(
+        "directory", "--run-dir", str(tmp_path / "dir-run"),
+        "--site-config", str(site), "--runtime-config", str(runtime),
+        "--node", "directory-a")
+
+    state = service_plane.start(args)
+
+    step = steps[0]
+    assert step.launch[:7] == [
+        "srun", "--overlap", "--mem=0", "--nodes=1", "--ntasks=1",
+        "--nodelist", "directory-a"]
+    assert "--background" not in step.launch
+    assert state["components"]["directory"]["step"]["pid"] == step.pid
+    assert step.returncode is None
+
+    service_plane.stop(tmp_path / "dir-run")
+
+    assert step.returncode == 0
+
+
+def test_a_service_whose_srun_step_ends_during_startup_is_named(
+        tmp_path, monkeypatch):
+    def ended_step(launch, env, step_log):
+        step_log.write_text("srun: error: Unable to create step\n")
+        return HeldStep(launch, returncode=1)
+
+    monkeypatch.setattr(service_plane, "_start_step", ended_step)
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    with pytest.raises(
+            service_plane.ServicePlaneError,
+            match="ended with its srun step, status 1: srun: error: Unable"):
+        service_plane._launch(
+            record, "c1", ["service"], "--background", {}, SLURM_ALLOCATION,
+            lambda: False, 1, "directory service d")
+
+
+def test_a_step_srun_has_not_started_names_its_log_when_it_times_out(
+        tmp_path, monkeypatch):
+    def queued_step(launch, env, step_log):
+        step_log.write_text(
+            "srun: Job step creation temporarily disabled, retrying "
+            "(Requested nodes are busy)\n")
+        return HeldStep(launch)
+
+    monkeypatch.setattr(service_plane, "_start_step", queued_step)
+    monkeypatch.setattr(service_plane, "STEP_START_GRACE_SECONDS", 0)
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    with pytest.raises(
+            service_plane.ServicePlaneError,
+            match=r"still running, and .*step\.log ends: .*Requested nodes are busy"):
+        service_plane._launch(
+            record, "c1", ["service"], "--background", {}, SLURM_ALLOCATION,
+            lambda: False, 0, "directory service d")
+
+
+def test_a_liveness_probe_that_does_not_answer_is_reported(monkeypatch):
+    def no_answer(launch, **kwargs):
+        raise subprocess.TimeoutExpired(launch, kwargs["timeout"])
+
+    monkeypatch.setattr(service_plane.subprocess, "run", no_answer)
+
+    with pytest.raises(
+            service_plane.ServicePlaneError,
+            match="cannot determine whether process 3101 on qpm-a"):
+        service_plane._read_process_identity(3101, "qpm-a", SLURM_ALLOCATION)
+
+
+def test_a_held_step_outlives_its_launch_until_it_is_ended(
+        tmp_path, monkeypatch):
+    fake_srun = tmp_path / "bin" / "srun"
+    fake_srun.parent.mkdir()
+    fake_srun.write_text(
+        "#!/bin/sh\n"
+        "while [ \"${1#-}\" != \"$1\" ]; do\n"
+        "  case \"$1\" in --nodelist) shift 2 ;; *) shift ;; esac\n"
+        "done\n"
+        "exec \"$@\"\n")
+    fake_srun.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_srun.parent}{os.pathsep}{os.environ['PATH']}")
+    ready_file = tmp_path / "ready"
+    service = [
+        sys.executable, "-c",
+        "import pathlib, sys, time\n"
+        "pathlib.Path(sys.argv[1]).write_text('ready')\n"
+        "time.sleep(600)\n",
+        str(ready_file)]
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    service_plane._launch(
+        record, "c1", service, "--background", os.environ.copy(),
+        SLURM_ALLOCATION, ready_file.exists, 10, "held service")
+    step = service_plane._STEPS[record["step"]["pid"]]
+    time.sleep(0.5)
+
+    assert step.poll() is None
+    monkeypatch.setattr(service_plane, "TERMINATE_TIMEOUT_SECONDS", 0.5)
+    service_plane._end_step(record)
+    assert step.poll() is not None
+
+
+CGROUP_SRUN = """#!/bin/sh
+pid_file=
+for arg in "$@"; do
+  [ "$previous" = --pid-file ] && pid_file=$arg
+  previous=$arg
+done
+while [ "${1#-}" != "$1" ]; do
+  case "$1" in --nodelist) shift 2 ;; *) shift ;; esac
+done
+"$@"
+status=$?
+[ -n "$pid_file" ] && [ -s "$pid_file" ] && kill -9 "$(cat "$pid_file")" 2>/dev/null
+exit $status
+"""
+
+DIRECTORY_SERVICE = """#!/usr/bin/env python3
+import json, os, sys, time
+argv = sys.argv[1:]
+pid_file = argv[argv.index("--pid-file") + 1]
+ready_file = argv[argv.index("--ready-file") + 1]
+if "--background" in argv and os.fork():
+    sys.exit(0)
+if "--background" in argv:
+    os.setsid()
+os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+open(pid_file, "w").write(f"{os.getpid()}\\n")
+open(ready_file, "w").write(json.dumps({"ready": True}))
+time.sleep(600)
+"""
+
+
+def _alive_identity(pid, *_args):
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return None
+    return process_identity(pid)
+
+
+def test_a_service_outlives_its_launch_when_the_step_end_kills_its_processes(
+        tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, text in (("srun", CGROUP_SRUN), ("directory", DIRECTORY_SERVICE)):
+        (bin_dir / name).write_text(text)
+        (bin_dir / name).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(service_plane.sys, "executable", str(bin_dir / "directory"))
+    monkeypatch.setattr(service_plane, "_read_process_identity", _alive_identity)
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda pid, *_args: os.kill(int(pid), signal.SIGKILL))
+    monkeypatch.setattr(
+        service_plane, "_allocation_context", lambda: SLURM_ALLOCATION)
+    monkeypatch.setattr(service_plane, "TERMINATE_TIMEOUT_SECONDS", 1)
+    site, _manifest = write_site_configuration(tmp_path, [
+        ("iqm-test", "svc_iqm_qpm", "remote-api"),
+    ])
+    runtime = tmp_path / "site-runtime.yaml"
+    runtime.write_text("resolver:\n  scope-order:\n    - site\n")
+    args = parse_role_start_args(
+        "directory", "--run-dir", str(tmp_path / "dir-run"),
+        "--site-config", str(site), "--runtime-config", str(runtime),
+        "--node", "directory-a")
+
+    state = service_plane.start(args)
+    pid = state["components"]["directory"]["pid"]
+    time.sleep(0.3)
+
+    assert _alive_identity(pid) is not None
+
+    service_plane.stop(tmp_path / "dir-run")
+
+    assert _alive_identity(pid) is None
+
+
+HET_ALLOCATION = {
+    "mode": "heterogeneous",
+    "group0": ["app-a"],
+    "group1": ["sim-a", "sim-b"],
+}
+
+
+@pytest.mark.parametrize("allocation, environment, node, cpus", [
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "login-a,directory-a,qpm-a",
+      "SLURM_JOB_CPUS_PER_NODE": "8,64(x2)"}, "directory-a", 64),
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "directory-a,qpm-a",
+      "SLURM_JOB_CPUS_PER_NODE": "64,32"}, "qpm-a", 32),
+    (HET_ALLOCATION,
+     {"SLURM_JOB_NODELIST_HET_GROUP_1": "sim-a,sim-b",
+      "SLURM_JOB_CPUS_PER_NODE_HET_GROUP_1": "16,48"}, "sim-b", 48),
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "qpm-a", "SLURM_JOB_CPUS_PER_NODE": "2",
+      "SLURM_CPUS_PER_TASK": "1"}, "qpm-a", 1),
+    (SLURM_ALLOCATION,
+     {"SLURM_JOB_NODELIST": "qpm-a", "SLURM_JOB_CPUS_PER_NODE": "96",
+      "SLURM_CPUS_PER_TASK": "48"}, "qpm-a", 48),
+    (HET_ALLOCATION,
+     {"SLURM_JOB_NODELIST_HET_GROUP_1": "sim-a,sim-b",
+      "SLURM_JOB_CPUS_PER_NODE_HET_GROUP_1": "16,48",
+      "SLURM_CPUS_PER_TASK_HET_GROUP_1": "8"}, "sim-b", 8),
+    (SLURM_ALLOCATION, {}, "qpm-a", None),
+])
+def test_a_held_step_asks_for_the_jobs_cpus_on_its_node_up_to_its_cpus_per_task(
+        tmp_path, monkeypatch, allocation, environment, node, cpus):
+    for variable in ("SLURM_JOB_NODELIST", "SLURM_JOB_CPUS_PER_NODE",
+                     "SLURM_CPUS_PER_TASK"):
+        monkeypatch.delenv(variable, raising=False)
+    for variable, value in environment.items():
+        monkeypatch.setenv(variable, value)
+    steps = []
+
+    def start_step(launch, env, step_log):
+        steps.append(HeldStep(launch))
+        return steps[-1]
+
+    monkeypatch.setattr(service_plane, "_start_step", start_step)
+
+    service_plane._launch(
+        {"pid_file": str(tmp_path / "pid")}, node, ["service"],
+        "--background", {}, allocation, lambda: True, 1, "service")
+
+    [step] = steps
+    asked = [item for item in step.launch if item.startswith("--cpus-per-task")]
+    assert asked == ([f"--cpus-per-task={cpus}"] if cpus else [])
+    command = step.launch[step.launch.index("env"):]
+    assert command == [
+        "env", "-u", "SLURM_CPUS_PER_TASK", "-u", "SLURM_TRES_PER_TASK",
+        "service"]
+
+
+def test_teardown_asks_a_service_to_stop_before_it_signals_it(
+        tmp_path, monkeypatch):
+    pid_file = tmp_path / "services" / "d" / "pid"
+    pid_file.parent.mkdir(parents=True)
+    requested = []
+    monkeypatch.setattr(
+        service_plane, "_verified_component_status",
+        lambda component, state: "alive")
+    monkeypatch.setattr(
+        service_plane, "_terminate_pid",
+        lambda *args: requested.append(
+            process_state.stop_request_path(pid_file).exists()))
+    state = {
+        "allocation": SLURM_ALLOCATION,
+        "components": {"directory": {
+            "role": "directory", "pid": 3101, "node": "directory-a",
+            "pid_file": str(pid_file)}},
+    }
+
+    assert service_plane._stop_components(state) == []
+
+    assert requested == [True]
+    assert not process_state.stop_request_path(pid_file).exists()
+
+
+def test_a_local_service_still_detaches_without_srun(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run_on_node(node, command, env, allocation, check=True):
+        calls.append(list(command))
+
+    monkeypatch.setattr(service_plane, "_run_on_node", fake_run_on_node)
+    monkeypatch.setattr(service_plane, "_start_step", pytest.fail)
+    record = {"pid_file": str(tmp_path / "pid")}
+
+    service_plane._launch(
+        record, "c1", ["service"], "--background", {}, {"mode": "local"},
+        lambda: True, 1, "local service")
+
+    assert calls == [["service", "--background"]]
+    assert "step" not in record
 
 
 def test_stale_directory_connection_record_is_replaced(tmp_path, monkeypatch):
@@ -673,7 +1035,8 @@ def test_site_simulator_nodes_expand_from_environment(monkeypatch):
         [], allocation, {}, "site") == ["sim-a", "sim-b"]
 
 
-def test_independent_application_qpms_use_manifest_port_offsets(tmp_path):
+def test_application_qpms_offset_a_configured_port_base_by_manifest_index(
+        tmp_path):
     site, manifest = write_site_configuration(tmp_path, [
         ("nwqsim", "svc_nwqsim_qpm", "mpi"),
         ("tnqvm", "svc_tnqvm_qpm", "mpi"),
@@ -681,6 +1044,8 @@ def test_independent_application_qpms_use_manifest_port_offsets(tmp_path):
     runtime = write_runtime_configuration(tmp_path, prte=False)
     with runtime.open("a", encoding="utf-8") as stream:
         stream.write(f"  service-manifest: {manifest}\n")
+        stream.write("  service-listen-port-base: 8290\n")
+        stream.write("  service-telnet-port-base: 8291\n")
     connection_file = tmp_path / "directory-service.json"
     connection_file.write_text(json.dumps({
         "schema": "qfw-directory-service-v1",
@@ -862,6 +1227,46 @@ def test_prte_start_uses_keepalive_mode(tmp_path, monkeypatch):
         "--report-pid", str(uri_path.with_name("pid")),
         "--keepalive", "0", "--daemonize",
     ])]
+
+
+def test_a_dvm_held_in_a_step_does_not_watch_its_stdin(tmp_path, monkeypatch):
+    uri_path = tmp_path / "prte_dvm" / "dvm-uri"
+    state = {
+        "run_dir": str(tmp_path),
+        "owner": "application",
+        "dry_run": False,
+        "dvm": {
+            "launch_node": "directory-a",
+            "nodes": ["directory-a"],
+            "uri_path": str(uri_path),
+        },
+        "allocation": SLURM_ALLOCATION,
+        "components": {},
+    }
+    steps = []
+
+    def start_step(launch, env, step_log):
+        uri_path.write_text("test-dvm-uri\n", encoding="utf-8")
+        Path(launch[launch.index("--report-pid") + 1]).write_text(
+            "7201\n", encoding="utf-8")
+        steps.append(HeldStep(launch))
+        return steps[-1]
+
+    monkeypatch.setattr(service_plane, "_start_step", start_step)
+    monkeypatch.setattr(service_plane, "_write_state", lambda state: None)
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity",
+        lambda pid, *_args: process_identity(pid))
+    monkeypatch.setattr(
+        service_plane, "_command_path", lambda name, env=None: name)
+    monkeypatch.setattr(service_plane.os, "geteuid", lambda: 1000)
+
+    service_plane._start_prte(state, timeout=1)
+
+    [step] = steps
+    assert "prte" in step.launch
+    assert "--keepalive" not in step.launch
+    assert "--daemonize" not in step.launch
 
 
 def test_qpm_start_composes_private_process_launcher(tmp_path, monkeypatch):
@@ -1362,3 +1767,140 @@ def test_process_state_reports_a_failed_probe_on_stderr(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "Permission denied" in captured.err
+
+
+def _ended_qpm_run(tmp_path, exit_status=121):
+    run_dir = tmp_path / "qpm-run"
+    component_dir = run_dir / "services" / "aer-run1"
+    log_dir = component_dir / "logs"
+    log_dir.mkdir(parents=True)
+    pid_file = component_dir / "pid"
+    (log_dir / "defw_py.log").write_text(
+        "loaded svc_aer_qpm\nsampling circuit cid-7\n", encoding="utf-8")
+    step_log = component_dir / "step.log"
+    step_log.write_text(
+        "srun: error: node1: task 0: Exited with exit code 121\n",
+        encoding="utf-8")
+    if exit_status is not None:
+        process_state.exit_status_path(pid_file).write_text(
+            f"{exit_status}\n", encoding="utf-8")
+    service_plane._write_state({
+        "schema": service_plane.SCHEMA,
+        "run_dir": str(run_dir),
+        "state": "ready",
+        "dry_run": False,
+        "allocation": {"mode": "local"},
+        "configuration": {
+            "components": {"directory": False, "prte": False, "qpm": True},
+            "service_ids": ["aer-run1"],
+        },
+        "components": {
+            "qpm:aer-run1": {
+                "role": "qpm",
+                "service_id": "aer-run1",
+                "state": "ready",
+                "pid": 4242,
+                "node": "sim-head",
+                "process_identity": process_identity(4242),
+                "pid_file": str(pid_file),
+                "ready_file": str(component_dir / "ready.json"),
+                "log_dir": str(log_dir),
+                "step": {"pid": 99, "host": "another-host", "log": str(step_log)},
+            }
+        },
+    })
+    return run_dir
+
+
+@pytest.fixture
+def processes_gone(monkeypatch):
+    monkeypatch.setattr(
+        service_plane, "_read_process_identity", lambda *_args: None)
+
+
+def test_status_names_a_service_that_exited_with_its_status_and_logs(
+        tmp_path, processes_gone):
+    run_dir = _ended_qpm_run(tmp_path)
+
+    observed = service_plane.status(run_dir)
+
+    assert observed["state"] == "degraded"
+    assert observed["error"].startswith(
+        "QPM service aer-run1 exited with status 121. ")
+    assert "step.log ends: srun: error: node1: task 0: Exited" in observed["error"]
+    assert "defw_py.log ends: loaded svc_aer_qpm | sampling circuit cid-7" in (
+        observed["error"])
+
+
+@pytest.mark.parametrize("exit_status, ended", [
+    (-9, "QPM service aer-run1 was killed by signal 9"),
+    (None, "QPM service aer-run1 ended"),
+])
+def test_status_says_how_a_service_ended(
+        tmp_path, processes_gone, exit_status, ended):
+    run_dir = _ended_qpm_run(tmp_path, exit_status=exit_status)
+
+    assert service_plane.status(run_dir)["error"].startswith(f"{ended}. ")
+
+
+def test_a_foreground_manager_names_the_service_that_ended(
+        tmp_path, monkeypatch, processes_gone):
+    import argparse
+
+    run_dir = _ended_qpm_run(tmp_path)
+    monkeypatch.setattr(
+        service_plane, "start", lambda _args: service_plane._read_state(run_dir))
+
+    assert service_plane.run(
+        argparse.Namespace(run_dir=str(run_dir), poll_interval=0.1)) == 1
+
+    assert service_plane._read_state(run_dir)["error"].startswith(
+        "QPM service aer-run1 exited with status 121. ")
+
+
+def test_stop_keeps_the_record_and_logs_of_a_service_that_ended(
+        tmp_path, processes_gone):
+    run_dir = _ended_qpm_run(tmp_path)
+    component_dir = run_dir / "services" / "aer-run1"
+
+    service_plane.stop(run_dir)
+
+    [report] = service_plane.ended_component_reports(run_dir)
+    assert report.startswith("QPM service aer-run1 exited with status 121. ")
+    assert process_state.read_exit_status(component_dir / "pid") == 121
+    assert (component_dir / "logs" / "defw_py.log").exists()
+
+
+def _runtime_with(tmp_path, qpm_run_dir):
+    runtime_dir = tmp_path / "runtime"
+    (runtime_dir / "state").mkdir(parents=True)
+    (runtime_dir / "state" / "runtime-state.json").write_text(json.dumps({
+        "run_dir": str(runtime_dir),
+        "service_managers": [{
+            "owner": "application",
+            "role": "qpm",
+            "service_id": "aer-run1",
+            "run_dir": str(qpm_run_dir),
+        }],
+    }), encoding="utf-8")
+    return runtime_dir
+
+
+def test_a_client_reads_why_a_reserved_service_ended(tmp_path):
+    runtime_dir = _runtime_with(tmp_path, _ended_qpm_run(tmp_path))
+
+    report = service_plane.ended_service_report("aer-run1", run_dir=runtime_dir)
+
+    assert report.startswith("QPM service aer-run1 exited with status 121. ")
+    assert service_plane.ended_service_report(
+        "nwqsim-run1", run_dir=runtime_dir) is None
+
+
+def test_a_running_service_has_no_ended_report(tmp_path):
+    runtime_dir = _runtime_with(
+        tmp_path, _ended_qpm_run(tmp_path, exit_status=None))
+
+    assert service_plane.ended_service_report(
+        "aer-run1", run_dir=runtime_dir) is None
+    assert service_plane.ended_service_report(
+        "aer-run1", run_dir=tmp_path / "no-runtime") is None

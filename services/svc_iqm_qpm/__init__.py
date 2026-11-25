@@ -1,6 +1,7 @@
 from .svc_qpm import QPM
 import defw
 import util.qpm.startup as qpm_startup
+from util.circuit_payload import qiskit_circuit_formats
 
 SERVICE_NAME = 'QPM'
 SERVICE_DESC = 'Quantum Platform Manager for IQM'
@@ -30,6 +31,9 @@ service_classes = [QPM]
 
 
 def initialize():
+	# Qiskit's mimalloc must first load on the persistent startup thread
+	# before registration/RPC workers can import it (QFw #179).
+	qiskit_circuit_formats()
 	qpm_startup.initialize_qpm_service(
 		defw,
 		"IQM QPM Initialized Successfully",

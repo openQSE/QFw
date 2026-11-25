@@ -175,6 +175,62 @@ qfw_example_teardown
     ) == "native log\n"
 
 
+def test_example_teardown_without_arguments_under_nounset(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    script = f"""
+set -u
+source examples/qfw_example_common.sh
+qfw-teardown() {{ printf 'teardown:%s\\n' "$#"; }}
+QFW_EXAMPLE_SETUP_STARTED=1
+QFW_EXAMPLE_TEARDOWN_DONE=0
+QFW_RUN_TMP_PATH={run_dir}
+QFW_EXAMPLE_LOG_ARCHIVE_DIR={tmp_path / "archive"}
+qfw_example_teardown
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "teardown:0" in result.stdout
+
+
+def test_example_finish_removes_the_files_an_example_wrote(tmp_path):
+    # An example's own generated inputs, such as the shim smoke test's copy
+    # of its service manifest, go with the run instead of piling up in
+    # example-runtime/.
+    manifest = tmp_path / "shim-smoke-services.abc123.yaml"
+    manifest.write_text("services: []\n", encoding="utf-8")
+    script = f"""
+source examples/qfw_example_common.sh
+QFW_EXAMPLE_START_EPOCH="$(date +%s)"
+QFW_EXAMPLE_TEMP_FILES=({manifest})
+qfw_example_finish 0
+"""
+
+    subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert not manifest.exists()
+
+
+def test_shim_smoke_registers_its_manifest_copy():
+    script = (REPOSITORY_ROOT / "examples" / "qfw_shim_smoke.sh").read_text(
+        encoding="utf-8")
+
+    assert 'QFW_EXAMPLE_TEMP_FILES+=("${shim_manifest}")' in script
+
+
 def test_example_teardown_can_keep_run_directory():
     script = """
 source examples/qfw_example_common.sh

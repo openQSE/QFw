@@ -66,13 +66,20 @@ Path to the application-scope service manifest. The installed default is
 .IR prefix/share/qfw/config/services/local-services.yaml .
 .TP
 .B service-listen-port-base
-First automatically assigned QPM listen port.
+QPM listen port.
+.BR auto ,
+the default, lets each QPM take a free port on its node when it starts, so
+several runtimes can share a node. A number gives the first QPM in the
+manifest that port and each later one
+.B service-port-stride
+more per manifest entry.
 .TP
 .B service-telnet-port-base
-First automatically assigned QPM telnet port.
+QPM telnet port, as
+.BR service-listen-port-base .
 .TP
 .B service-port-stride
-Spacing between automatically assigned ports for multiple QPMs.
+Spacing between the ports of manifest entries when a port base is a number.
 .TP
 .B dirsvc
 Directory launch settings. Common keys are
@@ -81,9 +88,10 @@ Directory launch settings. Common keys are
 .BR port ,
 and
 .BR telnet-port .
-The value
-.B auto
-selects an available port during a live application-scope launch.
+.BR auto ,
+the default for both ports, lets the directory take a free port on its node
+when it starts, so several runtimes can share a node; clients read the chosen
+endpoint from the directory-service connection file.
 .TP
 .B prte
 PRTE launch settings. A

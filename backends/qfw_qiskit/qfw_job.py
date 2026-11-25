@@ -2,20 +2,22 @@ import logging
 import uuid
 import time
 import select
+from collections.abc import Mapping
 
 from qiskit import QuantumCircuit
-from qiskit.providers import JobError, JobV1 as Job
+from qiskit.providers import JobError, JobTimeoutError, JobV1 as Job
 from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import Statevector
 from qiskit.result import Result
 from defw_exception import DEFwError
-from util.circuit_payload import encode_qiskit_circuit
+from util.circuit_payload import encode_logical_circuit, encode_qiskit_circuit
 from util import instrumentation
 from util.qpm.statevector import (
 	decode_statevector_payload,
 	statevector_payload_size_summary,
 )
 from .qfw_metadata import get_qubit_mapping
+from .qpm_resolver import ended_service_report
 
 
 EXECUTION_CONTEXT_KEYS = (
@@ -25,8 +27,59 @@ EXECUTION_CONTEXT_KEYS = (
 	"cancel_on_timeout",
 )
 
+# A task the QPM ended itself, failed or cancelled, without running it: its
+# completion carries no timing.
+QPM_ENDED_OUTCOMES = ("FAILED", "CANCELLED")
+
+# How long result() waits with no completion before asking the QPM whether it
+# is still there.
+QPM_STATUS_CHECK_INTERVAL_SEC = 60
+
+# Run options forwarded to the QPM through the job's info dict. param_values
+# is keyed by parameter name first (see normalize_param_values).
+QFW_INFO_PASSTHROUGH_OPTIONS = (
+	"param_values",
+	"compilation_options",
+	"seed_simulator",
+	"bases",
+)
+
+RESULT_METADATA_KEYS = ("qhw_result", "diagnostics", "bases")
+
+LOGICAL_CIRCUIT_METADATA_KEY = "qfw_logical_circuit"
+
+
+def normalize_param_values(param_values):
+	"""Key circuit parameter values by parameter name.
+
+	The values travel to the QPM inside an RPC message that DEFw serializes
+	with YAML. A qiskit ParameterVectorElement key cannot survive that round
+	trip, so keys that carry a name (qiskit Parameter objects) are reduced to
+	it and the QPM always receives {name: value}.
+	"""
+	if not isinstance(param_values, Mapping):
+		raise DEFwError(
+			"param_values must be a mapping of parameter name to value, "
+			f"got {type(param_values).__name__}")
+	normalized = {}
+	for key, value in param_values.items():
+		name = getattr(key, "name", key)
+		if not isinstance(name, str):
+			raise DEFwError(
+				"param_values keys must be parameter names or qiskit "
+				f"Parameter objects, got {type(key).__name__}")
+		if name in normalized:
+			raise DEFwError(
+				f"param_values names parameter {name!r} more than once")
+		normalized[name] = value
+	return normalized
+
+
 # The libraries a shim QPM can run a circuit through (svc_lib_qpm).
 SHIM_LIBRARIES = ("qrmi", "qdmi")
+# The shim library a job runs through when the program names none, so a batch
+# script can choose it for a program it does not edit.
+SHIM_LIB_ENV = "QFW_SHIM_LIB"
 
 
 def normalize_reservation_id(value):
@@ -84,6 +137,49 @@ def _runner_output_message(output):
 	return None
 
 
+def failure_message(result):
+	# One line describing a circuit the QPM reports failed or cancelled.
+	cid = result.get("cid", "unknown")
+	rc = result.get("rc")
+	output = result.get("result", {})
+	provider = None
+	error_type = None
+	message = None
+
+	if isinstance(output, dict):
+		for key, value in output.items():
+			if not isinstance(value, dict) or not value.get("error"):
+				continue
+			provider = str(key).upper()
+			error_type = value.get("error_type")
+			message = value.get("error")
+			break
+		if message is None:
+			message = output.get("error") or output.get("Error")
+	elif isinstance(output, str):
+		message = _runner_output_message(output)
+	if message is None:
+		# A task the QPM fails itself has no rc or result: its cause is
+		# under "error" (controller._fail_scheduled_task_locked).
+		error = result.get("error")
+		if isinstance(error, dict):
+			error_type = error_type or error.get("error_type")
+			error = error.get("error")
+		message = ": ".join(str(part) for part in (
+			result.get("reason"), error or result.get("message"))
+			if part)
+
+	details = [f"QFw circuit {cid} failed (rc={rc}"]
+	if provider:
+		details.append(f", provider={provider}")
+	if error_type:
+		details.append(f", error_type={error_type}")
+	details.append(")")
+	if message:
+		details.append(f": {message}")
+	return "".join(details)
+
+
 class QFwJob(Job):
 	def __init__(self, backend, qpm, event_api, qobj, options):
 		self._job_id = str(uuid.uuid4())
@@ -108,6 +204,11 @@ class QFwJob(Job):
 
 	def _run_experiment_async(self, circuit):
 		self.start_time = time.time()
+		# Validate param_values before the circuit is serialized, so a bad
+		# value fails without doing that work first.
+		param_values = self._options.get("param_values")
+		if param_values is not None:
+			param_values = normalize_param_values(param_values)
 		# get num_qubits from experiment
 		num_qubits = circuit.num_qubits
 		# let's form the info object to give to QFw!!
@@ -115,12 +216,13 @@ class QFwJob(Job):
 			"num_qubits": num_qubits,
 			"num_shots": self.options()["shots"],
 			"compiler": "staq",
+			"completion_event_class_id": self._qpm_event_api.class_id(),
 		}
 		# Serialize in the best format this QPM says it reads. A QPM that
 		# declares nothing gets OpenQASM 2 in info["qasm"], exactly as before.
+		logical = (circuit.metadata or {}).get(LOGICAL_CIRCUIT_METADATA_KEY)
 		with instrumentation.app_prepare(circuit) as prepare:
-			info.update(
-				encode_qiskit_circuit(circuit, self._declared_properties()))
+			info.update(self._encode_circuit(circuit, logical))
 			instrumentation.describe_payload(prepare, info)
 		qubit_mapping = get_qubit_mapping(circuit)
 		if qubit_mapping:
@@ -129,6 +231,11 @@ class QFwJob(Job):
 			info["return_statevector"] = True
 		if self._options.get("lib"):
 			info["lib"] = self._options["lib"]
+		for key in QFW_INFO_PASSTHROUGH_OPTIONS:
+			if self._options.get(key) is not None:
+				info[key] = self._options[key]
+		if param_values is not None:
+			info["param_values"] = param_values
 
 		try:
 			context = self._execution_context()
@@ -142,6 +249,36 @@ class QFwJob(Job):
 			output = {"Error": str(e), "counts": {"error": str(e)}, "statevector": [str(e)], "memory": []}
 			logging.defw_app(f"Error occurred: {output}")
 			raise e
+
+	def _encode_circuit(self, circuit, logical):
+		properties = self._declared_properties()
+		if logical is None:
+			return encode_qiskit_circuit(circuit, properties)
+		if not (properties or {}).get("logical_circuit"):
+			raise DEFwError(
+				f"the circuit carries a logical circuit in its "
+				f"{LOGICAL_CIRCUIT_METADATA_KEY!r} metadata, and this QPM "
+				"does not read one")
+		metadata = dict(circuit.metadata)
+		del metadata[LOGICAL_CIRCUIT_METADATA_KEY]
+		original = circuit.metadata
+		circuit.metadata = metadata
+		try:
+			fields = encode_qiskit_circuit(circuit, properties)
+		finally:
+			circuit.metadata = original
+		fields.update(encode_logical_circuit(logical, properties))
+		return fields
+
+	def _check_bases_job(self, circuits):
+		if not (self._declared_properties() or {}).get("bases_jobs"):
+			raise DEFwError(
+				"the job asks for bases, and this QPM does not run bases "
+				"jobs")
+		if len(circuits) != 1:
+			raise DEFwError(
+				"a bases job measures one prepared state, so it takes "
+				f"exactly one circuit, not {len(circuits)}")
 
 	def _job_labels(self):
 		# The device and backend kind the job's own metrics carry.
@@ -170,6 +307,8 @@ class QFwJob(Job):
 			circuits = [self._qobj]
 		else:
 			circuits = self._qobj
+		if self._options.get("bases") is not None:
+			self._check_bases_job(circuits)
 
 		# One trace per job. The RPCs inside the scope carry its context to
 		# the QPM, so the QPM's own spans join this trace.
@@ -192,19 +331,21 @@ class QFwJob(Job):
 		return
 
 	def _result_reader(self, cid_list):
-		circuit_run_timeout = self._backend.COMPLETION_TIMEOUT_SEC
 		total_circ = len(self._cid_list)
-		total_circuits_completed = 0
 		results = []
 		qpm_results = []
 
 		start = time.time()
+		deadline = _result_deadline(start, self._options.get("timeout"))
 		logging.defw_app(f"result reader start time: {start}")
 		event_fd = self._qpm_event_api.fileno()
 		expected_cids = {list(entry.keys())[0] for entry in cid_list}
 		completed_cids = set()
-		while time.time() - start < circuit_run_timeout and total_circuits_completed != total_circ:
-			readable, _, _ = select.select([event_fd], [], [], 1)
+		last_heard = start
+		while len(completed_cids) != total_circ:
+			past_deadline = deadline is not None and time.time() >= deadline
+			readable, _, _ = select.select(
+				[event_fd], [], [], _select_wait(deadline))
 			if len(readable) > 0 and event_fd not in readable:
 				raise DEFwError("Something wrong with select")
 			if len(readable) > 0:
@@ -217,10 +358,16 @@ class QFwJob(Job):
 					instrumentation.record_transport_return(
 						payload, labels=self._job_labels())
 					completed_cids.add(cid)
-					total_circuits_completed += 1
+					last_heard = time.time()
+			if past_deadline and len(completed_cids) != total_circ:
+				self._time_out(expected_cids - completed_cids)
+			if (len(completed_cids) != total_circ and
+					time.time() - last_heard >= QPM_STATUS_CHECK_INTERVAL_SEC):
+				self._check_qpm_reachable(expected_cids - completed_cids)
+				last_heard = time.time()
 
 		logging.defw_app(
-			f"Result reader thread ending. Events: {total_circuits_completed}."
+			f"Result reader thread ending. Events: {len(completed_cids)}."
 			f" Expected: {total_circ}. Time: {time.time()}")
 		for r in results:
 			res = r.get_event()
@@ -234,6 +381,51 @@ class QFwJob(Job):
 			qpm_results.append({'cid': res['cid'], 'res': res, 'exp': exp})
 
 		return qpm_results
+
+	def _time_out(self, missing_cids):
+		self._status = JobStatus.ERROR
+		if self._options.get("cancel_on_timeout"):
+			context = self._execution_context()
+			for cid in missing_cids:
+				try:
+					self._qpm.cancel_task(
+						cid=cid, reservation_id=context["reservation_id"],
+						token=context.get("token"), reason="job-timeout")
+				except Exception as e:
+					logging.defw_app(
+						f"QFw job {self._job_id} could not cancel {cid}: {e}")
+		raise JobTimeoutError(
+			f"QFw job {self._job_id} timed out after "
+			f"{self._options['timeout']}s with "
+			f"{self._describe_unfinished(missing_cids)}")
+
+	def _check_qpm_reachable(self, missing_cids):
+		context = self._execution_context()
+		try:
+			self._qpm.task_status(
+				cid=next(iter(missing_cids)),
+				reservation_id=context["reservation_id"],
+				token=context.get("token"))
+		except Exception as e:
+			self._status = JobStatus.ERROR
+			message = (
+				f"QFw job {self._job_id} could not reach its QPM with "
+				f"{self._describe_unfinished(missing_cids)}: {e}")
+			report = ended_service_report(self._qpm_service_id())
+			raise JobError(f"{message}. {report}" if report else message) from e
+
+	def _qpm_service_id(self):
+		binding = getattr(self._qpm, "lifecycle_binding", None)
+		return getattr(binding, "service_id", None)
+
+	def _describe_unfinished(self, missing_cids):
+		missing = ", ".join(
+			f"{cid} ({entry[cid]['exp'].name})"
+			for entry in self._cid_list for cid in entry
+			if cid in missing_cids)
+		return (
+			f"{len(missing_cids)} of {len(self._cid_list)} circuit(s) "
+			f"unfinished: {missing}")
 
 	def _get_memory_from_counts(self, counts):
 		m = []
@@ -272,52 +464,22 @@ class QFwJob(Job):
 
 	def _result_metadata(self, output):
 		metadata = {}
-		qhw_result = output.get("qhw_result")
-		if isinstance(qhw_result, dict):
-			metadata["qhw_result"] = qhw_result
+		for key in RESULT_METADATA_KEYS:
+			if isinstance(output.get(key), (dict, list)):
+				metadata[key] = output[key]
 		return metadata
-
-	def _failure_message(self, result):
-		cid = result.get("cid", "unknown")
-		rc = result.get("rc")
-		output = result.get("result", {})
-		provider = None
-		error_type = None
-		message = None
-
-		if isinstance(output, dict):
-			for key, value in output.items():
-				if not isinstance(value, dict) or not value.get("error"):
-					continue
-				provider = str(key).upper()
-				error_type = value.get("error_type")
-				message = value.get("error")
-				break
-			if message is None:
-				message = output.get("error") or output.get("Error")
-		elif isinstance(output, str):
-			message = _runner_output_message(output)
-
-		details = [f"QFw circuit {cid} failed (rc={rc}"]
-		if provider:
-			details.append(f", provider={provider}")
-		if error_type:
-			details.append(f", error_type={error_type}")
-		details.append(")")
-		if message:
-			details.append(f": {message}")
-		return "".join(details)
 
 	def _raise_for_failed_results(self, qpm_results):
 		failures = [
 			qr["res"] for qr in qpm_results
 			if qr["res"].get("rc") not in (None, 0)
+			or qr["res"].get("outcome") in QPM_ENDED_OUTCOMES
 		]
 		if not failures:
 			return
 
 		self._status = JobStatus.ERROR
-		messages = [self._failure_message(result) for result in failures]
+		messages = [failure_message(result) for result in failures]
 		raise JobError("; ".join(messages))
 
 	def _build_statevector(self, payload, cid=None):
@@ -359,21 +521,18 @@ class QFwJob(Job):
 		res_wait_start = time.time()
 		qpm_results = self._result_reader(self._cid_list)
 		self._result_wait_time = time.time() - res_wait_start
+		# Completion events can arrive in any order, and callers such as
+		# QFwEstimatorV2 read the results by position.
+		sent = {
+			next(iter(entry)): position
+			for position, entry in enumerate(self._cid_list)}
+		qpm_results.sort(key=lambda result: sent[result['cid']])
 		if not qpm_results:
 			raise DEFwError("no QPM circuit results were received")
 
-		if not qpm_results:
-			# _result_reader returns early when it times out; with no completed
-			# circuits there is nothing to assemble and the per-circuit `out`
-			# referenced below (and in the job-level result) never binds. Fail
-			# loudly with the cause instead of raising a bare NameError.
-			raise DEFwError(
-				f"QFw job {self._job_id} returned no circuit results within "
-				f"{self._backend.COMPLETION_TIMEOUT_SEC}s "
-				f"(expected {len(self._cid_list)} circuit(s))")
-
 		for qr in qpm_results:
-			self._backend.log_statistics(qr['res'])
+			if qr['res'].get("outcome") not in QPM_ENDED_OUTCOMES:
+				self._backend.log_statistics(qr['res'])
 		try:
 			self._raise_for_failed_results(qpm_results)
 		except JobError:
@@ -456,6 +615,18 @@ class QFwJob(Job):
 
 	def options(self):
 		return self._options
+
+
+def _result_deadline(start, timeout):
+	if timeout is None:
+		return None
+	return start + float(timeout)
+
+
+def _select_wait(deadline):
+	if deadline is None:
+		return 1
+	return min(1, max(0, deadline - time.time()))
 
 
 def _async_response_cid(response):

@@ -178,9 +178,11 @@ file(CHMOD
 		WORLD_READ WORLD_EXECUTE)
 
 foreach(qfw_command
+		qfw-services
 		qfw-setup
 		qfw-status
 		qfw-srun
+		qfw-target
 		qfw-teardown)
 	set(QFW_COMMAND_NAME "${qfw_command}")
 	configure_file(
@@ -197,9 +199,11 @@ endforeach()
 install(PROGRAMS
 	"${QFW_GENERATED_BIN_DIR}/qfw-activate"
 	"${QFW_GENERATED_BIN_DIR}/defw-python"
+	"${QFW_GENERATED_BIN_DIR}/qfw-services"
 	"${QFW_GENERATED_BIN_DIR}/qfw-setup"
 	"${QFW_GENERATED_BIN_DIR}/qfw-status"
 	"${QFW_GENERATED_BIN_DIR}/qfw-srun"
+	"${QFW_GENERATED_BIN_DIR}/qfw-target"
 	"${QFW_GENERATED_BIN_DIR}/qfw-teardown"
 	"${QFW_GENERATED_BIN_DIR}/qfw-dir-svc"
 	"${QFW_GENERATED_BIN_DIR}/qfw-qpm-svc"
@@ -216,6 +220,11 @@ install(DIRECTORY setup/qfw_runtime
 		PATTERN "*.py"
 		PATTERN "__pycache__" EXCLUDE)
 install(DIRECTORY backends/qfw_qiskit
+	DESTINATION "${QFW_PYTHON_INSTALL_DIR}"
+	FILES_MATCHING
+		PATTERN "*.py"
+		PATTERN "__pycache__" EXCLUDE)
+install(DIRECTORY backends/qfw_pulser
 	DESTINATION "${QFW_PYTHON_INSTALL_DIR}"
 	FILES_MATCHING
 		PATTERN "*.py"
@@ -249,20 +258,25 @@ install(DIRECTORY examples/
 		PATTERN "*.py"
 		PATTERN "*.yaml"
 		PATTERN "*.yml"
+		PATTERN "*.json.example"
 		PATTERN "__pycache__" EXCLUDE)
 install(PROGRAMS
 	examples/qfw_chem_app.sh
 	examples/qfw_example_common.sh
 	examples/qfw_fake_iqm_stress.sh
 	examples/qfw_ghz.sh
+	examples/qfw_ibm_simple.sh
 	examples/qfw_init_test.sh
 	examples/qfw_iqm_chem_driver.sh
 	examples/qfw_job_stream.sh
 	examples/qfw_mpi_smoke.sh
 	examples/qfw_pennylane.sh
+	examples/qfw_pulser.sh
 	examples/qfw_qaoa.sh
 	examples/qfw_qiskit_simple.sh
+	examples/qfw_qiskit_simple_w_mqt.sh
 	examples/qfw_qiskit_vqe.sh
+	examples/qfw_qrmi_ibm.sh
 	examples/qfw_run_all.sh
 	examples/qfw_shim_smoke.sh
 	examples/qfw_slurm_driver.sh

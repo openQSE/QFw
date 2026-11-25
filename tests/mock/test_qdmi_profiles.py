@@ -1,20 +1,13 @@
-# Guards the QDMI driver's provider profiles (drivers/qdmi_profiles.py).
-#
-# The driver keeps QDMI's session and job lifecycle and asks a per-provider
-# profile for the vendor-defined parts: how a session opens and from which
-# settings, which program format a job takes, what the CUSTOM slots mean,
-# and how counts are keyed. The IQM profile is the driver's behavior from
-# before profiles existed, so these tests pin that behavior down: the same
-# registration, the same open_device call, the same IQM_JSON submission.
-#
-# The device libraries and mqt.core are stood in for through sys.modules, so
-# no qiskit, iqm-qdmi or mqt-core install is needed.
+# QFw delegates session opening to the packaged MQT Core-backed adapters.
+# The remaining profiles carry QFw settings, policy and legacy output handling.
 
 import pathlib
 import sys
 import types
 
 import pytest
+
+from tests.mock.fakes import stub_qdmi_session
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -23,7 +16,7 @@ if SERVICES not in sys.path:
 	sys.path.insert(0, SERVICES)
 
 from defw_exception import DEFwExecutionError  # noqa: E402
-from svc_lib_qpm.drivers import fomac_normalize, qdmi_driver  # noqa: E402
+from svc_lib_qpm.drivers import qdmi_normalize, qdmi_driver  # noqa: E402
 from svc_lib_qpm.drivers.qdmi_driver import QdmiDriver  # noqa: E402
 from svc_lib_qpm.drivers.qdmi_profiles import (  # noqa: E402
 	IqmQdmiProfile, profile_for)
@@ -37,6 +30,41 @@ def test_the_default_profile_is_iqm():
 	assert isinstance(profile_for({"provider": "IQM"}), IqmQdmiProfile)
 
 
+def test_operation_loci_keep_ordered_three_qubit_tuples():
+	sites = [types.SimpleNamespace(name=lambda n=n: n)
+		for n in ["QB1", "QB2", "QB3", "QB3", "QB2", "QB1"]]
+	op = types.SimpleNamespace(sites=lambda: sites, qubits_num=lambda: 3)
+	assert qdmi_normalize._operation_loci(op) == [
+		["QB1", "QB2", "QB3"], ["QB3", "QB2", "QB1"]]
+
+
+@pytest.mark.parametrize("arity", [None, 0])
+def test_unknown_arity_does_not_invent_site_tuples(arity):
+	op = types.SimpleNamespace(sites=lambda: [object()], qubits_num=lambda: arity)
+	assert qdmi_normalize._operation_loci(op) == []
+
+
+def test_unsupported_arity_does_not_abort_introspection():
+	def qubits_num():
+		raise NotImplementedError
+	op = types.SimpleNamespace(name=lambda: "measure", sites=lambda: [object()], qubits_num=qubits_num)
+	device = types.SimpleNamespace(operations=lambda: [op])
+	assert qdmi_normalize._operations(device) == {"measure": []}
+
+
+@pytest.mark.parametrize("variable", [
+	"IQM_TOKENS_FILE", "IQM_QC_ID", "IQM_QUANTUM_COMPUTER", "IQM_QC_ALIAS"])
+def test_iqm_rejects_ambient_session_settings(monkeypatch, variable):
+	monkeypatch.setenv(variable, "process-default")
+	opened = []
+	_install_iqm_backend(monkeypatch, opened)
+	with pytest.raises(DEFwExecutionError, match=variable):
+		profile_for({"provider": "iqm"}).open_backend({
+			"base_url": "https://qc.example.org", "token": "user-token",
+			"qc_alias": "reserved-device"})
+	assert opened == []
+
+
 def test_an_unknown_provider_fails_when_the_driver_is_built():
 	with pytest.raises(
 			DEFwExecutionError, match="no profile for provider 'ionq'"):
@@ -45,14 +73,6 @@ def test_an_unknown_provider_fails_when_the_driver_is_built():
 
 # --- the IQM profile: the session opens as it did before ---------------------
 
-class _Definition:
-	# Stands in for mqt.core.qdmi.driver.DeviceDefinition.
-	def __init__(self, device_id, library_path, prefix):
-		self.device_id = device_id
-		self.library_path = library_path
-		self.prefix = prefix
-
-
 def _module(name, **attrs):
 	module = types.ModuleType(name)
 	for key, value in attrs.items():
@@ -60,61 +80,33 @@ def _module(name, **attrs):
 	return module
 
 
-def _install_mqt_driver(monkeypatch, opened):
-	# mqt.core.qdmi.driver with a recording open_device. Returns the list the
-	# registrations land in.
-	registered = []
-
-	def register_device_if_absent(definition):
-		registered.append(definition)
-		return True
-
-	def open_device(device_id, **kwargs):
-		opened.append((device_id, kwargs))
-		return "device-handle"
-
-	monkeypatch.setitem(sys.modules, "mqt", _module("mqt"))
-	monkeypatch.setitem(sys.modules, "mqt.core", _module("mqt.core"))
-	monkeypatch.setitem(sys.modules, "mqt.core.qdmi", _module("mqt.core.qdmi"))
-	monkeypatch.setitem(sys.modules, "mqt.core.qdmi.driver", _module(
-		"mqt.core.qdmi.driver",
-		DeviceDefinition=_Definition,
-		register_device_if_absent=register_device_if_absent,
-		open_device=open_device))
-	return registered
+def _install_iqm_backend(monkeypatch, opened):
+	def IQMBackend(**kwargs):
+		opened.append(kwargs)
+		return types.SimpleNamespace(device="device-handle")
+	monkeypatch.setitem(sys.modules, "iqm.qdmi.qiskit", _module(
+		"iqm.qdmi.qiskit", IQMBackend=IQMBackend))
 
 
-def _install_iqm_qdmi(monkeypatch):
-	monkeypatch.setitem(sys.modules, "iqm", _module("iqm"))
-	monkeypatch.setitem(sys.modules, "iqm.qdmi", _module(
-		"iqm.qdmi",
-		IQM_QDMI_DEVICE_ID="iqm.default",
-		IQM_QDMI_LIBRARY_PATH="/opt/libiqm-qdmi.so",
-		IQM_QDMI_PREFIX="IQM"))
-
-
-def test_the_iqm_session_opens_as_it_did_before(monkeypatch):
+def test_the_iqm_session_uses_the_packaged_backend(monkeypatch):
 	monkeypatch.setenv("QFW_QC_URL", "https://qc.example.org/")
 	monkeypatch.setenv("QFW_API_KEY", "secret")
 	opened = []
-	registered = _install_mqt_driver(monkeypatch, opened)
-	_install_iqm_qdmi(monkeypatch)
+
+	def IQMBackend(**kwargs):
+		opened.append(kwargs)
+		return types.SimpleNamespace(device="device-handle")
+
+	monkeypatch.setitem(sys.modules, "iqm.qdmi.qiskit", _module(
+		"iqm.qdmi.qiskit", IQMBackend=IQMBackend))
 	driver = QdmiDriver({
 		"provider": "iqm", "id": "ornl-iqm-20q",
 		"provider_device_id": "default"})
 
 	assert driver._device() == "device-handle"
-
-	assert [(d.device_id, d.library_path, d.prefix) for d in registered] == [
-		("iqm.default", "/opt/libiqm-qdmi.so", "IQM")]
-	# The trailing slash is stripped, the token rides in TOKEN and the
-	# quantum computer alias in CUSTOM2, as iqm.qdmi.qiskit does.
-	assert opened == [("iqm.default", {
+	assert opened == [{
 		"base_url": "https://qc.example.org",
-		"token": "secret",
-		"custom2": "default",
-	})]
-	# The session is opened once and cached.
+		"token": "secret", "qc_alias": "default"}]
 	assert driver._device() == "device-handle"
 	assert len(opened) == 1
 
@@ -131,6 +123,21 @@ def test_the_iqm_profile_names_the_missing_credential(monkeypatch):
 
 	with pytest.raises(DEFwExecutionError, match="API token"):
 		QdmiDriver({"provider": "iqm"})._access()
+
+
+@pytest.mark.parametrize("credential", [None, {"reservation_id": 7}])
+def test_a_warm_session_does_not_resolve_access_again(monkeypatch, credential):
+	monkeypatch.setenv("QFW_QC_URL", "https://qc.example.org")
+	monkeypatch.setenv("QFW_API_KEY", "user-token")
+	opened = []
+	_install_iqm_backend(monkeypatch, opened)
+	driver = QdmiDriver({"provider": "iqm"})
+	device = driver._device(credential)
+	monkeypatch.setattr(driver._profile, "access",
+		lambda credential=None: pytest.fail("warm session resolved access"))
+
+	assert driver._device(credential) is device
+	assert len(opened) == 1
 
 
 # --- the reservation's credential, not the service's ------------------------
@@ -157,17 +164,16 @@ def test_the_session_opens_with_the_reservation_credential(monkeypatch):
 	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
 	monkeypatch.setenv("QFW_API_KEY", "service-secret")
 	opened = []
-	_install_mqt_driver(monkeypatch, opened)
-	_install_iqm_qdmi(monkeypatch)
+	_install_iqm_backend(monkeypatch, opened)
 	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
 
 	driver._device(credential=_bound_credential())
 
-	assert opened == [("iqm.default", {
+	assert opened == [{
 		"base_url": "https://qc.example.org",
 		"token": "user-secret",
-		"custom2": "default",
-	})]
+		"qc_alias": "default",
+	}]
 
 
 def test_device_access_is_resolved_for_the_reservation_user(monkeypatch):
@@ -209,8 +215,7 @@ def test_each_reservation_gets_its_own_session(monkeypatch):
 	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
 	monkeypatch.setenv("QFW_API_KEY", "service-secret")
 	opened = []
-	_install_mqt_driver(monkeypatch, opened)
-	_install_iqm_qdmi(monkeypatch)
+	_install_iqm_backend(monkeypatch, opened)
 	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
 	alice = _bound_credential("alice", "alice-secret", reservation_id=7)
 	bob = _bound_credential("bob", "bob-secret", reservation_id=8)
@@ -222,7 +227,7 @@ def test_each_reservation_gets_its_own_session(monkeypatch):
 	driver._device(credential=dict(alice, reservation_id=9))
 	driver._device()
 
-	assert [kwargs["token"] for _, kwargs in opened] == [
+	assert [kwargs["token"] for kwargs in opened] == [
 		"alice-secret", "bob-secret", "alice-secret", "service-secret"]
 
 
@@ -230,8 +235,7 @@ def test_an_ended_reservation_loses_its_session(monkeypatch):
 	monkeypatch.setenv("QFW_QC_URL", "https://service.example.org/")
 	monkeypatch.setenv("QFW_API_KEY", "service-secret")
 	opened = []
-	_install_mqt_driver(monkeypatch, opened)
-	_install_iqm_qdmi(monkeypatch)
+	_install_iqm_backend(monkeypatch, opened)
 	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
 	alice = _bound_credential("alice", "alice-secret", reservation_id=7)
 	driver._device(credential=alice)
@@ -240,7 +244,7 @@ def test_an_ended_reservation_loses_its_session(monkeypatch):
 	assert driver.evict_reservation(7) is True
 	# Nothing left for it, and the service's own session is untouched.
 	assert driver.evict_reservation(7) is False
-	assert list(driver._devices) == [("default",)]
+	assert list(driver._backends) == [("default",)]
 	# A circuit that still names the reservation opens a fresh session
 	# rather than finding the old one.
 	driver._device(credential=alice)
@@ -250,12 +254,11 @@ def test_an_ended_reservation_loses_its_session(monkeypatch):
 def test_a_missing_device_library_names_its_package(monkeypatch):
 	monkeypatch.setenv("QFW_QC_URL", "https://qc.example.org/")
 	monkeypatch.setenv("QFW_API_KEY", "secret")
-	_install_mqt_driver(monkeypatch, [])
 	# A None entry makes `import iqm` fail the way an absent package does.
 	monkeypatch.setitem(sys.modules, "iqm", None)
-	monkeypatch.setitem(sys.modules, "iqm.qdmi", None)
+	monkeypatch.setitem(sys.modules, "iqm.qdmi.qiskit", None)
 
-	with pytest.raises(DEFwExecutionError, match="Install iqm-qdmi"):
+	with pytest.raises(DEFwExecutionError, match="iqm-qdmi"):
 		QdmiDriver({"provider": "iqm"})._device()
 
 
@@ -269,13 +272,14 @@ def test_the_iqm_profile_encodes_an_iqm_json_program(monkeypatch):
 
 	monkeypatch.setattr(iqm_transcode, "build_iqm_circuit", build_iqm_circuit)
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
+		qdmi_driver.qdmi_normalize, "extract_topology",
 		lambda device: {"qubits": ["QB1", "QB2"]})
 	driver = QdmiDriver({"provider": "iqm"})
 	driver._serialize_program = lambda iqm_circuit: f"json:{iqm_circuit}"
 
 	encoded = driver._profile.encode(
-		driver, "OPENQASM 2.0;", {"qubit_mapping": {"q0": "QB2"}}, object())
+		driver, "OPENQASM 2.0;", {"qubit_mapping": {"q0": "QB2"}},
+		types.SimpleNamespace(device=object()))
 
 	# The format is a name, resolved by the driver only at submission.
 	assert encoded == ("json:iqm-circuit", "IQM_JSON", None)
@@ -283,9 +287,9 @@ def test_the_iqm_profile_encodes_an_iqm_json_program(monkeypatch):
 		("OPENQASM 2.0;", {"qubits": ["QB1", "QB2"]}, {"q0": "QB2"})]
 
 
-# --- the IQM architecture rebuilt from FoMaC ----------------------------------
+# --- the IQM architecture rebuilt from QDMI ----------------------------------
 
-def _fomac_topology():
+def _qdmi_topology():
 	# Shaped like extract_topology's output for the q20, cut to three qubits.
 	return {
 		"num_qubits": 3,
@@ -299,10 +303,10 @@ def _fomac_topology():
 	}
 
 
-def test_the_iqm_architecture_is_rebuilt_from_fomac_topology():
+def test_the_iqm_architecture_is_rebuilt_from_qdmi_topology():
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	arch = iqm_architecture(_fomac_topology(), "cal-set-1")
+	arch = iqm_architecture(_qdmi_topology(), "cal-set-1")
 
 	assert arch["calibration_set_id"] == "cal-set-1"
 	assert arch["qubits"] == ["QB1", "QB2", "QB3"]
@@ -320,7 +324,7 @@ def test_without_a_calibration_set_only_the_qubits_are_passed():
 	# and build_iqm_circuit serializes an already-native circuit, as before.
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	assert iqm_architecture(_fomac_topology(), None) == {
+	assert iqm_architecture(_qdmi_topology(), None) == {
 		"qubits": ["QB1", "QB2", "QB3"]}
 
 
@@ -329,7 +333,7 @@ def test_without_a_measure_gate_only_the_qubits_are_passed():
 	# which build_iqm_circuit would not fall back on, when there is none.
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	topology = _fomac_topology()
+	topology = _qdmi_topology()
 	del topology["operations"]["measure"]
 
 	assert iqm_architecture(topology, "cal-set-1") == {
@@ -337,11 +341,11 @@ def test_without_a_measure_gate_only_the_qubits_are_passed():
 
 
 def test_a_locus_outside_the_qubits_means_only_the_qubits_are_passed():
-	# A computational resonator. FoMaC does not say which sites are
+	# A computational resonator. QDMI does not say which sites are
 	# resonators, so a device with them is not rebuilt.
 	from svc_lib_qpm.drivers.qdmi_profiles import iqm_architecture
 
-	topology = _fomac_topology()
+	topology = _qdmi_topology()
 	topology["operations"]["move"] = [["QB1", "CR1"]]
 
 	assert iqm_architecture(topology, "cal-set-1") == {
@@ -365,30 +369,51 @@ def test_the_iqm_profile_transcodes_against_the_rebuilt_architecture(
 
 	monkeypatch.setattr(iqm_transcode, "build_iqm_circuit", build_iqm_circuit)
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
-		lambda device: _fomac_topology())
+		qdmi_driver.qdmi_normalize, "extract_topology",
+		lambda device: _qdmi_topology())
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "_calibration_set_id",
+		qdmi_driver.qdmi_normalize, "_calibration_set_id",
 		calibration_set_id)
 	driver = QdmiDriver({"provider": "iqm"})
 	driver._serialize_program = lambda iqm_circuit: f"json:{iqm_circuit}"
 
-	driver._profile.encode(driver, "OPENQASM 2.0;", {}, object())
+	driver._profile.encode(driver, "OPENQASM 2.0;", {}, types.SimpleNamespace(device=object()))
 
 	assert slots == ["CUSTOM1"]
-	assert calls == [iqm_architecture(_fomac_topology(), "cal-set-1")]
+	assert calls == [iqm_architecture(_qdmi_topology(), "cal-set-1")]
 
 
 def test_the_iqm_profile_defaults():
 	profile = profile_for({"provider": "iqm"})
 
 	assert profile.calibration_set_slot == "CUSTOM1"
-	assert profile.technology() is None
+	assert profile.technology() == "superconducting"
 	assert profile.job_kwargs({}) == {}
 	assert profile.check_shots(10_000) is None
 	assert profile.timeout_seconds({}) == 300.0
 	assert profile.timeout_seconds({"timeout": "12"}) == 12.0
 	assert profile.result_counts({"01": 3}, None) == {"01": 3}
+
+
+@pytest.mark.parametrize("provider", ["iqm", "aws", "ibm"])
+def test_resource_shot_caps_apply_to_every_provider(provider):
+	profile = profile_for({"provider": provider, "id": "limited-device", "max_shots": "10"})
+	assert profile.check_shots(10) is None
+	with pytest.raises(DEFwExecutionError, match="over the 10-shot cap"):
+		profile.check_shots(11)
+	assert profile_for({"provider": provider}).check_shots(10**6) is None
+
+
+@pytest.mark.parametrize("provider", ["iqm", "aws", "ibm"])
+def test_resource_timeouts_allow_a_client_override(provider):
+	profile = profile_for({"provider": provider, "job_timeout_seconds": "120"})
+	assert profile.timeout_seconds({}) == 120.0
+	assert profile.timeout_seconds({"timeout": "12"}) == 12.0
+	assert profile_for({"provider": provider}).timeout_seconds({}) == 300.0
+
+
+def test_amazon_braket_keeps_its_zero_shot_policy():
+	assert profile_for({"provider": "aws", "max_shots": "10"}).check_shots(0) is None
 
 
 # --- run_circuit goes through the profile -----------------------------------
@@ -422,7 +447,7 @@ def _running_driver(monkeypatch, counts, records, submitted):
 		iqm_transcode, "build_iqm_circuit",
 		lambda *args, **kwargs: "iqm-circuit")
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "extract_topology",
+		qdmi_driver.qdmi_normalize, "extract_topology",
 		lambda device: {"qubits": ["QB1"]})
 
 	def to_result_record(counts, shots, provider, device_id, **kwargs):
@@ -430,7 +455,7 @@ def _running_driver(monkeypatch, counts, records, submitted):
 		return {"schema": "qhw-result-v1"}
 
 	monkeypatch.setattr(
-		qdmi_driver.fomac_normalize, "to_result_record", to_result_record)
+		qdmi_driver.qdmi_normalize, "to_result_record", to_result_record)
 	_install_program_formats(monkeypatch)
 
 	def submit_job(program, fmt, shots, **kwargs):
@@ -438,7 +463,7 @@ def _running_driver(monkeypatch, counts, records, submitted):
 		return _Job(counts)
 
 	driver = QdmiDriver({"provider": "iqm", "id": "ornl-iqm-20q"})
-	driver._device = lambda credential=None: types.SimpleNamespace(submit_job=submit_job)
+	stub_qdmi_session(driver, types.SimpleNamespace(submit_job=submit_job))
 	driver._serialize_program = lambda iqm_circuit: "{}"
 	return driver
 
@@ -469,20 +494,47 @@ def test_task_lookups_find_each_cid_and_need_one(monkeypatch):
 def test_run_circuit_opens_the_session_with_the_circuit_credential(
 		monkeypatch):
 	driver = _running_driver(monkeypatch, {"1": 10}, [], [])
-	device = driver._device()
+	backend = driver._backend()
 	seen = []
 
-	def _device(credential=None):
+	def _backend(credential=None):
 		seen.append(credential)
-		return device
+		return backend
 
-	driver._device = _device
+	driver._backend = _backend
 	circuit = _circuit()
 	circuit.provider_credential = _bound_credential()
 
 	driver.run_circuit(circuit)
 
 	assert seen == [_bound_credential()]
+
+
+@pytest.mark.parametrize("info,device,expected", [
+	# What QFwBackend sends: the device's first wait, doubling from there.
+	({}, {"poll_interval_seconds": 4}, (4.0, True)),
+	({}, {}, (1.0, True)),
+	# A client that names its interval gets that, fixed.
+	({"poll_interval": 0.5}, {"poll_interval_seconds": 4}, (0.5, False)),
+])
+def test_run_circuit_polls_on_the_poll_schedule(
+		monkeypatch, info, device, expected):
+	driver = _running_driver(monkeypatch, {"1": 10}, [], [])
+	driver._descriptor.update(device)
+	seen = []
+
+	def _poll_job(job, timeout, poll, cancel_event=None, backoff=False):
+		seen.append((poll, backoff))
+		return "completed"
+
+	driver._poll_job = _poll_job
+	circuit = _circuit()
+	del circuit.info["poll_interval"]
+	circuit.info.update(info)
+
+	driver.run_circuit(circuit)
+
+	assert seen == [expected]
 
 
 def test_run_circuit_submits_what_the_profile_encodes(monkeypatch):
@@ -548,7 +600,7 @@ def test_an_unknown_program_format_is_reported(monkeypatch):
 	assert submitted == []
 
 
-# --- fomac_normalize: the calibration slot and the technology ---------------
+# --- qdmi_normalize: the calibration slot and the technology ---------------
 
 class _CustomDevice:
 	def __init__(self, value="cal-set-1"):
@@ -579,7 +631,7 @@ def test_the_calibration_slot_defaults_to_custom1(monkeypatch):
 	_install_custom_property(monkeypatch)
 	device = _CustomDevice()
 
-	assert fomac_normalize._calibration_set_id(device) == "cal-set-1"
+	assert qdmi_normalize._calibration_set_id(device) == "cal-set-1"
 	assert device.queries == [("slot-1", str)]
 
 
@@ -587,7 +639,7 @@ def test_a_profile_can_point_at_another_slot(monkeypatch):
 	_install_custom_property(monkeypatch)
 	device = _CustomDevice()
 
-	assert fomac_normalize._calibration_set_id(device, "CUSTOM2") == "cal-set-1"
+	assert qdmi_normalize._calibration_set_id(device, "CUSTOM2") == "cal-set-1"
 	assert device.queries == [("slot-2", str)]
 
 
@@ -595,12 +647,50 @@ def test_no_slot_means_nothing_is_queried(monkeypatch):
 	_install_custom_property(monkeypatch)
 	device = _CustomDevice()
 
-	assert fomac_normalize._calibration_set_id(device, None) is None
-	cal = fomac_normalize.extract_calibration(
+	assert qdmi_normalize._calibration_set_id(device, None) is None
+	cal = qdmi_normalize.extract_calibration(
 		device, calibration_set_slot=None)
 
 	assert cal["calibration_set_id"] is None
 	assert device.queries == []
+
+
+@pytest.mark.parametrize("scale, expected_scale, exception", [
+	(0.001, 0.001, None), (1.0, 1.0, None), (None, 1.0, None),
+	("missing", 1.0, None), ("failure", None, RuntimeError),
+	(0.0, None, DEFwExecutionError), (-1.0, None, DEFwExecutionError),
+	(float("inf"), None, DEFwExecutionError), (float("nan"), None, DEFwExecutionError)])
+def test_calibration_times_use_the_device_duration_scale(scale, expected_scale, exception):
+	site = types.SimpleNamespace(
+		name=lambda: "0", t1=lambda: 10000, t2=lambda: 8000)
+	unavailable = types.SimpleNamespace(name=lambda: "1", t1=lambda: None)
+	op = types.SimpleNamespace(
+		name=lambda: "x", qubits_num=lambda: 1, sites=lambda: [site],
+		fidelity=lambda **kwargs: 0.99, duration=lambda **kwargs: 40)
+	device = types.SimpleNamespace(
+		regular_sites=lambda: [site, unavailable], operations=lambda: [op],
+		duration_unit=lambda: "us")
+
+	def duration_scale_factor():
+		if scale == "failure":
+			raise RuntimeError("query failed")
+		return scale
+
+	if scale != "missing":
+		device.duration_scale_factor = duration_scale_factor
+	if exception is not None:
+		with pytest.raises(exception):
+			qdmi_normalize.extract_calibration(device, calibration_set_slot=None)
+		return
+
+	cal = qdmi_normalize.extract_calibration(device, calibration_set_slot=None)
+	assert cal["qubit_metrics"] == [
+		{"qubit": "0", "t1": 10000 * expected_scale, "t2": 8000 * expected_scale},
+		{"qubit": "1"}]
+	assert cal["gate_metrics"] == [{
+		"operation": "x", "locus": ["0"], "fidelity": 0.99,
+		"duration": 40 * expected_scale}]
+	assert cal["duration_unit"] == "us"
 
 
 # --- svc_qpm tags each circuit with the resource's provider -----------------
@@ -639,9 +729,33 @@ def test_a_device_record_carries_the_profile_technology():
 	topo = {"num_qubits": 2, "qubits": ["0", "1"], "edges": [["0", "1"]],
 		"operations": {}}
 
-	with_technology = fomac_normalize.to_device_record(
+	with_technology = qdmi_normalize.to_device_record(
 		topo, "aws", "aws-sv1", technology="simulator")
-	without = fomac_normalize.to_device_record(topo, "iqm", "ornl-iqm-20q")
+	without = qdmi_normalize.to_device_record(topo, "iqm", "ornl-iqm-20q")
 
 	assert with_technology["device"]["technology"] == "simulator"
 	assert "technology" not in without["device"]
+
+
+def test_topology_and_calibration_share_three_qubit_loci():
+	sites = [types.SimpleNamespace(name=lambda i=i: str(i)) for i in range(3)]
+	queried = []
+
+	def fidelity(*, sites):
+		queried.append(tuple(site.name() for site in sites))
+		return 0.9
+
+	op = types.SimpleNamespace(
+		name=lambda: "ccnot", qubits_num=lambda: 3,
+		sites=lambda: sites, fidelity=fidelity)
+	device = types.SimpleNamespace(operations=lambda: [op])
+	assert qdmi_normalize._operations(device) == {"ccnot": [["0", "1", "2"]]}
+	assert qdmi_normalize._operation_metrics(device, 1.0) == [{
+		"operation": "ccnot", "locus": ["0", "1", "2"], "fidelity": 0.9}]
+	assert queried == [("0", "1", "2")]
+
+
+def test_incomplete_site_tuples_are_rejected():
+	op = types.SimpleNamespace(qubits_num=lambda: 3, sites=lambda: [0, 1])
+	with pytest.raises(DEFwExecutionError, match="incomplete"):
+		qdmi_normalize._operation_loci(op)

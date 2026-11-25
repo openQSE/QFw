@@ -1,4 +1,4 @@
-.TH QFW-DEVICE-ACCESS.YAML 5 "August 2026" "QFw 0.1.0" "QFw File Formats"
+.TH QFW-DEVICE-ACCESS.YAML 5 "October 2026" "QFw 0.1.0" "QFw File Formats"
 .SH NAME
 qfw-device-access.yaml \- bind logical QFw devices to providers and credentials
 .SH DESCRIPTION
@@ -55,18 +55,29 @@ QRMI resource type to open for the device, such as
 .B IQMServer
 or
 .BR IBMQiskitRuntimeService .
-Optional when the provider serves only one resource type. An
-.B ibm
-device must set it, because IBM serves
+Optional when the provider serves only one QRMI resource type. IBM devices
+using QRMI must select
 .BR IBMQiskitRuntimeService ,
 .BR IBMQuantumComputeService ,
-and
+or
 .BR IBMQuantumSystem .
+IBM QDMI supports only
+.BR IBMQiskitRuntimeService .
+A device using only QDMI can omit this field. For the other IBM resource
+types, set
+.B libraries
+to
+.BR [qrmi] .
+A
+.B pasqal
+device sets
+.BR PasqalCloud ,
+the only Pasqal resource type the shim runs.
 .TP
 .B service-crn
 IBM Cloud service instance CRN for an
 .B ibm
-device. QRMI requires one for every IBM resource type. An instance can serve
+device. Both QRMI and QDMI require one. An instance can serve
 several devices and many users, and a user can be assigned to several
 instances. This value is the default for users whose credential entry does not
 name an instance, which a file credential database does with
@@ -79,11 +90,29 @@ reservation's credential takes precedence over both.
 .B iam-endpoint
 IBM Cloud IAM endpoint that exchanges an API key for a token, for an
 .B ibm
-device. Optional. The default,
+device through QRMI or QDMI. Optional. The default,
 .BR https://iam.cloud.ibm.com ,
 serves public IBM Cloud.
 .B QFW_IBM_IAM_ENDPOINT
 overrides it when set in the QPM's environment.
+.TP
+.B qdmi-device-id
+The QDMI catalogue entry a device opens through MQT Core, as a provider's
+package registers it. Optional for
+.BR aws ,
+.B ibm
+and
+.BR pasqal ,
+which have defaults. Required for
+.BR mqv ,
+whose entries,
+.BR mqv.eqe1 ,
+.B mqv.maqcs
+and
+.BR mqv.aws ,
+come from MQV's
+.B mqss-qdmi-mqv
+package.
 .TP
 .BR s3-endpoint ", " s3-bucket ", " s3-region
 Object storage that an
@@ -112,14 +141,71 @@ differs from the one the client uses.
 overrides it.
 .TP
 .B job-timeout-seconds
-Seconds QRMI allows a job before abandoning it, for an
+Seconds QFw waits for a QDMI job before requesting cancellation, including
+time spent in the provider queue. Defaults to 300 seconds; a timeout supplied
+with the circuit takes precedence.
+.IP
+For QRMI, seconds allowed before abandoning a job on an
 .B IBMQuantumSystem
 device, which requires the value. Optional here: it defaults to the same
 timeout this driver polls for, so QRMI does not give up on a job still being
 waited on.
 .B QFW_IBM_JOB_TIMEOUT_SECONDS
 overrides it. The other IBM resource types treat the same QRMI variable as
-optional, so QFw leaves it unset for them.
+optional, so QFw leaves it unset for them. On every QRMI device it is also
+how long the shim waits for a job before cancelling it, 300 seconds when
+unset; on a
+.B pasqal
+device a job without it waits as long as Pasqal Cloud queues it, or until
+its reservation closes. The value is a number of seconds.
+.IP
+The wait covers the whole job, including time spent waiting out a provider
+rate limit. A QRMI submission, status poll or result fetch that the provider
+refuses with HTTP 429 is tried again after a wait that doubles from 2 to 60
+seconds, with jitter, until it goes through or this timeout runs out. QRMI
+passes on no
+.BR Retry-After .
+.TP
+.B poll-interval-seconds
+Seconds the shim waits before it first polls a job's status, through QRMI or
+QDMI. Optional, 1 when unset. Each poll that finds the job unfinished
+doubles the wait, up to 60 seconds, which is how IQM's own QDMI library
+polls. A provider that limits its request rate counts every poll, so raise
+this for a device whose limit is tight. A circuit that names its own poll
+interval is polled at that fixed interval instead. The value is a number of
+seconds.
+.TP
+.B max-concurrent-jobs
+How many of the device's circuits the QPM lets be at the provider at once,
+from submission to result. Optional. It is a whole number, at least 1, and a
+service whose device sets anything else fails to start. The QPM holds the
+other circuits in its queue and sends the next as one finishes. Set it for a
+provider that rate-limits.
+.IP
+The QPM also applies its operator limit,
+.BR max_inflight ,
+and the smaller of the two wins. That limit is 1 unless an operator raises
+it with the QPM's
+.B configure_dispatch_limits
+call, so by default a QPM already sends a device one job at a time. This key
+keeps the device to its own limit once an operator raises the QPM's. Unset,
+the device adds no limit of its own.
+.TP
+.B project-id
+Pasqal Cloud project that jobs on a
+.B pasqal
+device are billed to. It is the default for users whose credential entry does
+not name a project, which a file credential database does with
+.BR project_id .
+A project in a reservation's credential takes precedence. A job needs a
+project, which a Pasqal config file under
+.B PASQAL_CONFIG_ROOT
+may name instead. The device itself, such as
+.B EMU_FREE
+or
+.BR FRESNEL ,
+is the
+.BR provider-device-id .
 .SH CREDENTIAL PROVIDERS
 The optional
 .B credential-providers
@@ -165,11 +251,20 @@ qpus:
     provider: ibm
     provider-device-id: ibm_system_two
     resource-type: IBMQuantumSystem
+    libraries: [qrmi]
     url: https://qs.example/api/v1
     service-crn: "crn:v1:bluemix:public:quantum-computing:us-east:a/ACCT:INST::"
     s3-endpoint: https://store.example
     s3-bucket: qfw-results
     s3-region: us-east
+    credential-db: qpu-users.json
+  pasqal-emu-free:
+    provider: pasqal
+    provider-device-id: EMU_FREE
+    resource-type: PasqalCloud
+    url: https://apis.pasqal.cloud
+    project-id: PROJECT
+    libraries: [qrmi]
     credential-db: qpu-users.json
 .EE
 .SH SEE ALSO

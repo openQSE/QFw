@@ -1,0 +1,66 @@
+qpus:
+  # Pasqal Cloud's free emulator. qfw_pulser.sh fills in project-id from
+  # QFW_PASQAL_PROJECT_ID. The token is the QPM service's QFW_API_KEY; a site
+  # gives each user a token and project through a credential database instead.
+  pasqal-emu-free:
+    provider: pasqal
+    provider-device-id: EMU_FREE
+    resource-type: PasqalCloud
+    url: https://apis.pasqal.cloud
+    project-id: QFW_PASQAL_PROJECT_ID
+    credential-provider: pasqal-no-secret
+    libraries:
+      - qrmi
+      - qdmi
+    preference: qrmi
+    execution-owner: qrmi
+    caps:
+      get_backend_info:
+        - qrmi
+        - qdmi
+      get_device_info:
+        - qdmi
+      run_circuit:
+        - qrmi
+        - qdmi
+      get_task_timing:
+        - qrmi
+        - qdmi
+      get_task_metadata:
+        - qrmi
+        - qdmi
+    job-timeout-seconds: 1800
+  # Pasqal's FRESNEL QPU, set up as pasqal-emu-free is. Its jobs queue behind
+  # other users', so the wait allowed is longer.
+  pasqal-fresnel:
+    provider: pasqal
+    provider-device-id: FRESNEL
+    resource-type: PasqalCloud
+    url: https://apis.pasqal.cloud
+    project-id: QFW_PASQAL_PROJECT_ID
+    credential-provider: pasqal-no-secret
+    libraries:
+      - qrmi
+      - qdmi
+    preference: qrmi
+    execution-owner: qrmi
+    caps:
+      get_backend_info:
+        - qrmi
+        - qdmi
+      get_device_info:
+        - qdmi
+      run_circuit:
+        - qrmi
+        - qdmi
+      get_task_timing:
+        - qrmi
+        - qdmi
+      get_task_metadata:
+        - qrmi
+        - qdmi
+    job-timeout-seconds: 3600
+
+credential-providers:
+  pasqal-no-secret:
+    type: no-secret

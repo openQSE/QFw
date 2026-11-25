@@ -70,11 +70,9 @@ export QFW_VENV="$QFW_BASE/qfw-venv"
 export QFW_BUILD="$QFW_BASE/qfw-build"
 export QFW_PREFIX="$QFW_BASE/qfw-install"
 
-python3 -m venv "$QFW_VENV"
+uv venv "$QFW_VENV"
 source "$QFW_VENV/bin/activate"
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r "$QFW_SRC/setup/build-requirements.txt"
-python -m pip install -r "$QFW_SRC/setup/requirements.txt"
+uv pip install -r "$QFW_SRC/setup/build-requirements.txt" -r "$QFW_SRC/setup/requirements.txt" --override "$QFW_SRC/setup/overrides.txt"
 
 cmake -S "$QFW_SRC" -B "$QFW_BUILD" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -184,14 +182,14 @@ git submodule update --init --recursive
 <details id="python-environment">
 <summary><strong>3. Create A Python Environment</strong></summary>
 
-Create the environment on storage visible to every node that will use it:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first if
+it is not already available. Create the environment on storage visible to every
+node that will use it:
 
 ```bash
-python3 -m venv /path/to/qfw-venv
+uv venv /path/to/qfw-venv
 source /path/to/qfw-venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r setup/build-requirements.txt
-python -m pip install -r setup/requirements.txt
+uv pip install -r setup/build-requirements.txt -r setup/requirements.txt --override setup/overrides.txt
 ```
 
 Install any simulator, application, or hardware-provider Python dependencies
@@ -269,9 +267,10 @@ passed to `qfw-activate --venv`.
 
 QFw environment variables fall into three groups. Operators select the first
 group, activation derives the second group, and `qfw-setup` publishes the third
-group for commands and services in the active run. In these tables, `<prefix>`
-is the installation prefix selected during the build. For the commands above,
-`<prefix>` is `$HOME/.local/qfw`.
+group for commands and services in the active run. The logging and telemetry
+variables form a fourth group that any process may set. In these tables,
+`<prefix>` is the installation prefix selected during the build. For the
+commands above, `<prefix>` is `$HOME/.local/qfw`.
 
 #### Operator Configuration
 
@@ -335,10 +334,73 @@ directly.
 | `QFW_GROUP_0_NODELIST`, `QFW_GROUP_1_NODELIST`, `QFW_GROUPS` | Normalized application and quantum-service placement derived from the Slurm allocation. |
 | `QFW_RESERVATION_ID` | Reservation context supplied to an application by a trusted Slurm/site launcher or by the example driver. It is not a user credential. |
 
+These values describe one run, so a process inherits them only by mistake,
+for example a job submitted from inside another run, since `sbatch` exports
+the submitter's environment by default. `qfw-setup` prepares a new run and
+ignores them, except `QFW_RESERVATION_ID`, and names what it ignored on
+standard error. `qfw-srun` takes them from its run's state. A `QFW_RUN_ID` or
+`QFW_DIRECTORY_SERVICE_INFO` that arrives with a `QFW_RUN_TMP_PATH` belongs to
+that earlier run, so `qfw-setup` ignores those as well.
+
+`qfw-srun`, `qfw-status` and `qfw-teardown` find the run through
+`QFW_RUN_TMP_PATH` when it is set, and otherwise through the `current` marker
+below `QFW_RUN_BASE_DIR`. They use `QFW_RUN_TMP_PATH` only for a run prepared
+in the same Slurm job, or outside Slurm when they run outside Slurm. For any
+other run they say so on standard error and fall back to the marker.
+
+DEFw describes the process it runs in with `DEFW_AGENT_NAME`,
+`DEFW_AGENT_TYPE`, `DEFW_SHELL_TYPE`, `DEFW_LISTEN_PORT`, `DEFW_TELNET_PORT`,
+`DEFW_PARENT_ADDR`, `DEFW_PARENT_HOSTNAME`, `DEFW_PARENT_NAME`,
+`DEFW_PARENT_PORT`, `DEFW_DISABLE_DIRSVC`, `DEFW_LOG_DIR` and
+`DEFW_ONLY_LOAD_MODULE`. Importing DEFw writes placeholders for them into the
+importing process's environment, so a workflow manager that uses a QFw client
+and then calls `sbatch` passes them to its jobs. QFw sets these variables for
+the application and for every service it starts, and ignores inherited values.
+DEFw's installation paths and log levels pass through unchanged.
+
 Example-only controls such as `QFW_RUN_ALL_BACKEND` are documented with their
 wrappers in [examples/README.md](../examples/README.md). Provider credentials
 are service configuration and must not be placed in these application runtime
 variables.
+
+#### Logging And Telemetry
+
+Every QFw process reads these variables once, at start. Set them in the
+environment of the process that should report: the submitting shell for a job,
+which Slurm carries into the job, and the launcher of a site's daemons for its
+QPMs. `qfw-setup` and the service launcher pass the caller's environment to the
+services they start. A running daemon does not pick up a change; restart it.
+
+| Variable | Default | Meaning and use |
+| --- | --- | --- |
+| `QFW_TELEMETRY` | `off` | Telemetry profile: `off`, `file` (OTLP JSON files under `QFW_TELEMETRY_DIR`), or `otlp` (export to a collector). `1`, `yes`, and `true` select `file`. Any other value is an error, so a typo cannot silently switch telemetry on or off. |
+| `QFW_TELEMETRY_ENDPOINT` | Unset | Collector base URL for the `otlp` profile, such as `http://collector:4318`. QFw appends each signal's path. When unset, the exporter reads the standard `OTEL_EXPORTER_OTLP_*` variables. |
+| `QFW_TELEMETRY_SAMPLE` | `off` | Trace sampling: `off`, `always`, or a ratio between 0 and 1. The decision is made once at the trace root and follows the job across services, so a sampled trace is complete. Metrics are exported whenever the profile is not `off`, regardless of this setting. |
+| `QFW_TELEMETRY_TRANSPORT` | `0` | `1` adds the transport spans and histogram: the client's run RPC, the QPM's completion event, and the result's way back. |
+| `QFW_TELEMETRY_LOGS` | `off` | Log lines exported alongside the traces: `error`, `warning`, `info`, `debug`, or `all`. Each line carries the trace and span ids current when it was written. `all` adds DEFw's transport-internal categories. |
+| `QFW_TELEMETRY_VENDOR` | `0` | `1` adds the provider's own phase times (queue, validation, compilation, execution, post-processing) to the execute span and the `qfw.vendor.duration` histogram, where the provider reports them. |
+| `QFW_TELEMETRY_DIR` | `$DEFW_TMP_DIR`, `$TMPDIR`, or `/tmp`, plus `/qfw-telemetry` | Output directory of the `file` profile. Keep it node-local. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `10000` | Milliseconds between metric exports. A standard OpenTelemetry variable; the SDK's own default is `60000`. |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` (SDK default) | A standard OpenTelemetry variable. `delta` makes each export carry only what happened since the previous one, which suits short-lived clients. |
+| `DEFW_LOG_LEVEL` | `error` | DEFw runtime log level: `error`, `debug`, `message`, or `all`. An unrecognized value falls back to `error`. |
+| `DEFW_PY_LOGLEVEL` | `critical` for applications and the directory service, `debug,DEFW_ALL` for QPM services | Python logging selection for DEFw's per-process log file: comma-separated standard level names and DEFw categories (`DEFW_CORE`, `DEFW_WORKER`, `DEFW_SERVICE`, `DEFW_APP`, `DEFW_RPC`, `DEFW_STACKTRACE`, `DEFW_ALL`). This selects what the file keeps; `QFW_TELEMETRY_LOGS` selects what is exported, and QFw's own loggers export at that level whatever this is set to. |
+| `DEFW_LOG_DIR` | The run's log directory | Directory of DEFw's per-process log files. `qfw-srun` and the service launcher point it at the run's log directories, `<run dir>/application/logs` for the application, and ignore an inherited value; DEFw's own fallback is `/tmp/<agent name>`. |
+
+A service's two DEFw levels can also be set without touching the shared
+environment. The launcher resolves each of them in this order:
+`QFW_SERVICE_<ID>_DEFW_LOG_LEVEL` for one service, where `<ID>` is the service
+name in upper case with every character that is not a letter or a digit
+replaced by `_` (`QFW_SERVICE_FAKE_IQM_DEFW_LOG_LEVEL` for `fake-iqm`); then
+`QFW_SERVICE_DEFW_LOG_LEVEL` for every service; then `DEFW_LOG_LEVEL`; then
+the `log-level` key of the service's manifest entry; then the default.
+`DEFW_PY_LOGLEVEL` follows the same chain with `py-log-level` as the manifest
+key.
+
+The telemetry profiles, the signal tiers, and the measured cost of each setting
+are described in [docs/design/benchmarking.md](design/benchmarking.md). The
+collector, storage, and dashboards that receive the `otlp` profile are
+deployment infrastructure outside QFw; the cluster repository provides them as
+a Compose overlay and as a bare-metal kit.
 
 Activation preserves explicit `QFW_SITE_CONFIG` and `QFW_RUN_BASE_DIR` values.
 Confirm the active paths with:
@@ -478,13 +540,6 @@ mpi-launch:
   allow-run-as-root: auto
   export-env:
     - LD_LIBRARY_PATH
-  bind-to: core
-  map-by: ppr:1:l3cache
-  mca:
-    btl: ^tcp,ofi,vader,openib
-    pml: ^ucx
-    mtl: ofi
-    opal_common_ofi_provider_include: shm+cxi:linkx
 
 services:
   - name: nwqsim
@@ -520,6 +575,20 @@ services:
       type: mpi
       wrapper: null
 
+  - name: aer
+    module: svc_aer_qpm
+    load-modules: svc_aer_qpm,api_launcher
+    agent-prefix: qpm_aer
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    aer:
+      mode: ideal
+      device: CPU
+      num-qubits: 30
+    provider-launch:
+      type: mpi
+
   - name: fake-iqm
     module: svc_fake_iqm_qpm
     load-modules: svc_fake_iqm_qpm,api_launcher
@@ -542,6 +611,107 @@ placement, assigned-host fields, ports, and device ID. Simulator launch code
 also consumes `provider-launch.wrapper`. The packaged `agent-prefix` and
 `provider-launch.type` fields are reserved metadata and do not currently alter
 launch behavior.
+
+The default `mpi-launch` block sets no transport or placement, so Open MPI
+chooses its own. A site that needs its own settings copies this manifest, edits
+`mpi-launch`, and adds `service-manifest` to the `local-services` block of the
+runtime file it passes to `qfw-setup --runtime-config`:
+
+```yaml
+local-services:
+  service-manifest: /path/to/site-local-services.yaml
+```
+
+A site-owned QPM takes `mpi-launch` from the manifest that `service.manifest`
+names in `site.yaml`.
+
+QFw passes each `mca` entry to `mpirun` as `--mca`, which takes precedence over
+`OMPI_MCA_*` variables. `frontier-local-services.yaml`, beside this manifest,
+is the same manifest with Frontier's HPE Slingshot settings. Frontier names it
+in its runtime file:
+
+```yaml
+local-services:
+  service-manifest: ${QFW_PREFIX}/share/qfw/config/services/frontier-local-services.yaml
+```
+
+`mpi-launch` also takes `extra-args`, a list added to every `mpirun` command.
+
+The `aer` service reads its own `aer` block:
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `mode` | `ideal` runs noiselessly. `noisy` emulates the service's `device-id` under its noise model. | `ideal` |
+| `device` | `CPU` or `GPU`, as Aer's `device` option. | `CPU` |
+| `method` | An Aer simulation method. | `automatic` |
+| `max-memory-mb` | Aer's memory limit; 0 lets Aer decide. | `0` |
+| `target-gpus` | The GPU ids to use, with `device: GPU`. | all |
+| `num-qubits` | The width when there is no `device-id`. | none |
+| `mps-max-bond-dimension` | Aer's `matrix_product_state_max_bond_dimension`, with `method: matrix_product_state`. | Aer's |
+| `mps-truncation-threshold` | Aer's `matrix_product_state_truncation_threshold`, with `method: matrix_product_state`. | Aer's |
+| `mps-log-data` | Aer's `mps_log_data`, with `method: matrix_product_state`. Each result then carries Aer's `MPS_log_data`, which records the discarded weight and bond dimensions. | `false` |
+| `mps-lapack` | Aer's `mps_lapack`, which computes MPS SVDs with LAPACK, with `method: matrix_product_state`. Aer checks each SVD, and one LAPACK gets wrong fails the circuit with `Wrong SVD calculations`, as the OpenBLAS 0.3.3 in the PyPI wheels has done. | `false` |
+
+`device-id` names a `qiskit-ibm-runtime` `fake_provider` class, such as
+`FakeFez`, or a JSON file `{"configuration": ..., "properties": ...}` of raw IBM
+records. With one, the service describes that device and clients transpile for
+it, in either mode. The service publishes `aer_mode`, `aer_device` and
+`aer_method` in its properties, and `aer_mps_max_bond_dimension`,
+`aer_mps_truncation_threshold` and `aer_mps_log_data` when they are set. A
+QFw result keeps Aer's metadata for each circuit in
+`result.data(circuit)["metadata"]["diagnostics"]`, not in
+`result.results[0].metadata`. The service refuses to start when
+`device: GPU` is set and its host's Aer has no GPU, and a circuit runner
+without one fails rather than run on the CPU.
+
+In ideal mode the runner transpiles each circuit to its `method`'s gates, so
+any gate the target offers runs. Noisy mode runs only the device's basis
+gates, so circuits must be transpiled for the target the service publishes. A circuit Aer cannot run fails with
+Aer's reason, such as `aer: AerError: 'unknown instruction: h'`. A service
+whose `aer` block it refuses does not start, and `qfw-setup` reports only a
+readiness timeout. The reason is in the QPM's `defw_py.log`.
+
+The runner is one MPI rank that uses Aer's threads. Unless `mpi-launch` sets
+`bind-to`, the service starts it with `--bind-to none`, so Open MPI does not
+hold it to one core. It exports `OMP_NUM_THREADS` to the runner when the
+service has it.
+
+A matrix product state or density matrix run can take longer than the
+default circuit time limit of 600 seconds. A service entry's own
+`circuit-time-limit-seconds` overrides the site's `qpm` value for that
+service:
+
+```yaml
+services:
+  - name: aer-fez-mps
+    module: svc_aer_qpm
+    device-id: FakeFez
+    circuit-time-limit-seconds: 7200
+    aer:
+      mode: noisy
+      method: matrix_product_state
+```
+
+GPU needs a GPU build of Aer in place of `qiskit-aer`, and QFw pins
+`qiskit_aer==0.17.2`. PyPI has `qiskit-aer-gpu-cu11==0.17.2` (CUDA 11, x86_64
+Linux) but no `qiskit-aer-gpu` (CUDA 12) 0.17.2. Elsewhere, build Aer 0.17.2
+from source with `-DAER_THRUST_BACKEND=CUDA`.
+
+The `nwqsim` service reads its own `nwqsim` block:
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `backend` | The NWQ-Sim backend every circuit runs on: `CPU`, `OPENMP` or `MPI` on the CPU, `NVGPU`, `NVGPU_MPI` or `AMDGPU` on a GPU. | `OPENMP` |
+
+```yaml
+services:
+  - name: nwqsim
+    module: svc_nwqsim_qpm
+    nwqsim:
+      backend: NVGPU
+```
+
+A circuit's own `backend` is ignored.
 
 </details>
 
@@ -708,6 +878,27 @@ When a reservation exceeds a record or byte limit, the QPM evicts its oldest
 completed records. The byte limit is 64 MiB by default. If a result's size
 cannot be measured, the QPM still enforces the age and record-count limits.
 Explicit non-positive values are invalid.
+
+A simulator QPM also limits how long one circuit's runner may take:
+
+```yaml
+qpm:
+  circuit-time-limit-seconds: 600
+```
+
+When a runner passes the limit, the QPM kills its launcher, fails the circuit
+and moves on. A runner that a PRTE DVM started is not the launcher's child,
+so the QPM also gives each launch `MPIEXEC_TIMEOUT`, five seconds longer than
+its own limit, and the DVM ends that runner itself. Without a limit, a runner whose exit never reaches the QPM, as
+when PRTE loses it, holds the QPM's dispatch slot for good, and every later
+circuit waits behind it. The default is `600` seconds. Raise it for circuits
+that take longer, or set `0` for no limit. A service entry's own
+`circuit-time-limit-seconds` overrides it for that service.
+
+A Qiskit job waits for every circuit it submitted. To bound the wait, pass
+`timeout` in seconds to `backend.run`; add `cancel_on_timeout=True` to cancel
+the unfinished circuits on the QPM when it passes. Without `timeout`, a job
+waits until every circuit ends or its QPM stops answering.
 
 Simulator-specific MPI and wrapper settings live with the corresponding
 entries in `local-services.yaml`; hardware QPMs do not receive those settings.
@@ -914,9 +1105,11 @@ qfw-setup -> qfw-status -> qfw-srun -> qfw-teardown
 
 | Command | Responsibility |
 | --- | --- |
+| `qfw-services` | List the profile's local services with their provider, device id and accelerator, without starting them |
 | `qfw-setup` | Select configuration, create run state, validate directory access, and start job-owned services when requested |
 | `qfw-status` | Report the current application run and recorded role-manager health |
 | `qfw-srun` | Launch the application through DEFw with the prepared runtime and Slurm placement |
+| `qfw-target` | Print one QPM's settings and device records as a `qfw-target-v1` JSON document, without reserving it |
 | `qfw-teardown` | Stop job-owned services and clean runtime state without stopping site-owned services |
 
 One `qfw-setup` invocation creates one run directory for one logical
@@ -1016,7 +1209,19 @@ Application
 ```
 
 The application uses its normal framework interface, such as a Qiskit backend
-or estimator. The trusted Slurm or site launcher exports
+or estimator. A Pulser program for a Pasqal device uses Pulser's own backend
+with the QFw connection, which needs `pulser-core` in the application's
+environment:
+
+```python
+import pulser
+from qfw_pulser import QFwConnection
+
+backend = pulser.QPUBackend(sequence, connection=QFwConnection())
+results = backend.run([{"runs": 100}], wait=True)
+```
+
+The trusted Slurm or site launcher exports
 `QFW_RESERVATION_ID` into the application process. The QFw backend or adapter
 reads it and attaches it to QPM execution requests.
 
@@ -1035,6 +1240,157 @@ IDs. Direct QPM calls remain available to low-level integrations and new QFw
 adapters. Code using that interface is responsible for attaching the
 launcher-provided reservation ID, but it still does not create the reservation
 itself.
+
+#### Device Target
+
+A Qiskit application transpiles against `backend.target`. The QFw backend
+builds that target from the QPM it is bound to. Next to the execution API it
+binds the QPM's telemetry API, exposed as `backend.telemetry`, asks
+`get_backend_info()` whether the QPM describes a device, and when it does
+builds a `Target` from the device's qubits, its native operations on the loci
+they are offered on, the coupling edges, and the calibration snapshot's errors
+and durations:
+
+| What the QPM reports | What `backend.target` holds |
+| --- | --- |
+| IBM through the shim: the raw `BackendConfiguration` under `static_architecture` and the raw `BackendProperties` under `backend_properties` | The target `qiskit_ibm_runtime` builds for that backend; its converter runs on the client, and without the package the configuration alone gives the qubits, basis gates and coupling map |
+| IQM through the shim, or any QDMI device: the qhw device, coupling and calibration records | The device's qubits, its native gates (`r` for IQM's `prx`, `cz`, `measure`, `reset`) on their loci, both orders of each symmetric two-qubit locus, error and duration per locus, T1 and T2 per qubit |
+| A QPM with a plain description, such as the fake IQM: a qubit count and a `couplings` list | The qubit count and the coupling edges, with QFw's generic gates on them |
+| `metadata_supported: false` (NWQSim, TNQVM, QB) | The generic 400-qubit all-to-all target |
+
+The shim's QRMI driver caches what a device reports for
+`QFW_QPU_TARGET_TTL_SECONDS` (default 300) of the service's environment, and 0
+reads the device every time. A recalibration reaches new backends once that
+time has passed. When a device cannot be reached, the driver keeps the last
+target it read and asks again after another TTL.
+
+The target is built once per backend instance, on first use. When the
+telemetry call fails, or the QPM connection carries no telemetry binding, the
+backend keeps the generic target and logs why. `backend.target_source` says
+which target it holds: `device: ...` or `generic: <reason>`.
+
+On a shim QPM with `credential-mode: required`, the telemetry calls resolve
+the credential record of the user the QPM service runs as, not the
+reservation's. Without that record the backend keeps the generic target, with
+the reason in `backend.target_source`, while the reservation still runs the
+circuits under its own credential.
+
+```python
+from qiskit import transpile
+from qfw_qiskit import QFwBackend
+
+backend = QFwBackend(provider="fake-iqm")
+target = backend.target
+print(backend.target_source)   # device: QFw fake-iqm fake-iqm-20q target
+print(target.num_qubits, target.build_coupling_map())
+isa_circuit = transpile(circuit, target=target)
+job = backend.run(isa_circuit, shots=100)
+```
+
+`backend.telemetry` is also usable on its own. `get_backend_info()`,
+`get_device_info()`, `get_coupling_graph()`, `get_calibration_snapshot()` and
+`get_dynamic_backend_info()` return the QPM's records, with the backend's shim
+library (`lib`) and reservation token filled in. A workflow that plans its
+layout before it submits reads them in the reserved job it submits from, since
+they describe the QPM the reservation names.
+
+`qfw-target` prints the same records as one `qfw-target-v1` JSON document
+without a backend and without a new reservation. It picks the QPM and shim
+library the way `QFwBackend` does: the reserved QPM in a job with a
+reservation, otherwise `--provider` or `QFW_QPM_IMPL`, and `--lib` or
+`QFW_SHIM_LIB`. `--service-id` takes the name of a QPM that `qfw-setup`
+launched for the run as well as its runtime id.
+`qfw_qiskit.qfw_target_query.target_from_json` builds the same
+target as `backend.target` from it. The note above on `credential-mode:
+required` shims applies to it too.
+
+```bash
+qfw-target --output target.json
+```
+
+```python
+from qfw_qiskit.qfw_target_query import target_from_json
+
+with open("target.json") as stream:
+    target = target_from_json(stream.read())
+```
+
+#### Proxy Sampler
+
+`QFwBackend(provider="proxy")` samples noisy circuits too wide for
+density-matrix or noisy statevector simulation. Each shot's ideal outcome comes
+from the first source that can produce it: outcomes recorded on the circuit,
+ffsim, Pauli rotation programs, then Aer statevector and matrix product state.
+The device's calibrated noise is applied on top. One service emulates one
+device, named by its `device-id`, a `qiskit_ibm_runtime.fake_provider` class
+such as `FakeFez` (`proxy-fez` in the local manifest). Its telemetry is the IBM
+`static_architecture` and `backend_properties`, so `backend.target` is the
+device. A circuit must be transpiled for `backend.target`. A gate the device
+has no calibration for fails the circuit with a `LookupError` that says so. A
+qubit with no published T1 or T2 gets the maximum idle error.
+
+The service reads its own `proxy` block:
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `max-memory-mb` | The memory limit of each job's ideal sources, in MiB. It covers the cached states and the arrays that sample them. A circuit whose statevector does not fit is sampled by matrix product state. A circuit that does not fit that way either, or a bases job whose statevector does not fit, fails with `AerMemoryRefused`, and an ffsim state vector that does not fit fails with `FfsimMemoryRefused`, in the circuit's error. Cached states are dropped to make room for a new one. | `4096` |
+
+A service whose `proxy` block or `device-id` it refuses does not start, and
+`qfw-setup` reports only a readiness timeout
+([#215](https://github.com/openQSE/QFw/issues/215)). The reason, which names
+the setting, is in the QPM's `defw_py.log`.
+
+| Run option | Effect |
+| --- | --- |
+| `seed_simulator` | Fixes the ideal draws and the noise draws together. Without it, each job draws fresh samples |
+| `circuit.metadata["qfw_logical_circuit"] = logical` | The pre-compilation circuit. The ideal outcomes come from it and the noise from the compiled circuit. It is sent beside the circuit as `info["logical_circuit"]`, in the same `{format, data}` envelope as `info["circuit"]` |
+| `bases={"physical": [...], "bases": ["XZ", ...], "shots": [...]}` | One record per basis from one prepared state, in the result's `metadata["bases"]`. A basis string reads like a Qiskit bitstring: its last letter is the basis of `physical[0]`, and each record's counts keep that order. The job's own counts are empty. Only a QPM that declares `bases_jobs` takes one |
+
+A logical circuit of ffsim gates travels as QPY, which loads each ffsim gate as
+a plain gate with its definition. The service rebuilds the orbital rotations
+and diagonal Coulomb evolutions from those definitions, so ffsim simulates the
+circuit as ffsim built it. This needs ffsim where the QPM runs, from
+`setup/proxy-requirements.txt`, which the base install leaves out because ffsim
+brings jax. Without ffsim, or for a circuit ffsim cannot simulate, the next
+source samples it, and the QPM's log says why.
+
+The error budget of each circuit (`fidelity`, `events_per_shot`, `gates_2q`)
+is in the result's `metadata["diagnostics"]`, and `ideal` names the source of
+the ideal outcomes: `known`, `ffsim`, `pauli-rotations`, `statevector`,
+`matrix_product_state` or `statevector-bases`.
+
+Each job samples in a runner process of its own, `circuit_runner.py`, launched
+as the Aer service launches its runner. A job waits for the one sampling, as
+an Aer job does. The memory limit applies to each runner, and cached states
+last only for the job, so each job loads the device and computes its states
+afresh. A runner that outlives the circuit time limit is killed, and a service
+entry's own `circuit-time-limit-seconds` overrides the site's. A runner records
+its host and pid next to its job file, and cancelling a job kills it by that
+pid when it runs on the QPM's host, also when a DVM started it. A runner that
+fails prints the
+reason as its first line, such as `proxy: LookupError: ...`, and the job's
+error keeps the error's type.
+
+A noisy shot is its ideal outcome with the X part of a Pauli frame applied,
+the frame carried from each error to the measurement, as in Stim's frame
+sampling ([Gidney 2021](https://doi.org/10.22331/q-2021-07-06-497)):
+
+| Error | Model |
+| --- | --- |
+| Gate | A uniformly random non-identity Pauli with probability (d + 1)/d times the calibrated average gate error |
+| Idle (`delay` only) | The Pauli-twirled T1 and T2 channel. Gaps in an unscheduled circuit add no error |
+| Readout | Each bit flips with the qubit's calibrated p(1\|0) and p(0\|1), once, for the last qubit measured into it |
+| Errors per shot | Each gate and delay errs at most once, independently, with its own probability |
+
+The frame passes through Clifford gates exactly, so a Clifford circuit's
+samples follow its noisy distribution under this model. Through `rz`, `rx`,
+`ry` and `rzz` by θ, a frame Pauli P that anticommutes with the rotation
+becomes cos θ P + sin θ P′, which the sampler replaces by P′ with probability
+sin² θ. That is the Pauli twirling approximation
+([Geller and Zhou 2013](https://doi.org/10.1103/PhysRevA.88.012314)), which
+drops the coherent cross term. Any other non-Clifford gate randomises the frame
+on its qubits. Amplitude damping during gates and coherent gate errors are not
+modelled.
 
 #### Application Output
 
@@ -1291,6 +1647,15 @@ qfw-teardown
 Inspect the run directory before deleting it. Application logs, directory
 service logs, QPM logs, generated runtime configuration, and driver result
 records are stored there.
+
+Under Slurm, a QPM or directory service that ends on its own leaves its exit
+status in an `exit-status` file next to its pid file. `qfw-status` then
+reports it, for example `QPM service aer-1 exited with status 121`, with the
+end of its `step.log` and `defw_py.log`. Outside Slurm the service runs
+detached, so the report has no exit status. A client whose reserved QPM ended gets the same
+report after `reserved QPM service ... is unavailable`, and a job waiting on
+it after `could not reach its QPM`. `qfw-teardown` prints
+it and keeps the run directory, so the logs survive teardown.
 
 If setup cannot reach the required directory before its configured timeout, it
 returns nonzero and the application should not be launched. Verify the selected

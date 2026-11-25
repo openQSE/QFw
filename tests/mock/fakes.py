@@ -1,11 +1,19 @@
+import types
+
+
 class FakeQPM:
 	def __init__(self, cids=None, async_error=None, test_error=None):
 		self.cids = list(cids or ["cid-1"])
 		self.async_error = async_error
 		self.test_error = test_error
 		self.registrations = []
+		self.unregistrations = []
 		self.submitted_payloads = []
+		self.cancelled = []
+		self.status_requests = []
 		self.shutdown_called = False
+		self._registration_id_next = 1
+		self._live_registration_ids = set()
 
 	def register_event_notification(self, endpoint, event_type, class_id,
 					**kwargs):
@@ -16,6 +24,17 @@ class FakeQPM:
 		}
 		registration.update(kwargs)
 		self.registrations.append(registration)
+		registration_id = self._registration_id_next
+		self._registration_id_next += 1
+		self._live_registration_ids.add(registration_id)
+		return {"status": "accepted", "registration_id": registration_id}
+
+	def unregister_event_notification(self, registration_id, **kwargs):
+		self.unregistrations.append(registration_id)
+		if registration_id in self._live_registration_ids:
+			self._live_registration_ids.remove(registration_id)
+			return True
+		return False
 
 	def async_run(self, info, **kwargs):
 		payload = dict(info)
@@ -26,6 +45,14 @@ class FakeQPM:
 		if self.cids:
 			return self.cids.pop(0)
 		return f"cid-{len(self.submitted_payloads)}"
+
+	def cancel_task(self, cid=None, **kwargs):
+		self.cancelled.append(dict(kwargs, cid=cid))
+		return {"outcome": "CANCELLED", "cid": cid}
+
+	def task_status(self, cid=None, **kwargs):
+		self.status_requests.append(dict(kwargs, cid=cid))
+		return {"outcome": "RUNNING", "cid": cid}
 
 	def shutdown(self):
 		self.shutdown_called = True
@@ -262,3 +289,22 @@ def make_result_event(cid, counts=None, *, offset=0.0, rc=0, result=None):
 			"result": result,
 		}
 	)
+
+
+def stub_qdmi_session(driver, device=None):
+	"""Stand in for the QDMI driver's live session, opening nothing.
+
+	A test here only wants the driver to stop short of a real session, not
+	to track which private accessor run_circuit reaches that session
+	through. Stubbing one accessor by name has already proved brittle, so
+	set both the one in use (_device) and the one the packaged-adapter work
+	moves to (_backend, whose .device this returns). The driver takes
+	whichever it asks for and the unused one costs nothing. Returns the
+	device, so a caller can assert against the object the driver was handed.
+	"""
+	if device is None:
+		device = object()
+	driver._device = lambda credential=None: device
+	driver._backend = lambda credential=None: types.SimpleNamespace(
+		device=device)
+	return device

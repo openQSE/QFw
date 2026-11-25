@@ -93,6 +93,17 @@ capacity, queue, allocation, and lifecycle state are visible to callers.
 | `get_service_lifecycle_telemetry` | Return service lifecycle events, audit records, and reconciliation faults. |
 | `list_scheduler_allocations` | Return scheduler allocation summaries derived from reservation and scheduler state. |
 
+The Qiskit client binds this API next to the execution API, as
+`QFwBackend.telemetry`, and builds `QFwBackend.target` from `get_backend_info`,
+`get_device_info`, `get_coupling_graph` and `get_calibration_snapshot` (see the
+Device Target section of `usage.md`). Both shim libraries serve
+`get_backend_info`: QRMI from `target()`, with the provider's static
+architecture and, for an IBM resource, the raw backend configuration under
+`static_architecture` and the raw backend properties under
+`backend_properties`; QDMI from the device topology, with the same embedded
+qhw device record and an empty static architecture, so a QDMI-only resource
+describes itself too. `get_dynamic_backend_info` stays with QRMI.
+
 ## Privileged Control
 
 Privileged control is important because service owners and site operators need

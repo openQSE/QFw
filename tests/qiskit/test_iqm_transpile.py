@@ -13,7 +13,7 @@
 # transcoder with no client at all.
 #
 # They need qiskit, iqm-client's Qiskit adapter and iqm.pulse. The CI mock job
-# installs none of those, so these run in QFw's own venv.
+# installs none of those, so these run in the ci-qdmi job.
 
 import os
 import pathlib
@@ -28,20 +28,6 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SERVICES = str(REPO_ROOT / "services")
 if SERVICES not in sys.path:
 	sys.path.insert(0, SERVICES)
-
-if "defw_exception" not in sys.modules:
-	try:
-		import defw_exception  # noqa: F401
-	except ImportError:
-		# Outside a QFw install there is no DEFw. util.iqm_transcode only
-		# needs its exception type, so stand in a minimal one.
-		stub = types.ModuleType("defw_exception")
-
-		class DEFwExecutionError(Exception):
-			pass
-
-		stub.DEFwExecutionError = DEFwExecutionError
-		sys.modules["defw_exception"] = stub
 
 
 CALIBRATION_SET_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -113,6 +99,20 @@ def test_a_ghz_runs_through_the_clientless_path():
 	assert len(measures) == 3
 
 
+def test_a_ghz_transpiles_for_a_star_device():
+	_iqm()
+	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
+	from util.iqm_transcode import build_iqm_circuit
+
+	iqm_circuit = build_iqm_circuit(
+		_ghz(), IQMFakeDeneb().architecture, None)
+
+	assert iqm_circuit.metadata.get("qfw_transpiled_to_iqm") is True
+	names = {op.name for op in iqm_circuit.instructions}
+	assert "move" in names, names
+	assert "CR1" in _loci(iqm_circuit)
+
+
 def test_the_serializer_alone_cannot_take_a_ghz():
 	# Why the transpile tier is load-bearing rather than an optimisation.
 	# Without it a GHZ reaches a tier that only accepts native operations.
@@ -168,6 +168,26 @@ def test_a_mapping_given_as_a_dict_is_honoured_too():
 		_ghz(), _architecture(), {0: "QB2", 1: "QB3", 2: "QB4"})
 
 	assert _loci(iqm_circuit) == ["QB2", "QB3", "QB4"]
+
+
+def _measured_on(iqm_circuit):
+	return [operation.locus[0] for operation in sorted(
+		(operation for operation in iqm_circuit.instructions
+		 if operation.name == "measure"),
+		key=lambda operation: operation.args["key"])]
+
+
+def test_a_mapped_ghz_transpiles_for_a_star_device():
+	_iqm()
+	from iqm.qiskit_iqm.fake_backends import IQMFakeDeneb
+	from util.iqm_transcode import build_iqm_circuit
+
+	iqm_circuit = build_iqm_circuit(
+		_ghz(), IQMFakeDeneb().architecture, ["QB4", "QB2", "QB6"])
+
+	assert iqm_circuit.metadata.get("qfw_transpiled_to_iqm") is True
+	assert _loci(iqm_circuit) == ["CR1", "QB2", "QB4", "QB6"]
+	assert _measured_on(iqm_circuit) == ["QB4", "QB2", "QB6"]
 
 
 def test_without_a_mapping_the_device_order_is_used():
@@ -238,9 +258,9 @@ def _qdmi_iqm_architecture(monkeypatch):
 	return iqm_architecture
 
 
-def _fomac_topology(count=5):
-	# The same chain as _architecture(), the way FoMaC reports it
-	# (fomac_normalize.extract_topology): qubit labels and each operation's
+def _qdmi_topology(count=5):
+	# The same chain as _architecture(), the way QDMI reports it
+	# (qdmi_normalize.extract_topology): qubit labels and each operation's
 	# loci, with no implementation names and no calibration set id.
 	qubits = [f"QB{index}" for index in range(1, count + 1)]
 	single = [[qubit] for qubit in qubits]
@@ -260,12 +280,12 @@ def _fomac_topology(count=5):
 
 def test_a_ghz_runs_through_the_architecture_qdmi_rebuilds(monkeypatch):
 	# The QDMI path had only the qubit list, so h and cx failed there as they
-	# did on QRMI. Rebuilt from FoMaC, the architecture transpiles the same.
+	# did on QRMI. Rebuilt from QDMI, the architecture transpiles the same.
 	_iqm()
 	from util.iqm_transcode import build_iqm_circuit
 	iqm_architecture = _qdmi_iqm_architecture(monkeypatch)
 
-	arch = iqm_architecture(_fomac_topology(), CALIBRATION_SET_ID)
+	arch = iqm_architecture(_qdmi_topology(), CALIBRATION_SET_ID)
 	iqm_circuit = build_iqm_circuit(_ghz(), arch, None)
 
 	names = sorted({op.name for op in iqm_circuit.instructions})
@@ -281,7 +301,7 @@ def test_a_mapping_holds_on_the_architecture_qdmi_rebuilds(monkeypatch):
 	from util.iqm_transcode import build_iqm_circuit
 	iqm_architecture = _qdmi_iqm_architecture(monkeypatch)
 
-	arch = iqm_architecture(_fomac_topology(), CALIBRATION_SET_ID)
+	arch = iqm_architecture(_qdmi_topology(), CALIBRATION_SET_ID)
 	iqm_circuit = build_iqm_circuit(_ghz(), arch, ["QB3", "QB4", "QB5"])
 
 	assert _loci(iqm_circuit) == ["QB3", "QB4", "QB5"]

@@ -34,6 +34,12 @@ from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver  # noqa: E402
 
 
 BACKEND = "ibm_torino"
+PASQAL_BACKEND = "EMU_FREE"
+PASQAL_ACCESS = {
+	"base_url": "https://apis.pasqal.cloud",
+	"token": "pasqal-tok",
+	"project_id": "proj-alice",
+}
 SUFFIXES = (
 	"ENDPOINT", "IAM_ENDPOINT", "IAM_APIKEY", "SERVICE_CRN",
 	"S3_ENDPOINT", "S3_ENDPOINT_FOR_QSAPI", "S3_BUCKET", "S3_REGION",
@@ -61,7 +67,8 @@ KEY_PAIR = {
 
 def _clear():
 	for name in list(os.environ):
-		if name.startswith(f"{BACKEND}_") or name.startswith("default_"):
+		if name.startswith((
+				f"{BACKEND}_", f"{PASQAL_BACKEND}_", "default_")):
 			del os.environ[name]
 	for name in QFW_VARS:
 		os.environ.pop(name, None)
@@ -93,15 +100,12 @@ def _qs_driver(**descriptor):
 	return _driver(access=access, **descriptor)
 
 
-def _env_settings(make_driver, type_name, kind, alias, credential=None):
+def _env_settings(make_driver, type_name, alias, credential=None):
 	# What the environment path leaves behind, as unprefixed keys, so it can
 	# be compared with a config map.
 	_clear()
 	driver = make_driver()
-	if kind is None:
-		driver._ensure_iqm_isa_env(alias, credential=credential)
-	else:
-		driver._ensure_ibm_env(kind, alias, credential=credential)
+	driver._ensure_resource_env(type_name, alias, credential=credential)
 	backend = alias.split(",")[0]
 	prefix = f"{backend}_"
 	return {
@@ -117,87 +121,292 @@ def _config_settings(make_driver, type_name, alias, credential=None):
 		type_name, alias, credential=credential)
 
 
-# What to resolve, as (label, driver factory, resource type, IBM kind, alias,
+# What to resolve, as (label, driver factory, resource type, alias,
 # credential). Each is run down both paths and the results compared.
 CASES = (
 	(
 		"qrs without a credential",
 		lambda: _driver(service_crn="crn:device"),
-		"IBMQiskitRuntimeService", "QRS", BACKEND, None,
+		"IBMQiskitRuntimeService", BACKEND, None,
 	),
 	(
 		"qrs with a credential",
 		lambda: _driver(service_crn="crn:device"),
-		"IBMQiskitRuntimeService", "QRS", BACKEND,
+		"IBMQiskitRuntimeService", BACKEND,
 		{"user": "alice", "service_crn": "crn:alice"},
 	),
 	(
 		"qrs with a credential that names no instance",
 		lambda: _driver(service_crn="crn:device"),
-		"IBMQiskitRuntimeService", "QRS", BACKEND, {"user": "alice"},
+		"IBMQiskitRuntimeService", BACKEND, {"user": "alice"},
 	),
 	(
 		"qcs picks its own family",
 		lambda: _driver(service_crn="crn:device"),
-		"IBMQuantumComputeService", "QCS", BACKEND, None,
+		"IBMQuantumComputeService", BACKEND, None,
 	),
 	(
 		"quantum system without a credential",
 		lambda: _qs_driver(service_crn="crn:device"),
-		"IBMQuantumSystem", "QS", BACKEND, None,
+		"IBMQuantumSystem", BACKEND, None,
 	),
 	(
 		"quantum system with a credential",
 		lambda: _qs_driver(service_crn="crn:device"),
-		"IBMQuantumSystem", "QS", BACKEND,
+		"IBMQuantumSystem", BACKEND,
 		dict({"user": "alice", "service_crn": "crn:alice"}, **KEY_PAIR),
 	),
 	(
 		"quantum system with a device job timeout",
 		lambda: _qs_driver(service_crn="crn:device", **{
 			"job-timeout-seconds": 900}),
-		"IBMQuantumSystem", "QS", BACKEND, None,
+		"IBMQuantumSystem", BACKEND, None,
 	),
 	(
 		"iqm without a credential",
 		lambda: _driver(provider="iqm"),
-		"IQMServer", None, "default", None,
+		"IQMServer", "default", None,
 	),
 	(
 		"iqm with a credential",
 		lambda: _driver(provider="iqm"),
-		"IQMServer", None, "default", {"user": "alice"},
+		"IQMServer", "default", {"user": "alice"},
 	),
 	(
 		"iqm alias carrying a calibration set",
 		lambda: _driver(provider="iqm"),
-		"IQMServer", None, "default,cal-7", None,
+		"IQMServer", "default,cal-7", None,
 	),
 )
 
 
 @pytest.mark.parametrize(
-	"label,make_driver,type_name,kind,alias,credential",
+	"label,make_driver,type_name,alias,credential",
 	CASES, ids=[case[0] for case in CASES])
 def test_the_two_paths_agree(
-		label, make_driver, type_name, kind, alias, credential):
+		label, make_driver, type_name, alias, credential):
 	# The anti-drift check. One resolver feeds both sinks, so a config map and
 	# the variables the environment path writes have to come out identical.
 	# Starting from an empty environment there is nothing to carry over, so
 	# the map is exactly what was resolved.
 	from_env = _env_settings(
-		make_driver, type_name, kind, alias, credential=credential)
+		make_driver, type_name, alias, credential=credential)
 	from_config = _config_settings(
 		make_driver, type_name, alias, credential=credential)
 
 	assert from_config == from_env, label
 
 
-def test_a_type_with_nothing_to_resolve_has_no_config():
-	# Pasqal and Alice & Bob have no device-access mapping, so the
+@pytest.mark.parametrize("provider,type_name", (
+	("pasqal", "PasqalLocal"),
+	("alicebob", "AliceBobFelis"),
+))
+def test_a_type_with_nothing_to_resolve_has_no_config(provider, type_name):
+	# PasqalLocal and Alice & Bob have no device-access mapping, so the
 	# environment is still their only source and _qpu must fall back to it.
-	assert _driver(provider="pasqal")._resource_config(
-		"PasqalCloud", "fresnel") is None
+	assert _driver(provider=provider)._resource_config(
+		type_name, "backend") is None
+
+
+def test_pasqal_cloud_resolves_token_project_and_base_url():
+	config = _driver(
+		access=dict(PASQAL_ACCESS, project_id=None), provider="pasqal",
+		project_id="proj-device",
+	)._resource_config("PasqalCloud", PASQAL_BACKEND)
+
+	assert config == {
+		"QRMI_PASQAL_CLOUD_AUTH_TOKEN": "pasqal-tok",
+		"QRMI_PASQAL_CLOUD_PROJECT_ID": "proj-device",
+		"QRMI_PASQAL_CLOUD_BASE_URL": "https://apis.pasqal.cloud",
+	}
+
+
+# --- whose identity a Pasqal resource runs as ---------------------------------
+
+OPERATOR_LOGIN = {
+	"QRMI_PASQAL_CLOUD_CLIENT_ID": "operator-id",
+	"QRMI_PASQAL_CLOUD_CLIENT_SECRET": "operator-secret",
+}
+
+
+def _operator_env(**extra):
+	# A service set up to log in as itself: a service account, a token and
+	# a project for the backend, and Pasqal's own config root and login.
+	for key, value in dict(OPERATOR_LOGIN, **{
+			"QRMI_PASQAL_CLOUD_AUTH_TOKEN": "operator-tok",
+			"QRMI_PASQAL_CLOUD_PROJECT_ID": "proj-operator"}).items():
+		os.environ[f"{PASQAL_BACKEND}_{key}"] = value
+	os.environ.update(extra)
+
+
+@pytest.fixture
+def pasqal_login_env(monkeypatch):
+	for name in ("PASQAL_CONFIG_ROOT", "PASQAL_USERNAME", "PASQAL_PASSWORD"):
+		monkeypatch.delenv(name, raising=False)
+	return monkeypatch
+
+
+def test_a_users_token_never_travels_with_the_services_login(pasqal_login_env):
+	# QRMI renews an expiring token with whatever login it holds, so a user's
+	# resource carrying the operator's service account would carry on as the
+	# operator once the user's token expires.
+	_operator_env(
+		PASQAL_CONFIG_ROOT="/etc/qfw/pasqal",
+		PASQAL_USERNAME="operator", PASQAL_PASSWORD="operator-pw")
+
+	config = _driver(access=PASQAL_ACCESS, provider="pasqal")._resource_config(
+		"PasqalCloud", PASQAL_BACKEND, credential={
+			"user": "alice", "token": "alice-tok",
+			"project_id": "proj-alice", "reservation_id": 7,
+			"url": "https://apis.pasqal.cloud"})
+
+	assert config == {
+		"QRMI_PASQAL_CLOUD_AUTH_TOKEN": "alice-tok",
+		"QRMI_PASQAL_CLOUD_PROJECT_ID": "proj-alice",
+		"QRMI_PASQAL_CLOUD_BASE_URL": "https://apis.pasqal.cloud",
+	}
+
+
+def test_a_reservation_id_alone_is_not_a_user_credential(pasqal_login_env):
+	# Every circuit's credential carries its reservation id, the no-secret
+	# provider's nothing else. That is the service's own identity, resolved
+	# exactly as without a reservation.
+	_operator_env()
+	driver = _driver(access={}, provider="pasqal")
+
+	bare = driver._resource_config("PasqalCloud", PASQAL_BACKEND)
+	reserved = driver._resource_config(
+		"PasqalCloud", PASQAL_BACKEND, credential={"reservation_id": 7})
+
+	assert reserved == bare == dict(OPERATOR_LOGIN, **{
+		"QRMI_PASQAL_CLOUD_AUTH_TOKEN": "operator-tok",
+		"QRMI_PASQAL_CLOUD_PROJECT_ID": "proj-operator"})
+
+
+def test_an_entitled_user_runs_as_the_service_billed_to_their_project(
+		pasqal_login_env):
+	_operator_env()
+	config = _driver(access={}, provider="pasqal")._resource_config(
+		"PasqalCloud", PASQAL_BACKEND, credential={
+			"user": "alice", "project_id": "proj-alice",
+			"reservation_id": 7})
+
+	assert config["QRMI_PASQAL_CLOUD_CLIENT_ID"] == "operator-id"
+	assert config["QRMI_PASQAL_CLOUD_PROJECT_ID"] == "proj-alice"
+
+
+def test_the_service_can_log_in_as_pasqals_own_tools_do(pasqal_login_env):
+	# Opted into explicitly: a config root, or a username and password. The
+	# service's $HOME is never handed over, so QRMI reads no config file the
+	# operator did not point at.
+	pasqal_login_env.setenv(
+		f"{PASQAL_BACKEND}_PASQAL_CONFIG_ROOT", "/etc/qfw/pasqal")
+	pasqal_login_env.setenv("PASQAL_USERNAME", "operator")
+	pasqal_login_env.setenv("PASQAL_PASSWORD", "operator-pw")
+	pasqal_login_env.setenv("HOME", "/home/qfw")
+
+	config = _driver(access={}, provider="pasqal")._resource_config(
+		"PasqalCloud", PASQAL_BACKEND)
+
+	assert config == {
+		"PASQAL_CONFIG_ROOT": "/etc/qfw/pasqal",
+		"PASQAL_USERNAME": "operator",
+		"PASQAL_PASSWORD": "operator-pw",
+	}
+
+
+def test_a_users_resource_resolves_nothing_for_the_service_user():
+	# A token without a URL or a user (a plugin provider's, say) is still
+	# the user's: the device supplies the rest, never the service's own
+	# credential DB entry and its project.
+	driver = _driver(provider="pasqal", project_id="proj-device",
+		url="https://pasqal.example/")
+
+	def refuse(credential=None):
+		raise AssertionError("resolved device access for the service user")
+	driver._access = refuse
+
+	config = driver._resource_config(
+		"PasqalCloud", PASQAL_BACKEND, credential={"token": "alice-tok"})
+
+	assert config == {
+		"QRMI_PASQAL_CLOUD_AUTH_TOKEN": "alice-tok",
+		"QRMI_PASQAL_CLOUD_PROJECT_ID": "proj-device",
+		"QRMI_PASQAL_CLOUD_BASE_URL": "https://pasqal.example",
+	}
+
+
+def test_a_failed_device_lookup_keeps_the_device_url():
+	# The service's own user may hold no credential DB entry; the device's
+	# URL must not fall back to Pasqal Cloud's public one for that.
+	driver = _driver(provider="pasqal", url="https://pasqal.example")
+
+	def unresolved(credential=None):
+		raise DEFwExecutionError("no entry for the service user")
+	driver._access = unresolved
+
+	config = driver._resource_config("PasqalCloud", PASQAL_BACKEND)
+
+	assert config["QRMI_PASQAL_CLOUD_BASE_URL"] == "https://pasqal.example"
+
+
+def test_pasqal_cloud_opens_without_a_project():
+	# An emulator's specs are public, so discovery needs no project; a batch
+	# does, and run_circuit asks for it (test_qrmi_pasqal).
+	config = _driver(
+		access=dict(PASQAL_ACCESS, project_id=None), provider="pasqal",
+	)._resource_config("PasqalCloud", PASQAL_BACKEND)
+
+	assert "QRMI_PASQAL_CLOUD_PROJECT_ID" not in config
+
+
+def test_a_qrmi_without_from_config_cannot_open_pasqal_cloud():
+	# Its constructor reads $HOME/.pasqal/config and PASQAL_USERNAME beside
+	# whatever token the environment holds.
+	with pytest.raises(DEFwExecutionError, match="qrmi 0.25.0 or later"):
+		_driver(provider="pasqal")._ensure_resource_env(
+			"PasqalCloud", PASQAL_BACKEND,
+			credential={"token": "alice-tok"})
+
+
+@pytest.mark.parametrize("type_name,alias,settings", (
+	("IQMServer", "default", {
+		"QRMI_IQM_ISA_ENDPOINT": "https://iqm.example",
+		"QRMI_IQM_ISA_TOKEN": "spank-tok",
+	}),
+	("IBMQiskitRuntimeService", BACKEND, {
+		"QRMI_IBM_QRS_ENDPOINT": "https://qrs.example",
+		"QRMI_IBM_QRS_IAM_APIKEY": "operator-key",
+		"QRMI_IBM_QRS_SERVICE_CRN": "crn:operator",
+	}),
+))
+@pytest.mark.parametrize("credential", (
+	{"reservation_id": 7},
+	{"reservation_id": 7, "user": "alice", "device_id": "dev"},
+), ids=("no-secret", "entitlement"))
+def test_a_reservation_credential_without_a_key_keeps_the_environment(
+		type_name, alias, settings, credential):
+	# Every circuit's credential carries its reservation id. The no-secret
+	# provider's carries nothing else, and the entitlement provider's a user
+	# but no key. Neither names an identity to open with, so the settings
+	# SPANK or the operator put in the environment still apply, exactly as
+	# without a credential, even with no device access to fall back to.
+	backend = alias.split(",")[0]
+	for key, value in settings.items():
+		os.environ[f"{backend}_{key}"] = value
+	driver = QrmiDriver({"provider": type_name[:3].lower()})
+
+	def no_device_access(credential=None):
+		raise DEFwExecutionError("no device access configured")
+
+	driver._access = no_device_access
+
+	bare = driver._resource_config(type_name, alias)
+	reserved = driver._resource_config(
+		type_name, alias, credential=credential)
+
+	assert reserved == bare
+	assert settings.items() <= reserved.items()
 
 
 def test_the_map_carries_settings_the_driver_does_not_model(monkeypatch):

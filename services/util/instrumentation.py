@@ -66,6 +66,7 @@ METRIC_APP_JOB_DURATION = "qfw.app.job.duration"
 METRIC_APP_JOB_COUNT = "qfw.app.job.count"
 METRIC_QPM_DURATION = "qfw.qpm.duration"
 METRIC_BACKEND_DURATION = "qfw.backend.duration"
+METRIC_VENDOR_DURATION = "qfw.vendor.duration"
 METRIC_TRANSPORT_DURATION = "qfw.transport.duration"
 
 # Dimensional attributes: bounded value sets, allowed as metric labels.
@@ -90,6 +91,7 @@ ATTR_CIRCUIT_FORMAT = "qfw.circuit.format"
 ATTR_PAYLOAD_BYTES = "qfw.circuit.payload_bytes"
 ATTR_VENDOR_JOB_ID = "qfw.vendor.job_id"
 ATTR_VENDOR_QUEUE_POSITION = "qfw.vendor.queue_position"
+ATTR_VENDOR_PHASE = "qfw.vendor.phase"
 ATTR_POLL_COUNT = "qfw.backend.poll_count"
 ATTR_POLL_INTERVAL = "qfw.backend.poll_interval_s"
 
@@ -671,6 +673,45 @@ def describe_payload(span, info):
 # optional transport extension and are flag-guarded by
 # QFW_TELEMETRY_TRANSPORT rather than sampled, because a sampled-out span
 # still runs its call site.
+
+def vendor_enabled():
+	"""True when the provider's own phase times should be recorded."""
+	gate = getattr(_telemetry, "vendor_timing_enabled", None)
+	return gate is not None and gate()
+
+
+def record_vendor_timing(phases, labels=None):
+	"""
+	Attach a provider's own account of a job to the telemetry: the seconds
+	it spent in each of the provider's phases (queue, validation,
+	compilation, execution, post_processing, total), as attributes
+	qfw.vendor.<phase>_s on the current span, which is qfw.backend.execute
+	when a driver calls this, and as points of the qfw.vendor.duration
+	histogram labelled by phase like the backend metrics. Durations only:
+	the provider's clock is not this host's, so no span is placed at its
+	timestamps. phases maps a phase name to seconds; a None is skipped.
+	"""
+	if not vendor_enabled() or not phases:
+		return
+	try:
+		values = {
+			f"qfw.vendor.{name}_s": float(seconds)
+			for name, seconds in phases.items() if seconds is not None}
+		if not values:
+			return
+		span = _trace_api().get_current_span()
+		if span is not None:
+			_set(span, values)
+		base = dict(labels or _EXECUTION_LABELS.get() or {})
+		for name, seconds in phases.items():
+			if seconds is None:
+				continue
+			point = dict(base)
+			point[ATTR_VENDOR_PHASE] = name
+			_record(METRIC_VENDOR_DURATION, float(seconds), point)
+	except Exception as exc:
+		_LOG.debug("vendor timing not recorded: %s", exc)
+
 
 def transport_enabled():
 	"""True when the transport call sites should run at all."""

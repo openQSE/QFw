@@ -192,6 +192,29 @@ def test_backend_run_uses_option_reservation_context(monkeypatch):
 	assert job.options["cancel_on_timeout"] is True
 
 
+def test_backend_telemetry_context_includes_reservation_context(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-telemetry-context")
+	fake_runtime = FakeRuntime(endpoint="endpoint-telemetry-context")
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+
+	backend = qfw_simulator.QFwBackend()
+	backend.options.reservation_id = 7
+	backend.options.token = "default-token"
+
+	context = backend._telemetry_context()
+
+	assert context["reservation_id"] == 7
+	assert context["token"] == "default-token"
+
+
 def test_backend_registers_completion_event_once(monkeypatch):
 	import qfw_qiskit.qfw_simulator as qfw_simulator
 
@@ -216,6 +239,96 @@ def test_backend_registers_completion_event_once(monkeypatch):
 			"class_id": "event-api-scoped",
 		}
 	]
+
+
+def test_backend_unregisters_completion_events_at_interpreter_exit(
+		monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-atexit")
+	fake_runtime = FakeRuntime(endpoint="endpoint-atexit")
+	atexit_callbacks = []
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(
+		qfw_simulator.atexit, "register", atexit_callbacks.append)
+
+	backend = qfw_simulator.QFwBackend()
+
+	assert atexit_callbacks == [backend._unregister_completion_events]
+
+	atexit_callbacks[0]()
+
+	assert fake_qpm.unregistrations == [1]
+
+
+def test_backend_shutdown_unregisters_completion_events(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	fake_event_api = FakeEventAPI(class_id="event-api-unregister")
+	fake_runtime = FakeRuntime(endpoint="endpoint-unregister")
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator.g_circ_metrics, "dump", lambda: None)
+
+	backend = qfw_simulator.QFwBackend()
+	backend.shutdown()
+
+	assert fake_qpm.unregistrations == [1]
+	assert backend._completion_event_registration is None
+	assert backend._completion_event_registered is False
+
+	backend.shutdown()
+	assert fake_qpm.unregistrations == [1]
+
+
+def test_backend_shutdown_tolerates_unregister_failure(monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	calls = []
+
+	class OrderedLifecycleBinding(FakeLifecycleBinding):
+		def remove_reconnect_listener(self, listener):
+			calls.append("remove_reconnect_listener")
+			super().remove_reconnect_listener(listener)
+
+	class BrokenUnregisterQPM(FakeQPM):
+		def unregister_event_notification(self, registration_id, **kwargs):
+			calls.append("unregister_event_notification")
+			raise RuntimeError("connection already gone")
+
+	fake_qpm = BrokenUnregisterQPM()
+	lifecycle = OrderedLifecycleBinding()
+	fake_qpm.lifecycle_binding = lifecycle
+	fake_event_api = FakeEventAPI(class_id="event-api-unregister-broken")
+	fake_runtime = FakeRuntime(endpoint="endpoint-unregister-broken")
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator.g_circ_metrics, "dump", lambda: None)
+
+	backend = qfw_simulator.QFwBackend()
+
+	backend.shutdown()
+
+	assert calls == [
+		"remove_reconnect_listener", "unregister_event_notification"]
+	assert fake_runtime.exit_called is True
+	assert lifecycle.listeners == []
+	assert lifecycle.closed is True
 
 
 def test_backend_restores_completion_event_after_same_qpm_reconnect(
@@ -245,6 +358,30 @@ def test_backend_restores_completion_event_after_same_qpm_reconnect(
 	assert lifecycle.closed is True
 
 
+def test_backend_unregisters_previous_registration_on_same_runtime_reconnect(
+		monkeypatch):
+	import qfw_qiskit.qfw_simulator as qfw_simulator
+
+	fake_qpm = FakeQPM()
+	lifecycle = FakeLifecycleBinding()
+	fake_qpm.lifecycle_binding = lifecycle
+	fake_event_api = FakeEventAPI(class_id="event-api-reconnect-unregister")
+	fake_runtime = FakeRuntime(endpoint="endpoint-reconnect-unregister")
+
+	monkeypatch.setattr(
+		qfw_simulator, "get_qpm",
+		lambda *args, **kwargs: (fake_qpm, None))
+	monkeypatch.setattr(qfw_simulator, "BaseEventAPI", lambda: fake_event_api)
+	monkeypatch.setattr(qfw_simulator, "me", fake_runtime)
+	monkeypatch.setattr(qfw_simulator.g_circ_metrics, "dump", lambda: None)
+
+	backend = qfw_simulator.QFwBackend()
+	lifecycle.reconnect(same_runtime=True)
+	backend.shutdown()
+
+	assert fake_qpm.unregistrations == [1, 2]
+
+
 def test_qfw_job_metadata_keeps_only_qhw_result():
 	from qfw_qiskit.qfw_job import QFwJob
 
@@ -272,6 +409,23 @@ def test_qfw_job_metadata_keeps_only_qhw_result():
 	assert counts == {"0x0": 12}
 	assert statevector == []
 	assert metadata == {"qhw_result": qhw_result}
+
+
+def test_qfw_job_metadata_keeps_the_qpms_diagnostics():
+	from qfw_qiskit.qfw_job import QFwJob
+
+	class FakeBackend:
+		def returns_statevector(self):
+			return False
+
+	job = QFwJob(
+		FakeBackend(), FakeQPM(), FakeEventAPI(), FakeCircuit(1), {"shots": 12})
+	diagnostics = {"MPS_log_data": "{discarded_value=0.5}"}
+
+	_, _, metadata = job._split_result_payload(
+		{"counts": {"0x0": 12}, "diagnostics": diagnostics})
+
+	assert metadata == {"diagnostics": diagnostics}
 
 
 def test_qfw_job_reads_the_shim_result_envelope():
@@ -339,8 +493,6 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 	from qfw_qiskit.qfw_metadata import set_qubit_mapping
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 
@@ -364,7 +516,9 @@ def test_qfw_job_forwards_qubit_mapping_to_qpm():
 				"num_qubits": 1,
 				"num_shots": 12,
 				"compiler": "staq",
+				"completion_event_class_id": "event-api-1",
 				"qubit_mapping": {"0": "QB7"},
+				"seed_simulator": 34,
 				"reservation_id": 1,
 			}
 		]
@@ -374,8 +528,6 @@ def test_qfw_job_forwards_reservation_context_to_qpm():
 	from qfw_qiskit.qfw_job import QFwJob
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 
@@ -407,8 +559,6 @@ def test_qfw_job_requires_reservation_id():
 	from qfw_qiskit.qfw_job import QFwJob
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 
@@ -445,6 +595,14 @@ def _backend_with_qpm_properties(monkeypatch, properties):
 	monkeypatch.setattr(qfw_simulator, "QFwJob", FakeJob)
 	monkeypatch.delenv(qfw_simulator.SHIM_LIB_ENV, raising=False)
 	return qfw_simulator.QFwBackend()
+
+
+def test_backend_run_leaves_the_simulator_seed_unset_by_default(monkeypatch):
+	backend = _backend_with_qpm_properties(monkeypatch, {"provider": "aer"})
+
+	job = backend.run(FakeCircuit(2, name="unseeded"))
+
+	assert job.options["seed_simulator"] is None
 
 
 def test_backend_run_names_the_shim_library(monkeypatch):
@@ -509,8 +667,6 @@ def test_qfw_job_forwards_shim_library_to_qpm():
 	from qfw_qiskit.qfw_job import QFwJob
 
 	class FakeBackend:
-		COMPLETION_TIMEOUT_SEC = 1
-
 		def returns_statevector(self):
 			return False
 

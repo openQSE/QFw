@@ -106,9 +106,11 @@ endif()
 foreach(command_name
 			qfw-activate
 			defw-python
+			qfw-services
 			qfw-setup
 			qfw-status
 			qfw-srun
+			qfw-target
 			qfw-teardown
 			qfw-dir-svc
 			qfw-qpm-svc)
@@ -137,9 +139,11 @@ foreach(man_page
 		man1/qfw_run_all.sh.1
 		man1/qfw_supermarq.sh.1
 		man1/qfw-qpm-svc.1
+		man1/qfw-services.1
 		man1/qfw-setup.1
 		man1/qfw-srun.1
 		man1/qfw-status.1
+		man1/qfw-target.1
 		man1/qfw-teardown.1
 		man5/qfw-runtime.yaml.5
 		man5/qfw-services.yaml.5
@@ -198,14 +202,20 @@ endif()
 foreach(example_file
 		examples/README.md
 		examples/qfw_example_common.sh
+		examples/qfw_garnet_mock_creds.json.example
+		examples/qfw_garnet_mock_device_access.yaml
 		examples/qfw_mpi_smoke.sh
 		examples/qfw_mpi_smoke_services.yaml
+		examples/qfw_pulser.sh
+		examples/qfw_pulser_device_access.yaml
+		examples/qfw_pulser_services.yaml
 		examples/qfw_qiskit_simple.sh
 		examples/qfw_shim_smoke.sh
 		examples/qfw_shim_device_access.yaml
 		examples/qfw_shim_smoke_services.yaml
 		examples/qfw_slurm_driver.sh
-		examples/tests/test_init_qfw.py)
+		examples/tests/test_init_qfw.py
+		examples/tests/test_pulser.py)
 	if(NOT EXISTS "${QFW_INSTALL_PREFIX}/share/qfw/${example_file}")
 		message(FATAL_ERROR
 			"missing installed example file: ${example_file}")
@@ -214,6 +224,7 @@ endforeach()
 
 foreach(custom_manifest_wrapper
 		qfw_mpi_smoke.sh
+		qfw_pulser.sh
 		qfw_shim_smoke.sh)
 	file(READ
 		"${QFW_INSTALL_PREFIX}/share/qfw/examples/${custom_manifest_wrapper}"
@@ -467,7 +478,7 @@ execute_process(
 		command -v qfw-dir-svc >/dev/null
 		command -v qfw-qpm-svc >/dev/null
 		export DEFW_ONLY_LOAD_MODULE=api_qpm_common
-		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, qfw_telemetry, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None'
+		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, qfw_telemetry, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None; assert importlib.util.find_spec(\"qfw_pulser\") is not None'
 		qfw-deactivate
 		test \"\${PS1}\" = 'original> '
 		test -z \"\${QFW_PREFIX+x}\"

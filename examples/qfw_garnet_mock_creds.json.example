@@ -1,0 +1,13 @@
+{
+  "users": {
+    "REPLACE_WITH_YOUR_USERNAME": {
+      "enabled": true,
+      "devices": {
+        "iqm-garnet-mock": {
+          "enabled": true,
+          "api_key": "REPLACE_WITH_YOUR_IQM_RESONANCE_API_KEY"
+        }
+      }
+    }
+  }
+}

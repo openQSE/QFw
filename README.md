@@ -54,14 +54,14 @@ QFw services. For an existing checkout that was not cloned with
 git submodule update --init --recursive
 ```
 
-Create or activate the shared Python environment that QFw should use:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if it is
+not already available, then create or activate the shared Python environment
+that QFw should use:
 
 ```bash
-python3 -m venv /path/to/qfw-venv
+uv venv /path/to/qfw-venv
 source /path/to/qfw-venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r setup/build-requirements.txt
-python -m pip install -r setup/requirements.txt
+uv pip install -r setup/build-requirements.txt -r setup/requirements.txt --override setup/overrides.txt
 ```
 
 Install QFw with the CMake-backed installer. Use `--with-defw` when this
@@ -81,10 +81,10 @@ cmake --install build
 ```
 
 The install places public commands in `/path/to/qfw-install/bin`,
-including `qfw-activate`, `defw-python`, `qfw-setup`, `qfw-srun`,
-`qfw-status`, `qfw-teardown`, `qfw-dir-svc`, and `qfw-qpm-svc`. The
-two role commands are the only public interfaces for independently managed
-directory services and QPMs.
+including `qfw-activate`, `defw-python`, `qfw-services`, `qfw-setup`,
+`qfw-srun`, `qfw-status`, `qfw-target`, `qfw-teardown`, `qfw-dir-svc`, and
+`qfw-qpm-svc`. The two role commands are the only public interfaces for
+independently managed directory services and QPMs.
 
 Simulator runners and optional hardware client libraries must be available
 through the activated environment or site image. The QFw install packages
@@ -378,11 +378,15 @@ The installed prefix contains:
 
 - `bin/qfw-activate`: prepares QFw, DEFw, Python, and library paths.
 - `bin/defw-python`: runs Python through the DEFw executor bridge.
+- `bin/qfw-services`: lists a runtime profile's local services with their
+  provider, device and accelerator, without starting them.
 - `bin/qfw-setup`: creates runtime state and starts allocation-local
   services when requested.
 - `bin/qfw-status`: reports the current application runtime and its recorded
   service-manager health.
 - `bin/qfw-srun`: launches applications with the active QFw runtime state.
+- `bin/qfw-target`: prints what a QPM says about its device, without
+  reserving it.
 - `bin/qfw-teardown`: stops application-owned role managers and removes the
   application run directory.
 - `bin/qfw-dir-svc`: manages one directory-service instance.
@@ -491,7 +495,7 @@ simulator modes may still require one.
 Run these checks when editing QFw itself:
 
 ```bash
-python -m pip install flake8 pytest
+uv pip install flake8 pytest
 ./.github/scripts/ci-syntax.sh
 ./.github/scripts/ci-mock.sh
 ```

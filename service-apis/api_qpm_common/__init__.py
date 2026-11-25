@@ -21,6 +21,8 @@ class QPMCapability(IntFlag):
 	QPM_CAP_TENSORNETWORK = 1 << 0
 	QPM_CAP_STATEVECTOR = 1 << 1
 	QPM_CAP_SUPERCONDUCTING = 1 << 2
+	QPM_CAP_NEUTRAL_ATOM = 1 << 3
+	QPM_CAP_QEC = 1 << 4
 
 
 class QPMRemoteBase(BaseRemote):
@@ -76,6 +78,10 @@ class QPMLifecycleBinding:
 		self._event_api = event_api_factory()
 		self._recovery_timeout = recovery_timeout
 		self._lock = threading.RLock()
+		# Serialises connection establishment: concurrent client() calls
+		# that miss the cache would otherwise each open their own DEFw
+		# connection to the QPM (see the comment in client()).
+		self._connect_lock = threading.Lock()
 		self._recovery_lock = threading.Lock()
 		self._stop = threading.Event()
 		self._directory = None
@@ -156,22 +162,37 @@ class QPMLifecycleBinding:
 			client = self._clients.get(binding_name)
 			if client is not None:
 				return client
-			record = copy.deepcopy(self._service_record)
-			runtime_id = self._runtime_id
-			peer_handle = self._peer_handle
-		binding = self._select_api_binding(record, binding_name)
-		client = self._defw.connect_to_binding({
-			"service_record": record,
-			"selected_binding": binding,
-		})
-		with self._lock:
-			self._require_runtime_locked(expected_runtime_id)
-			if (self._runtime_id != runtime_id or
-					self._peer_handle != peer_handle):
-				raise QPMBindingUnavailable(
-					f"QPM {self.service_id!r} changed while connecting")
-			self._clients.setdefault(binding_name, client)
-			return self._clients[binding_name]
+		# Connect under a lock of its own (not self._lock, which the peer
+		# and service event handlers need while a connect blocks). Without
+		# it, every thread that missed the cache above opened its own DEFw
+		# connection pair to the QPM: the QPM consolidates the pairs by
+		# the caller's identity and only reads the last one, while the
+		# clients here all bind to the first, so their requests sit unread
+		# until the heartbeats on that pair fail and the peer is marked
+		# lost (QFw#176). The thread holding the lock connects once; the
+		# others find its client in the cache when they get the lock.
+		with self._connect_lock:
+			with self._lock:
+				self._require_runtime_locked(expected_runtime_id)
+				client = self._clients.get(binding_name)
+				if client is not None:
+					return client
+				record = copy.deepcopy(self._service_record)
+				runtime_id = self._runtime_id
+				peer_handle = self._peer_handle
+			binding = self._select_api_binding(record, binding_name)
+			client = self._defw.connect_to_binding({
+				"service_record": record,
+				"selected_binding": binding,
+			})
+			with self._lock:
+				self._require_runtime_locked(expected_runtime_id)
+				if (self._runtime_id != runtime_id or
+						self._peer_handle != peer_handle):
+					raise QPMBindingUnavailable(
+						f"QPM {self.service_id!r} changed while connecting")
+				self._clients.setdefault(binding_name, client)
+				return self._clients[binding_name]
 
 	def snapshot(self):
 		with self._lock:
@@ -373,13 +394,24 @@ class QPMLifecycleBinding:
 
 	def _handle_peer_event(self, event):
 		try:
-			if not self._peer_events.is_dirsvc_peer_event(event):
-				return
+			directory_peer = self._peer_events.is_dirsvc_peer_event(event)
 		except Exception:
 			return
 		event_type = event.get("event_type")
 		runtime_id = event.get("remote_runtime_id") or \
 			event.get("runtime_id")
+		if not directory_peer:
+			# A transport peer other than the directory: only the QPM's
+			# own runtime matters here. When that peer is lost, DEFw has
+			# no connection behind the cached clients any more, so every
+			# call through them fails, while the QPM stays registered and
+			# the directory has nothing to say. Drop the clients and let
+			# the next client() call connect again (QFw#176).
+			if event_type in ("PEER_LOST", "PEER_REMOVED"):
+				with self._lock:
+					if runtime_id and runtime_id == self._runtime_id:
+						self._clients = {}
+			return
 		if event_type in ("PEER_LOST", "PEER_REMOVED"):
 			with self._lock:
 				if (self._directory_runtime_id and runtime_id and

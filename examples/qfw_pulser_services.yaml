@@ -1,0 +1,10 @@
+services:
+  - name: shim-pasqal
+    module: svc_lib_qpm
+    load-modules: svc_lib_qpm,api_launcher
+    credential-mode: no-secret
+    agent-prefix: qpm_shim_pasqal
+    target: group1-head
+    assigned-hosts: group1
+    assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
+    device-id: pasqal-emu-free

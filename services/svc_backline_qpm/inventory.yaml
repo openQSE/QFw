@@ -1,0 +1,27 @@
+# What this site offers to Backline programs. Read only by the Backline QPM;
+# clients see only the placement returned for their reservation.
+# Dollar-brace variables are expanded from the environment at load; a literal
+# dollar sign is written twice. CATALYST_LIB defaults to the installed catalyst
+# package's lib/ directory, where the wheel ships the precompiled decoders.
+# Override this file with QFW_BACKLINE_INVENTORY.
+
+controller:
+  - id: local-cpu-ctrl
+    hardware: cpu
+    device: null.qubit
+    device_lib: librtd_null_qubit.so     # plugin the executor loads for this simulator
+    transports:
+      - memcpy
+
+coprocessor:
+  - id: local-cpu-coproc
+    hardware: cpu
+    transports:
+      - memcpy
+
+decoder:
+  - id: steane-cpu
+    code: steane
+    hardware: cpu
+    symbol: steane_coprocessor
+    lib: ${CATALYST_LIB}/libsteane_coprocessor_cpu.so

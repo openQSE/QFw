@@ -96,6 +96,7 @@ class FileCredentialProvider(CredentialProvider):
 		record_key = selected["user"]
 		api_key = selected["api_key"]
 		service_crn = selected["service_crn"]
+		project_id = selected["project_id"]
 		credential_db_path = selected["credential_db_path"]
 		now_ns = time.time_ns()
 		expires_at_ns = self._expires_at_ns(now_ns)
@@ -126,6 +127,7 @@ class FileCredentialProvider(CredentialProvider):
 			"api_key": api_key,
 			"token": api_key,
 			"service_crn": service_crn,
+			"project_id": project_id,
 			"url": self.device.get("url"),
 			"device_id": self.device.get("device_id"),
 			"provider": self.device.get("provider"),
@@ -165,6 +167,13 @@ class FileCredentialProvider(CredentialProvider):
 			user_record,
 			self.device.get("device_id"),
 			self.device.get("provider_device_id"))
+		# Optional, for Pasqal: which of the user's projects to run under.
+		# Without one, the device's project-id from device-access config
+		# applies.
+		project_id = device_access.get_project_id_from_user_record(
+			user_record,
+			self.device.get("device_id"),
+			self.device.get("provider_device_id"))
 		# Optional, for IBM Quantum System: the key pair for the bucket it
 		# stages results through.
 		object_storage = device_access.get_object_storage_from_user_record(
@@ -175,6 +184,7 @@ class FileCredentialProvider(CredentialProvider):
 			"user": record_key,
 			"api_key": api_key,
 			"service_crn": service_crn,
+			"project_id": project_id,
 			"object_storage": object_storage,
 			"credential_db_path": credential_db_path,
 		}
@@ -220,7 +230,8 @@ class EntitlementCredentialProvider(CredentialProvider):
 		self._select_entitlement(request)
 
 	def bind(self, request):
-		record_key, credential_db_path = self._select_entitlement(request)
+		record_key, record, credential_db_path = self._select_entitlement(
+			request)
 		now_ns = time.time_ns()
 		metadata = {
 			"schema": CREDENTIAL_BINDING_SCHEMA,
@@ -245,7 +256,8 @@ class EntitlementCredentialProvider(CredentialProvider):
 			"secret_material": "none",
 		}
 		# What a driver needs to know which device the circuit is for, and
-		# nothing it could authenticate with.
+		# nothing it could authenticate with. The user's Pasqal project is
+		# not a secret either.
 		secret = {
 			"url": self.device.get("url"),
 			"device_id": self.device.get("device_id"),
@@ -253,6 +265,10 @@ class EntitlementCredentialProvider(CredentialProvider):
 			"provider_device_id": self.device.get("provider_device_id"),
 			"quantum_computer": self.device.get("provider_device_id"),
 			"user": record_key,
+			"project_id": device_access.get_project_id_from_user_record(
+				record,
+				self.device.get("device_id"),
+				self.device.get("provider_device_id")),
 		}
 		return CredentialProviderResponse(
 			secret={key: value for key, value in secret.items()
@@ -263,7 +279,7 @@ class EntitlementCredentialProvider(CredentialProvider):
 		credential_db_path = self._credential_db_path()
 		credential_db = device_access.load_json_config(credential_db_path)
 		try:
-			record_key, _record = device_access.select_entitled_record(
+			record_key, record = device_access.select_entitled_record(
 				credential_db,
 				request.get("user"),
 				device_id=self.device.get("device_id"),
@@ -272,7 +288,7 @@ class EntitlementCredentialProvider(CredentialProvider):
 				credential_handle=request.get("credential_handle"))
 		except DEFwExecutionError as exc:
 			raise QPMCredentialBindingMissing(str(exc)) from exc
-		return record_key, credential_db_path
+		return record_key, record, credential_db_path
 
 	def _credential_db_path(self):
 		value = (

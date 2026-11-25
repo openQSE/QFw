@@ -11,8 +11,8 @@
 # Because that payload is the same IQM data the native svc_iqm_qpm path handles,
 # this driver reuses `qhw-iqm` to normalize it to qhw — rather than a separate
 # adapter. (QDMI is different: it presents a vendor-neutral query interface, so
-# the QDMI driver reads device info via MQT Core's FoMaC API and normalizes it
-# with fomac_normalize.) target() is not reservation-bound, so introspection works
+# the QDMI driver reads device info via MQT Core's QDMI API and normalizes it
+# with qdmi_normalize.) target() is not reservation-bound, so introspection works
 # without acquire().
 #
 # Milestone status (design doc qpu-frontend-contract.md section 13): the whole
@@ -23,13 +23,20 @@
 # composite with an embedded qhw device). Circuit execution uses QRMI's task
 # lifecycle and returns normalized qhw results.
 
-from .base_driver import BaseDriver, JobRecords, reservation_cache_key
+from .base_driver import (BaseDriver, JobRecords, Sessions, next_poll_wait,
+		poll_schedule, reservation_cache_key)
+from .login import resolve_login
+from .qrmi_profiles import (DEFAULT_JOB_TIMEOUT_SECONDS, JOB_TIMEOUT_KEY,
+		PASQAL_CONFIG_ROOT,
+		PROFILES, num_shots,
+		profile_for, profile_for_resource_type)
 from defw_exception import (DEFwExecutionError, DEFwNotFound,
 		DEFwNotReady)
 from util import instrumentation
 import json
 import logging
 import os
+import random
 import sys
 import threading
 import time
@@ -79,60 +86,22 @@ import time
 # Names are resolved against the installed qrmi at call time rather than
 # imported, so a qrmi that does not carry one of these reports it as an
 # unknown type instead of failing at import.
-# QRMI names each IBM service's variables after the service, so the resource
-# type selects the family: {backend}_QRMI_IBM_<kind>_ENDPOINT and friends.
-IBM_RESOURCE_ENV_KINDS = {
-	"IBMQiskitRuntimeService": "QRS",
-	"IBMQuantumComputeService": "QCS",
-	"IBMQuantumSystem": "QS",
-}
 
-# IBM Cloud's IAM endpoint. QRMI trades the API key for a token there, with
-# grant_type urn:ibm:params:oauth:grant-type:apikey against /identity/token,
-# and that is the same host for every IBM service. Only a non-public IBM Cloud
-# needs it overridden, so it defaults rather than being required.
-IBM_DEFAULT_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+TARGET_TTL_ENV = "QFW_QPU_TARGET_TTL_SECONDS"
+DEFAULT_TARGET_TTL_SECONDS = 300
 
-# The object storage IBMQuantumSystem stages results through, as
-# (QRMI variable suffix, QFW_IBM_* override, config key). The first four
-# describe the store and come from device-access config. The last two are
-# secret and come from the credential DB, so they are kept apart. QRMI reads
-# S3_ENDPOINT_FOR_QSAPI as well as S3_ENDPOINT: a deployment can put the QS
-# API on a different address from the one the client uses.
-OBJECT_STORAGE_FIELDS = (
-	("S3_ENDPOINT", "QFW_IBM_S3_ENDPOINT", "s3_endpoint"),
-	("S3_ENDPOINT_FOR_QSAPI", "QFW_IBM_S3_ENDPOINT_FOR_QSAPI",
-		"s3_endpoint_for_qsapi"),
-	("S3_BUCKET", "QFW_IBM_S3_BUCKET", "s3_bucket"),
-	("S3_REGION", "QFW_IBM_S3_REGION", "s3_region"),
-)
-OBJECT_STORAGE_SECRETS = (
-	("AWS_ACCESS_KEY_ID", "QFW_IBM_AWS_ACCESS_KEY_ID", "aws_access_key_id"),
-	("AWS_SECRET_ACCESS_KEY", "QFW_IBM_AWS_SECRET_ACCESS_KEY",
-		"aws_secret_access_key"),
-)
-OBJECT_STORAGE_SECRET_KEYS = tuple(
-	key for _suffix, _env, key in OBJECT_STORAGE_SECRETS)
 
-# What IBMQuantumSystem cannot open without. QRMI resolves these with
-# required_env(), so a missing one fails construction, and task_start fails
-# later anyway because the client has no S3 config to stage results through.
-# S3_ENDPOINT_FOR_QSAPI is the one that is genuinely optional.
-OBJECT_STORAGE_REQUIRED = (
-	"S3_ENDPOINT", "S3_BUCKET", "S3_REGION",
-	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-)
+def target_ttl_seconds():
+	value = os.environ.get(TARGET_TTL_ENV)
+	if value in (None, ""):
+		return DEFAULT_TARGET_TTL_SECONDS
+	text = str(value).strip()
+	if not text.isdigit():
+		raise DEFwExecutionError(
+			f"{TARGET_TTL_ENV} must be a whole number of seconds, not "
+			f"{value!r}")
+	return int(text)
 
-# IBMQuantumSystem also requires a job timeout, and it sits outside the
-# per-service prefix as {resource}_QRMI_JOB_TIMEOUT_SECONDS. QRS and QCS read
-# the same variable but treat it as optional, so only QS needs it supplied.
-# It is a number rather than a credential, so a device can set
-# job-timeout-seconds and otherwise it defaults, which is friendlier than
-# failing for the want of a value we can pick.
-JOB_TIMEOUT_SETTING = "QRMI_JOB_TIMEOUT_SECONDS"
-JOB_TIMEOUT_ENV = "QFW_IBM_JOB_TIMEOUT_SECONDS"
-JOB_TIMEOUT_KEY = "job_timeout_seconds"
-DEFAULT_JOB_TIMEOUT_SECONDS = 300
 
 # Setting the environment and constructing the resource are one step, for a
 # qrmi that has no from_config().
@@ -156,10 +125,7 @@ DEFAULT_JOB_TIMEOUT_SECONDS = 300
 RESOURCE_ENV_LOCK = threading.Lock()
 
 PROVIDER_RESOURCE_TYPES = {
-	"iqm": ("IQMServer",),
-	"ibm": ("IBMQiskitRuntimeService", "IBMQuantumComputeService",
-		"IBMQuantumSystem"),
-	"pasqal": ("PasqalCloud", "PasqalLocal"),
+	**{name: profile.resource_types for name, profile in PROFILES.items()},
 	"alicebob": ("AliceBobFelis",),
 }
 
@@ -192,18 +158,6 @@ def _status_str(status):
 	return str(status).lower()
 
 
-DEFAULT_SHOTS = 1024
-
-
-def num_shots(info: dict, default: int = DEFAULT_SHOTS) -> int:
-	"""Return the shot count from a circuit info dict.
-
-	Accepts both the canonical ``num_shots`` key and the legacy ``shots``
-	alias, falling back to *default* when neither is present.
-	"""
-	return int(info.get("num_shots") or info.get("shots") or default)
-
-
 def _first_error_line(logs):
 	# Scan provider log text for the first line that looks like an error.
 	# Returns that line (stripped) so the caller can append it to the
@@ -219,6 +173,75 @@ def _first_error_line(logs):
 		if any(tok in lower for tok in ("error", "exception", "traceback", "failed", "fatal")):
 			return stripped
 	return None
+
+
+# A provider that rate-limits the shim answers HTTP 429. QRMI 0.26 has no class
+# for that, so a 429 arrives as its base QrmiError, with the status only in the
+# message. reqwest spells it the same way for every vendor:
+#
+#   IQM              error in response: status code 429 Too Many Requests
+#   IBM QRS and QCS  response body: 429 Too Many Requests ...
+#   Pasqal Cloud     Status: 429 Too Many Requests, Fail ...
+#
+# IBMQuantumSystem retries a 429 inside QRMI, without a limit, so it never
+# reaches here.
+#
+# None of them passes on the response's Retry-After, so the wait is the
+# driver's own. It doubles from RATE_LIMIT_FIRST_WAIT up to RATE_LIMIT_MAX_WAIT,
+# and each wait is drawn from the upper half of that, so circuits refused
+# together do not all come back together. IQM blocks an account that runs over
+# its request quota for 30 seconds, as QDMI-on-IQM 1.5.0 notes. A status poll
+# or a result fetch can be refused then as well as a submission, so every call
+# of a job's lifecycle waits a 429 out, and none of them gives up before the
+# job's own timeout runs out (_RateLimit).
+RATE_LIMITED = "429 too many requests"
+RATE_LIMIT_FIRST_WAIT = 2.0
+RATE_LIMIT_MAX_WAIT = 60.0
+
+
+def _rate_limited(exc):
+	return RATE_LIMITED in str(exc).lower()
+
+
+def _rate_limit_wait(retry):
+	# The wait before retry number `retry`, counting from zero.
+	ceiling = min(RATE_LIMIT_MAX_WAIT,
+		RATE_LIMIT_FIRST_WAIT * 2 ** min(retry, 16))
+	return random.uniform(ceiling / 2, ceiling)
+
+
+class _RateLimit:
+	# Waits out a provider's rate limit for one QRMI call of one job. A wait
+	# never runs past the job's deadline, and it ends as soon as the circuit
+	# is cancelled.
+	def __init__(self, call, deadline=None, cancel_event=None):
+		self.call = call
+		self.deadline = deadline
+		self.cancel_event = cancel_event
+		self.retries = 0
+
+	def wait(self, at_least=0.0):
+		# True once the wait is over and the call can be made again. False
+		# when the deadline has passed, or a cancel arrived meanwhile.
+		delay = max(at_least, _rate_limit_wait(self.retries))
+		if self.deadline is not None:
+			remaining = self.deadline - time.monotonic()
+			if remaining <= 0:
+				return False
+			delay = min(delay, remaining)
+		self.retries += 1
+		logging.warning(
+			"shim: QRMI %s was refused as rate-limited (HTTP 429); "
+			"retry %d in %.1fs", self.call, self.retries, delay)
+		instrumentation.add_event(
+			"rate-limited", {"qfw.backend.wait_s": round(delay, 3)})
+		if self.cancel_event is not None:
+			return not self.cancel_event.wait(delay)
+		time.sleep(delay)
+		return True
+
+	def cancelled(self):
+		return self.cancel_event is not None and self.cancel_event.is_set()
 
 
 class QrmiDriver(BaseDriver):
@@ -239,11 +262,18 @@ class QrmiDriver(BaseDriver):
 		# binding/creds and, later, dynamic capability discovery.
 		self._descriptor = descriptor or {}
 		self._qrmi = None
-		self._resource_objs = {}
-		self._resource_locks = {}
-		self._resource_locks_guard = threading.Lock()
+		self._sessions = Sessions()
+		self._resource_objs = self._sessions.opened
+		self._resource_locks = self._sessions.locks
 		self._target_cache = {}
+		self._target_fetched_at = {}
+		self._target_retry_after = {}
+		self._target_ttl_seconds = target_ttl_seconds()
 		self._jobs = JobRecords("QRMI")
+		self._profile = profile_for(self._descriptor)
+
+	def implements(self, call):
+		return self._profile.serves(call, self.CAPABILITIES)
 
 	def _resource(self):
 		# Lazy import so the service/Frontend construct and route even where
@@ -280,13 +310,25 @@ class QrmiDriver(BaseDriver):
 
 	# --- QRMI resource binding ------------------------------------------
 
+	def _profile_for_type(self, type_name):
+		return profile_for_resource_type(type_name, self._descriptor)
+
+	def _ensure_ibm_env(self, kind, alias, credential=None):
+		self._profile_for_type("IBMQuantumSystem")._ensure_ibm_env(
+			self, kind, alias, credential=credential)
+
+	def _ensure_iqm_isa_env(self, alias, credential=None):
+		self._profile_for_type("IQMServer")._ensure_iqm_isa_env(
+			self, alias, credential=credential)
+
+	def _build_iqmjson(self, iqm_circuit, shots, calibration_set_id):
+		return self._profile_for_type("IQMServer")._build_iqmjson(
+			self, iqm_circuit, shots, calibration_set_id)
+
 	def _qc_alias(self, credential=None):
-		credential = dict(credential or {})
-		value = (
-			credential.get("provider_device_id")
-			or credential.get("quantum_computer")
-			or self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
+		value = resolve_login(
+			self._descriptor, credential, self._provider(),
+			lambda login: False, "")["provider_device_id"]
 		if value:
 			return value
 		try:
@@ -299,109 +341,7 @@ class QrmiDriver(BaseDriver):
 			or self._descriptor.get("id"))
 
 	def _access(self, credential=None):
-		# Resolve the IQM endpoint + token for the QRMI resource. Honor the same
-		# env vars the native svc_iqm_qpm uses, then fall back to the shared
-		# device-access config (util.device_access). Mirrors QdmiDriver._access.
-		# The IBM service CRN is returned too, from the credential or the user's
-		# credential DB entry, when either names one. See _ensure_ibm_env.
-		credential = dict(credential or {})
-		provider = self._descriptor.get("provider", "iqm")
-		service_crn = credential.get("service_crn")
-		object_storage = {
-			key: credential[key] for key in OBJECT_STORAGE_SECRET_KEYS
-			if credential.get(key)}
-		base_url = credential.get("url") or os.environ.get("QFW_QC_URL")
-		token = (
-			credential.get("api_key") or
-			credential.get("token") or
-			os.environ.get("QFW_API_KEY"))
-		provider_device_id = (
-			credential.get("provider_device_id")
-			or credential.get("quantum_computer")
-			or self._descriptor.get("provider_device_id")
-			or self._descriptor.get("provider-device-id"))
-		if not (base_url and token):
-			try:
-				from util.device_access import resolve_device_access
-				cfg = resolve_device_access(
-					provider=provider,
-					device_id=(credential.get("device_id")
-						or self._descriptor.get("id")),
-					user=credential.get("user"),
-					credential_hint=credential.get("credential_hint"),
-					credential_handle=credential.get("credential_handle"))
-			except Exception as exc:
-				raise DEFwExecutionError(
-					"QRMI driver could not resolve device access for "
-					f"provider {provider!r}: set QFW_QC_URL/QFW_API_KEY or "
-					f"configure device access: {exc}") from exc
-			base_url = base_url or cfg.get("url")
-			token = token or cfg.get("api_key")
-			service_crn = service_crn or cfg.get("service_crn")
-			for key in OBJECT_STORAGE_SECRET_KEYS:
-				if not object_storage.get(key) and cfg.get(key):
-					object_storage[key] = cfg[key]
-			provider_device_id = (
-				provider_device_id
-				or cfg.get("provider_device_id")
-				or cfg.get("quantum_computer"))
-		# Strip trailing slashes: QRMI's IQM client builds URLs as
-		# f"{endpoint}/api/v1/...", so a configured base URL ending in "/"
-		# yields "//api/v1/..." which the IQM server rejects (empty target).
-		if base_url:
-			base_url = base_url.rstrip("/")
-		resolved = {
-			"base_url": base_url,
-			"token": token,
-			"provider_device_id": provider_device_id,
-			"quantum_computer": provider_device_id,
-			"service_crn": service_crn,
-		}
-		resolved.update(object_storage)
-		return resolved
-
-	def _iqm_isa_settings(self, backend, credential=None):
-		# What QRMI's IQM resource needs, as the unprefixed setting names both
-		# sinks below work in: QRMI_IQM_ISA_ENDPOINT and QRMI_IQM_ISA_TOKEN. It
-		# reads them when the resource is constructed. Inside a SLURM
-		# reservation the SPANK plugin supplies them; outside one (e.g. a bare
-		# introspection call) they are unset and the resource cannot be opened,
-		# so resolve them from device-access config instead.
-		#
-		# A value already in the environment wins, so nothing here overrides
-		# what the SPANK plugin set. A credential replaces what it supplies and
-		# leaves the rest, which is why an unsupplied half falls back to the
-		# environment rather than being cleared.
-		endpoint_key = "QRMI_IQM_ISA_ENDPOINT"
-		token_key = "QRMI_IQM_ISA_TOKEN"
-		endpoint = os.environ.get(f"{backend}_{endpoint_key}")
-		token = os.environ.get(f"{backend}_{token_key}")
-		if credential:
-			access = self._access(credential=credential)
-			return {
-				endpoint_key: access.get("base_url") or endpoint,
-				token_key: access.get("token") or token,
-			}, ()
-		if endpoint and token:
-			return {endpoint_key: endpoint, token_key: token}, ()
-		access = self._access()
-		return {
-			endpoint_key: endpoint or access.get("base_url"),
-			token_key: token or access.get("token"),
-		}, (endpoint_key, token_key)
-
-	def _ensure_iqm_isa_env(self, alias, credential=None):
-		# Write the IQM pair into the process environment, for a qrmi with no
-		# from_config(). QRMI keys the variables by the resource id up to the
-		# first comma (backend_name,calibration_set_id), so match that prefix.
-		backend = alias.split(",")[0]
-		settings, required = self._iqm_isa_settings(
-			backend, credential=credential)
-		self._write_settings_env(backend, settings)
-		missing = [key for key in required
-				if not os.environ.get(f"{backend}_{key}")]
-		if missing:
-			raise self._missing_settings_error(backend, missing)
+		return self._profile.access(credential)
 
 	def _resource_type(self, qrmi):
 		# Resolve the ResourceType this descriptor should open. Returns the
@@ -436,15 +376,13 @@ class QrmiDriver(BaseDriver):
 
 	def _ensure_resource_env(self, type_name, alias, credential=None):
 		# Each resource type reads its own {backend}_QRMI_* variables. Populate
-		# the families we can resolve; Pasqal and Alice & Bob have no
+		# the families we can resolve; PasqalLocal and Alice & Bob have no
 		# device-access mapping yet and rely on the environment already
 		# carrying theirs, from the SPANK plugin or the operator.
-		if type_name == "IQMServer":
-			self._ensure_iqm_isa_env(alias, credential=credential)
-			return
-		kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
-		if kind:
-			self._ensure_ibm_env(kind, alias, credential=credential)
+		profile = profile_for_resource_type(type_name, self._descriptor)
+		if profile:
+			profile.ensure_env(
+				self, type_name, alias, credential=credential)
 
 	def _write_settings_env(self, backend, settings):
 		# Settings are named without the resource prefix, because that is the
@@ -470,6 +408,13 @@ class QrmiDriver(BaseDriver):
 				"; set them, or set QFW_QC_URL/QFW_API_KEY, or configure "
 				"device access (these are normally injected by the SPANK "
 				"plugin inside a reservation)")
+		if kind == "PASQAL":
+			return DEFwExecutionError(
+				"a Pasqal Cloud job needs " + " and ".join(names) +
+				". The project comes from the user's project_id entry in "
+				"the credential DB, the device's project-id key in "
+				"device-access config, or the config file under "
+				f"{PASQAL_CONFIG_ROOT}")
 		message = (
 			"QRMI IBM access needs " + " and ".join(names) + ". The "
 			"endpoint and API key come from device-access config or "
@@ -485,173 +430,6 @@ class QrmiDriver(BaseDriver):
 				"aws_access_key_id and aws_secret_access_key entries in "
 				"the credential DB")
 		return DEFwExecutionError(message)
-
-	def _ibm_settings(self, kind, backend, credential=None):
-		# What QRMI's IBM resources need, as unprefixed setting names. They
-		# read endpoint, IAM endpoint, API key and service CRN when the
-		# resource is constructed, and QRMI names each service's settings
-		# after the service, so the kind selects the family.
-		#
-		# A credential bound to the caller's reservation always supplies the
-		# endpoint and API key, replacing whatever is already set, as the IQM
-		# resolver does. A value it does not supply resolves to None, which
-		# clears rather than inherits: these settings outlive one call in a
-		# long-running service, so filling in only what is missing would let
-		# the first reservation's key open every later reservation's resource.
-		# Without a credential only missing values are resolved and anything
-		# already set is kept, since an operator or a SPANK plugin may have
-		# set it.
-		#
-		# The endpoint and API key come from device-access config, the same
-		# source the IQM path uses. The IAM endpoint belongs to the device, so
-		# it comes from the device's iam-endpoint key through the descriptor,
-		# and QFW_IBM_IAM_ENDPOINT still wins when set.
-		#
-		# The service CRN names the IBM instance a job runs under. An instance
-		# can serve several devices and many users, and a user can be assigned
-		# to several instances. So the CRN comes from, in order: the
-		# reservation's credential, QFW_IBM_SERVICE_CRN, the user's credential
-		# DB entry, and the device's service-crn key as the default. That is
-		# the order _access uses for the endpoint and key. A site service
-		# relies on the config sources, since nothing a user or a job exports
-		# reaches it.
-		prefix = f"QRMI_IBM_{kind}"
-		endpoint_key = f"{prefix}_ENDPOINT"
-		iam_endpoint_key = f"{prefix}_IAM_ENDPOINT"
-		apikey_key = f"{prefix}_IAM_APIKEY"
-		crn_key = f"{prefix}_SERVICE_CRN"
-
-		def current(key):
-			return os.environ.get(f"{backend}_{key}")
-
-		settings = {}
-		access = {}
-		if credential:
-			# No fallback on this path. A credential that cannot be resolved
-			# has to fail rather than leave another reservation's endpoint or
-			# key in place.
-			access = self._access(credential=credential)
-			settings[endpoint_key] = access.get("base_url")
-			settings[apikey_key] = access.get("token")
-		else:
-			endpoint = current(endpoint_key)
-			apikey = current(apikey_key)
-			if not (endpoint and apikey):
-				try:
-					access = self._access(credential=credential)
-				except DEFwExecutionError:
-					# Fall through to the missing-setting report, which names
-					# what to set. It is more actionable than a failure to
-					# resolve device access the caller may not be relying on.
-					access = {}
-			settings[endpoint_key] = endpoint or access.get("base_url")
-			settings[apikey_key] = apikey or access.get("token")
-
-		settings[iam_endpoint_key] = current(iam_endpoint_key) or str(
-			os.environ.get("QFW_IBM_IAM_ENDPOINT")
-			or self._descriptor.get("iam_endpoint")
-			or self._descriptor.get("iam-endpoint")
-			or IBM_DEFAULT_IAM_ENDPOINT)
-
-		crn = (dict(credential or {}).get("service_crn")
-			or os.environ.get("QFW_IBM_SERVICE_CRN")
-			or access.get("service_crn")
-			or self._descriptor.get("service_crn")
-			or self._descriptor.get("service-crn"))
-		if credential:
-			# Resolved for every reservation and cleared when nothing supplies
-			# one, like the endpoint and key. A CRN can belong to the user, so
-			# keeping the value already set would run this reservation under
-			# the previous user's instance.
-			settings[crn_key] = str(crn) if crn else None
-		else:
-			settings[crn_key] = current(crn_key) or (
-				str(crn) if crn else None)
-
-		# Object storage applies only to IBMQuantumSystem, which stages
-		# results through a bucket. The other IBM services never read these.
-		required = [endpoint_key, iam_endpoint_key, apikey_key, crn_key]
-		if kind == "QS":
-			settings.update(self._object_storage_settings(
-				prefix, backend, access, credential))
-			settings.update(self._job_timeout_settings(backend))
-			required += [
-				f"{prefix}_{suffix}" for suffix in OBJECT_STORAGE_REQUIRED]
-			required.append(JOB_TIMEOUT_SETTING)
-		return settings, required
-
-	def _ensure_ibm_env(self, kind, alias, credential=None):
-		# Write an IBM family into the process environment, for a qrmi with no
-		# from_config().
-		backend = alias.split(",")[0]
-		settings, required = self._ibm_settings(
-			kind, backend, credential=credential)
-		self._write_settings_env(backend, settings)
-		missing = [key for key in required
-				if not os.environ.get(f"{backend}_{key}")]
-		if missing:
-			raise self._missing_settings_error(backend, missing, kind=kind)
-
-	def _object_storage_settings(self, prefix, backend, access,
-			credential=None):
-		# QRMI's IBM Quantum System stages results through object storage and
-		# reads six more settings for it.
-		#
-		# The bucket, region and the two endpoints describe the store, so they
-		# come from the device's own device-access entry, the way iam-endpoint
-		# does. The AWS key pair is secret, so it comes from the reservation's
-		# credential or from the user's credential DB entry, never from the
-		# admin-owned YAML. QFW_IBM_* wins for both, for an operator driving
-		# the shim by hand.
-		#
-		# Config is what makes this reachable at all. Nothing a user or a job
-		# exports reaches a site service, so an IBM Quantum System configured
-		# only through the environment cannot be driven from one.
-		settings = {}
-		for suffix, env_name, key in OBJECT_STORAGE_FIELDS:
-			setting_key = f"{prefix}_{suffix}"
-			value = (
-				os.environ.get(env_name)
-				or self._descriptor.get(key)
-				or self._descriptor.get(key.replace("_", "-")))
-			settings[setting_key] = (
-				os.environ.get(f"{backend}_{setting_key}")
-				or (str(value) if value else None))
-
-		credential = dict(credential or {})
-		for suffix, env_name, key in OBJECT_STORAGE_SECRETS:
-			setting_key = f"{prefix}_{suffix}"
-			value = (
-				credential.get(key)
-				or os.environ.get(env_name)
-				or access.get(key))
-			if not credential:
-				settings[setting_key] = (
-					os.environ.get(f"{backend}_{setting_key}")
-					or (str(value) if value else None))
-				continue
-			# With a credential these are replaced, not filled in, for the
-			# reason the endpoint and key are: one reservation's key would
-			# otherwise serve the next.
-			settings[setting_key] = str(value) if value else None
-		return settings
-
-	def _job_timeout_settings(self, backend):
-		# QRMI_JOB_TIMEOUT_SECONDS, which IBMQuantumSystem requires. Note it
-		# is not under the per-service prefix. The value matches run_circuit's
-		# own default, so QRMI does not abandon a job while this driver is
-		# still polling for it. It is a number rather than a credential, so a
-		# device can set job-timeout-seconds and otherwise it defaults, which
-		# is friendlier than failing for the want of a value we can pick.
-		current = os.environ.get(f"{backend}_{JOB_TIMEOUT_SETTING}")
-		if current:
-			return {JOB_TIMEOUT_SETTING: current}
-		value = (
-			os.environ.get(JOB_TIMEOUT_ENV)
-			or self._descriptor.get(JOB_TIMEOUT_KEY)
-			or self._descriptor.get(JOB_TIMEOUT_KEY.replace("_", "-"))
-			or DEFAULT_JOB_TIMEOUT_SECONDS)
-		return {JOB_TIMEOUT_SETTING: str(value)}
 
 	def _resource_config(self, type_name, alias, credential=None):
 		# The config map QuantumResource.from_config() opens a resource with,
@@ -670,16 +448,12 @@ class QrmiDriver(BaseDriver):
 		# working, and keeps "what the operator or SPANK set wins" true for
 		# the settings that are filled in rather than replaced.
 		backend = alias.split(",")[0]
-		kind = None
-		if type_name == "IQMServer":
-			settings, required = self._iqm_isa_settings(
-				backend, credential=credential)
-		else:
-			kind = IBM_RESOURCE_ENV_KINDS.get(type_name)
-			if not kind:
-				return None
-			settings, required = self._ibm_settings(
-				kind, backend, credential=credential)
+		profile = profile_for_resource_type(type_name, self._descriptor)
+		resolved = profile and profile.resource_settings(
+			self, type_name, backend, credential=credential)
+		if resolved is None:
+			return None
+		settings, required, kind = resolved
 
 		prefix = f"{backend}_"
 		config = {
@@ -697,17 +471,6 @@ class QrmiDriver(BaseDriver):
 		if missing:
 			raise self._missing_settings_error(backend, missing, kind=kind)
 		return config
-
-	def _resource_lock(self, cache_key):
-		# One construction lock per credential. Two reservations have nothing
-		# to serialize once the process environment is out of the picture, but
-		# two threads sharing a credential must still open one resource
-		# between them rather than each building its own: a QRMI resource
-		# holds its own runtime threads (four each on qrmi 0.26.0) until it
-		# is dropped.
-		with self._resource_locks_guard:
-			return self._resource_locks.setdefault(
-				cache_key, threading.Lock())
 
 	def _open_resource(self, open_resource, type_name, alias):
 		try:
@@ -744,69 +507,53 @@ class QrmiDriver(BaseDriver):
 
 		config = None
 		if hasattr(qrmi.QuantumResource, "from_config"):
-			# None means this driver resolves nothing for the type (Pasqal,
+			# None means this driver resolves nothing for the type (PasqalLocal,
 			# Alice & Bob), so the environment is still the only source and
 			# the fallback below is the right path for it.
 			config = self._resource_config(
 				type_name, alias, credential=credential)
 
 		if config is not None:
-			with self._resource_lock(cache_key):
-				# Another thread may have opened this very resource while this
-				# one waited, so look again before building a second.
-				cached = self._resource_objs.get(cache_key)
-				if cached is not None:
-					return cached
-				resource_obj = self._open_resource(
-					lambda: qrmi.QuantumResource.from_config(
-						alias, resource_type, config),
-					type_name, alias)
-				self._resource_objs[cache_key] = resource_obj
+			resource_obj = self._open_from_config(
+				cache_key, qrmi, resource_type, type_name, alias, config)
 		else:
-			with RESOURCE_ENV_LOCK:
-				cached = self._resource_objs.get(cache_key)
-				if cached is not None:
-					return cached
-				self._ensure_resource_env(
-					type_name, alias, credential=credential)
-				resource_obj = self._open_resource(
-					lambda: qrmi.QuantumResource(alias, resource_type),
-					type_name, alias)
-				self._resource_objs[cache_key] = resource_obj
+			resource_obj = self._open_from_environment(
+				cache_key, qrmi, resource_type, type_name, alias, credential)
 		logging.debug(
 			"shim: QRMI resource opened (%s, %s)", type_name, alias)
 		return resource_obj
 
-	def _credential_cache_key(self, credential=None):
-		# A reservation's resource is its own, as the native IQM QPM keys its
-		# clients, so evict_reservation can drop it when the reservation
-		# ends. A credential from outside a reservation is keyed by identity.
-		credential = dict(credential or {})
-		if not credential:
-			return ("default",)
-		reservation_id = credential.get("reservation_id")
-		if reservation_id is not None:
-			return reservation_cache_key(reservation_id)
-		return (
-			credential.get("url"),
-			credential.get("provider_device_id"),
-			credential.get("device_id"),
-			credential.get("user"),
-			credential.get("api_key") or credential.get("token"),
-			credential.get("service_crn"),
-			credential.get("aws_access_key_id"),
-		)
+	def _open_from_config(
+			self, cache_key, qrmi, resource_type, type_name, alias, config):
+		return self._sessions.open(cache_key, lambda: self._open_resource(
+			lambda: qrmi.QuantumResource.from_config(
+				alias, resource_type, config),
+			type_name, alias))
+
+	def _open_from_environment(
+			self, cache_key, qrmi, resource_type, type_name, alias,
+			credential):
+		with RESOURCE_ENV_LOCK:
+			return self._sessions.open(
+				cache_key, lambda: self._open_with_environment(
+					qrmi, resource_type, type_name, alias, credential))
+
+	def _open_with_environment(
+			self, qrmi, resource_type, type_name, alias, credential):
+		self._ensure_resource_env(type_name, alias, credential=credential)
+		return self._open_resource(
+			lambda: qrmi.QuantumResource(alias, resource_type),
+			type_name, alias)
 
 	def evict_reservation(self, reservation_id):
 		# The reservation has ended: drop its resource and target, so the
 		# token it opened with goes too, and so do the resource's runtime
 		# threads.
 		cache_key = reservation_cache_key(reservation_id)
-		with self._resource_lock(cache_key):
-			resource = self._resource_objs.pop(cache_key, None)
-			target = self._target_cache.pop(cache_key, None)
-		with self._resource_locks_guard:
-			self._resource_locks.pop(cache_key, None)
+		resource = self._sessions.drop(cache_key)
+		target = self._target_cache.pop(cache_key, None)
+		self._target_fetched_at.pop(cache_key, None)
+		self._target_retry_after.pop(cache_key, None)
 		if resource is not None:
 			logging.debug(
 				"shim: QRMI resource for reservation %s dropped",
@@ -815,32 +562,55 @@ class QrmiDriver(BaseDriver):
 
 	def _target(self, credential=None):
 		# QRMI target() is a remote call returning raw IQM JSON (dynamic
-		# architecture / calibration_set / quality_metrics). Parse it once per
-		# driver instance and serve every introspection call from the cache, so
-		# the four calls don't each re-fetch the same payload.
+		# architecture / calibration_set / quality_metrics). Parse it and
+		# serve every introspection call from the cache, so the four calls
+		# don't each re-fetch the same payload.
 		cache_key = self._credential_cache_key(credential)
-		if cache_key not in self._target_cache:
-			try:
-				target_data = json.loads(
-					self._qpu(credential=credential).target().value)
-			except Exception as exc:
-				raise self._qrmi_error(
-					exc, "failed to read QRMI target()") from exc
+		cached = self._target_cache.get(cache_key)
+		if cached is not None and self._target_is_fresh(cache_key):
+			return cached
+		try:
+			target_data = json.loads(
+				self._qpu(credential=credential).target().value)
+		except Exception as exc:
+			if cached is not None:
+				logging.warning(
+					f"shim: keeping the cached QRMI target, refresh failed: {exc}")
+				return self._keep_until_next_refresh(cache_key, cached)
+			raise self._qrmi_error(
+				exc, "failed to read QRMI target()") from exc
 
-			# IBM target() returns null for configuration or properties on failure.
-			# To avoid caching a failed or half-failed payload (which would stick
-			# in the cache after IBM recovers), do not cache if either is None.
-			if self._provider() == "ibm":
-				if (
-					isinstance(target_data, dict)
-					and target_data.get("configuration") is not None
-					and target_data.get("properties") is not None
-				):
-					self._target_cache[cache_key] = target_data
-			else:
-				self._target_cache[cache_key] = target_data
+		# A failed or half-failed payload must not be cached: it would stick
+		# after the device recovers.
+		if not self._profile.is_complete_target(target_data):
+			if cached is not None:
+				logging.warning(
+					"shim: keeping the cached QRMI target, the refresh was "
+					"incomplete")
+				return self._keep_until_next_refresh(cache_key, cached)
 			return target_data
-		return self._target_cache[cache_key]
+		self._cache_target(cache_key, target_data)
+		return target_data
+
+	def _target_is_fresh(self, cache_key):
+		fetched_at = self._target_fetched_at.get(cache_key)
+		retry_after = self._target_retry_after.get(cache_key)
+		now = time.monotonic()
+		return ((fetched_at is not None
+			 and now - fetched_at < self._target_ttl_seconds)
+			or (retry_after is not None and now < retry_after))
+
+	def _cache_target(self, cache_key, target_data):
+		self._target_cache[cache_key] = target_data
+		self._target_fetched_at[cache_key] = time.monotonic()
+		self._target_retry_after.pop(cache_key, None)
+
+	def _keep_until_next_refresh(self, cache_key, cached):
+		# So a device that stays down is asked once per TTL, not per call.
+		if cache_key in self._target_cache:
+			self._target_retry_after[cache_key] = (
+				time.monotonic() + self._target_ttl_seconds)
+		return cached
 
 	def _static_arch(self, target):
 		# QRMI 0.22.0 added the static architecture to target(). Before that the
@@ -859,10 +629,10 @@ class QrmiDriver(BaseDriver):
 				return entry
 		return {}
 
-	def _arch_raw(self):
+	def _arch_raw(self, credential=None):
 		# Map target() to the {static_architecture, dynamic_architecture} shape
 		# qhw-iqm's device/coupling normalizers expect.
-		target = self._target()
+		target = self._target(credential=credential)
 		raw = {"dynamic_architecture":
 				target.get("dynamic_quantum_architecture") or {}}
 		static = self._static_arch(target)
@@ -879,102 +649,19 @@ class QrmiDriver(BaseDriver):
 	# --- introspection facet: reuse qhw-iqm / qhw-ibm on QRMI's raw data -
 
 	def get_device_info(self):
-		if self._provider() == "ibm":
-			from qhw_ibm import normalize_device
-			target_config_json = self._target().get("configuration") or {}
-			if not target_config_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			return normalize_device(target_config_json, device_id=self._device_id())
-		from qhw_iqm import normalize_device
-		return normalize_device(self._arch_raw(), device_id=self._device_id())
+		return self._profile.device_info(self)
 
 	def get_coupling_graph(self, calibration_set_id=None):
-		if self._provider() == "ibm":
-			from qhw_ibm import normalize_coupling
-			target_config_json = self._target().get("configuration") or {}
-			if not target_config_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			return normalize_coupling(target_config_json, device_id=self._device_id())
-		from qhw_iqm import normalize_coupling
-		return normalize_coupling(self._arch_raw(), device_id=self._device_id())
+		return self._profile.coupling_graph(self)
 
 	def get_calibration_snapshot(self, calibration_set_id=None):
-		if self._provider() == "ibm":
-			# The calibration normalizer reads the properties sub-dict
-			# (qubits, gates, last_update_date).
-			from qhw_ibm import normalize_calibration
-			target_props_json = self._target().get("properties") or {}
-			if not target_props_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			return normalize_calibration(target_props_json, device_id=self._device_id())
-		# target() carries the IQM calibration_set + quality_metrics; feed them
-		# (with the dynamic architecture) to qhw-iqm — the same normalizer the
-		# native svc_iqm_qpm path uses — to build a qhw-calibration-v1 record.
-		# Selecting a specific calibration_set_id is a follow-up; this returns
-		# the resource's current/default calibration.
-		from qhw_iqm import normalize_calibration
-		target = self._target()
-		raw = {
-			"dynamic_architecture":
-				target.get("dynamic_quantum_architecture") or {},
-			"calibration_set": target.get("calibration_set") or {},
-			"quality_metric_set": target.get("quality_metrics") or {},
-		}
-		return normalize_calibration(raw, device_id=self._device_id())
+		return self._profile.calibration_snapshot(self)
 
 	def get_dynamic_backend_info(self, calibration_set_id=None):
-		if self._provider() == "ibm":
-			# IBM target() has no live dynamic state; configuration and
-			# properties are static snapshots with no calibration_set_id or
-			# active qubit list equivalent.
-			return {
-				"backend": "ibm",
-				"metadata_supported": False,
-				"dynamic_architecture": {},
-			}
-		# The dynamic architecture as-is, matching the native svc_iqm_qpm shape
-		# (a provider dict, not a qhw record).
-		return {
-			"backend": self._descriptor.get("provider", "iqm"),
-			"metadata_supported": True,
-			"dynamic_architecture":
-				self._target().get("dynamic_quantum_architecture") or {},
-		}
+		return self._profile.dynamic_backend_info(self)
 
-	def get_backend_info(self):
-		if self._provider() == "ibm":
-			from qhw_ibm import normalize_device
-			target_config_json = self._target().get("configuration") or {}
-			if not target_config_json:
-				raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-			qhw_device = normalize_device(target_config_json, device_id=self._device_id())
-			qubits_len = len(qhw_device.get("qubits", []))
-			n_qubits = target_config_json.get("n_qubits", qubits_len)
-			return {
-				"backend": "ibm",
-				"metadata_supported": True,
-				"static_architecture": target_config_json,
-				"active_qubits": list(range(n_qubits)),
-				"calibration_set_id": None,
-				"qhw_device": qhw_device,
-			}
-
-		# Native composite shape (mirrors svc_iqm_qpm.get_backend_info): the
-		# provider fields plus an embedded qhw device record. The static
-		# architecture is empty against QRMI older than 0.22.0, which did not
-		# report it at all.
-		from qhw_iqm import normalize_device
-		target = self._target()
-		dynamic = target.get("dynamic_quantum_architecture") or {}
-		return {
-			"backend": self._descriptor.get("provider", "iqm"),
-			"metadata_supported": True,
-			"static_architecture": self._static_arch(target),
-			"active_qubits": dynamic.get("qubits") or [],
-			"calibration_set_id": dynamic.get("calibration_set_id"),
-			"qhw_device": normalize_device(
-					self._arch_raw(), device_id=self._device_id()),
-		}
+	def get_backend_info(self, credential=None):
+		return self._profile.backend_info(self, credential=credential)
 
 	# --- execution: OpenQASM/QPY -> QRMI task lifecycle ----------------------
 
@@ -985,49 +672,17 @@ class QrmiDriver(BaseDriver):
 		# and normalize the counts to qhw-result-v1 (the same normalizer the
 		# native svc_iqm_qpm path uses). QRMI-for-IQM has no acquire/release, so
 		# there is no reservation step.
-		provider = self._provider()
-		if provider == "ibm":
-			return self._run_ibm_circuit(source)
-		return self._run_iqm_circuit(source)
+		return self._profile.run_circuit(self, source)
 
-	def _run_ibm_circuit(self, source):
-		# Lifecycle: build backend target -> build Qiskit SamplerV2 payload ->
-		# submit via QRMI -> normalize the result to qhw-result-v1.
-		from util.circuit_payload import is_qpy_circuit_provided, QPY_FORMATS
-		info = getattr(source, "info", None) or {}
-		if not is_qpy_circuit_provided(info):
-			raise DEFwExecutionError(
-				"A circuit targeted to run in an IBM Quantum device must be serialized"
-				" using QPY to preserve all its properties. Please update the data and"
-				" format fields in the info[circuit] provided accordingly to a"
-				f" QPY format: {QPY_FORMATS}")
-
-		with instrumentation.backend_phase("acquire"):
-			target, target_config_json = self._build_backend_target(source)
-		with instrumentation.qpm_transpile():
-			payload = self._build_ibm_payload(source, target)
-		result_json, job = self._run_sampler_payload(payload, source)
-
-		# Update last_job with IBM measurements.
-		if job is not None:
-			results = result_json.get("results") or []
-			data = results[0].get("data") or {}
-			job["measurements"] = data
-			self._jobs.put(job)
-
-		# The JSON returned by qrmi.task_start is a Qiskit runtime SamplerV2, which is
-		# focused on the measured samples and does not include device and job information.
-		# They are both returned by separated API calls.
-		raw = {
-			"device": {
-				"raw_configuration": target_config_json,
-			},
-			"job": job,
-			"raw_results": result_json
-		}
-
-		from qhw_ibm import normalize_result
-		return normalize_result(raw, device_id=self._device_id())
+	def _vendor_timing(self, job_id, credential=None):
+		# Behind QFW_TELEMETRY_VENDOR because it is one more request per job.
+		if not instrumentation.vendor_enabled():
+			return {}
+		phases = self._profile.vendor_timing(
+			self, job_id, credential=credential)
+		if phases:
+			instrumentation.record_vendor_timing(phases)
+		return phases
 
 	def _task_logs(self, job_id, credential=None):
 		# Best effort: the caller is already failing, so anything that goes
@@ -1040,16 +695,45 @@ class QrmiDriver(BaseDriver):
 				"shim: QRMI task_logs for job %s failed: %s", job_id, exc)
 			return ""
 
-	def _run_sampler_payload(self, payload, source):
+	def _job_call(self, call, make_call, timeout, deadline,
+			cancel_event=None):
+		# One QRMI call of a job's lifecycle, made again while the provider
+		# refuses it as rate-limited, until the job's deadline. Any other
+		# failure is raised at once, as before.
+		rate_limit = _RateLimit(call, deadline, cancel_event)
+		while True:
+			try:
+				return make_call()
+			except Exception as exc:
+				if not _rate_limited(exc):
+					raise self._qrmi_error(
+						exc, f"QRMI {call} failed") from exc
+				if rate_limit.wait():
+					continue
+				if rate_limit.cancelled():
+					raise DEFwExecutionError(
+						f"QRMI job was cancelled while its {call} "
+						"waited out a rate limit") from exc
+				raise self._qrmi_error(
+					exc, f"QRMI {call} was still rate-limited when the "
+					f"{timeout}s job timeout ran out, after "
+					f"{rate_limit.retries} retries") from exc
+
+	def _run_sampler_payload(self, payload, source, delete_finished=True,
+			default_timeout=DEFAULT_JOB_TIMEOUT_SECONDS):
 		# Submit the SamplerV2 payload via QRMI task_start -> poll to
 		# completion -> fetch task_result JSON. Time is measured along the way.
+		# delete_finished says whether task_stop deletes a finished task. It
+		# does not on Pasqal, where task_stop cancels the batch and Pasqal
+		# rejects cancelling a batch that has already ended. default_timeout
+		# is the provider deadline when neither the client nor the device
+		# sets one, None for none.
 		info = getattr(source, "info", None) or {}
 		credential = getattr(source, "provider_credential", None)
 		cid = source.get_cid() if hasattr(source, "get_cid") else info.get("cid")
 
 		shots = num_shots(info)
-		timeout = float(info.get("timeout", DEFAULT_JOB_TIMEOUT_SECONDS))
-		poll = float(info.get("poll_interval", 1.0))
+		poll, backoff = poll_schedule(info, self._descriptor)
 
 		# Set by the shim QRC when the QPM cancels this circuit. A cancel that
 		# arrives before submission starts nothing at the provider.
@@ -1058,15 +742,36 @@ class QrmiDriver(BaseDriver):
 			raise DEFwExecutionError(
 				"QRMI job was cancelled before it was submitted")
 
+		# A device whose provider queues jobs sets the wait with
+		# job-timeout-seconds, the key IBMQuantumSystem also hands QRMI as its
+		# job timeout. A timeout the client sends still wins. Reaching it
+		# stops the provider job (_poll_task).
+		timeout = info.get("timeout",
+			self._descriptor.get(JOB_TIMEOUT_KEY) or default_timeout)
+		# Checked before anything is submitted: a value _poll_task cannot
+		# read would otherwise fail with the job already at the provider.
+		if timeout is not None:
+			try:
+				timeout = float(timeout)
+			except (TypeError, ValueError):
+				raise DEFwExecutionError(
+					f"the job timeout must be a number of seconds, not "
+					f"{timeout!r} (job-timeout-seconds or the client's "
+					"timeout)") from None
+
 		timing = {}
 		start = time.monotonic()
+		# One deadline for the whole wait, counted from here, so time spent
+		# waiting out a rate limit (_RateLimit) comes off the job's timeout
+		# rather than adding to it.
+		deadline = (None if timeout is None
+			else start + max(timeout, 0.0))
 		with instrumentation.backend_phase("acquire"):
 			qpu = self._qpu(credential=credential)
 		with instrumentation.backend_phase("submit"):
-			try:
-				job_id = qpu.task_start(payload)
-			except Exception as exc:
-				raise self._qrmi_error(exc, "QRMI task_start failed") from exc
+			job_id = self._job_call(
+				"task_start", lambda: qpu.task_start(payload),
+				timeout, deadline, cancel_event)
 		timing["submit_seconds"] = time.monotonic() - start
 		instrumentation.set_attribute(
 			instrumentation.ATTR_VENDOR_JOB_ID, str(job_id))
@@ -1078,7 +783,8 @@ class QrmiDriver(BaseDriver):
 		try:
 			status = self._poll_task(
 				job_id, timeout, poll, credential=credential,
-				cancel_event=cancel_event)
+				cancel_event=cancel_event, deadline=deadline,
+				backoff=backoff)
 		except BaseException:
 			collect.__exit__(*sys.exc_info())
 			raise
@@ -1091,7 +797,8 @@ class QrmiDriver(BaseDriver):
 			# full and to the caller as one line.
 			logs = self._task_logs(job_id, credential=credential)
 			# Nothing else to do with the failed job, we can delete it.
-			self._stop_task(job_id, credential=credential)
+			if delete_finished:
+				self._stop_task(job_id, credential=credential)
 			if logs:
 				logging.error(
 					"shim: QRMI job %s %s; provider logs:\n%s",
@@ -1108,177 +815,56 @@ class QrmiDriver(BaseDriver):
 
 		result_started = time.monotonic()
 		try:
-			result_json = json.loads(
-				self._qpu(credential=credential).task_result(job_id).value)
-		except Exception as exc:
+			result_json = self._job_call(
+				"task_result",
+				lambda: json.loads(self._qpu(
+					credential=credential).task_result(job_id).value),
+				timeout, deadline, cancel_event)
+		except BaseException:
 			collect.__exit__(*sys.exc_info())
-			raise self._qrmi_error(exc, "QRMI task_result failed") from exc
+			raise
 		collect.__exit__(None, None, None)
 		timing["result_fetch_seconds"] = time.monotonic() - result_started
 		timing["total_wall_seconds"] = time.monotonic() - start
+		vendor = self._vendor_timing(job_id, credential=credential)
 
 		# Nothing else to do with the completed task, we can delete it.
 		# The same behavior is implemented in QRMI's task_runner.
-		self._stop_task(job_id, credential=credential)
+		if delete_finished:
+			self._stop_task(job_id, credential=credential)
 
 		job = {"id": str(job_id), "status": "completed", "cid": cid,
 			   "timing": timing, "shots": shots}
+		if vendor:
+			job["vendor_timing"] = vendor
 		self._jobs.put(job)
 
 		return result_json, job
 
-	def _build_backend_target(self, source):
-		# Fetch the raw backend configuration and properties via QRMI, then
-		# convert them to a Qiskit Target used for ISA compilation.
-		try:
-			from qiskit_ibm_runtime.utils.backend_converter import convert_to_target
-			from qiskit_ibm_runtime.models import BackendProperties, BackendConfiguration
-		except Exception as exc:
-			raise DEFwExecutionError(
-				f"failed to import qiskit_ibm_runtime models: {exc}") from exc
-
-		target_data = self._target(credential=getattr(source, "provider_credential", None))
-		target_config_json = target_data.get("configuration")
-		target_props_json = target_data.get("properties")
-
-		if not target_config_json or not target_props_json:
-			raise DEFwExecutionError("QRMI failed to retrieve the backend data")
-
-		backend_config = BackendConfiguration.from_dict(target_config_json)
-		backend_props = BackendProperties.from_dict(target_props_json)
-		target = convert_to_target(backend_config, backend_props)
-		return target, target_config_json
-
-	def _build_ibm_payload(self, source, target):
-		# Transcode the circuit to an ISA circuit against the backend target,
-		# then wrap it as a Qiskit SamplerV2 primitive payload for QRMI.
-		info = getattr(source, "info", None) or {}
-		shots = num_shots(info)
-		compilation_options = info.get("compilation_options") or {}
-		param_values = info.get("param_values") or {}
-
-		from util.circuit_payload import qiskit_input
-		qiskit_circuit = qiskit_input(info)
-
-		try:
-			from qiskit.circuit import QuantumCircuit
-		except Exception as exc:
-			raise DEFwExecutionError("Failed to import qiskit QuantumCircuit") from exc
-
-		if (
-			isinstance(qiskit_circuit, QuantumCircuit)
-			and qiskit_circuit.num_parameters
-			and not param_values
-		):
-			raise DEFwExecutionError(
-				  "'param_values' must be defined in info (as a dict keyed by"
-				  " parameter name strings) for the following circuit parameters:"
-				  f" {[p.name for p in qiskit_circuit.parameters]}")
-
-		from util.ibm_transcode import compile_circuit
-		isa_circuit = compile_circuit(qiskit_circuit, target, compilation_options)
-
-		from util.ibm_transcode import qiskit_sampler_input_json
-		input_json = qiskit_sampler_input_json(isa_circuit, param_values, shots)
-
-		qrmi = self._resource()
-		return qrmi.Payload.QiskitPrimitive(input=input_json, program_id="sampler")
-
-	def _run_iqm_circuit(self, source):
-		# Build IQM run request -> wrap as Payload.IQMServer -> delegate
-		# submit/poll/fetch to _run_sampler_payload -> normalize to
-		# qhw-result-v1 and patch measurements into the job record.
-		qrmi = self._resource()
-
-		info = getattr(source, "info", None) or {}
-		shots = num_shots(info)
-		mapping = info.get("iqm_qubit_mapping") or info.get("qubit_mapping")
-		use_timeslot = bool(info.get("use_timeslot", False))
-
-		with instrumentation.backend_phase("acquire"):
-			target = self._target(
-				credential=getattr(source, "provider_credential", None))
-		dynamic = target.get("dynamic_quantum_architecture") or {}
-		calibration_set_id = (
-			info.get("calibration_set_id")
-			or info.get("iqm_calibration_set_id")
-			or dynamic.get("calibration_set_id"))
-
-		from util.circuit_payload import qiskit_input
-		from util.iqm_transcode import build_iqm_circuit
-		with instrumentation.qpm_transpile():
-			circuit = qiskit_input(info)
-			iqm_circuit = build_iqm_circuit(circuit, dynamic, mapping)
-			iqmjson, run_request = self._build_iqmjson(
-					iqm_circuit, shots, calibration_set_id)
-
-		payload = qrmi.Payload.IQMServer(
-			iqmjson=iqmjson, job_type="circuit",
-			use_timeslot=use_timeslot, tag=None)
-
-		result_json, job = self._run_sampler_payload(payload, source)
-
-		# Update last_job with IQM measurements
-		if job is not None:
-			job["measurements"] = result_json.get("measurements") or {}
-			self._jobs.put(job)
-
-		measurement_counts = result_json.get("measurement_counts")
-		circuits = run_request.get("circuits") if isinstance(
-				run_request, dict) else None
-		job_id = job.get("id") if job is not None else None
-		raw = {
-			"job": {"id": job_id, "status": "completed"},
-			"run_request": run_request if isinstance(run_request, dict) else {},
-			"measurement_counts": measurement_counts,
-			"circuits": circuits or [],
-		}
-		from qhw_iqm import normalize_result
-		return normalize_result(raw, device_id=self._device_id())
-
-	def _build_iqmjson(self, iqm_circuit, shots, calibration_set_id):
-		# Build an iqm-client RunRequest the same way QRMI's own Qiskit adapter
-		# (qrmi.qiskit_iqm) does, then serialize it: QRMI's task_start expects the
-		# RunRequest JSON as the IQM Server job body. This is the QASM -> IQM JSON
-		# step; the exact RunRequest schema is validated against the live IQM
-		# Server on hardware. Returns (json_str, parsed_dict).
-		try:
-			from iqm.station_control.interface.models import RunRequest
-		except Exception as exc:
-			raise DEFwExecutionError(
-				"iqm-client is required to build the IQM job payload for QRMI "
-				f"execution: {exc}") from exc
-		calset = calibration_set_id
-		if calset is not None and not isinstance(calset, str):
-			calset = str(calset)
-		try:
-			# iqm-client >= 34 dropped the private _build_run_request helper.
-			# RunRequest (a TypeAlias for PostJobsRequest) is built directly:
-			# every compilation option the helper set now has a model default.
-			# qubit_mapping stays None because build_iqm_circuit already emits
-			# physical qubit names (see logical_to_physical_qubits).
-			run_request = RunRequest(
-				circuits=[iqm_circuit],
-				calibration_set_id=calset,
-				shots=int(shots))
-			iqmjson = run_request.model_dump_json()
-		except Exception as exc:
-			raise DEFwExecutionError(
-				f"failed to build the IQM run-request JSON for QRMI: {exc}") \
-				from exc
-		return iqmjson, json.loads(iqmjson)
-
 	def _poll_task(self, job_id, timeout, poll, credential=None,
-			cancel_event=None):
+			cancel_event=None, deadline=None, backoff=False):
 		# Poll QRMI task_status until a terminal state, and return
 		# completed, failed or cancelled.
 		#
 		# A cancel from the QPM (cancel_event, set by the shim QRC) or the
 		# timeout stops the provider job with task_stop, so it does not keep
 		# running after QFw has given up on it. The wait between polls ends as
-		# soon as a cancel arrives.
-		deadline = time.monotonic() + max(timeout, 0.0)
+		# soon as a cancel arrives. A timeout of None sets no deadline.
+		#
+		# deadline is when the timeout runs out. _run_sampler_payload counts
+		# it from the submission. Without one, it is counted from the first
+		# poll. A poll the provider refuses as rate-limited is waited out and
+		# made again, inside the same deadline.
+		#
+		# poll is the first wait between polls. With backoff, each poll that
+		# finds the job unfinished doubles it (poll_schedule). No wait runs
+		# past the deadline, so the last poll is made when it runs out.
+		if deadline is None and timeout is not None:
+			deadline = time.monotonic() + max(timeout, 0.0)
+		rate_limit = _RateLimit("task_status", deadline, cancel_event)
+		wait = poll
 		polls = 0
+		state = None
 		while True:
 			if cancel_event is not None and cancel_event.is_set():
 				self._stop_task(job_id, credential=credential)
@@ -1286,8 +872,18 @@ class QrmiDriver(BaseDriver):
 			try:
 				raw = self._qpu(credential=credential).task_status(job_id)
 			except Exception as exc:
-				raise self._qrmi_error(
-					exc, "QRMI task_status failed") from exc
+				if not _rate_limited(exc):
+					raise self._qrmi_error(
+						exc, "QRMI task_status failed") from exc
+				# A cancel that ended the wait is the loop's to handle.
+				if rate_limit.wait(at_least=wait) or rate_limit.cancelled():
+					continue
+				raise self._timed_out(
+					job_id, timeout,
+					"its status polls were rate-limited" if state is None
+					else f"last status {state!r}, then rate-limited",
+					credential=credential) from exc
+			rate_limit.retries = 0
 			state = _status_str(raw)
 			polls += 1
 			instrumentation.add_event("poll", {"qfw.vendor.status": state})
@@ -1298,18 +894,28 @@ class QrmiDriver(BaseDriver):
 				return "failed"
 			if "cancel" in state:
 				return "cancelled"
-			if time.monotonic() >= deadline:
-				stop_error = self._stop_task(job_id, credential=credential)
-				stopped = (
-					f"task_stop failed: {stop_error}" if stop_error
-					else "it was stopped")
-				raise DEFwExecutionError(
-					f"QRMI job {job_id} timed out after {timeout}s "
-					f"(last status {state!r}), and {stopped}")
+			if deadline is not None and time.monotonic() >= deadline:
+				raise self._timed_out(
+					job_id, timeout, f"last status {state!r}",
+					credential=credential)
+			pause = max(wait, 0.0)
+			if deadline is not None:
+				pause = min(pause, max(deadline - time.monotonic(), 0.0))
 			if cancel_event is not None:
-				cancel_event.wait(max(poll, 0.0))
+				cancel_event.wait(pause)
 			else:
-				time.sleep(max(poll, 0.0))
+				time.sleep(pause)
+			wait = next_poll_wait(wait, backoff)
+
+	def _timed_out(self, job_id, timeout, last, credential=None):
+		# Stop a job that ran past its timeout, and the error that says so.
+		stop_error = self._stop_task(job_id, credential=credential)
+		stopped = (
+			f"task_stop failed: {stop_error}" if stop_error
+			else "it was stopped")
+		return DEFwExecutionError(
+			f"QRMI job {job_id} timed out after {timeout}s ({last}), "
+			f"and {stopped}")
 
 	def _stop_task(self, job_id, credential=None):
 		# Best effort, since the job may already have ended at the provider.

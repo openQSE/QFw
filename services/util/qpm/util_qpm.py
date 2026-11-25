@@ -179,6 +179,7 @@ class UTIL_QPM:
 			self.controller.oor_queue = self.oor_queue
 		self.circuit_results = self.controller.circuit_results
 		self.free_hosts = self.controller.free_hosts
+		self.host_slots = self.controller.host_slots
 		if not self.controller.resources_initialized:
 			self.setup_host_resources(max_ppn)
 			self.controller.resources_initialized = True
@@ -188,15 +189,22 @@ class UTIL_QPM:
 		self.controller.start_completion_purge_worker()
 
 	def setup_host_resources(self, max_ppn):
+		# Each assigned host has max_ppn slots, or the count a
+		# host:slots entry gives it. host_slots keeps that count, which
+		# is all a host can ever have free.
 		assigned_hosts = os.environ.get('QFW_QPM_ASSIGNED_HOSTS')
 		hl = (expand_host_list(assigned_hosts) if assigned_hosts
 		      else [os.uname().nodename])
 		for h in hl:
 			comp = h.split(':')
 			if len(comp) == 1:
-				self.free_hosts[comp[0]] = max_ppn
+				slots = max_ppn
 			elif len(comp) == 2:
-				self.free_hosts[comp[0]] = int(comp[1])
+				slots = int(comp[1])
+			else:
+				continue
+			self.free_hosts[comp[0]] = slots
+			self.host_slots[comp[0]] = slots
 
 	def create_circuit(self, info, request=None):
 		start = time.time()
@@ -389,13 +397,24 @@ class UTIL_QPM:
 		return selected
 
 	def free_resources(self, circ, result=None):
-		self.finalize_provider_task(circ, result=result)
+		# The hosts go back even when recording the outcome fails. Kept,
+		# they would leave every later circuit waiting for resources
+		# that never come back (openQSE/QFw#196).
+		try:
+			self.finalize_provider_task(circ, result=result)
+		finally:
+			self._return_hosts(circ)
+
+	def _return_hosts(self, circ):
 		with self.controller.lock:
 			res = circ.info['hosts']
 			for host in res.keys():
 				if host not in self.free_hosts:
 					raise DEFwError(f"Circuit has untracked host: {host}")
-				if res[host] + self.free_hosts[host] > self.max_ppn:
+				# A host:slots entry can give a host more
+				# slots than max_ppn.
+				slots = self.host_slots.get(host, self.max_ppn)
+				if res[host] + self.free_hosts[host] > slots:
 					raise DEFwError(
 						"Returning more resources than originally had")
 				self.free_hosts[host] += res[host]
@@ -405,19 +424,23 @@ class UTIL_QPM:
 			self.controller.cleanup_circuit(cid)
 
 	def free_resources_and_oor(self, circ, result=None):
-		self.free_resources(circ, result=result)
-		# When resources are free, go through the queue and try
-		# to consume circuits from that queue until you run out of
-		# resources again. A provider's thread calls this before it
-		# hands over its own result, so a failure here, which belongs to
-		# another task, must not escape and lose that result.
 		try:
-			self.process_oor_queue()
-		except Exception as error:
-			logging.warning(
-				"dispatching queued work after "
-				f"{circ.get_cid()}: "
-				f"{type(error).__name__}: {error}")
+			self.free_resources(circ, result=result)
+		finally:
+			# When resources are free, go through the queue and try
+			# to consume circuits from that queue until you run out
+			# of resources again. This runs even when freeing raised,
+			# since free_resources gives the hosts back regardless. A
+			# provider's thread calls this before it hands over its
+			# own result, so a failure here, which belongs to another
+			# task, must not escape and lose that result.
+			try:
+				self.process_oor_queue()
+			except Exception as error:
+				logging.warning(
+					"dispatching queued work after "
+					f"{circ.get_cid()}: "
+					f"{type(error).__name__}: {error}")
 
 	def _prepare_run_circuit(self, cid, require_selected_cid=False):
 		with self.controller.lock:
@@ -954,6 +977,9 @@ class UTIL_QPM:
 		result = self.controller.register_event_endpoint(push_info)
 		self._ensure_qrc_event_dispatcher(evtype)
 		return result
+
+	def unregister_event_notification(self, registration_id):
+		return self.controller.unregister_event_endpoint(registration_id)
 
 	def _ensure_qrc_event_dispatcher(self, evtype):
 		if self.qrc is None:

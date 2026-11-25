@@ -7,6 +7,7 @@
 #	{"format": "qpy+gzip", "data": "<base64 of gzipped QPY>"}
 #	{"format": "qpy", "data": "<base64 of the QPY bytes>"}
 #	{"format": "openqasm2", "data": "OPENQASM 2.0; ..."}
+#	{"format": "pulser-abstract-repr", "data": "{\"version\": ...}"}
 #
 # Binary formats travel as base64 text, so the info dict stays plain data on
 # any transport. info["qasm"] is the older form. It is still read, as
@@ -19,10 +20,15 @@
 # qpy+gzip is the same QPY with gzip around it, declared separately so a QPM
 # that cannot decompress is simply sent plain QPY instead.
 #
+# pulser-abstract-repr is a Pulser sequence in Pulser's JSON abstract
+# representation, the program an analog neutral-atom device runs. It is not a
+# circuit, and no Qiskit QPM can transpile it, so only a QPM that declares it
+# reads it. A Pasqal QPM declares it alone, since such a device runs no gates.
+#
 # The reading half of this module runs in the QPM. The writing half runs in
 # the client: choose_circuit_format reads what the QPM declared and
-# encode_qiskit_circuit turns a Qiskit circuit into the info fields that carry
-# it. Both halves live here so the format is defined once.
+# encode_qiskit_circuit and encode_pulser_sequence turn a program into the info
+# fields that carry it. Both halves live here so the format is defined once.
 
 import base64
 import binascii
@@ -35,10 +41,12 @@ from defw_exception import DEFwExecutionError
 OPENQASM2 = "openqasm2"
 QPY = "qpy"
 QPY_GZIP = "qpy+gzip"
-CIRCUIT_FORMATS = (OPENQASM2, QPY, QPY_GZIP)
+PULSER = "pulser-abstract-repr"
+CIRCUIT_FORMATS = (OPENQASM2, QPY, QPY_GZIP, PULSER)
 QPY_FORMATS = (QPY, QPY_GZIP)
 
-# Every QPM runs OpenQASM 2, so a QPM declares that unless it says more.
+# A QPM that declares nothing reads OpenQASM 2, as every QPM did before formats
+# were declared.
 DEFAULT_CIRCUIT_FORMATS = (OPENQASM2,)
 
 
@@ -53,7 +61,7 @@ def is_qpy_circuit_provided(info):
 
 def circuit_payload(info):
 	# Return (format, data) for the circuit in a circuit info dict. data is
-	# text for OpenQASM 2 and bytes for QPY.
+	# text for OpenQASM 2 and Pulser, and bytes for QPY.
 	#
 	# The format returned is the format of the content, so a qpy+gzip payload
 	# comes back as QPY with the gzip already removed. Compression is framing
@@ -124,6 +132,41 @@ def qiskit_input(info):
 	fmt, data = circuit_payload(info)
 	if fmt == QPY:
 		return load_qpy(data)
+	if fmt == PULSER:
+		raise DEFwExecutionError(
+			"this QPM runs circuits and received a Pulser sequence. Send one "
+			"of the formats it lists in circuit_formats")
+	return data
+
+
+def logical_circuit_payload(info):
+	logical = (info or {}).get("logical_circuit")
+	if logical is None:
+		return None
+	return circuit_payload({"circuit": logical})
+
+
+def load_circuit(fmt, data):
+	if fmt == QPY:
+		return load_qpy(data)
+	if fmt == OPENQASM2:
+		try:
+			from qiskit import qasm2
+			return qasm2.loads(data)
+		except Exception as exc:
+			raise DEFwExecutionError(
+				f"could not load the OpenQASM 2 circuit: {exc}") from exc
+	raise DEFwExecutionError(f"cannot load a {fmt} circuit with Qiskit")
+
+
+def pulser_sequence(info):
+	# Return the Pulser sequence as abstract representation JSON text, for
+	# QPMs that run Pulser sequences.
+	fmt, data = circuit_payload(info)
+	if fmt != PULSER:
+		raise DEFwExecutionError(
+			f"this QPM runs Pulser sequences only and received a {fmt} "
+			"circuit. Send one of the formats it lists in circuit_formats")
 	return data
 
 
@@ -268,3 +311,22 @@ def encode_qiskit_circuit(circuit, properties=None):
 		raise DEFwExecutionError(
 			f"this QPM reads {reads}, and the circuit cannot be written as "
 			f"OpenQASM 2: {exc}") from exc
+
+
+def encode_logical_circuit(circuit, properties=None):
+	fields = encode_qiskit_circuit(circuit, properties)
+	if "circuit" in fields:
+		return {"logical_circuit": fields["circuit"]}
+	return {"logical_circuit": {"format": OPENQASM2, "data": fields["qasm"]}}
+
+
+def encode_pulser_sequence(sequence):
+	# The circuit info fields carrying a built Pulser sequence. A sequence
+	# with variables is built with their values first, because the providers
+	# take one concrete sequence per job.
+	try:
+		data = sequence.to_abstract_repr()
+	except Exception as exc:
+		raise DEFwExecutionError(
+			f"could not write the Pulser sequence: {exc}") from exc
+	return {"circuit": {"format": PULSER, "data": data}}

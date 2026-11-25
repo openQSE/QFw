@@ -5,7 +5,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
 qfw_example_parse_common_options "$@"
-set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
+set -- ${QFW_EXAMPLE_REMAINING_ARGS[@]+"${QFW_EXAMPLE_REMAINING_ARGS[@]}"}
 
 usage() {
 	cat <<EOF
@@ -25,8 +25,9 @@ Optional:
                        get_task_metadata.
   --device-id <id>      the device in qfw_shim_device_access.yaml to bind the
                        shim QPM to (default ornl-iqm-20q; aws-sv1 is Amazon
-                       Braket's SV1 simulator, which needs AWS credentials in
-                       the environment).
+                       Braket's SV1 simulator and aws-cepheus is Rigetti's
+                       Cepheus-1-108Q through Braket, a billed QPU; both need
+                       AWS credentials in the environment).
   --circuit <name>      x (default) or asymmetric, a 3-qubit circuit whose
                        measurements land in permuted classical bits, which
                        catches a result keyed by qubit instead of bit.
@@ -95,10 +96,10 @@ echo "Starting QFw shim smoke test with ${libs:+libs=${libs} }${lib:+lib=${lib}}
 qfw_example_begin "shim-smoke" "$@"
 QFW_EXAMPLE_SITE_CONFIG="$(qfw_example_make_site_config \
 	"$(qfw_example_path qfw_shim_device_access.yaml)")"
+shim_manifest="$(shim_manifest_for_device "${device_id}")"
+QFW_EXAMPLE_TEMP_FILES+=("${shim_manifest}")
 QFW_SITE_CONFIG="${QFW_EXAMPLE_SITE_CONFIG}" \
-	qfw_example_setup_local_services \
-		"$(shim_manifest_for_device "${device_id}")" \
-		shim-ornl-20q
+	qfw_example_setup_local_services "${shim_manifest}" shim-ornl-20q
 DEFW_ONLY_LOAD_MODULE=api_qpm_execution,api_qpm_telemetry,api_qpm_control \
 	QFW_SHIM_SMOKE_SHUTDOWN_QPM=no \
 	qfw_example_slurm_driver \

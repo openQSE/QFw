@@ -18,7 +18,7 @@ echo "##################################"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/qfw_example_common.sh"
 qfw_example_parse_execution_options "$@"
-set -- "${QFW_EXAMPLE_REMAINING_ARGS[@]}"
+set -- ${QFW_EXAMPLE_REMAINING_ARGS[@]+"${QFW_EXAMPLE_REMAINING_ARGS[@]}"}
 
 backend="$(qfw_example_backend "${3:-nwqsim}")"
 

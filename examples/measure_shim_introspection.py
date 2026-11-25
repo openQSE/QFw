@@ -11,7 +11,7 @@ cost lands in different places:
          caches the parsed document per driver instance. The network cost is
          paid by the FIRST introspection call; later calls read the cache.
 
-  QDMI   opening the device (mqt.core.qdmi.driver.open_device) initializes a
+  QDMI   opening the device (mqt.core.qdmi.open_device) initializes a
          session, and the IQM device library fetches its data during that init.
          The network cost is paid at OPEN; later property queries are local.
 

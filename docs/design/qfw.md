@@ -75,7 +75,9 @@ Relevant implementation points:
   reservation execution context options `reservation_id`, `token`, `timeout`,
   and `cancel_on_timeout` when constructing a `QFwJob`. Its `lib` option
   (default `QFW_SHIM_LIB`) names the shim library, `qrmi` or `qdmi`, that
-  `QFwJob` puts in each circuit's `info`.
+  `QFwJob` puts in each circuit's `info`. Its `compile()` compiles against
+  the backend's target with `qiskit` or `mqt`. A call that names no compiler
+  takes `QFW_COMPILER`, else Qiskit.
 - `backends/qfw_qiskit/qfw_job.py` calls `qpm.async_run(info, **context)` and
   rejects unreserved execution when the launcher did not provide
   `reservation_id`.
@@ -1319,6 +1321,8 @@ The current service modules follow this pattern:
 | --- | --- | --- |
 | `services/svc_tnqvm_qpm` | TNQVM tensor-network simulator QPM. | `UTIL_QPM` with a TNQVM QRC. |
 | `services/svc_nwqsim_qpm` | NWQSIM state-vector simulator QPM. | `UTIL_QPM` with an NWQSIM QRC. |
+| `services/svc_aer_qpm` | Simulator QPM running Qiskit Aer on the CPU or GPU, noiseless or under a named device's noise model; with a device it publishes that device's IBM configuration and properties. | `UTIL_QPM` with a QRC that runs `circuit_runner.py`. |
+| `services/svc_proxy_qpm` | Simulator QPM that applies a named device's calibrated Pauli-frame noise to each shot's ideal outcome; it publishes that device's IBM configuration and properties. | `UTIL_QPM` with a QRC that runs `circuit_runner.py`. |
 | `services/svc_qb_qpm` | Quantum Brilliance simulator QPM with managed vQPU startup. | `UTIL_QPM` with a QB QRC and QB-specific run preparation. |
 | `services/svc_iqm_qpm` | Native IQM hardware QPM. | `UTIL_QPM` with an IQM QRC. |
 | `services/svc_lib_qpm` | QRMI/QDMI shim QPM. | `UTIL_QPM` with a QRC front end that routes calls to QRMI or QDMI drivers. |
@@ -1440,6 +1444,11 @@ sequenceDiagram
     QRC-->>EventEP: completion event for registered cid or event type
     EventEP-->>Client: application-level notification handling
 ```
+
+A circuit whose `info` sets `completion_event_class_id` has its completion
+sent only to the matching registrations with that class ID. `QFwJob` sets it
+to its event API's class ID. Without it, or when no matching registration has
+that class ID, every matching registration gets the completion.
 
 Local out-of-resource handling happens in `UTIL_QPM` before provider
 submission. The notification path avoids unbounded polling while preserving

@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import uuid
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -97,6 +98,8 @@ QPM_TASK_TERMINAL_STATES = (
 	QPM_TASK_FAILED,
 	QPM_TASK_CANCELLED,
 )
+# The scheduler's names for a task it no longer runs.
+SCHEDULER_TASK_ENDED_STATES = ("completed", "failed", "cancelled")
 TELEMETRY_BASIC_DISCOVERY = "basic-discovery"
 TELEMETRY_CALLER_OWNED = "caller-owned"
 TELEMETRY_MANAGER_AGGREGATE = "manager-aggregate"
@@ -192,6 +195,7 @@ class QPMRuntimeTask:
 	external_ids: dict = field(default_factory=dict)
 	canonical_ids: dict = field(default_factory=dict)
 	state: str = QPM_TASK_CREATED
+	completion_event_class_id: str = None
 	# The trace context the circuit was received in, kept here because the
 	# circuit itself is gone by the time its completion is published.
 	trace_context: object = None
@@ -238,6 +242,7 @@ class QPMTargetController:
 		self.oor_queue = None
 		self.circuit_results = []
 		self.free_hosts = {}
+		self.host_slots = {}
 		self.all_results = []
 		self.push_info = {}
 		self.qtask_id_next = 1
@@ -942,16 +947,43 @@ class QPMTargetController:
 		registration["filters"] = dict(info.get("filters") or {})
 		registration["reservation_id"] = reservation_id
 		class_id = registration.get("class_id")
+		registration_id = str(uuid.uuid4())
+		registration["registration_id"] = registration_id
 		with self.lock:
 			self.event_endpoints.setdefault(class_id, []).append(
 				registration)
 			return {
 				"status": "accepted",
 				"class_id": class_id,
+				"registration_id": registration_id,
 				"registration_count": sum(
 					len(items)
 					for items in self.event_endpoints.values()),
 			}
+
+	def unregister_event_endpoint(self, registration_id):
+		if registration_id is None:
+			return False
+		with self.lock:
+			return self._prune_event_registrations_locked(
+				lambda registration:
+					registration.get("registration_id") == registration_id)
+
+	def _prune_event_registrations_locked(self, matches):
+		removed = False
+		for class_id in list(self.event_endpoints):
+			registrations = [
+				registration
+				for registration in self.event_endpoints[class_id]
+				if not matches(registration)
+			]
+			if len(registrations) != len(self.event_endpoints[class_id]):
+				removed = True
+			if registrations:
+				self.event_endpoints[class_id] = registrations
+			else:
+				self.event_endpoints.pop(class_id, None)
+		return removed
 
 	def dispatch_completion_event(self, event):
 		return self.publish_completion_event(event)
@@ -1189,6 +1221,7 @@ class QPMTargetController:
 					     operation="execution"):
 		reservation_id = normalize_reservation_id(
 			request_context.reservation_id)
+		deliveries = []
 		try:
 			with self.lock:
 				reservation = get_reservation(
@@ -1198,22 +1231,26 @@ class QPMTargetController:
 						f"reservation is closing: "
 						f"reservation_id={reservation_id}")
 				self._require_reservation_active(reservation, operation)
-				self._require_reservation_not_expired(reservation)
+				self._require_reservation_not_expired(
+					reservation, deliveries)
 				self._require_reservation_matches_context_locked(
 					reservation, request_context)
 				return reservation
 		finally:
+			self._dispatch_completion_deliveries(deliveries)
 			self._drain_provider_credential_cleanup()
 
 	def provider_credential_for_reservation(self, reservation_id,
 						operation="execution"):
 		reservation_id = normalize_reservation_id(reservation_id)
+		deliveries = []
 		try:
 			with self.lock:
 				reservation = get_reservation(
 					self.admission_context, reservation_id)
 				self._require_reservation_active(reservation, operation)
-				self._require_reservation_not_expired(reservation)
+				self._require_reservation_not_expired(
+					reservation, deliveries)
 				record = self.reservation_credentials_by_id.get(reservation_id)
 				if record is None:
 					record = self._fallback_provider_credential_locked(
@@ -1228,6 +1265,7 @@ class QPMTargetController:
 					"metadata": dict(record.get("metadata") or {}),
 				}
 		finally:
+			self._dispatch_completion_deliveries(deliveries)
 			self._drain_provider_credential_cleanup()
 
 	def attach_provider_credential(self, circuit):
@@ -1552,75 +1590,79 @@ class QPMTargetController:
 
 	def retry_pending_capacity(self, reservation_id=None):
 		results = []
-		with self.lock:
-			pending_items = list(self.pending_capacity.items())
-			for qtask_id, pending in pending_items:
-				if (reservation_id is not None and
-						pending["reservation_id"] != reservation_id):
-					continue
-				runtime = self.runtime_by_qtask_id.get(qtask_id)
-				if runtime is None:
+		deliveries = []
+		try:
+			with self.lock:
+				pending_items = list(self.pending_capacity.items())
+				for qtask_id, pending in pending_items:
+					if (reservation_id is not None and
+							pending["reservation_id"] != reservation_id):
+						continue
+					runtime = self.runtime_by_qtask_id.get(qtask_id)
+					if runtime is None:
+						self.pending_capacity.pop(qtask_id, None)
+						continue
+					try:
+						self._require_pending_capacity_reservation_valid_locked(
+							qtask_id, pending, runtime, deliveries)
+					except QPMAdmissionValidationError as error:
+						results.append(
+							self._reject_pending_capacity_locked(
+								qtask_id, pending, runtime, error))
+						continue
+					usage = dict(pending["usage"])
+					authorized = authorize_usage(
+						self.admission_context, pending["reservation_id"],
+						usage)
+					if authorized.get("status") == "delayed":
+						pending["decision"] = dict(authorized)
+						results.append({
+							"qtask_id": qtask_id,
+							"status": "delayed",
+							"decision": dict(authorized),
+						})
+						continue
+					if authorized.get("status") != "accepted":
+						runtime.state = QPM_TASK_FAILED
+						self.pending_capacity.pop(qtask_id, None)
+						results.append({
+							"qtask_id": qtask_id,
+							"status": "rejected",
+							"decision": dict(authorized),
+						})
+						continue
+					committed = consume_usage(
+						self.admission_context, pending["reservation_id"],
+						usage)
+					if committed.get("status") != "accepted":
+						runtime.state = QPM_TASK_FAILED
+						self.pending_capacity.pop(qtask_id, None)
+						results.append({
+							"qtask_id": qtask_id,
+							"status": "commit-failed",
+							"decision": dict(committed),
+						})
+						continue
 					self.pending_capacity.pop(qtask_id, None)
-					continue
-				try:
-					self._require_pending_capacity_reservation_valid_locked(
-						qtask_id, pending, runtime)
-				except QPMAdmissionValidationError as error:
-					results.append(
-						self._reject_pending_capacity_locked(
-							qtask_id, pending, runtime, error))
-					continue
-				usage = dict(pending["usage"])
-				authorized = authorize_usage(
-					self.admission_context, pending["reservation_id"],
-					usage)
-				if authorized.get("status") == "delayed":
-					pending["decision"] = dict(authorized)
+					self.capacity_holds[qtask_id] = {
+						"reservation_id": pending["reservation_id"],
+						"usage": usage,
+						"decision": dict(committed),
+					}
+					self.record_usage_event(qtask_id, qtask_id)
+					runtime.state = QPM_TASK_CAPACITY_HELD
 					results.append({
 						"qtask_id": qtask_id,
-						"status": "delayed",
-						"decision": dict(authorized),
-					})
-					continue
-				if authorized.get("status") != "accepted":
-					runtime.state = QPM_TASK_FAILED
-					self.pending_capacity.pop(qtask_id, None)
-					results.append({
-						"qtask_id": qtask_id,
-						"status": "rejected",
-						"decision": dict(authorized),
-					})
-					continue
-				committed = consume_usage(
-					self.admission_context, pending["reservation_id"],
-					usage)
-				if committed.get("status") != "accepted":
-					runtime.state = QPM_TASK_FAILED
-					self.pending_capacity.pop(qtask_id, None)
-					results.append({
-						"qtask_id": qtask_id,
-						"status": "commit-failed",
+						"status": "accepted",
 						"decision": dict(committed),
 					})
-					continue
-				self.pending_capacity.pop(qtask_id, None)
-				self.capacity_holds[qtask_id] = {
-					"reservation_id": pending["reservation_id"],
-					"usage": usage,
-					"decision": dict(committed),
-				}
-				self.record_usage_event(qtask_id, qtask_id)
-				runtime.state = QPM_TASK_CAPACITY_HELD
-				results.append({
-					"qtask_id": qtask_id,
-					"status": "accepted",
-					"decision": dict(committed),
-				})
+		finally:
+			self._dispatch_completion_deliveries(deliveries)
 		self._drain_provider_credential_cleanup()
 		return results
 
 	def _require_pending_capacity_reservation_valid_locked(
-			self, qtask_id, pending, runtime):
+			self, qtask_id, pending, runtime, deliveries):
 		reservation_id = pending.get("reservation_id")
 		if reservation_id is None:
 			raise QPMAdmissionValidationError(
@@ -1644,7 +1686,7 @@ class QPMTargetController:
 				f"error={error}") from error
 		self._require_reservation_active(
 			reservation, "pending capacity retry")
-		self._require_reservation_not_expired(reservation)
+		self._require_reservation_not_expired(reservation, deliveries)
 		return reservation
 
 	def _reject_pending_capacity_locked(self, qtask_id, pending, runtime,
@@ -1766,6 +1808,8 @@ class QPMTargetController:
 				token_metadata=_token_metadata(request_context.token),
 				owner_metadata=dict(owner_metadata),
 				request_metadata=request_metadata,
+				completion_event_class_id=(
+					request_context.completion_event_class_id),
 			)
 			runtime.external_ids, runtime.canonical_ids = (
 				self.canonicalize_reservation_metadata(request_metadata))
@@ -1896,8 +1940,8 @@ class QPMTargetController:
 				return runtime
 			self._reconcile_task_hold_locked(runtime, circuit)
 			if runtime.scheduler_task_id is not None:
-				mark_scheduler_task_completed(
-					self.scheduler_context, runtime.scheduler_task_id)
+				self._end_scheduler_task_locked(
+					runtime, mark_scheduler_task_completed)
 			self.provider_inflight.discard(qtask_id)
 			self.selected_qtask_ids.discard(qtask_id)
 			self.dispatching_qtask_ids.pop(qtask_id, None)
@@ -1917,6 +1961,29 @@ class QPMTargetController:
 			self._dispatch_completion_deliveries(deliveries)
 		return runtime
 
+	def _end_scheduler_task_locked(self, runtime, mark):
+		"""Tell the scheduler that a task ended, unless it already
+		knows.
+
+		Closing a reservation cancels its tasks in the scheduler first,
+		and a provider that cannot be cancelled keeps running. When that
+		provider finishes, the scheduler refuses to end the task a
+		second time. The task is over either way, so that refusal is no
+		error here. Raising it stopped the QPM, because the runner that
+		reported the result died before it gave back the circuit's
+		resources (openQSE/QFw#196).
+		"""
+		try:
+			mark(self.scheduler_context, runtime.scheduler_task_id)
+		except Exception:
+			try:
+				state = scheduler_task_state_name(
+					self.scheduler_context, runtime.scheduler_task_id)
+			except Exception:
+				state = None
+			if state not in SCHEDULER_TASK_ENDED_STATES:
+				raise
+
 	def _fail_scheduled_task_locked(self, circuit, error=None, reason=None,
 					deliveries=None):
 		qtask_id = circuit.info["qtask_id"]
@@ -1929,8 +1996,8 @@ class QPMTargetController:
 			return runtime
 		self._reconcile_task_hold_locked(runtime, circuit)
 		if runtime.scheduler_task_id is not None:
-			mark_scheduler_task_failed(
-				self.scheduler_context, runtime.scheduler_task_id)
+			self._end_scheduler_task_locked(
+				runtime, mark_scheduler_task_failed)
 		self.provider_inflight.discard(qtask_id)
 		self.selected_qtask_ids.discard(qtask_id)
 		self.dispatching_qtask_ids.pop(qtask_id, None)
@@ -2012,6 +2079,7 @@ class QPMTargetController:
 			external_ids=dict(runtime.external_ids),
 			canonical_ids=dict(runtime.canonical_ids),
 			state=runtime.state,
+			completion_event_class_id=runtime.completion_event_class_id,
 			trace_context=runtime.trace_context,
 		)
 		self.terminal_tasks_by_cid[snapshot.cid] = snapshot
@@ -2103,8 +2171,20 @@ class QPMTargetController:
 			event = _CompletionEvent(event_type, record)
 		return {
 			"event": event,
-			"matches": matches,
+			"matches": self._completion_recipients_locked(matches, record),
 		}
+
+	def _completion_recipients_locked(self, registrations, record):
+		runtime = self._completion_runtime_locked(record)
+		submitter = getattr(runtime, "completion_event_class_id", None)
+		if submitter is None:
+			return registrations
+		submitter_registrations = [
+			registration
+			for registration in registrations
+			if registration.get("class_id") == submitter
+		]
+		return submitter_registrations or registrations
 
 	def _dispatch_completion_deliveries(self, deliveries):
 		delivered = False
@@ -2119,21 +2199,16 @@ class QPMTargetController:
 							context=delivery.get("trace_context")):
 						registration["class"].put(delivery["event"])
 				except Exception:
-					stale_registration_ids.add(id(registration))
+					stale_registration_ids.add(
+						registration.get("registration_id"))
 					continue
 				delivered = True
 		if stale_registration_ids:
 			with self.lock:
-				for class_id in list(self.event_endpoints):
-					registrations = [
-						registration
-						for registration in self.event_endpoints[class_id]
-						if id(registration) not in stale_registration_ids
-					]
-					if registrations:
-						self.event_endpoints[class_id] = registrations
-					else:
-						self.event_endpoints.pop(class_id, None)
+				self._prune_event_registrations_locked(
+					lambda registration:
+						registration.get("registration_id")
+						in stale_registration_ids)
 		return delivered
 
 	def _enqueue_completion_record_locked(self, queue, record):
@@ -3576,7 +3651,7 @@ class QPMTargetController:
 			f"invalid reservation for {operation}: "
 			f"state={reservation.get('state')}")
 
-	def _require_reservation_not_expired(self, reservation):
+	def _require_reservation_not_expired(self, reservation, deliveries):
 		expires_at_ns = reservation.get("expires_at_ns")
 		if not expires_at_ns:
 			return
@@ -3584,7 +3659,9 @@ class QPMTargetController:
 		if expires_at_ns > now_ns:
 			return
 		reservation_id = reservation.get("reservation_id")
-		self._close_reservation(reservation_id, "expire", now_ns=now_ns)
+		self._close_reservation(
+			reservation_id, "expire", now_ns=now_ns,
+			deliveries=deliveries)
 		raise QPMAdmissionValidationError(
 			f"expired reservation: reservation_id={reservation_id}")
 

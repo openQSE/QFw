@@ -15,29 +15,13 @@
 # Qiskit is imported where it is used, so this module imports without it.
 
 from defw_exception import DEFwExecutionError
+from util.gate_names import INSTRUCTION_ALIASES
 
-# Qiskit gate name -> Braket OpenQASM name, where the two differ. Braket's
-# dialect spells several standard gates its own way; the rest coincide. These
-# are the gate aliases of MQSC's amazon.braket.qdmi.qiskit adapter.
-QISKIT_TO_BRAKET = {
-	"cx": "cnot",
-	"ccx": "ccnot",
-	"cp": "cphaseshift",
-	"p": "phaseshift",
-	"rxx": "xx",
-	"ryy": "yy",
-	"rzz": "zz",
-	"sdg": "si",
-	"sx": "v",
-	"sxdg": "vi",
-	"tdg": "ti",
-	"id": "i",
-}
-BRAKET_TO_QISKIT = {
-	braket: qiskit for qiskit, braket in QISKIT_TO_BRAKET.items()}
-
-# Not gates. They pass through whatever the device's operation set says.
-DIRECTIVES = frozenset({"barrier", "measure", "reset"})
+# Measurement and barrier are output/directive syntax. Reset needs explicit
+# device support, just like a gate. Barriers are kept: Braket's compilers do
+# not reorder or merge gates across them, so dropping one can change what
+# runs.
+DIRECTIVES = frozenset({"barrier", "measure"})
 
 # The technology family of a Braket device, from the vendor segment of its
 # ARN: arn:aws:braket:<region>::device/qpu/<vendor>/<name>, or
@@ -95,31 +79,33 @@ def accepted_operation_names(device):
 	return names
 
 
-def to_braket_qasm3(circuit, accepted):
-	"""Serialize a Qiskit circuit as Braket's self-contained OpenQASM 3.
+def to_braket_qasm3(circuit, backend):
+	"""Return OpenQASM 3 and the map from measured qubits to classical bits.
 
-	Returns (program, measurement). `measurement` is what remap_counts needs
-	to key the device library's histogram onto the circuit: the circuit's
-	classical bit count and the (program qubit, classical bit) pairs of its
-	measurements.
-
-	Gates the device spells differently are renamed. Gates it does not accept
-	are decomposed into ones it does, with no coupling map, because Braket
-	routes a non-verbatim program on its side. Idle qubits are dropped, since
-	the simulators want contiguous indices.
+	Measure qubits in ascending order into a compact classical register so
+	qubit order and register order agree across Amazon Braket backends. The
+	returned map restores the circuit's original classical-bit layout.
 	"""
-	accepted = {str(name).lower() for name in accepted}
 	try:
-		from qiskit import qasm3
-		from qiskit.circuit import QuantumRegister
+		from qiskit.circuit import ClassicalRegister, QuantumCircuit, QuantumRegister
 		from qiskit.converters import circuit_to_dag, dag_to_circuit
-	except Exception as exc:
+	except ImportError as exc:
 		raise DEFwExecutionError(
-			f"transcoding to Braket OpenQASM 3 needs qiskit: {exc}") from exc
+			f"Braket serialization needs the QDMI package set: {exc}") from exc
 
+	accepted = accepted_operation_names(backend.device)
+	aliases = {}
+	for name in sorted(accepted):
+		aliases.setdefault(INSTRUCTION_ALIASES.get(name, name), name)
+
+	# Braket's Target contains only native gates. Its non-verbatim compiler
+	# also accepts supportedOperations (CUSTOM1).
+	# https://github.com/Munich-Quantum-Software/amazon-braket-qdmi-device/issues/207
 	def braket_name(name):
 		name = name.lower()
-		return name if name in accepted else QISKIT_TO_BRAKET.get(name, name)
+		if name in accepted:
+			return name
+		return aliases.get(name, name)
 
 	def unaccepted(circ):
 		return sorted({
@@ -127,42 +113,79 @@ def to_braket_qasm3(circuit, accepted):
 			if instruction.operation.name.lower() not in DIRECTIVES
 			and braket_name(instruction.operation.name) not in accepted})
 
-	missing = unaccepted(circuit)
-	if missing:
-		circuit = _decompose(circuit, accepted)
-		still = unaccepted(circuit)
-		if still:
+	if circuit.parameters:
+		raise DEFwExecutionError("Braket circuits must have bound parameters")
+	# The driver reports final qubit values, so it cannot recover
+	# an earlier measurement followed by a gate.
+	# https://github.com/Munich-Quantum-Software/amazon-braket-qdmi-device/pull/242
+	measured_qubits = set()
+	for instruction in circuit.data:
+		name = instruction.operation.name.lower()
+		if name == "measure":
+			measured_qubits.update(instruction.qubits)
+		elif name != "barrier" and measured_qubits.intersection(instruction.qubits):
 			raise DEFwExecutionError(
-				f"the device accepts none of {still}, and they could not be "
+				"Braket's legacy QDMI results require terminal measurements")
+
+	if unaccepted(circuit):
+		circuit = _decompose(circuit, accepted, aliases)
+		if missing := unaccepted(circuit):
+			raise DEFwExecutionError(
+				f"the device accepts none of {missing}, and they could not be "
 				f"decomposed into its operation set {sorted(accepted)}")
 
 	num_clbits = circuit.num_clbits
 	dag = circuit_to_dag(circuit)
 	dag.remove_qubits(*(set(dag.idle_wires()) & set(dag.qubits)))
-	program_circuit = dag_to_circuit(dag)
-	if program_circuit.qubits and not program_circuit.qregs:
-		program_circuit.add_register(
-			QuantumRegister(bits=program_circuit.qubits, name="q"))
+	trimmed = dag_to_circuit(dag)
+
+	# Keep gate order and hold measurements for the final canonical block.
 	measurement_map = []
+	measured = set()
+	operations = []
 	used = set()
-	for index, instruction in enumerate(program_circuit.data):
+	for instruction in trimmed.data:
 		name = instruction.operation.name
+		qubits = [trimmed.find_bit(qubit).index for qubit in instruction.qubits]
 		if name.lower() == "measure":
-			measurement_map.append((
-				program_circuit.find_bit(instruction.qubits[0]).index,
-				program_circuit.find_bit(instruction.clbits[0]).index))
+			measurement_map.append(
+				(qubits[0], trimmed.find_bit(instruction.clbits[0]).index))
+			measured.add(qubits[0])
 			continue
-		if name.lower() in DIRECTIVES:
-			continue
-		new_name = braket_name(name)
-		used.add(new_name)
-		if new_name != name:
-			program_circuit.data[index] = instruction.replace(
-				operation=instruction.operation.copy(name=new_name))
-	# Every gate is declared as basis, so the exporter writes none of them
-	# out as a definition in terms of U, which Braket would not take.
-	program = qasm3.dumps(
-		program_circuit, includes=(), basis_gates=sorted(used))
+		if name.lower() != "barrier":
+			after = sorted(measured.intersection(qubits))
+			if after:
+				raise DEFwExecutionError(
+					"Braket takes terminal measurements only: "
+					f"{name} on qubit(s) {after} follows their measurement")
+			if instruction.clbits:
+				raise DEFwExecutionError(
+					f"{name} reads classical bits, which a Braket program "
+					"cannot do")
+		operation = instruction.operation
+		if name.lower() not in DIRECTIVES:
+			new_name = braket_name(name)
+			used.add(new_name)
+			if new_name != name:
+				operation = operation.copy(name=new_name)
+		operations.append((operation, qubits))
+
+	program_circuit = QuantumCircuit()
+	if trimmed.num_qubits:
+		qreg = QuantumRegister(trimmed.num_qubits, "q")
+		program_circuit.add_register(qreg)
+		for operation, qubits in operations:
+			program_circuit.append(
+				operation, [qreg[index] for index in qubits])
+		ranks = sorted(measured)
+		if ranks:
+			creg = ClassicalRegister(len(ranks), "c")
+			program_circuit.add_register(creg)
+			for rank, qubit in enumerate(ranks):
+				program_circuit.measure(qreg[qubit], creg[rank])
+
+	from qiskit import qasm3
+	program = qasm3.dumps(program_circuit, includes=(), basis_gates=sorted(used))
 	return program, {"num_clbits": num_clbits, "map": measurement_map}
 
 
@@ -170,12 +193,18 @@ def remap_counts(counts, measurement):
 	"""Key the Braket device library's histogram by classical bit.
 
 	The library writes each key with the highest-index measured qubit
-	leftmost, over the measured qubits in ascending order. Qiskit keys by
-	classical bit, highest index leftmost, over every bit of the registers.
-	The two agree only when bit i holds qubit i and every qubit is measured,
-	so rebuild each key from the measurement map recorded at transcode time.
-	An unmeasured bit reads 0, as it does in Qiskit.
+	leftmost, over the measured qubits in ascending order, which
+	to_braket_qasm3's measurement block guarantees on every Braket backend.
+	Qiskit keys by classical bit, highest index leftmost, over every bit of
+	the registers. The two agree only when bit i holds qubit i and every
+	qubit is measured, so rebuild each key from the measurement map recorded
+	at transcode time. An unmeasured bit reads 0, as it does in Qiskit; a
+	qubit measured into several bits fills each of them, and the last
+	measurement into a bit is the one that lands.
 	"""
+	# Remove this when the provider returns counts in classical-bit order.
+	# Applying it again would corrupt permuted outputs.
+	# https://github.com/Munich-Quantum-Software/amazon-braket-qdmi-device/pull/242
 	if not counts or not isinstance(measurement, dict):
 		return counts
 	pairs = list(measurement.get("map") or [])
@@ -187,10 +216,6 @@ def remap_counts(counts, measurement):
 	# the highest measured qubit.
 	position = {
 		qubit: len(measured) - 1 - rank for rank, qubit in enumerate(measured)}
-	clbit_of = {}
-	for qubit, clbit in pairs:
-		# The last measurement of a qubit is the one that lands, as in Qiskit.
-		clbit_of[qubit] = clbit
 	remapped = {}
 	for key, count in counts.items():
 		bits = str(key)
@@ -199,14 +224,14 @@ def remap_counts(counts, measurement):
 				f"Braket counts key {key!r} does not cover the "
 				f"{len(measured)} measured qubits")
 		out = ["0"] * num_clbits
-		for qubit, clbit in clbit_of.items():
+		for qubit, clbit in pairs:
 			out[num_clbits - 1 - clbit] = bits[position[qubit]]
 		new_key = "".join(out)
 		remapped[new_key] = remapped.get(new_key, 0) + count
 	return remapped
 
 
-def _decompose(circuit, accepted):
+def _decompose(circuit, accepted, aliases):
 	# Rewrite into Qiskit gates whose Braket spelling the device accepts. Only
 	# standard gates can be a transpile basis; a Braket-only name (gpi, ms,
 	# ...) has no Qiskit gate to decompose into and is left to the rename.
@@ -214,7 +239,8 @@ def _decompose(circuit, accepted):
 	from qiskit.circuit.library import get_standard_gate_name_mapping
 	standard = set(get_standard_gate_name_mapping()) - DIRECTIVES
 	basis = sorted(
-		{BRAKET_TO_QISKIT.get(name, name) for name in accepted} & standard)
+		name for name in standard
+		if aliases.get(name, name) in accepted)
 	if not basis:
 		return circuit
 	try:

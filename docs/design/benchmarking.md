@@ -700,8 +700,8 @@ because revision 2 got both wrong:
 | `qfw.qpm.dispatch` | QPM service (QRC) | In-process hand-off from the QPM's resource controller to the back-end driver |
 | `qfw.backend.execute` | back-end driver | Full back-end interaction; attributes `qfw.stack.api_path` = `native` \| `qrmi` \| `qdmi` \| `simulator`, `qfw.device.name`, `qfw.backend.kind`, `qfw.outcome` = `completed` \| `failed` \| `cancelled` |
 | `qfw.backend.acquire` | back-end driver | Resource/session acquisition (QRMI `acquire`, QDMI session open, vendor connect) |
-| `qfw.backend.submit` | back-end driver | The submission call to the vendor/simulator |
-| `qfw.backend.collect` | back-end driver | Result retrieval, the complement of `qfw.backend.submit`. One span per job. Attributes `qfw.backend.poll_count` and `qfw.backend.poll_interval_s`; each poll is a span event |
+| `qfw.backend.submit` | back-end driver | The submission call to the vendor/simulator. Each wait out of a rate limit (HTTP 429) is a `rate-limited` span event with `qfw.backend.wait_s` |
+| `qfw.backend.collect` | back-end driver | Result retrieval, the complement of `qfw.backend.submit`. One span per job. Attributes `qfw.backend.poll_count` and `qfw.backend.poll_interval_s`, the first wait between polls, which doubles while the job runs unless the client named it; each poll is a span event, and so is each `rate-limited` wait |
 
 `qfw.app.job` sits under `app` because the front end is what emits it and
 what its duration is measured against. It is the application's view of the
@@ -766,6 +766,36 @@ would tax the very quantity this span exists to measure. See
 [Instrumentation Cost](#instrumentation-cost). Never enable it for a Type A
 comparison, where it would perturb the numbers being compared.
 
+### Optional Extension: Vendor Timeline
+
+The provider's own account of a job, attached to the job's execute span and
+to a histogram (October 2026). IQM's server keeps a timeline per job, one
+timestamped event per phase from `created` to `completed`, which is the only
+thing that can say how a device's share of `qfw.backend.execute` divides
+into queueing, compilation and running on the device.
+
+| Signal | Where | What |
+| --- | --- | --- |
+| `qfw.vendor.<phase>_s` | attributes of `qfw.backend.execute` | the seconds the provider spent in each phase: `queue`, `validation`, `compilation`, `execution`, `post_processing`, and `total` from created to completed |
+| `qfw.vendor.duration` | histogram, labelled like the backend metrics plus `qfw.vendor.phase` | the same, aggregated per API path and device for a dashboard's "inside the device" row |
+
+Durations only, never spans. The timestamps come from the provider's clock
+and are compared only with each other; placing spans at them under a span
+from this host's clock would mislead, see [Clocks and
+Precision](#clocks-and-precision).
+
+Where the data comes from, per API path. The native IQM QPM gets the
+timeline structured with the job and already summarizes it. On the QRMI
+path QRMI returns the measurements alone from `task_result`, and prints the
+timeline only as the text of `task_logs`, which the shim reads after a
+completed job (`util/iqm_timeline.py`); that is one more request to the
+provider per job, so the extension is flag-guarded,
+`QFW_TELEMETRY_VENDOR=1`, like the transport spans, and a QRMI change that
+returns the timeline with the result lets the text route go. QDMI's job
+interface exposes counts and a queue position and nothing with a timestamp,
+so the QDMI path carries no vendor timeline, and the histogram's QDMI series
+is absent: a fair statement about the two libraries.
+
 ### Context Attributes
 
 Captured **at run time** as resource attributes (per-process facts) or span
@@ -779,7 +809,7 @@ system looks at report time.
 | Qiskit | `qfw.qiskit.version`; transpiler settings (`qfw.transpile.optimization_level`, seed, basis gates); circuit statistics before/after (`qfw.circuit.num_qubits`, `qfw.circuit.depth`, `qfw.circuit.depth_transpiled`, gate counts, two-qubit gate count); OpenQASM payload size |
 | QRMI | `qfw.qrmi.version`, resource type, `target()` payload digest, acquisition/session identifiers |
 | QDMI / FoMaC | `qfw.device.name`, `qfw.device.version`, qubit count, coupling map, gate set; calibration snapshot (gate fidelities, readout errors, T1/T2 where exposed); `qfw.device.calibration_set_id`, read from the device's `CUSTOM1` property — the key to knowing *which* calibration a result was obtained under |
-| Vendor (e.g. IQM) | Server-side job ID, vendor-reported queue/execution times, vendor calibration identifier |
+| Vendor (e.g. IQM) | Server-side job ID, vendor-reported queue/execution times, vendor calibration identifier. The job id is on the execute span; the phase times are the [vendor timeline extension](#optional-extension-vendor-timeline) |
 | Simulators (NWQ-Sim, TNQVM, …) | Simulator name/version, method/configuration, node and rank count, peak memory where obtainable |
 | SLURM | Job ID, partition, node list, allocated resources (also scrapeable via OpenMetrics in the collector profile) |
 | Environment | Container image tag/digest, Python version, key package versions (qiskit, qrmi, mqt.core, iqm-client, …) |
@@ -833,6 +863,7 @@ the **dimensional** class above:
 | `qfw.backend.duration` | histogram | `qfw.backend.op` = `execute` \| `acquire` \| `submit` \| `collect`, plus api path, device, backend kind and outcome | Back-end cost per stage, and `execute` for the whole interaction so a dashboard needs no sum. Carries the Type A API-path comparison when traces are sampled off |
 | `qfw.transport.duration` | histogram | `qfw.transport.op` = `submit` \| `event` \| `return` | The two legs between the processes and the way back, so a dashboard's per-hop view adds up to the client's end to end. Optional extension, off by default |
 | `qfw.transport.rpc.bytes` | histogram | `qfw.transport.kind` | Transport characterization (libfabric work). Reserved for DEFw's own emission |
+| `qfw.vendor.duration` | histogram | `qfw.vendor.phase` = `queue` \| `validation` \| `compilation` \| `execution` \| `post_processing` \| `total`, plus api path, device, backend kind | The provider's own phase times inside `qfw.backend.execute`. Optional extension, off by default; absent on the QDMI path |
 
 Two conventions hold for this set. Metric names mirror the span they
 aggregate, so moving between a trace view and a dashboard needs no
