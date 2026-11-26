@@ -39,86 +39,22 @@ fi
 qfw_prefix="${QFW_PREFIX:-$(cd "${script_dir}/.." && pwd)}"
 defw_prefix="${DEFW_PREFIX:-${qfw_prefix}}"
 
-defwp_bin=""
+# DEFw's own launcher runs the Python: a script, a module with -m, or a
+# service module with --serve. It runs the active interpreter, so a virtual
+# environment's packages are on its path as they are.
+launcher=""
 for candidate in \
-	"${defw_prefix}/bin/defwp" \
-	"${defw_prefix}/src/defwp" \
-	"${qfw_prefix}/bin/defwp"; do
+	"${defw_prefix}/bin/defw2-python" \
+	"${qfw_prefix}/bin/defw2-python"; do
 	if [[ -x "${candidate}" ]]; then
-		defwp_bin="${candidate}"
+		launcher="${candidate}"
 		break
 	fi
 done
-defwp_wrapper=""
-for candidate in \
-	"${defw_prefix}/bin/defwp-wrapper" \
-	"${defw_prefix}/src/defwp-wrapper" \
-	"${qfw_prefix}/bin/defwp-wrapper"; do
-	if [[ -x "${candidate}" ]]; then
-		defwp_wrapper="${candidate}"
-		break
-	fi
-done
-if [[ ! -x "${defwp_bin}" ]]; then
-	echo "Unable to find DEFw executable under ${defw_prefix}" >&2
+if [[ ! -x "${launcher}" ]]; then
+	echo "Unable to find the DEFw launcher, defw2-python, under ${defw_prefix}" >&2
 	exit 127
-fi
-if [[ ! -x "${defwp_wrapper}" ]]; then
-	echo "Unable to find DEFw wrapper under ${defw_prefix}" >&2
-	exit 127
-fi
-
-if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-	user_python="${VIRTUAL_ENV}/bin/python"
-else
-	user_python="$(command -v python3)"
-fi
-
-user_py_version="$("${user_python}" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
-defw_py_version="$("${defwp_bin}" --py-version | awk -F. 'NR == 1 {print $1 "." $2}')"
-if [[ -z "${defw_py_version}" ]]; then
-	echo "Unable to determine DEFw Python version from ${defwp_bin}" >&2
-	exit 1
-fi
-if [[ "${user_py_version}" != "${defw_py_version}" ]]; then
-	echo "Python version mismatch: active Python ${user_py_version}, DEFw ${defw_py_version}" >&2
-	exit 1
-fi
-
-venv_pythonpath="$("${user_python}" - <<'PY'
-import site
-import sys
-
-paths = []
-try:
-    paths.extend(site.getsitepackages())
-except Exception:
-    pass
-try:
-    paths.append(site.getusersitepackages())
-except Exception:
-    pass
-for item in sys.path:
-    if item and ("site-packages" in item or "dist-packages" in item):
-        paths.append(item)
-seen = set()
-ordered = []
-for item in paths:
-    if item and item not in seen:
-        seen.add(item)
-        ordered.append(item)
-print(":".join(ordered))
-PY
-)"
-if [[ -n "${venv_pythonpath}" ]]; then
-	IFS=':' read -r -a venv_paths <<< "${venv_pythonpath}"
-	for venv_path in "${venv_paths[@]}"; do
-		prepend_path PYTHONPATH "${venv_path}"
-	done
 fi
 
 export DEFW_PATH="${DEFW_PATH:-${defw_prefix}}"
-if [[ "${DEFW_SHELL_TYPE:-}" == "daemon" || "${1:-}" == "-d" ]]; then
-	exec "${defwp_bin}" "$@"
-fi
-exec "${defwp_wrapper}" "$@"
+exec "${launcher}" "$@"

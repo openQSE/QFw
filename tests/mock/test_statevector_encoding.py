@@ -3,7 +3,6 @@ import pytest
 from util.qpm.statevector import (
 	QFwStatevector,
 	decode_statevector_payload,
-	default_statevector_encoding,
 	encode_statevector_payload,
 )
 
@@ -15,19 +14,18 @@ def _amplitudes(decoded):
 	return [complex(value) for value in decoded]
 
 
-def test_v1_encodes_as_before_and_v2_raw(monkeypatch):
-	monkeypatch.delenv("QFW_DEFW_VERSION", raising=False)
-	assert default_statevector_encoding() == "base64+zlib"
-	assert encode_statevector_payload(
-		AMPLITUDES, num_qubits=2)["encoding"] == "base64+zlib"
-
-	monkeypatch.setenv("QFW_DEFW_VERSION", "2")
-	assert default_statevector_encoding() == "raw"
+def test_a_statevector_is_raw_unless_text_is_asked_for():
 	payload = encode_statevector_payload(AMPLITUDES, num_qubits=2)
 	assert payload["encoding"] == "raw"
+	assert isinstance(payload["data"], bytes)
 	assert payload["raw_size_bytes"] == 64
 	assert payload["num_amplitudes"] == 4
 	assert "compressed_size_bytes" not in payload
+
+	text = encode_statevector_payload(
+		AMPLITUDES, num_qubits=2, encoding="base64+zlib")
+	assert text["encoding"] == "base64+zlib"
+	assert isinstance(text["data"], str)
 
 
 @pytest.mark.parametrize("encoding", ["base64+zlib", "raw"])

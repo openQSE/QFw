@@ -25,8 +25,6 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(QFW_BUILD_BUNDLED_DEFW
 	"Build and install the bundled DEFw tree with QFw" OFF)
-option(QFW_BUILD_DEFW2
-	"Also build and install the bundled DEFw v2 prototype, which QFW_DEFW_VERSION=2 runs QFw on" OFF)
 set(QFW_DEFAULT_DEFW_PREFIX "self" CACHE STRING
 	"Default DEFw prefix for generated QFw launchers; use 'self' for QFW_PREFIX")
 set(QFW_PYTHON_INSTALL_DIR
@@ -292,21 +290,26 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/DEFw/python/config/defw_generic.yaml")
 		DESTINATION "${CMAKE_INSTALL_DATADIR}/defw/config")
 endif()
 
-# DEFw v2 installs its directory, its launcher and the defw2 package beside
-# v1, so a run chooses between them with QFW_DEFW_VERSION alone. The package
-# goes where QFw's own Python goes, which qfw-activate already puts on the
-# path. v2 needs Margo, found through pkg-config.
-if(QFW_BUILD_DEFW2 AND NOT QFW_BUILD_BUNDLED_DEFW)
-	message(FATAL_ERROR
-		"QFW_BUILD_DEFW2 builds the bundled DEFw's v2, so it needs "
-		"QFW_BUILD_BUNDLED_DEFW=ON as well")
-endif()
-if(QFW_BUILD_DEFW2)
-	set(DEFW_BUILD_V2 ON CACHE BOOL "Build the DEFw v2 prototype" FORCE)
+# QFw runs on DEFw v2, so the bundled DEFw is built with it. v2 installs
+# its directory, its launcher and the defw2 package. The package goes where
+# QFw's own Python goes, which qfw-activate already puts on the path. v2
+# needs Margo, found through pkg-config.
+if(QFW_BUILD_BUNDLED_DEFW)
+	# DEFw builds its Python binding only when cffi is there to build it,
+	# and installs the rest without it. QFw cannot run on that, so stop here.
+	execute_process(
+		COMMAND "${Python3_EXECUTABLE}" -c "import cffi"
+		RESULT_VARIABLE QFW_CFFI_MISSING
+		OUTPUT_QUIET ERROR_QUIET)
+	if(NOT QFW_CFFI_MISSING EQUAL 0)
+		message(FATAL_ERROR
+			"QFw runs on DEFw v2, whose Python binding needs cffi, and "
+			"${Python3_EXECUTABLE} cannot import it. Install "
+			"setup/build-requirements.txt into that Python's environment.")
+	endif()
+	set(DEFW_BUILD_V2 ON CACHE BOOL "Build DEFw v2" FORCE)
 	set(DEFW2_PYTHON_INSTALL_DIR "${QFW_PYTHON_INSTALL_DIR}" CACHE STRING
 		"Where the defw2 Python package installs, under the prefix" FORCE)
-endif()
-if(QFW_BUILD_BUNDLED_DEFW)
 	add_subdirectory(DEFw)
 endif()
 

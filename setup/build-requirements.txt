@@ -1,1 +1,4 @@
 PyYAML
+# DEFw v2's Python binding is built with cffi and imports it at run time,
+# so QFw cannot build or run without it.
+cffi

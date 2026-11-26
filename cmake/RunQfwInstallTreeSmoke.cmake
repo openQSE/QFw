@@ -269,7 +269,7 @@ set(qfw_run_base "${QFW_BINARY_DIR}/install-runtime-smoke")
 file(REMOVE_RECURSE "${qfw_run_base}")
 file(MAKE_DIRECTORY "${qfw_run_base}")
 set(fake_module_dir "${qfw_run_base}/fake-python")
-set(fake_service_script "${qfw_run_base}/fake_defwp_service.py")
+set(fake_service_script "${qfw_run_base}/fake_defw_service.py")
 set(plain_tcp_script "${qfw_run_base}/plain_tcp_listener.py")
 file(MAKE_DIRECTORY "${fake_module_dir}")
 file(WRITE "${fake_module_dir}/defw.py"
@@ -422,22 +422,18 @@ while running:
 sock.close()
 ")
 
-file(WRITE "${QFW_INSTALL_PREFIX}/bin/defwp"
+# Stand-ins for DEFw's own programs. The directory, and a QPM served with
+# --serve, run the fake service. Anything else is an application, which
+# the launcher records and then runs.
+file(WRITE "${QFW_INSTALL_PREFIX}/bin/defw2-dirsvc"
 "#!/usr/bin/env bash
 set -euo pipefail
-if [[ \"\${1:-}\" == \"--py-version\" ]]; then
-	'${QFW_PYTHON}' -c 'import sys; print(f\"{sys.version_info[0]}.{sys.version_info[1]}.0\")'
-	exit 0
-fi
-if [[ \"\${DEFW_SHELL_TYPE:-}\" == \"daemon\" ]]; then
-	exec '${QFW_PYTHON}' '${fake_service_script}'
-fi
-exit 0
+exec '${QFW_PYTHON}' '${fake_service_script}'
 ")
-file(WRITE "${QFW_INSTALL_PREFIX}/bin/defwp-wrapper"
+file(WRITE "${QFW_INSTALL_PREFIX}/bin/defw2-python"
 "#!/usr/bin/env bash
 set -euo pipefail
-if [[ \"\${DEFW_SHELL_TYPE:-}\" == \"daemon\" ]]; then
+if [[ \"\${1:-}\" == \"--serve\" ]]; then
 	exec '${QFW_PYTHON}' '${fake_service_script}'
 fi
 if [[ -n \"\${DEFW_APP_SMOKE_OUTPUT:-}\" ]]; then
@@ -449,8 +445,8 @@ fi
 exec '${QFW_PYTHON}' \"\$@\"
 ")
 file(CHMOD
-	"${QFW_INSTALL_PREFIX}/bin/defwp"
-	"${QFW_INSTALL_PREFIX}/bin/defwp-wrapper"
+	"${QFW_INSTALL_PREFIX}/bin/defw2-dirsvc"
+	"${QFW_INSTALL_PREFIX}/bin/defw2-python"
 	PERMISSIONS
 		OWNER_READ OWNER_WRITE OWNER_EXECUTE
 		GROUP_READ GROUP_EXECUTE

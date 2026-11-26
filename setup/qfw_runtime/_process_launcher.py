@@ -140,9 +140,8 @@ def start_directory(argv):
     if args.site_config:
         env["QFW_SITE_CONFIG"] = str(qfw_config.resolve_site_config(
             args.site_config))
-    if qfw_config.defw_version(env) == 2:
-        env["DEFW2_ADDRESS"] = _defw2_listen_address(
-            env, dirsvc_host, dirsvc_port)
+    env["DEFW2_ADDRESS"] = _defw2_listen_address(
+        env, dirsvc_host, dirsvc_port)
     return _start_defw_owned_process(
         dirsvc_name,
         env,
@@ -312,16 +311,14 @@ def start_qpm(argv):
         except Exception as exc:
             raise SystemExit(str(exc)) from exc
     env["QFW_SITE_CONFIG"] = str(site_config_path)
-    if qfw_config.defw_version(env) == 2:
-        # v1 listened on every interface and only advertised service_host,
-        # whose fallback of 127.0.0.1 never mattered. A v2 process listens
-        # where it is told, and one bound to loopback cannot reach the
-        # directory on another node, so with no host named it binds this
-        # node's own name.
-        bind_host = str(service.get("bind-host") or service.get("host") or
-                        target or socket.gethostname())
-        env["DEFW2_ADDRESS"] = _defw2_listen_address(
-            env, bind_host, service_port)
+    # A DEFw process listens where it is told, and one bound to loopback
+    # cannot reach the directory on another node. So with no host named it
+    # binds this node's own name, and not service_host's fallback of
+    # 127.0.0.1.
+    bind_host = str(service.get("bind-host") or service.get("host") or
+                    target or socket.gethostname())
+    env["DEFW2_ADDRESS"] = _defw2_listen_address(
+        env, bind_host, service_port)
     return _start_defw_owned_process(
         service_id,
         env,
@@ -347,25 +344,21 @@ def start_qpm(argv):
 
 
 def _defw_command(env, role):
-    """What starts a DEFw-owned process on the run's DEFw.
+    """What starts a DEFw-owned process.
 
-    v1 runs every role through defw-python as a daemon, which reads the role
-    and the modules to load from its environment. v2 has a directory of its
-    own, and serves a QPM service module through defw2-python --serve.
+    The directory is DEFw's own program, defw2-dirsvc. A QPM is its service
+    module, served by defw-python --serve.
     """
     kind, module = role
-    if qfw_config.defw_version(env) == 2:
-        if kind == "directory":
-            return [str(_command_path("defw2-dirsvc", env=env))]
-        return [str(_command_path("defw2-python", env=env)),
-                "--serve", module]
-    return [str(_command_path("defw-python", env=env)), "-d", "-x"]
+    if kind == "directory":
+        return [str(_command_path("defw2-dirsvc", env=env))]
+    return [str(_command_path("defw-python", env=env)), "--serve", module]
 
 
 def _defw2_listen_address(env, host, port):
-    """Where a v2 process listens: ofi+tcp on the host and port v1 would have
-    used, unless the caller chose another transport with a DEFW2_ADDRESS
-    that names no endpoint, such as na+sm://.
+    """Where a DEFw process listens: ofi+tcp on its host and port, unless
+    the caller chose another transport with a DEFW2_ADDRESS that names no
+    endpoint, such as na+sm://.
 
     A port alone binds one interface of Mercury's choosing, which a client
     that was given the host cannot always reach, and every QFw process finds
@@ -421,19 +414,15 @@ def _start_defw_owned_process(name, env, role, pid_file, ready_file,
 
 
 def _require_free_defw_ports(name, env):
-    # A service left over from an earlier run still holds its ports, and a
+    # A service left over from an earlier run still holds its port, and a
     # new DEFw process would only exit during startup. Name the port instead.
-    # v2 has no telnet shell, so only its listen port matters.
-    ports = [("DEFW_LISTEN_PORT", "listen")]
-    if qfw_config.defw_version(env) == 1:
-        ports.append(("DEFW_TELNET_PORT", "telnet"))
-    for variable, label in ports:
-        port = int(env.get(variable) or 0)
-        if port > 0 and not _tcp_port_free(port):
-            raise RuntimeError(
-                f"{name} cannot start: {label} port {port} is already in use "
-                f"on {socket.gethostname()}, possibly by a service left over "
-                "from an earlier run")
+    # DEFw has no telnet shell, so only the listen port matters.
+    port = int(env.get("DEFW_LISTEN_PORT") or 0)
+    if port > 0 and not _tcp_port_free(port):
+        raise RuntimeError(
+            f"{name} cannot start: listen port {port} is already in use "
+            f"on {socket.gethostname()}, possibly by a service left over "
+            "from an earlier run")
 
 
 def _unused_tcp_port(taken):

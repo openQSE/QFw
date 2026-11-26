@@ -25,13 +25,7 @@ CALLER_ENVIRONMENT_KEYS = (
     "PYTHONUSERBASE",
     "VIRTUAL_ENV",
     "VIRTUAL_ENV_PROMPT",
-    "QFW_DEFW_VERSION",
 )
-# Which DEFw a run uses: 1, the default, or 2, the DEFw v2 prototype. The
-# caller of qfw-setup chooses, and the run records the choice, so every
-# service it starts and every application qfw-srun runs agree on it.
-DEFW_VERSION_ENV = "QFW_DEFW_VERSION"
-DEFW_VERSIONS = ("1", "2")
 # DEFw describes the process it runs in with these variables, and importing
 # DEFw writes a default for each of them into the importer's own environment.
 # Inherited from a caller, they describe the caller's DEFw process, and sbatch
@@ -50,10 +44,10 @@ DEFW_PROCESS_VARIABLES = frozenset((
     "DEFW_DISABLE_DIRSVC",
     "DEFW_LOG_DIR",
     "DEFW_ONLY_LOAD_MODULE",
-    # Where DEFw v2 looks for its directory before it reads DEFW_PARENT_*.
+    # Where DEFw looks for its directory before it reads DEFW_PARENT_*.
     "DEFW2_DIRSVC",
 ))
-# DEFw v2 takes an address of the form protocol://endpoint. With no endpoint,
+# DEFw takes an address of the form protocol://endpoint. With no endpoint,
 # as in na+sm:// or ofi+cxi://, it only chooses the transport, which a caller
 # may choose for a whole run. With an endpoint it is where one process
 # listens, and inherited from a caller it is that caller's own address.
@@ -102,23 +96,6 @@ def _split_config_list(value):
     else:
         items = value
     return [str(item).strip() for item in items if str(item).strip()]
-
-
-def defw_version(env=None):
-    """The DEFw a run uses, 1 or 2, from QFW_DEFW_VERSION."""
-    value = str((env or os.environ).get(DEFW_VERSION_ENV) or "1").strip()
-    if value not in DEFW_VERSIONS:
-        raise ValueError(
-            f"{DEFW_VERSION_ENV} must be 1 or 2, not {value!r}")
-    return int(value)
-
-
-def defw_python_command(env=None):
-    """The launcher that runs QFw's Python on the run's DEFw.
-
-    defw2-python runs the same v1 code on v2, through defw2.compat.
-    """
-    return "defw2-python" if defw_version(env) == 2 else "defw-python"
 
 
 def _persist_caller_environment(environment):
