@@ -363,15 +363,19 @@ def _defw_command(env, role):
 
 
 def _defw2_listen_address(env, host, port):
-    """Where a v2 process listens: the caller's DEFW2_ADDRESS when it set one,
-    and otherwise ofi+tcp on the host and port v1 would have used.
+    """Where a v2 process listens: ofi+tcp on the host and port v1 would have
+    used, unless the caller chose another transport with a DEFW2_ADDRESS
+    that names no endpoint, such as na+sm://.
 
     A port alone binds one interface of Mercury's choosing, which a client
     that was given the host cannot always reach, and every QFw process finds
-    the directory from that host and port.
+    the directory from that host and port. A DEFW2_ADDRESS that names an
+    endpoint is some other process's address, inherited, and is not a
+    choice of transport (openQSE/QFw#187).
     """
-    if env.get("DEFW2_ADDRESS"):
-        return env["DEFW2_ADDRESS"]
+    transport = env.get(qfw_config.DEFW2_ADDRESS_ENV)
+    if transport and not qfw_config.defw2_address_names_endpoint(transport):
+        return transport
     return f"ofi+tcp://{host}:{port}"
 
 

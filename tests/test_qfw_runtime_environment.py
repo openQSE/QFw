@@ -56,6 +56,12 @@ CALLER_SETTINGS = {
     "QFW_SITE_CONFIG": "/etc/openqse/qfw/site.yaml",
     "QFW_RESERVATIONS": '[["nwqsim","5"]]',
 }
+# What a process that QFw started on DEFw v2 carries, and a directory named
+# by hand.
+DEFW2_PROCESS = {
+    "DEFW2_ADDRESS": "ofi+tcp://qpm01:18494",
+    "DEFW2_DIRSVC": "ofi+tcp://dirsvc01:8190",
+}
 # A submitter inside a QFw run with an allocation-local directory.
 OTHER_RUN = {
     "QFW_RUN_ID": "submitter-run",
@@ -215,6 +221,41 @@ def test_qfw_target_queries_on_this_node_with_the_run_environment(
     assert captured["env"]["DEFW_PARENT_HOSTNAME"] == "slurmctld"
 
 
+@pytest.mark.parametrize("defw_version, launcher", [
+    (None, "defw-python"),
+    ("2", "defw2-python"),
+])
+def test_qfw_target_queries_through_the_launcher_of_the_runs_defw(
+        tmp_path, monkeypatch, backends_on_pythonpath, defw_version,
+        launcher):
+    # qfw-setup records the DEFw the run uses, and a query from a v1
+    # process cannot find a v2 directory.
+    run_dir = tmp_path / "run"
+    state = _site_only_state(run_dir)
+    if defw_version:
+        state["environment"]["QFW_DEFW_VERSION"] = defw_version
+        _write_state(run_dir, state)
+    monkeypatch.delenv("QFW_DEFW_VERSION", raising=False)
+    _set_environment(
+        monkeypatch, DEFW_IMPORT_PLACEHOLDERS,
+        {"SLURM_JOB_ID": "42", "SLURM_JOB_NODELIST": "c1"})
+    captured = {}
+
+    def fake_run(argv, env):
+        captured["argv"] = list(argv)
+        return commands.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(
+        commands, "_command_path", lambda name, env=None: Path("/bin") / name)
+    monkeypatch.setattr(commands, "_free_tcp_port", lambda host: 45680)
+    monkeypatch.setattr(commands, "_resolve_host_address",
+                        lambda host: "10.0.0.4")
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    assert commands.qfw_target(["--run-dir", str(run_dir)]) == 0
+    assert captured["argv"][0] == f"/bin/{launcher}"
+
+
 def test_qfw_target_names_a_service_the_run_launched_by_its_runtime_id(
         tmp_path, monkeypatch, backends_on_pythonpath):
     run_dir = tmp_path / "run"
@@ -294,6 +335,39 @@ def test_qfw_setup_discards_another_process_and_another_run():
         "QFW_RUN_BASE_DIR": "/workspace/qfw-runs/job-42",
         "QFW_QPM_RESOLVER_SCOPE_ORDER": "site",
     }
+
+
+def test_qfw_setup_discards_another_v2_process():
+    environ = {**DEFW2_PROCESS, **CALLER_SETTINGS, "DEFW2_RPC_THREADS": "4"}
+
+    qfw_config.discard_inherited_environment(environ)
+
+    assert environ == {**CALLER_SETTINGS, "DEFW2_RPC_THREADS": "4"}
+
+
+@pytest.mark.parametrize("transport", ["na+sm://", "ofi+cxi://", "ofi+tcp://"])
+def test_qfw_setup_keeps_a_callers_choice_of_v2_transport(transport):
+    environ = {"DEFW2_ADDRESS": transport}
+
+    qfw_config.discard_inherited_environment(environ)
+
+    assert environ == {"DEFW2_ADDRESS": transport}
+
+
+def test_qfw_srun_ignores_another_v2_process(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    _site_only_state(run_dir)
+    _set_environment(
+        monkeypatch, DEFW2_PROCESS,
+        {"SLURM_JOB_ID": "42", "SLURM_JOB_NODELIST": "c1"})
+
+    env = _capture_qfw_srun(monkeypatch, run_dir)["env"]
+
+    # The application finds this run's directory and listens where DEFw
+    # puts it, not at the submitter's directory or address.
+    assert "DEFW2_DIRSVC" not in env
+    assert "DEFW2_ADDRESS" not in env
+    assert env["DEFW_PARENT_HOSTNAME"] == "slurmctld"
 
 
 def test_qfw_setup_keeps_a_caller_supplied_run_id():
@@ -509,8 +583,12 @@ def _profile_with_manifest(tmp_path, manifest_text, selected=None):
     return site_path, runtime_path
 
 
-def test_qfw_services_lists_the_manifest_through_defw_python(
-        tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("defw_version, launcher", [
+    (None, "defw-python"),
+    ("2", "defw2-python"),
+])
+def test_qfw_services_lists_the_manifest_through_the_defw_launcher(
+        tmp_path, monkeypatch, capsys, defw_version, launcher):
     site_path, runtime_path = _profile_with_manifest(
         tmp_path,
         "services:\n"
@@ -534,6 +612,10 @@ def test_qfw_services_lists_the_manifest_through_defw_python(
         return types.SimpleNamespace(returncode=0, stdout=json.dumps(records))
 
     _set_environment(monkeypatch, DEFW_IMPORT_PLACEHOLDERS)
+    if defw_version:
+        monkeypatch.setenv("QFW_DEFW_VERSION", defw_version)
+    else:
+        monkeypatch.delenv("QFW_DEFW_VERSION", raising=False)
     monkeypatch.setattr(
         commands, "_command_path", lambda name, env=None: Path("/bin") / name)
     monkeypatch.setattr(commands.subprocess, "run", fake_run)
@@ -543,7 +625,7 @@ def test_qfw_services_lists_the_manifest_through_defw_python(
         "--runtime-config", str(runtime_path), "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == records
     defw_python, listing, entries = captured["command"]
-    assert defw_python == "/bin/defw-python"
+    assert defw_python == f"/bin/{launcher}"
     assert listing == str(
         _REPO_ROOT / "services" / "util" / "service_listing.py")
     assert [entry["name"] for entry in json.loads(entries)] == ["aer-gpu"]
