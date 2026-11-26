@@ -30,7 +30,7 @@ Additional requirements, design, and release material is grouped under
 - [Run Examples](#run-examples)
 - [Run On A Real Cluster](#run-on-a-real-cluster)
 - [Run With QFw-SLURM-Cluster](#run-with-qfw-slurm-cluster)
-- [Run On DEFw v2](#run-on-defw-v2)
+- [DEFw v2](#defw-v2)
 - [Install Configuration Reference](#install-configuration-reference)
 - [Shared Filesystem Behavior](#shared-filesystem-behavior)
 - [Developer Testing](#developer-testing)
@@ -302,51 +302,37 @@ The example commands are the same as the local workflow.
 
 </details>
 
-## Run On DEFw v2
+## DEFw v2
 
-DEFw v2 is a prototype of DEFw in C over Mercury and Margo, designed in
-`DEFw/docs/design_v2.md`. QFw runs on it unchanged. A v2 run serves QFw's
-QPMs and runs its applications through `defw2-python`, which provides the v1
-module names QFw imports, `defw`, `defw_remote`, `api_events` and the rest,
-on v2.
+QFw runs on DEFw v2, which is DEFw in C over Mercury and Margo, designed in
+`DEFw/docs/design_v2.md`. QFw's services and applications import DEFw's
+Python module names, `defw`, `defw_remote`, `api_events` and the rest. DEFw's
+launcher, `defw2-python`, provides those names on v2, and `defw-python` is
+QFw's wrapper around it.
 
-Build it into the install with the bundled DEFw. It needs Margo, which it
-finds through pkg-config:
+The bundled DEFw is built with v2. It needs Margo, which it finds through
+pkg-config:
 
 ```bash
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=<prefix> \
-  -DQFW_BUILD_BUNDLED_DEFW=ON -DQFW_BUILD_DEFW2=ON
+  -DQFW_BUILD_BUNDLED_DEFW=ON
 ```
 
-Then choose v2 for a run before `qfw-setup`:
-
-```bash
-export QFW_DEFW_VERSION=2
-qfw-setup --profile local --service-id fake-iqm
-qfw-srun app.py
-qfw-teardown
-```
-
-The run records the choice. Its directory service is `defw2-dirsvc`, each
-QPM is served by `defw2-python --serve <module>`, and `qfw-srun` runs
-applications under `defw2-python`. Without the variable, or with it set to
-1, nothing changes. A v2 directory or QPM listens over `ofi+tcp` on the host
-and port v1 would have used, so every process finds the directory from the
-same `DEFW_PARENT_*` settings as on v1. An application listens too, on its
-own host and a port Mercury picks, so a QPM can send it each completion as an
-event and the directory can send it each service change, as on v1. A QPM on
-v2 returns a statevector as raw bytes, which DEFw moves straight into a
-buffer the caller lends, rather than as base64 of compressed bytes. A client
+A run's directory service is `defw2-dirsvc`, each QPM is served by
+`defw-python --serve <module>`, and `qfw-srun` runs applications under
+`defw-python`. A directory or QPM listens over `ofi+tcp` on its configured
+host and port, so every process finds the directory from the `DEFW_PARENT_*`
+settings. An application listens too, on its own host and a port Mercury
+picks, so a QPM can send it each completion as an event and the directory can
+send it each service change. A QPM returns a statevector as raw bytes, which
+DEFw moves straight into a buffer the caller lends. A client
 takes a QPM's API classes, such as `QPMExecution`, only from the directories
 `DEFW_EXTERNAL_SERVICE_APIS_PATH` names, which `qfw-activate` points at QFw's
 `service-apis`, so a directory record cannot make it load anything else. Since
 every one of these processes listens, DEFw v2 keeps Margo from spinning its
-progress loop between calls in each of them, so a busy QPM or client no
-longer holds a CPU while it waits for the next. How v2 compares with v1 on
+progress loop between calls in each of them, so a busy QPM or client does
+not hold a CPU while it waits for the next. How v2 compares with v1 on
 every workload is in `DEFw/docs/comparison_report_v2.md`.
-
-This is prototype work on the `defw2-prototype` branch, which merges to
-`main` only if the prototype succeeds.
 
 ## Install Configuration Reference
 
@@ -366,10 +352,8 @@ Important CMake options:
 
 - `CMAKE_INSTALL_PREFIX`: install prefix for QFw commands, Python modules,
   service APIs, examples, and configuration templates.
-- `QFW_BUILD_BUNDLED_DEFW`: build and install the bundled DEFw tree.
-- `QFW_BUILD_DEFW2`: also build and install the bundled DEFw v2 prototype,
-  so a run can choose it with `QFW_DEFW_VERSION=2`. It needs
-  `QFW_BUILD_BUNDLED_DEFW` and Margo through pkg-config.
+- `QFW_BUILD_BUNDLED_DEFW`: build and install the bundled DEFw tree, with
+  DEFw v2. It needs Margo through pkg-config.
 - `QFW_DEFAULT_DEFW_PREFIX`: default DEFw prefix encoded into
   `qfw-activate`; use `self` when DEFw is installed into the same prefix.
 - `QFW_PYTHON_INSTALL_DIR`: relative Python site-packages destination.
@@ -377,7 +361,8 @@ Important CMake options:
 The installed prefix contains:
 
 - `bin/qfw-activate`: prepares QFw, DEFw, Python, and library paths.
-- `bin/defw-python`: runs Python through the DEFw executor bridge.
+- `bin/defw-python`: runs Python on DEFw: a script, a module with `-m`, or
+  a QPM service module with `--serve`. It wraps DEFw's `defw2-python`.
 - `bin/qfw-services`: lists a runtime profile's local services with their
   provider, device and accelerator, without starting them.
 - `bin/qfw-setup`: creates runtime state and starts allocation-local
@@ -391,8 +376,8 @@ The installed prefix contains:
   application run directory.
 - `bin/qfw-dir-svc`: manages one directory-service instance.
 - `bin/qfw-qpm-svc`: manages one QPM and its optional PRTE DVM.
-- `bin/defw2-python` and `bin/defw2-dirsvc`, with `QFW_BUILD_DEFW2`: the
-  DEFw v2 launcher and directory service a v2 run uses.
+- `bin/defw2-python` and `bin/defw2-dirsvc`, with `QFW_BUILD_BUNDLED_DEFW`:
+  DEFw's launcher and its directory service.
 - `share/qfw/config`: site, runtime, service, and device configuration
   templates.
 - `share/qfw/examples`: installed example wrappers and application tests.
@@ -588,25 +573,22 @@ The common service payload is:
 ```python
 {
     "type": "statevector",
-    "encoding": "base64+zlib",
+    "encoding": "raw",
     "dtype": "complex128",
     "byte_order": "little",
     "num_qubits": 4,
     "num_amplitudes": 16,
     "raw_size_bytes": 256,
-    "compressed_size_bytes": ...,
-    "base64_size_bytes": ...,
-    "compression_ratio": ...,
-    "encode_time_seconds": ...,
-    "data": "<base64 of the zlib-compressed amplitudes>",
+    "data": b"<the little-endian complex128 amplitudes>",
     "source": "nwqsim",
 }
 ```
 
-On DEFw v2, with `QFW_DEFW_VERSION=2`, the builder gives `"encoding":
-"raw"` instead, with `data` holding the little-endian `complex128` bytes
-themselves and no compression fields, because v2 moves them as bulk data.
-`decode_statevector_payload` reads both.
+`data` holds the bytes themselves, because DEFw moves them as bulk data.
+Asked for `encoding="base64+zlib"`, the builder gives the text form
+instead: `data` is base64 of the zlib-compressed bytes, with
+`compressed_size_bytes`, `base64_size_bytes`, `compression_ratio` and
+`encode_time_seconds` beside it. `decode_statevector_payload` reads both.
 
 The fake IQM QPM returns a statevector when a run asks for one, beside its
 usual counts. Amplitude k is exp(2&pi;i frac(k&phi;)) / &radic;2^n, with
