@@ -108,14 +108,16 @@ add_custom_target(qfw_external_runtime ALL
 # Where the build found libfabric, for qfw-activate to put on
 # LD_LIBRARY_PATH.
 #
-# DEFw links libfabric when pkg-config finds it, and its libraries install with
-# an RPATH of $ORIGIN alone, so libfabric stays resolvable only through the
-# environment. That is enough in a shell that already has it, and not enough
-# anywhere else: sshd builds a fresh environment, so a remote command gets
-# PATH, HOME and little else. QFw-SLURM-Cluster's qfw-site-services drives
-# every site service over ssh and sources this script as the whole of its
-# setup, and its services died at load with "libfabric.so.1: cannot open
-# shared object file" the moment DEFw started linking libfabric.
+# DEFw v1's library linked libfabric and installed with an RPATH of $ORIGIN
+# alone, so libfabric stayed resolvable only through the environment. That
+# is enough in a shell that already has it, and not enough anywhere else:
+# sshd builds a fresh environment, so a remote command gets PATH, HOME and
+# little else. QFw-SLURM-Cluster's qfw-site-services drives every site
+# service over ssh and sources this script as the whole of its setup, and
+# its services died at load with "libfabric.so.1: cannot open shared object
+# file". DEFw v2 reaches libfabric through Mercury, by RPATH where Mochi
+# was built with one. The directory is still recorded for a Mochi that was
+# not.
 #
 # Activating an install should be enough to run it, so record the directory
 # here rather than leaving each caller to know it.
@@ -285,14 +287,9 @@ install(DIRECTORY "${QFW_EXTERNAL_STAGE_DIR}/"
 	DESTINATION "."
 	USE_SOURCE_PERMISSIONS)
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/DEFw/python/config/defw_generic.yaml")
-	install(FILES DEFw/python/config/defw_generic.yaml
-		DESTINATION "${CMAKE_INSTALL_DATADIR}/defw/config")
-endif()
-
-# QFw runs on DEFw v2, so the bundled DEFw is built with it. v2 installs
+# QFw runs on DEFw v2, which is what the bundled DEFw builds. It installs
 # its directory, its launcher and the defw2 package. The package goes where
-# QFw's own Python goes, which qfw-activate already puts on the path. v2
+# QFw's own Python goes, which qfw-activate already puts on the path. It
 # needs Margo, found through pkg-config.
 if(QFW_BUILD_BUNDLED_DEFW)
 	# DEFw builds its Python binding only when cffi is there to build it,
@@ -307,7 +304,6 @@ if(QFW_BUILD_BUNDLED_DEFW)
 			"${Python3_EXECUTABLE} cannot import it. Install "
 			"setup/build-requirements.txt into that Python's environment.")
 	endif()
-	set(DEFW_BUILD_V2 ON CACHE BOOL "Build DEFw v2" FORCE)
 	set(DEFW2_PYTHON_INSTALL_DIR "${QFW_PYTHON_INSTALL_DIR}" CACHE STRING
 		"Where the defw2 Python package installs, under the prefix" FORCE)
 	add_subdirectory(DEFw)

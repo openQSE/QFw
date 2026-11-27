@@ -313,7 +313,6 @@ them.
 | `QFW_LIBEXEC_DIR` | `<prefix>/libexec/qfw` | Private command helpers used by the public commands. |
 | `QFW_SHARE_DIR` | `<prefix>/share/qfw` | Installed examples and packaged site, runtime, service, and device configuration. |
 | `DEFW_PREFIX` | `<prefix>` | Bundled DEFw installation root. |
-| `DEFW_CONFIG_PATH` | `<prefix>/share/defw/config/defw_generic.yaml` | DEFw runtime configuration. |
 
 #### Prepared Run Environment
 

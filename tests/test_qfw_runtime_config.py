@@ -38,6 +38,30 @@ def test_site_service_config_resolves_environment_paths(tmp_path, monkeypatch):
     }
 
 
+def test_site_install_prefixes_finds_defw_in_a_source_tree(tmp_path):
+    qfw = tmp_path / "qfw"
+    (qfw / "DEFw").mkdir(parents=True)
+    site = {"install": {"qfw-prefix": str(qfw)}}
+
+    assert qfw_config.site_install_prefixes(site) == {
+        "qfw_prefix": qfw,
+        "defw_prefix": qfw / "DEFw",
+    }
+
+
+def test_site_install_prefixes_finds_defw_installed_with_qfw(tmp_path):
+    qfw = tmp_path / "qfw"
+    (qfw / "DEFw").mkdir(parents=True)
+    (qfw / "bin").mkdir()
+    (qfw / "bin" / "defw2-python").write_text("", encoding="utf-8")
+    site = {"install": {"qfw-prefix": str(qfw)}}
+
+    assert qfw_config.site_install_prefixes(site) == {
+        "qfw_prefix": qfw,
+        "defw_prefix": qfw,
+    }
+
+
 @pytest.mark.parametrize("key,replacement", [
     ("qfw_prefix", "qfw-prefix"),
     ("defw_prefix", "defw-prefix"),

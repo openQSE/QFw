@@ -474,7 +474,7 @@ execute_process(
 		command -v qfw-dir-svc >/dev/null
 		command -v qfw-qpm-svc >/dev/null
 		export DEFW_ONLY_LOAD_MODULE=api_qpm_common
-		'${QFW_PYTHON}' -c 'import defw, qfw_runtime, qfw_telemetry, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None; assert importlib.util.find_spec(\"qfw_pulser\") is not None'
+		'${QFW_PYTHON}' -c 'import defw_util, cdefw_global, qfw_runtime, qfw_telemetry, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None; assert importlib.util.find_spec(\"qfw_pulser\") is not None'
 		qfw-deactivate
 		test \"\${PS1}\" = 'original> '
 		test -z \"\${QFW_PREFIX+x}\"

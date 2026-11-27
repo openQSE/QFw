@@ -304,8 +304,10 @@ def site_install_prefixes(site_config):
     if defw_value is not None:
         defw_path = resolve_path(defw_value)
     else:
+        # A source tree has DEFw's sources and no installed launcher.
         source_defw = qfw_path / "DEFw"
-        if source_defw.exists() and not (qfw_path / "bin" / "defwp").exists():
+        launcher = qfw_path / "bin" / "defw2-python"
+        if source_defw.exists() and not launcher.exists():
             defw_path = source_defw
         else:
             defw_path = qfw_path
@@ -709,10 +711,6 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         "QFW_SHARE_DIR": str(qfw_share_dir(qfw_install_prefix)),
         "DEFW_PREFIX": str(defw_install_prefix),
         "DEFW_PATH": str(defw_install_prefix),
-        "DEFW_CONFIG_PATH": str(
-            defw_install_prefix / "share" / "defw" /
-            "config" / "defw_generic.yaml"
-        ),
         "QFW_SITE_CONFIG": str(site_config_path),
         "QFW_RUNTIME_CONFIG": str(runtime_config_path),
         "QFW_RUN_ID": run_id,
