@@ -28,7 +28,7 @@ def fake_statevector(num_qubits):
 	recompute and check any amplitude it received. The phases make it
 	compress about as badly as a simulator's statevector does, rather than
 	like the vector of zeros the fake's counts would suggest, so its cost
-	on DEFw v1's base64+zlib path is a fair one. Made once per qubit count.
+	as base64+zlib text is a fair one. Made once per qubit count.
 	"""
 	with _STATEVECTORS_LOCK:
 		amplitudes = _STATEVECTORS.get(num_qubits)

@@ -41,12 +41,12 @@ def test_statevector_result_allows_output_without_measurements(
 	statevector = result["statevector"]
 	assert result["counts"] == {}
 	assert statevector["type"] == "statevector"
-	assert statevector["encoding"] == "base64+zlib"
+	assert statevector["encoding"] == "raw"
 	assert statevector["dtype"] == "complex128"
 	assert statevector["num_qubits"] == 1
 	assert statevector["num_amplitudes"] == 2
-	assert isinstance(statevector["data"], str)
-	assert len(statevector["data"]) == statevector["base64_size_bytes"]
+	assert isinstance(statevector["data"], bytes)
+	assert len(statevector["data"]) == statevector["raw_size_bytes"]
 
 
 def test_statevector_result_keeps_measurement_parsing_strict(tmp_path):

@@ -1,37 +1,50 @@
-.TH DEFW-PYTHON 1 "August 2026" "QFw 0.1.0" "QFw Commands"
+.TH DEFW-PYTHON 1 "November 2026" "QFw 0.1.0" "QFw Commands"
 .SH NAME
-defw-python \- run a Python application through the QFw DEFw executor
+defw-python \- run Python on DEFw
 .SH SYNOPSIS
 .B defw-python
 .I script
 .RI [ arguments ... ]
+.br
+.B defw-python \-m
+.I module
+.RI [ arguments ... ]
+.br
+.B defw-python \-\-serve
+.I module
 .SH DESCRIPTION
 .B defw-python
-locates the DEFw executor under
+activates QFw when it is not active, locates the DEFw launcher
+.B defw2-python
+under
 .BR DEFW_PREFIX ,
-verifies that its embedded Python major and minor version match the active
-Python environment, exposes that environment's site packages, and invokes the
-script through DEFw.
+and runs it with the same arguments. The launcher runs the active Python
+interpreter as a DEFw v2 process and provides the DEFw module names that QFw
+code imports.
+.PP
+A script or a module runs as a DEFw client. With
+.BR \-\-serve ,
+the named QPM service module is served until it is told to stop.
 .PP
 Normal applications use this entry point indirectly through
-.BR qfw-srun (1).
+.BR qfw-srun (1),
+and QPM services through
+.BR qfw-qpm-svc (1).
 It is also useful for low-level diagnostics that require a DEFw agent context.
 .SH ENVIRONMENT
 .TP
 .B VIRTUAL_ENV
-Selects the application Python environment when it contains
+Selects the Python interpreter when it contains
 .IR bin/python .
 .TP
 .B DEFW_PREFIX
 Selects the DEFw installation. The activated QFw environment supplies the
 default.
-.TP
-.B PYTHONPATH
-Is extended with active-environment site-package directories.
 .SH EXIT STATUS
-The DEFw wrapper or application status is returned. Missing executors and
-Python-version mismatches return nonzero.
+The launcher's or the application's status is returned. A missing launcher
+returns 127.
 .SH SEE ALSO
 .BR qfw-activate (1),
+.BR qfw-qpm-svc (1),
 .BR qfw-srun (1),
 .BR qfw (7)

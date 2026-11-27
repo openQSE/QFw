@@ -1,15 +1,14 @@
 import base64
-import os
 import struct
 import time
 import zlib
 
 
-# How a statevector travels in a QPM's answer. DEFw v1 carries answers as
-# YAML text, so there a statevector is base64 of its zlib-compressed bytes.
-# DEFw v2 moves a statevector as bulk bytes, straight into a buffer its
-# caller lent, so there the payload carries the raw bytes and nothing
-# encodes or decodes them on either side.
+# How a statevector travels in a QPM's answer. DEFw moves a statevector as
+# bulk bytes, straight into a buffer its caller lent, so by default the
+# payload carries the raw bytes and nothing encodes or decodes them on
+# either side. base64 of the zlib-compressed bytes is the text form, for a
+# payload that has to be kept or carried as text.
 STATEVECTOR_ENCODING = "base64+zlib"
 STATEVECTOR_RAW_ENCODING = "raw"
 STATEVECTOR_ENCODINGS = (STATEVECTOR_ENCODING, STATEVECTOR_RAW_ENCODING)
@@ -81,17 +80,6 @@ def _resolve_num_qubits(num_amplitudes, num_qubits=None):
 	return resolved
 
 
-def default_statevector_encoding(env=None):
-	"""raw for a QPM running on DEFw v2, base64+zlib on v1.
-
-	The run's QFW_DEFW_VERSION says which DEFw this process serves on.
-	"""
-	version = str((env or os.environ).get("QFW_DEFW_VERSION", "")).strip()
-	if version == "2":
-		return STATEVECTOR_RAW_ENCODING
-	return STATEVECTOR_ENCODING
-
-
 def _compression_ratio(raw_size, compressed_size):
 	if raw_size <= 0:
 		return 0.0
@@ -108,7 +96,7 @@ def encode_statevector_payload(amplitudes, num_qubits=None, source=None,
 
 def _encode_statevector_bytes(raw, num_amplitudes, num_qubits=None,
 			      source=None, metadata=None, encoding=None):
-	encoding = encoding or default_statevector_encoding()
+	encoding = encoding or STATEVECTOR_RAW_ENCODING
 	if encoding not in STATEVECTOR_ENCODINGS:
 		raise ValueError(f"Unsupported statevector encoding: {encoding}")
 	resolved_qubits = _resolve_num_qubits(num_amplitudes, num_qubits)

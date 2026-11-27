@@ -2,8 +2,6 @@ import cmath
 import math
 import types
 
-import pytest
-
 from util.qpm.statevector import decode_statevector_payload
 from svc_fake_iqm_qpm.svc_qrc import QRC, fake_statevector
 
@@ -38,14 +36,7 @@ def test_fake_qpm_counts_are_unchanged_without_a_statevector():
 	assert qrc._measurement(_circuit().info, "000", 100, True) == {}
 
 
-@pytest.mark.parametrize("version, encoding", [
-	(None, "base64+zlib"), ("2", "raw")])
-def test_fake_qpm_returns_a_statevector_when_asked(
-		monkeypatch, version, encoding):
-	if version is None:
-		monkeypatch.delenv("QFW_DEFW_VERSION", raising=False)
-	else:
-		monkeypatch.setenv("QFW_DEFW_VERSION", version)
+def test_fake_qpm_returns_a_statevector_when_asked():
 	qrc = QRC(start=False)
 
 	result = qrc._measurement(
@@ -53,7 +44,7 @@ def test_fake_qpm_returns_a_statevector_when_asked(
 
 	assert result["counts"] == {"000": 100}
 	payload = result["statevector"]
-	assert payload["encoding"] == encoding
+	assert payload["encoding"] == "raw"
 	assert payload["num_qubits"] == 3
 	assert payload["source"] == "fake-iqm"
 	decoded = _amplitudes(decode_statevector_payload(payload))
