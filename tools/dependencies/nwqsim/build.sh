@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../fetch-source.sh"
 NWQSIM_REPOSITORY="https://github.com/pnnl/NWQ-Sim.git"
 NWQSIM_REF="b35763d846e6512ed817d3f88ac8ce79a7e82a7e"
 WORK_DIR=""
@@ -26,7 +27,7 @@ Required:
   --prefix PATH         NWQ-Sim installation prefix
 
 Options:
-  --ref REF             NWQ-Sim git revision (default: ${NWQSIM_REF})
+  --ref REF             NWQ-Sim commit, branch or tag (default: ${NWQSIM_REF})
   --jobs N              Parallel build jobs (default: ${BUILD_JOBS})
   --python PATH         Python interpreter (default: ${PYTHON_BIN:-python3})
   --cc PATH             C compiler (default: ${CC_BIN})
@@ -92,9 +93,7 @@ if [[ -e "${SOURCE_DIR}" ]]; then
 fi
 
 mkdir -p "${WORK_DIR}/source" "${BUILD_DIR}" "${INSTALL_PREFIX}/bin"
-git clone --recursive "${NWQSIM_REPOSITORY}" "${SOURCE_DIR}"
-git -C "${SOURCE_DIR}" checkout --detach "${NWQSIM_REF}"
-git -C "${SOURCE_DIR}" submodule update --init --recursive
+fetch_source "${NWQSIM_REPOSITORY}" "${NWQSIM_REF}" "${SOURCE_DIR}"
 
 cmake_args=(
 	-S "${SOURCE_DIR}"

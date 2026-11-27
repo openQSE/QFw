@@ -19,6 +19,12 @@ tools/dependencies/tnqvm/build.sh \
   --mpi-prefix /opt/openmpi
 ```
 
+Each builder fetches only the files of its pinned revisions and of their
+submodules, not their history. A revision given with `--ref`, `--xacc-ref`,
+`--exatn-ref` or `--tnqvm-ref` keeps it that way when it is a full commit
+id, a branch or a tag. Any other revision, such as an abbreviated commit id,
+makes the builder clone that repository's whole history.
+
 TNQVM accepts `--rocm auto`, `--rocm on`, or `--rocm off`. Automatic mode
 selects ROCm only when `hipcc`, HIP headers, and hipBLAS are all available.
 Common compatibility patches are applied in both modes. The CPU and ROCm
