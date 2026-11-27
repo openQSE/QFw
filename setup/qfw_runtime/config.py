@@ -26,24 +26,19 @@ CALLER_ENVIRONMENT_KEYS = (
     "VIRTUAL_ENV",
     "VIRTUAL_ENV_PROMPT",
 )
-# DEFw describes the process it runs in with these variables, and importing
-# DEFw writes a default for each of them into the importer's own environment.
-# Inherited from a caller, they describe the caller's DEFw process, and sbatch
-# carries them into a job (openQSE/QFw#187). QFw's launchers set them for each
-# process they start instead of inheriting them.
+# DEFw describes the process it runs in with these variables. Inherited from
+# a caller, they describe the caller's DEFw process, and sbatch carries them
+# into a job (openQSE/QFw#187). QFw's launchers set them for each process
+# they start instead of inheriting them.
 DEFW_PROCESS_VARIABLES = frozenset((
     "DEFW_AGENT_NAME",
     "DEFW_AGENT_TYPE",
-    "DEFW_SHELL_TYPE",
     "DEFW_LISTEN_PORT",
-    "DEFW_TELNET_PORT",
     "DEFW_PARENT_ADDR",
     "DEFW_PARENT_HOSTNAME",
-    "DEFW_PARENT_NAME",
     "DEFW_PARENT_PORT",
     "DEFW_DISABLE_DIRSVC",
     "DEFW_LOG_DIR",
-    "DEFW_ONLY_LOAD_MODULE",
     # Where DEFw looks for its directory before it reads DEFW_PARENT_*.
     "DEFW2_DIRSVC",
 ))
@@ -85,6 +80,14 @@ UNSUPPORTED_PATH_PLACEHOLDERS = {
     "<defw-prefix>": "${DEFW_PREFIX}",
 }
 DIRECTORY_SERVICE_CONNECTION_SCHEMA = "qfw-directory-service-v1"
+# Settings that configured DEFw v1, and why QFw no longer reads them. A file
+# that still has one is refused by name, so its owner knows what to delete.
+NO_TELNET_SHELL = "DEFw has no telnet shell"
+REMOVED_SERVICE_KEYS = {
+    "telnet-port": NO_TELNET_SHELL,
+    "telnet_port": NO_TELNET_SHELL,
+    "load-modules": "DEFw serves the module that 'module' names",
+}
 CREDENTIAL_MODES = ("no-secret", "required")
 
 
@@ -504,6 +507,15 @@ def local_services(runtime_config):
     value = runtime_config.get("local-services") or {}
     if not isinstance(value, dict):
         raise ValueError("local-services must be a mapping")
+    if "service-telnet-port-base" in value:
+        raise ValueError(
+            "unsupported local-services key 'service-telnet-port-base'; "
+            f"{NO_TELNET_SHELL}, so remove it")
+    dirsvc = value.get("dirsvc")
+    if isinstance(dirsvc, dict) and "telnet-port" in dirsvc:
+        raise ValueError(
+            "unsupported local-services dirsvc key 'telnet-port'; "
+            f"{NO_TELNET_SHELL}, so remove it")
     return value
 
 
@@ -527,27 +539,6 @@ def allocate_local_endpoint(local_config, dry_run=False):
         port = int(configured_port)
     name = str(dirsvc.get("name", "qfw-local-dirsvc"))
     return name, host, port, f"{host}:{port}"
-
-
-def allocate_local_telnet_port(local_config, host, listen_port,
-                               dry_run=False):
-    dirsvc = local_config.get("dirsvc") or {}
-    configured_port = dirsvc.get("telnet-port", "auto")
-    if str(configured_port).strip().lower() == "auto" and dry_run:
-        port = 0
-    elif str(configured_port).strip().lower() == "auto":
-        port = _free_tcp_port(host)
-        while port == listen_port:
-            port = _free_tcp_port(host)
-    else:
-        port = int(configured_port)
-    if port == 0 and dry_run:
-        return port
-    if port <= 0 or port > 65535:
-        raise ValueError(f"invalid local directory telnet port: {port}")
-    if port == listen_port:
-        raise ValueError("local directory listen and telnet ports must differ")
-    return port
 
 
 def service_manifest_path(local_config, qfw_prefix_value=None):
@@ -585,17 +576,23 @@ def load_service_manifest(path):
     services = data.get("services") or []
     if not isinstance(services, list):
         raise ValueError(f"services must be a list: {path}")
+    # Every entry of a manifest written for DEFw v1 has them, so name them
+    # all at once.
+    removed = sorted({
+        key for service in services if isinstance(service, dict)
+        for key in REMOVED_SERVICE_KEYS if key in service})
+    if removed:
+        reasons = ", ".join(
+            f"{key!r} ({REMOVED_SERVICE_KEYS[key]})" for key in removed)
+        raise ValueError(
+            f"unsupported service keys in {path}: {reasons}; remove them")
     for index, service in enumerate(services):
         if not isinstance(service, dict):
             raise ValueError(
                 f"service entry {index} must be a mapping: {path}")
-        for key, replacement in {
-                "listen_port": "listen-port",
-                "telnet_port": "telnet-port",
-        }.items():
-            if key in service:
-                raise ValueError(
-                    f"unsupported service key {key!r}; use {replacement!r}")
+        if "listen_port" in service:
+            raise ValueError(
+                "unsupported service key 'listen_port'; use 'listen-port'")
         for key in (
                 "direct-endpoint-enabled",
                 "direct-qpm-endpoint",
@@ -688,18 +685,11 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
     local_endpoint = ""
     local_name = ""
     local_port = None
-    local_telnet_port = None
     local_host = ""
     manifest_path = None
     if local_config:
         local_name, local_host, local_port, local_endpoint = (
             allocate_local_endpoint(local_config, dry_run=dry_run))
-        local_telnet_port = allocate_local_telnet_port(
-            local_config,
-            local_host,
-            local_port,
-            dry_run=dry_run,
-        )
         manifest_path = service_manifest_path(
             local_config,
             qfw_prefix_value=qfw_install_prefix,
@@ -735,7 +725,6 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
         environment["QFW_LOCAL_DIRSVC_NAME"] = local_name
         environment["DEFW_PARENT_HOSTNAME"] = local_host
         environment["DEFW_PARENT_PORT"] = str(local_port)
-        environment["DEFW_PARENT_NAME"] = local_name
         environment["QFW_DVM_URI_PATH"] = str(
             run_root / "prte_dvm" / "dvm-uri")
     if manifest_path is not None:
@@ -777,7 +766,6 @@ def prepare_run_state(site_config_path, runtime_config_path, site_config,
             "name": local_name,
             "host": local_host,
             "port": local_port,
-            "telnet_port": local_telnet_port,
             "endpoint": local_endpoint,
         },
         "service_manifest": str(manifest_path) if manifest_path else "",

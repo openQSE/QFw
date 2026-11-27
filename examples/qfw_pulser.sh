@@ -87,20 +87,19 @@ trap 'rc=$?; trap - EXIT; qfw_example_finish "${rc}";
 QFW_EXAMPLE_SITE_CONFIG="$(qfw_example_make_site_config "${device_access}")"
 QFW_SITE_CONFIG="${QFW_EXAMPLE_SITE_CONFIG}" \
 	qfw_example_setup_local_services "${services}" shim-pasqal
-DEFW_ONLY_LOAD_MODULE=api_qpm_execution,api_qpm_telemetry,api_qpm_control \
-	qfw_example_slurm_driver \
-		--backend pasqal \
-		--example qfw_pulser \
-		--qubits "${atoms}" \
-		--shots "${shots}" \
-		--count "$((2 * ${#lib_list[@]}))" \
-		--operation async_run \
-		--walltime 3600 \
-		--ttl 7200 \
-		--nodes 1 \
-		--ntasks 1 \
-		--target-device "${device_id}" \
-		-- "$(qfw_example_path tests/test_pulser.py)" \
-		"${libs}" "${shots}" "${atoms}" "${build_on}"
+qfw_example_slurm_driver \
+	--backend pasqal \
+	--example qfw_pulser \
+	--qubits "${atoms}" \
+	--shots "${shots}" \
+	--count "$((2 * ${#lib_list[@]}))" \
+	--operation async_run \
+	--walltime 3600 \
+	--ttl 7200 \
+	--nodes 1 \
+	--ntasks 1 \
+	--target-device "${device_id}" \
+	-- "$(qfw_example_path tests/test_pulser.py)" \
+	"${libs}" "${shots}" "${atoms}" "${build_on}"
 
 echo "Stopping QFw Pulser example"

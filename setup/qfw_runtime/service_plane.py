@@ -487,7 +487,6 @@ def _selected_service_ids(explicit, local, manifest_services):
 def _resolve_services(selected, manifest_services, local, allocation, args,
                       qpm_node, default_target, runtime_service_id=None):
     listen_port = _port_base(local, "service-listen-port-base")
-    telnet_port = _port_base(local, "service-telnet-port-base")
     stride = int(local.get("service-port-stride", 100))
     resolved = []
     manifest_indexes = {
@@ -509,8 +508,6 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
             assigned_hosts = target
         service_listen = int(service.get(
             "listen-port", listen_port and listen_port + index * stride))
-        service_telnet = int(service.get(
-            "telnet-port", telnet_port and telnet_port + index * stride))
         resolved.append({
             "service_id": runtime_service_id or service_name,
             "manifest_service_name": service_name,
@@ -519,7 +516,6 @@ def _resolve_services(selected, manifest_services, local, allocation, args,
             "assigned_hosts": assigned_hosts,
             "assigned_hosts_env": service.get("assigned-hosts-env", ""),
             "listen_port": service_listen,
-            "telnet_port": service_telnet,
             "provider_launch": service.get("provider-launch") or {},
             "environment_modules": list(
                 service.get("environment-modules") or []),
@@ -541,16 +537,11 @@ def _resolve_directory(site, site_path, local, allocation, scope,
         dirsvc = local.get("dirsvc") or {}
         name = str(dirsvc.get("name", "qfw-local-dirsvc"))
         port = _port_base(dirsvc, "port")
-        telnet_port = _port_base(dirsvc, "telnet-port")
-        if port and port == telnet_port:
-            raise ServicePlaneError(
-                "local directory listen and telnet ports must differ")
         host = allocation["group1"][0]
         return {
             "name": name,
             "host": host,
             "port": port,
-            "telnet_port": telnet_port,
             "endpoint": f"{host}:{port}",
             "target": host,
             "connection_file": str(run_dir / "directory-service.json"),
@@ -577,7 +568,6 @@ def _resolve_directory(site, site_path, local, allocation, scope,
         "name": configured["name"],
         "host": host,
         "port": port,
-        "telnet_port": port + 1,
         "endpoint": f"{host}:{port}",
         "target": host,
         "connection_file": str(configured.get("connection_file") or ""),
@@ -754,7 +744,6 @@ def _start_directory(state, timeout):
             "--name", name,
             "--host", directory["host"],
             "--listen-port", str(directory["port"]),
-            "--telnet-port", str(directory["telnet_port"]),
             "--timeout", str(timeout),
             "--pid-file", str(pid_file),
             "--ready-file", str(ready_file),
@@ -767,8 +756,8 @@ def _start_directory(state, timeout):
         record["pid"] = _read_pid(pid_file)
         record["process_identity"] = _require_process_identity(
             record["pid"], record.get("node"), state["allocation"])
-        if not (directory["port"] and directory["telnet_port"]):
-            _adopt_directory_ports(directory, record, ready_file)
+        if not directory["port"]:
+            _adopt_directory_port(directory, record, ready_file)
     record["state"] = "ready"
     record["ready"] = True
     record["ready_at_ns"] = time.time_ns()
@@ -776,11 +765,10 @@ def _start_directory(state, timeout):
     _write_state(state)
 
 
-def _adopt_directory_ports(directory, record, ready_file):
+def _adopt_directory_port(directory, record, ready_file):
     with ready_file.open("r", encoding="utf-8") as stream:
         ready = json.load(stream)
     directory["port"] = ready["listen_port"]
-    directory["telnet_port"] = ready["telnet_port"]
     directory["endpoint"] = record["endpoint"] = ready["endpoint"]
 
 
@@ -835,7 +823,6 @@ def _start_qpm(state, service, timeout, service_environment=None):
                 "qfw-managed" if state["scope"] == "application"
                 else "long-running"),
             "--listen-port", str(service["listen_port"]),
-            "--telnet-port", str(service["telnet_port"]),
             "--timeout", str(timeout),
             "--pid-file", str(pid_file),
             "--ready-file", str(ready_file),

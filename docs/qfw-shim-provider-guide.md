@@ -382,11 +382,9 @@ services:
   - name: shim-xyz-qpu
     credential-mode: required
     module: svc_lib_qpm
-    load-modules: svc_lib_qpm,api_launcher
     agent-prefix: qpm_shim_xyz
     device-id: xyz-qpu
     listen-port: 8690
-    telnet-port: 8691
     provider-launch:
       type: qrmi-qdmi
 ```

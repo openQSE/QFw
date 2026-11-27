@@ -208,7 +208,6 @@ def test_start_job_local_services_delegates_to_split_managers(
                 "directory": {
                     "name": "qfw-local-dirsvc",
                     "endpoint": "svc-a:18090",
-                    "telnet_port": 18091,
                     "connection_file": str(
                         run_dir / "service-plane" / "directory" /
                         "directory-service.json"),
@@ -220,7 +219,6 @@ def test_start_job_local_services_delegates_to_split_managers(
                 "service_id": kwargs["service_id"],
                 "target": "svc-a",
                 "listen_port": 8290 + index * 100,
-                "telnet_port": 8291 + index * 100,
             }],
         }
 
@@ -313,7 +311,6 @@ def test_start_job_local_services_places_every_role_on_group1(
                 "directory": {
                     "name": "qfw-local-dirsvc",
                     "endpoint": "svc-a:18090",
-                    "telnet_port": 18091,
                     "connection_file": str(
                         run_dir / "service-plane" / "directory" /
                         "directory-service.json"),
@@ -325,7 +322,6 @@ def test_start_job_local_services_places_every_role_on_group1(
                 "target": "svc-a",
                 "assigned_hosts": "svc-a,svc-b",
                 "listen_port": 8290,
-                "telnet_port": 8291,
             }],
         }
 
@@ -648,35 +644,6 @@ def test_private_process_launcher_starts_a_qpm_and_the_directory(
     assert captured["argv"] == argv
 
 
-def test_private_process_launcher_ignores_the_telnet_port(
-        tmp_path, monkeypatch):
-    # DEFw has no telnet shell, so a leftover holding that port is no
-    # reason to refuse a service.
-    captured = _fake_process_start(monkeypatch, "defw-python")
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as leftover:
-        leftover.bind(("", 0))
-        leftover.listen(1)
-        port = leftover.getsockname()[1]
-
-        rc = process_launcher._start_defw_owned_process(
-            "svc",
-            {"DEFW_LOG_DIR": str(tmp_path / "logs"),
-             "DEFW_TELNET_PORT": str(port)},
-            ("qpm", "svc_fake_iqm_qpm"),
-            tmp_path / "svc.pid",
-            tmp_path / "svc-ready.json",
-            5,
-            True,
-            False,
-            {"role": "service"},
-            lambda: True,
-        )
-
-    assert rc == 0
-    assert captured["argv"][1:] == ["--serve", "svc_fake_iqm_qpm"]
-
-
 @pytest.mark.parametrize("caller_address, listens_at", [
     (None, "ofi+tcp://127.0.0.1:18090"),
     ("na+sm://", "na+sm://"),
@@ -721,7 +688,6 @@ def test_private_qpm_launcher_serves_its_module(tmp_path, monkeypatch):
             "services:",
             "  - name: fake-iqm",
             "    module: svc_fake_iqm_qpm",
-            "    load-modules: svc_fake_iqm_qpm,api_launcher",
             "    credential-mode: no-secret",
             "    host: 127.0.0.1",
             "",
@@ -759,7 +725,7 @@ def test_private_qpm_launcher_serves_its_module(tmp_path, monkeypatch):
     ])
 
     assert rc == 0
-    # DEFw serves the QPM module alone, whatever load-modules lists.
+    # DEFw serves the QPM's module.
     assert captured["role"] == ("qpm", "svc_fake_iqm_qpm")
     assert captured["env"]["DEFW2_ADDRESS"] == "ofi+tcp://127.0.0.1:18290"
     # The directory comes from the parent tuple.
@@ -971,7 +937,6 @@ def test_qfw_srun_configures_application_defw_environment(
             "QFW_LOCAL_DIRSVC_NAME": "qfw-local-dirsvc",
             "DEFW_PARENT_HOSTNAME": "svc-a",
             "DEFW_PARENT_PORT": "8090",
-            "DEFW_PARENT_NAME": "qfw-local-dirsvc",
         },
     }
     (state_dir / "runtime-state.json").write_text(
@@ -1005,7 +970,6 @@ def test_qfw_srun_configures_application_defw_environment(
     ]
     assert captured["env"]["DEFW_DISABLE_DIRSVC"] == "no"
     assert captured["env"]["DEFW_AGENT_TYPE"] == "agent"
-    assert captured["env"]["DEFW_SHELL_TYPE"] == "cmdline"
     assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.2"
     assert captured["env"]["DEFW_LISTEN_PORT"] == "45678"
     assert captured["env"]["DEFW_LOG_DIR"] == str(
@@ -1116,7 +1080,6 @@ def test_qfw_srun_configures_site_directory_defw_environment(
     assert captured["env"]["DEFW_DISABLE_DIRSVC"] == "no"
     assert captured["env"]["DEFW_PARENT_HOSTNAME"] == "svc-a"
     assert captured["env"]["DEFW_PARENT_PORT"] == "8090"
-    assert captured["env"]["DEFW_PARENT_NAME"] == "qfw-site-dirsvc"
     assert captured["env"]["DEFW_PARENT_ADDR"] == "10.0.0.3"
     assert captured["env"]["DEFW_LISTEN_PORT"] == "45679"
 
@@ -1233,11 +1196,10 @@ def test_two_sessions_of_one_user_start_their_qpms_on_one_host(
 
     def start_service(name, env, *args):
         process_launcher._require_free_defw_ports(name, env)
-        for variable in ("DEFW_LISTEN_PORT", "DEFW_TELNET_PORT"):
-            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            listener.bind(("", int(env[variable])))
-            listener.listen(1)
-            held.append(listener)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("", int(env["DEFW_LISTEN_PORT"])))
+        listener.listen(1)
+        held.append(listener)
         return 0
 
     monkeypatch.setenv("QFW_SERVICE_SCOPE", "site")
@@ -1257,13 +1219,12 @@ def test_two_sessions_of_one_user_start_their_qpms_on_one_host(
                 "--site-config", str(site_path),
                 "--run-dir", str(tmp_path / session),
                 "--listen-port", str(service["listen_port"]),
-                "--telnet-port", str(service["telnet_port"]),
             ]) == 0
     finally:
         for listener in held:
             listener.close()
 
-    assert len(held) == 4
+    assert len(held) == 2
 
 
 def test_two_sessions_of_one_user_start_their_directories_on_one_host(
@@ -1276,12 +1237,11 @@ def test_two_sessions_of_one_user_start_their_directories_on_one_host(
     def start_service(name, env, role, pid_file, ready_file, timeout,
                       background, dry_run, ready_payload, ready_probe):
         process_launcher._require_free_defw_ports(name, env)
-        for variable in ("DEFW_LISTEN_PORT", "DEFW_TELNET_PORT"):
-            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            listener.bind(("", int(env[variable])))
-            listener.listen(1)
-            held.append(listener)
-            ports.append(listener.getsockname()[1])
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("", int(env["DEFW_LISTEN_PORT"])))
+        listener.listen(1)
+        held.append(listener)
+        ports.append(listener.getsockname()[1])
         process_launcher._write_ready(ready_file, ready_payload)
         return 0
 
@@ -1298,7 +1258,7 @@ def test_two_sessions_of_one_user_start_their_directories_on_one_host(
 
     try:
         for session, directory in planned.items():
-            assert (directory["port"], directory["telnet_port"]) == (0, 0)
+            assert directory["port"] == 0
             ready_file = tmp_path / session / "ready.json"
             assert process_launcher.start_directory([
                 "--site-config", str(site_path),
@@ -1306,16 +1266,15 @@ def test_two_sessions_of_one_user_start_their_directories_on_one_host(
                 "--name", directory["name"],
                 "--host", directory["host"],
                 "--listen-port", str(directory["port"]),
-                "--telnet-port", str(directory["telnet_port"]),
                 "--ready-file", str(ready_file),
             ]) == 0
             record = {"endpoint": directory["endpoint"]}
-            service_plane._adopt_directory_ports(
+            service_plane._adopt_directory_port(
                 directory, record, ready_file)
             endpoints.append(record["endpoint"])
     finally:
         for listener in held:
             listener.close()
 
-    assert len(set(ports)) == 4
-    assert endpoints == [f"localhost:{port}" for port in ports[::2]]
+    assert len(set(ports)) == 2
+    assert endpoints == [f"localhost:{port}" for port in ports]

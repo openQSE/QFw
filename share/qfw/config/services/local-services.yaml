@@ -8,7 +8,6 @@ services:
   - name: nwqsim
     credential-mode: no-secret
     module: svc_nwqsim_qpm
-    load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
       - libfabric
       - openmpi
@@ -27,7 +26,6 @@ services:
   - name: tnqvm
     credential-mode: no-secret
     module: svc_tnqvm_qpm
-    load-modules: svc_tnqvm_qpm,api_launcher
     environment-modules:
       - libfabric
       - openmpi
@@ -45,7 +43,6 @@ services:
   - name: aer
     credential-mode: no-secret
     module: svc_aer_qpm
-    load-modules: svc_aer_qpm,api_launcher
     agent-prefix: qpm_aer
     target: group1-head
     assigned-hosts: group1
@@ -60,7 +57,6 @@ services:
   - name: fake-iqm
     credential-mode: no-secret
     module: svc_fake_iqm_qpm
-    load-modules: svc_fake_iqm_qpm,api_launcher
     agent-prefix: qpm_fake_iqm
     target: group1-head
     assigned-hosts: group1
@@ -72,7 +68,6 @@ services:
   - name: proxy-fez
     credential-mode: no-secret
     module: svc_proxy_qpm
-    load-modules: svc_proxy_qpm,api_launcher
     agent-prefix: qpm_proxy
     target: group1-head
     assigned-hosts: group1
@@ -86,7 +81,6 @@ services:
   - name: backline-local
     credential-mode: no-secret
     module: svc_backline_qpm
-    load-modules: svc_backline_qpm,api_launcher
     agent-prefix: qpm_backline
     target: group1-head
     assigned-hosts: group1
@@ -98,7 +92,6 @@ services:
   - name: shim-garnet-mock
     credential-mode: required
     module: svc_lib_qpm
-    load-modules: svc_lib_qpm,api_launcher
     agent-prefix: qpm_shim_garnet_mock
     target: group1-head
     assigned-hosts: group1
@@ -115,7 +108,6 @@ services:
   - name: qblox
     credential-mode: no-secret
     module: svc_qblox_qpm
-    load-modules: svc_qblox_qpm,api_launcher
     agent-prefix: qpm_qblox
     target: group1-head
     assigned-hosts: group1

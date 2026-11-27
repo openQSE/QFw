@@ -218,8 +218,7 @@ _QFW_SAVED_VARS=(
 	QFW_PREFIX QFW_BIN_PATH QFW_LIBEXEC_DIR QFW_SHARE_DIR \
 	QFW_CONFIG_DIR QFW_SITE_CONFIG QFW_RUN_BASE_DIR \
 	DEFW_PREFIX DEFW_PATH \
-	DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH \
-	DEFW_LOAD_NO_INIT)
+	DEFW_EXTERNAL_SERVICES_PATH DEFW_EXTERNAL_SERVICE_APIS_PATH)
 for _qfw_var in "${_QFW_SAVED_VARS[@]}"; do
 	_qfw_save_var "${_qfw_var}"
 done
@@ -364,12 +363,6 @@ if [[ -d "${QFW_PREFIX}/lib/qfw/service-apis" ]]; then
 else
 	export DEFW_EXTERNAL_SERVICE_APIS_PATH="${DEFW_EXTERNAL_SERVICE_APIS_PATH:-${QFW_PREFIX}/service-apis}"
 fi
-
-case ",${DEFW_LOAD_NO_INIT:-}," in
-	*,api_qpm_common,*) ;;
-	,,) export DEFW_LOAD_NO_INIT="api_qpm_common" ;;
-	*) export DEFW_LOAD_NO_INIT="${DEFW_LOAD_NO_INIT},api_qpm_common" ;;
-esac
 
 qfw-deactivate() {
 	if [[ -z "${_QFW_ACTIVE:-}" ]]; then

@@ -21,7 +21,6 @@ ibm_shim_local_manifest() {
 services:
   - name: shim_ibm_local_qpm
     module: svc_lib_qpm
-    load-modules: svc_lib_qpm,api_launcher
     credential-mode: required
     agent-prefix: qpm_shim
     target: group1-head

@@ -100,8 +100,7 @@ shim_manifest="$(shim_manifest_for_device "${device_id}")"
 QFW_EXAMPLE_TEMP_FILES+=("${shim_manifest}")
 QFW_SITE_CONFIG="${QFW_EXAMPLE_SITE_CONFIG}" \
 	qfw_example_setup_local_services "${shim_manifest}" shim-ornl-20q
-DEFW_ONLY_LOAD_MODULE=api_qpm_execution,api_qpm_telemetry,api_qpm_control \
-	QFW_SHIM_SMOKE_SHUTDOWN_QPM=no \
+QFW_SHIM_SMOKE_SHUTDOWN_QPM=no \
 	qfw_example_slurm_driver \
 		--backend shim \
 		--example qfw_shim_smoke \

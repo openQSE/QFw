@@ -231,12 +231,9 @@ foreach(custom_manifest_wrapper
 		custom_manifest_wrapper_text)
 	string(FIND "${custom_manifest_wrapper_text}" "--services-config"
 		legacy_services_config_index)
-	string(FIND "${custom_manifest_wrapper_text}" "--load-modules"
-		legacy_load_modules_index)
 	string(FIND "${custom_manifest_wrapper_text}"
 		"qfw_example_setup_local_services" local_services_helper_index)
 	if(NOT legacy_services_config_index EQUAL -1 OR
-	   NOT legacy_load_modules_index EQUAL -1 OR
 	   local_services_helper_index EQUAL -1)
 		message(FATAL_ERROR
 			"installed custom-manifest wrapper uses legacy runtime flags: "
@@ -456,7 +453,6 @@ execute_process(
 	COMMAND "${QFW_BASH}" -c
 		"set -e
 		export PS1='original> '
-		export DEFW_LOAD_NO_INIT=api_existing_helper
 		unset MANPATH
 		source '${QFW_INSTALL_PREFIX}/bin/qfw-activate'
 		test \"\${PS1}\" = '(qfw) original> '
@@ -468,18 +464,15 @@ execute_process(
 		test \"\${QFW_SHARE_DIR}\" = '${QFW_INSTALL_PREFIX}/share/qfw'
 		test \"\${MANPATH}\" = '${qfw_man_root}:'
 		test \"\${DEFW_PREFIX}\" = '${QFW_INSTALL_PREFIX}'
-		test \"\${DEFW_LOAD_NO_INIT}\" = 'api_existing_helper,api_qpm_common'
 		command -v qfw-setup >/dev/null
 		command -v qfw-status >/dev/null
 		command -v qfw-dir-svc >/dev/null
 		command -v qfw-qpm-svc >/dev/null
-		export DEFW_ONLY_LOAD_MODULE=api_qpm_common
 		'${QFW_PYTHON}' -c 'import defw_util, cdefw_global, qfw_runtime, qfw_telemetry, importlib.util; assert importlib.util.find_spec(\"qfw_qiskit\") is not None; assert importlib.util.find_spec(\"qfw_pulser\") is not None'
 		qfw-deactivate
 		test \"\${PS1}\" = 'original> '
 		test -z \"\${QFW_PREFIX+x}\"
-		test -z \"\${MANPATH+x}\"
-		test \"\${DEFW_LOAD_NO_INIT}\" = api_existing_helper"
+		test -z \"\${MANPATH+x}\""
 	RESULT_VARIABLE activation_rc)
 	if(NOT activation_rc EQUAL 0)
 		message(FATAL_ERROR "QFw install activation smoke failed")
@@ -883,7 +876,6 @@ file(WRITE "${service_manifest}"
 "services:
   - name: smoke-qpm
     module: svc_nwqsim_qpm
-    load-modules: svc_nwqsim_qpm
     credential-mode: no-secret
     listen-port: ${service_port}
     provider-launch:

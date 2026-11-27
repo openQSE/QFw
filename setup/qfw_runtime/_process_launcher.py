@@ -80,7 +80,6 @@ def start_directory(argv):
     parser.add_argument("--name")
     parser.add_argument("--host")
     parser.add_argument("--listen-port", type=int)
-    parser.add_argument("--telnet-port", type=int, default=8091)
     parser.add_argument("--timeout", type=int)
     parser.add_argument("--pid-file")
     parser.add_argument("--ready-file")
@@ -103,8 +102,7 @@ def start_directory(argv):
     dirsvc_port = (
         args.listen_port if args.listen_port is not None else
         site_dir.get("listen_port") or site_port or 8090
-    ) or _unused_tcp_port(())
-    telnet_port = args.telnet_port or _unused_tcp_port((dirsvc_port,))
+    ) or _unused_tcp_port()
     startup_timeout = (
         args.timeout if args.timeout is not None else
         int(site_dir.get("connect_timeout_seconds", 40))
@@ -124,14 +122,9 @@ def start_directory(argv):
     env.update({
         "DEFW_AGENT_NAME": dirsvc_name,
         "DEFW_LISTEN_PORT": str(dirsvc_port),
-        "DEFW_TELNET_PORT": str(telnet_port),
-        "DEFW_ONLY_LOAD_MODULE": "svc_dirsvc",
-        "DEFW_LOAD_NO_INIT": "",
-        "DEFW_SHELL_TYPE": "daemon",
         "DEFW_AGENT_TYPE": "dirsvc",
         "DEFW_PARENT_HOSTNAME": dirsvc_host,
         "DEFW_PARENT_PORT": str(dirsvc_port),
-        "DEFW_PARENT_NAME": dirsvc_name,
         "DEFW_LOG_LEVEL": _service_log_level(dirsvc_name),
         "DEFW_DISABLE_DIRSVC": "yes",
         "DEFW_LOG_DIR": str(log_dir),
@@ -156,7 +149,6 @@ def start_directory(argv):
             "name": dirsvc_name,
             "endpoint": endpoint,
             "listen_port": dirsvc_port,
-            "telnet_port": telnet_port,
             "startup_timeout": startup_timeout,
         },
         lambda: _tcp_endpoint_ready(endpoint),
@@ -169,7 +161,6 @@ def start_qpm(argv):
     parser.add_argument("--manifest-service-name")
     parser.add_argument("--site-config")
     parser.add_argument("--module")
-    parser.add_argument("--load-modules")
     parser.add_argument(
         "--operation-mode",
         choices=("long-running", "qfw-managed"),
@@ -177,7 +168,6 @@ def start_qpm(argv):
     )
     parser.add_argument("--run-dir")
     parser.add_argument("--listen-port", type=int, default=8290)
-    parser.add_argument("--telnet-port", type=int, default=8291)
     parser.add_argument("--timeout", type=int)
     parser.add_argument("--pid-file")
     parser.add_argument("--ready-file")
@@ -219,7 +209,6 @@ def start_qpm(argv):
     module = args.module or service.get("module")
     if not module:
         raise SystemExit("qfw-qpm-svc requires --module or a manifest entry")
-    load_modules = args.load_modules or service.get("load-modules") or module
     credential_mode = str(service.get("credential-mode") or "").strip()
     operation_mode = service.get("operation-mode", args.operation_mode)
     dirsvc_endpoint = (
@@ -246,9 +235,7 @@ def start_qpm(argv):
     service_host = str(service.get(
         "bind-host", service.get("host", target or "127.0.0.1")))
     service_port = int(service.get("listen-port", args.listen_port)) or (
-        _unused_tcp_port(()))
-    telnet_port = int(service.get("telnet-port", args.telnet_port)) or (
-        _unused_tcp_port((service_port,)))
+        _unused_tcp_port())
     assigned_hosts = (
         os.environ.get("QFW_SERVICE_ASSIGNED_HOSTS") or
         _resolve_host_policy(service.get("assigned-hosts"), allocation)
@@ -259,14 +246,9 @@ def start_qpm(argv):
     env.update({
         "DEFW_AGENT_NAME": service_id,
         "DEFW_LISTEN_PORT": str(service_port),
-        "DEFW_TELNET_PORT": str(telnet_port),
-        "DEFW_ONLY_LOAD_MODULE": load_modules,
-        "DEFW_LOAD_NO_INIT": "",
-        "DEFW_SHELL_TYPE": "daemon",
         "DEFW_AGENT_TYPE": service.get("agent-type", "service"),
         "DEFW_PARENT_HOSTNAME": dirsvc_host,
         "DEFW_PARENT_PORT": str(dirsvc_port),
-        "DEFW_PARENT_NAME": dirsvc_name,
         "DEFW_LOG_LEVEL": _service_log_level(service_id, service),
         "DEFW_DISABLE_DIRSVC": "no",
         "DEFW_LOG_DIR": str(log_dir),
@@ -416,7 +398,6 @@ def _start_defw_owned_process(name, env, role, pid_file, ready_file,
 def _require_free_defw_ports(name, env):
     # A service left over from an earlier run still holds its port, and a
     # new DEFw process would only exit during startup. Name the port instead.
-    # DEFw has no telnet shell, so only the listen port matters.
     port = int(env.get("DEFW_LISTEN_PORT") or 0)
     if port > 0 and not _tcp_port_free(port):
         raise RuntimeError(
@@ -425,13 +406,10 @@ def _require_free_defw_ports(name, env):
             "from an earlier run")
 
 
-def _unused_tcp_port(taken):
-    while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("", 0))
-            port = int(sock.getsockname()[1])
-        if port not in taken:
-            return port
+def _unused_tcp_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("", 0))
+        return int(sock.getsockname()[1])
 
 
 def _tcp_port_free(port):
@@ -566,7 +544,6 @@ def _resolve_service(args, site_service):
         return ({
             "name": args.service_id,
             "module": args.module,
-            "load-modules": args.load_modules or args.module,
             "operation-mode": args.operation_mode,
         }, qfw_config.resolve_path(manifest) if manifest else None)
 

@@ -66,15 +66,9 @@ to create a unique service ID for an application-owned QPM.
 .B module
 Primary DEFw QPM module.
 .TP
-.B load-modules
-Comma-separated DEFw module load list. It normally includes the QPM module and
-.BR api_launcher .
-.TP
 .B environment-modules
 YAML sequence of site environment modules loaded before an optional PRTE DVM
-and the QPM start. This is separate from
-.BR load-modules ,
-which names Python modules loaded by DEFw. A missing module is a startup error.
+and the QPM start. A missing module is a startup error.
 .TP
 .B required-executables
 YAML sequence of executable names that must be available after environment
@@ -105,9 +99,6 @@ Additional environment variable that receives the resolved host list.
 .TP
 .B listen-port
 DEFw service listen port.
-.TP
-.B telnet-port
-DEFw diagnostic telnet port.
 .TP
 .B device-id
 Device identifier resolved through the protected configuration described by
@@ -147,7 +138,6 @@ and
 services:
   - name: nwqsim
     module: svc_nwqsim_qpm
-    load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
       - libfabric
       - nwqsim

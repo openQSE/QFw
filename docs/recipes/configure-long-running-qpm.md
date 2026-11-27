@@ -209,7 +209,6 @@ manifest:
 services:
   - name: nwqsim
     module: svc_nwqsim_qpm
-    load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
       - libfabric
       - openmpi
@@ -220,7 +219,6 @@ services:
     assigned-hosts: ${QFW_SIMULATOR_NODES}
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     listen-port: 8490
-    telnet-port: 8491
     provider-launch:
       type: mpi
       wrapper: null

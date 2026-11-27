@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "setup"))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "setup"))
 
 from qfw_runtime import config as qfw_config
 
@@ -72,19 +73,84 @@ def test_site_install_prefixes_rejects_removed_keys(key, replacement):
         qfw_config.site_install_prefixes({"install": {key: "/opt/qfw"}})
 
 
-@pytest.mark.parametrize("key,replacement", [
-    ("listen_port", "listen-port"),
-    ("telnet_port", "telnet-port"),
-])
-def test_service_manifest_rejects_removed_port_keys(
-        tmp_path, key, replacement):
+def test_service_manifest_rejects_the_removed_listen_port_spelling(
+        tmp_path):
     manifest = tmp_path / "services.yaml"
     manifest.write_text(
-        f"services:\n  - name: test\n    {key}: 8090\n",
+        "services:\n  - name: test\n    listen_port: 8090\n",
         encoding="utf-8")
 
-    with pytest.raises(ValueError, match=replacement):
+    with pytest.raises(ValueError, match="listen-port"):
         qfw_config.load_service_manifest(manifest)
+
+
+@pytest.mark.parametrize("key,value,reason", [
+    ("telnet-port", "8091", "no telnet shell"),
+    ("telnet_port", "8091", "no telnet shell"),
+    ("load-modules", "svc_test,api_launcher", "serves the module"),
+])
+def test_service_manifest_rejects_defw_v1_settings(
+        tmp_path, key, value, reason):
+    # A manifest written for DEFw v1 says so by name, so its owner knows
+    # which line to delete.
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "services:\n"
+        "  - name: test\n"
+        "    module: svc_test\n"
+        "    credential-mode: no-secret\n"
+        f"    {key}: {value}\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match=reason) as refusal:
+        qfw_config.load_service_manifest(manifest)
+
+    assert repr(key) in str(refusal.value)
+    assert str(manifest) in str(refusal.value)
+
+
+def test_service_manifest_names_every_defw_v1_setting_at_once(tmp_path):
+    manifest = tmp_path / "services.yaml"
+    manifest.write_text(
+        "services:\n"
+        "  - name: first\n"
+        "    module: svc_test\n"
+        "    credential-mode: no-secret\n"
+        "    load-modules: svc_test,api_launcher\n"
+        "  - name: second\n"
+        "    module: svc_test\n"
+        "    credential-mode: no-secret\n"
+        "    telnet-port: 8091\n",
+        encoding="utf-8")
+
+    with pytest.raises(ValueError) as refusal:
+        qfw_config.load_service_manifest(manifest)
+
+    assert "'load-modules'" in str(refusal.value)
+    assert "'telnet-port'" in str(refusal.value)
+
+
+@pytest.mark.parametrize("local,key", [
+    ({"service-telnet-port-base": 8291}, "service-telnet-port-base"),
+    ({"dirsvc": {"port": 8100, "telnet-port": 8101}}, "telnet-port"),
+])
+def test_local_services_reject_telnet_ports(local, key):
+    with pytest.raises(ValueError, match="no telnet shell") as refusal:
+        qfw_config.local_services({"local-services": local})
+
+    assert repr(key) in str(refusal.value)
+
+
+@pytest.mark.parametrize("manifest", sorted([
+    *(REPO_ROOT / "share" / "qfw" / "config" / "services").glob("*.yaml"),
+    *(REPO_ROOT / "examples").glob("*services*.yaml"),
+]), ids=lambda path: path.name)
+def test_packaged_manifests_name_no_removed_setting(manifest):
+    services = qfw_config.load_yaml(manifest).get("services") or []
+
+    assert services
+    for service in services:
+        assert not set(service) & set(qfw_config.REMOVED_SERVICE_KEYS)
 
 
 def test_service_manifest_requires_explicit_credential_mode(tmp_path):
@@ -330,7 +396,6 @@ def test_prepare_run_state_persists_local_dvm_uri(tmp_path):
 
     assert state["environment"]["QFW_DVM_URI_PATH"] == str(
         tmp_path / "run" / "prte_dvm" / "dvm-uri")
-    assert state["local_dirsvc"]["telnet_port"] == 0
 
 
 def test_prepare_run_state_selects_one_profile_service(tmp_path):
@@ -387,35 +452,6 @@ def test_prepare_run_state_rejects_service_without_local_profile(tmp_path):
             dry_run=True,
             service_id="nwqsim",
         )
-
-
-def test_local_directory_rejects_duplicate_listen_and_telnet_ports():
-    local = {
-        "dirsvc": {
-            "port": 8100,
-            "telnet-port": 8100,
-        },
-    }
-
-    with pytest.raises(ValueError, match="listen and telnet ports must differ"):
-        qfw_config.allocate_local_telnet_port(local, "127.0.0.1", 8100)
-
-
-def test_local_directory_allocates_distinct_telnet_port(monkeypatch):
-    ports = iter([8100, 8101])
-    monkeypatch.setattr(
-        qfw_config,
-        "_free_tcp_port",
-        lambda _host: next(ports),
-    )
-
-    port = qfw_config.allocate_local_telnet_port(
-        {"dirsvc": {"telnet-port": "auto"}},
-        "127.0.0.1",
-        8100,
-    )
-
-    assert port == 8101
 
 
 def test_prepare_run_state_persists_user_python_environment(

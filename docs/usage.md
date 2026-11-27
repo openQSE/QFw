@@ -348,14 +348,14 @@ in the same Slurm job, or outside Slurm when they run outside Slurm. For any
 other run they say so on standard error and fall back to the marker.
 
 DEFw describes the process it runs in with `DEFW_AGENT_NAME`,
-`DEFW_AGENT_TYPE`, `DEFW_SHELL_TYPE`, `DEFW_LISTEN_PORT`, `DEFW_TELNET_PORT`,
-`DEFW_PARENT_ADDR`, `DEFW_PARENT_HOSTNAME`, `DEFW_PARENT_NAME`,
-`DEFW_PARENT_PORT`, `DEFW_DISABLE_DIRSVC`, `DEFW_LOG_DIR` and
-`DEFW_ONLY_LOAD_MODULE`. Importing DEFw writes placeholders for them into the
-importing process's environment, so a workflow manager that uses a QFw client
-and then calls `sbatch` passes them to its jobs. QFw sets these variables for
-the application and for every service it starts, and ignores inherited values.
-DEFw's installation paths and log levels pass through unchanged.
+`DEFW_AGENT_TYPE`, `DEFW_LISTEN_PORT`, `DEFW_PARENT_ADDR`,
+`DEFW_PARENT_HOSTNAME`, `DEFW_PARENT_PORT`, `DEFW_DISABLE_DIRSVC`,
+`DEFW_LOG_DIR` and `DEFW2_DIRSVC`, and with a `DEFW2_ADDRESS` that names
+an endpoint. A process that QFw started carries them, so a workflow manager
+that runs under `qfw-srun` and then calls `sbatch` passes them to its jobs.
+QFw sets the ones each process needs, for the application and for every
+service it starts, and ignores inherited values. DEFw's installation paths
+and log levels pass through unchanged.
 
 Example-only controls such as `QFW_RUN_ALL_BACKEND` are documented with their
 wrappers in [examples/README.md](../examples/README.md). Provider credentials
@@ -543,7 +543,6 @@ mpi-launch:
 services:
   - name: nwqsim
     module: svc_nwqsim_qpm
-    load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
       - libfabric
       - nwqsim
@@ -560,7 +559,6 @@ services:
 
   - name: tnqvm
     module: svc_tnqvm_qpm
-    load-modules: svc_tnqvm_qpm,api_launcher
     environment-modules:
       - libfabric
       - tnqvm
@@ -576,7 +574,6 @@ services:
 
   - name: aer
     module: svc_aer_qpm
-    load-modules: svc_aer_qpm,api_launcher
     agent-prefix: qpm_aer
     target: group1-head
     assigned-hosts: group1
@@ -590,7 +587,6 @@ services:
 
   - name: fake-iqm
     module: svc_fake_iqm_qpm
-    load-modules: svc_fake_iqm_qpm,api_launcher
     agent-prefix: qpm_fake_iqm
     target: group1-head
     assigned-hosts: group1
@@ -605,8 +601,8 @@ services:
 | --- | --- | --- |
 | QFw package | `qfw-setup` reads it when planning allocation-owned services. The `qfw-qpm-svc` lifecycle engine resolves the selected entry when launching a QPM. | Define local simulator services, allocation placement, and provider launch settings. |
 
-The current launcher consumes the service name, module, loaded modules,
-placement, assigned-host fields, ports, and device ID. Simulator launch code
+The current launcher consumes the service name, module, placement,
+assigned-host fields, listen port, and device ID. Simulator launch code
 also consumes `provider-launch.wrapper`. The packaged `agent-prefix` and
 `provider-launch.type` fields are reserved metadata and do not currently alter
 launch behavior.
@@ -721,7 +717,6 @@ A circuit's own `backend` is ignored.
 services:
   - name: iqm-ornl-20q
     module: svc_iqm_qpm
-    load-modules: svc_iqm_qpm,api_launcher
     agent-prefix: qpm_iqm
     device-id: ornl-iqm-20q
     provider-launch:
@@ -729,7 +724,6 @@ services:
 
   - name: shim-ornl-20q
     module: svc_lib_qpm
-    load-modules: svc_lib_qpm,api_launcher
     agent-prefix: qpm_shim
     device-id: ornl-iqm-20q
     provider-launch:
@@ -831,7 +825,6 @@ A representative IQM entry is:
 services:
   - name: iqm-ornl-20q
     module: svc_iqm_qpm
-    load-modules: svc_iqm_qpm,api_launcher
     agent-prefix: qpm_iqm
     device-id: ornl-iqm-20q
     provider-launch:

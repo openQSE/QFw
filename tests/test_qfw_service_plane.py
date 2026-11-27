@@ -1045,7 +1045,6 @@ def test_application_qpms_offset_a_configured_port_base_by_manifest_index(
     with runtime.open("a", encoding="utf-8") as stream:
         stream.write(f"  service-manifest: {manifest}\n")
         stream.write("  service-listen-port-base: 8290\n")
-        stream.write("  service-telnet-port-base: 8291\n")
     connection_file = tmp_path / "directory-service.json"
     connection_file.write_text(json.dumps({
         "schema": "qfw-directory-service-v1",
@@ -1086,9 +1085,7 @@ def test_application_qpms_offset_a_configured_port_base_by_manifest_index(
     )
 
     assert nwqsim["services"][0]["listen_port"] == 8290
-    assert nwqsim["services"][0]["telnet_port"] == 8291
     assert tnqvm["services"][0]["listen_port"] == 8390
-    assert tnqvm["services"][0]["telnet_port"] == 8391
 
 
 def test_application_roles_place_control_plane_on_group1_head(
