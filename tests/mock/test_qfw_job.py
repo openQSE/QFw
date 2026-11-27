@@ -388,7 +388,8 @@ def test_compact_statevector_payload_compresses_sparse_data():
 	amplitudes = [complex(0.0, 0.0)] * 1024
 	amplitudes[0] = complex(1.0, 0.0)
 
-	payload = encode_statevector_payload(amplitudes, num_qubits=10)
+	payload = encode_statevector_payload(
+		amplitudes, num_qubits=10, encoding="base64+zlib")
 	decoded = decode_statevector_payload(payload)
 
 	assert payload["encoding"] == "base64+zlib"

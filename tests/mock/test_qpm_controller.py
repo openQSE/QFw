@@ -6,6 +6,7 @@ from tests.mock.fakes import FakeSchedulerContext
 from util.qpm.controller import (
 	QPM_TASK_CANCELLED,
 	_clear_target_controllers_for_tests,
+	_completion_record_size_bytes,
 )
 from util.qpm.request import parse_execution_request
 from util.qpm.util_qpm import UTIL_QPM
@@ -416,6 +417,38 @@ def test_control_shutdown_finalizer_stops_provider_then_exits(monkeypatch):
 	assert qpm.qrc is None
 	assert qpm.controller.service_state == "stopped"
 	assert exits == [True]
+
+
+def test_completion_record_size_counts_text_as_repr_does():
+	record = {
+		"cid": "c-1",
+		"outcome": "COMPLETED",
+		"result": {"counts": {"00": 512, "11": 512}},
+		"times": [1.5, 2.5],
+		"_qpm_record_size_bytes": 99,
+	}
+	public = {key: value for key, value in record.items()
+		  if not key.startswith("_qpm_")}
+
+	assert _completion_record_size_bytes(record) == \
+		len(repr(public).encode("utf-8"))
+
+
+def test_completion_record_size_counts_raw_bytes_once():
+	# A statevector carried raw, as on DEFw v2. repr spells a byte as up to
+	# four characters, so it used to count this about three times over,
+	# and building that text is what made a 20-qubit read_cq wait.
+	data = bytes(range(256)) * 64
+	payload = {"type": "statevector", "encoding": "raw", "data": data}
+	record = {"cid": "c-2", "result": {"statevector": payload}}
+	without = {"cid": "c-2",
+		   "result": {"statevector": dict(payload, data=None)}}
+
+	assert _completion_record_size_bytes(record) == \
+		len(repr(without).encode("utf-8")) + len(data)
+	assert _completion_record_size_bytes(
+		{"cid": "c-3", "data": [memoryview(data), bytearray(8)]}) == \
+		len(repr({"cid": "c-3", "data": [None, None]})) + len(data) + 8
 
 
 def test_async_run_survives_a_task_finished_before_its_handle_is_bound(

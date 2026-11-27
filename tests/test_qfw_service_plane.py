@@ -1832,6 +1832,24 @@ def test_status_names_a_service_that_exited_with_its_status_and_logs(
         observed["error"])
 
 
+def test_status_quotes_the_defw_v2_log_of_a_service_that_exited(
+        tmp_path, processes_gone):
+    run_dir = _ended_qpm_run(tmp_path)
+    log_dir = run_dir / "services" / "aer-run1" / "logs"
+    (log_dir / "defw2_out.log").write_text(
+        "listening at ofi+tcp://sim-head:18494\n"
+        "the directory at ofi+tcp://dirsvc01:8190 did not answer\n",
+        encoding="utf-8")
+
+    observed = service_plane.status(run_dir)
+
+    assert (
+        "defw2_out.log ends: listening at ofi+tcp://sim-head:18494 | "
+        "the directory at ofi+tcp://dirsvc01:8190 did not answer"
+    ) in observed["error"]
+    assert "defw_py.log ends: loaded svc_aer_qpm" in observed["error"]
+
+
 @pytest.mark.parametrize("exit_status, ended", [
     (-9, "QPM service aer-run1 was killed by signal 9"),
     (None, "QPM service aer-run1 ended"),

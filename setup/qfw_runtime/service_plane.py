@@ -32,6 +32,9 @@ SLURM_MODES = frozenset({"slurm", "heterogeneous"})
 STEP_LOG_TAIL_LINES = 5
 ENDED_LIVENESS = frozenset({"dead", "identity-mismatch"})
 DEFW_LOG_NAME = "defw_py.log"
+# DEFw v2's own log. A v2 QPM writes it beside the Python log its service
+# code keeps, and for a v2 directory it is the only DEFw log there is.
+DEFW2_LOG_NAME = "defw2_out.log"
 AUTO_PORT = "auto"
 _STEPS = {}
 
@@ -1061,7 +1064,8 @@ def _component_logs(component):
     if component.get("log_dir"):
         log_dir = Path(component["log_dir"])
         logs.extend(sorted(log_dir.glob("*.stderr.log")))
-        logs.append(log_dir / DEFW_LOG_NAME)
+        logs.extend(
+            log_dir / name for name in (DEFW_LOG_NAME, DEFW2_LOG_NAME))
     return [path for path in logs if path.exists()]
 
 

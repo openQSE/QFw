@@ -140,9 +140,12 @@ def start_directory(argv):
     if args.site_config:
         env["QFW_SITE_CONFIG"] = str(qfw_config.resolve_site_config(
             args.site_config))
+    env["DEFW2_ADDRESS"] = _defw2_listen_address(
+        env, dirsvc_host, dirsvc_port)
     return _start_defw_owned_process(
         dirsvc_name,
         env,
+        ("directory", None),
         pid_file,
         ready_file,
         startup_timeout,
@@ -308,9 +311,18 @@ def start_qpm(argv):
         except Exception as exc:
             raise SystemExit(str(exc)) from exc
     env["QFW_SITE_CONFIG"] = str(site_config_path)
+    # A DEFw process listens where it is told, and one bound to loopback
+    # cannot reach the directory on another node. So with no host named it
+    # binds this node's own name, and not service_host's fallback of
+    # 127.0.0.1.
+    bind_host = str(service.get("bind-host") or service.get("host") or
+                    target or socket.gethostname())
+    env["DEFW2_ADDRESS"] = _defw2_listen_address(
+        env, bind_host, service_port)
     return _start_defw_owned_process(
         service_id,
         env,
+        ("qpm", module),
         pid_file,
         ready_file,
         startup_timeout,
@@ -330,8 +342,39 @@ def start_qpm(argv):
         lambda: _service_ready(service_ready_file),
     )
 
-def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
-                              background, dry_run, ready_payload, ready_probe):
+
+def _defw_command(env, role):
+    """What starts a DEFw-owned process.
+
+    The directory is DEFw's own program, defw2-dirsvc. A QPM is its service
+    module, served by defw-python --serve.
+    """
+    kind, module = role
+    if kind == "directory":
+        return [str(_command_path("defw2-dirsvc", env=env))]
+    return [str(_command_path("defw-python", env=env)), "--serve", module]
+
+
+def _defw2_listen_address(env, host, port):
+    """Where a DEFw process listens: ofi+tcp on its host and port, unless
+    the caller chose another transport with a DEFW2_ADDRESS that names no
+    endpoint, such as na+sm://.
+
+    A port alone binds one interface of Mercury's choosing, which a client
+    that was given the host cannot always reach, and every QFw process finds
+    the directory from that host and port. A DEFW2_ADDRESS that names an
+    endpoint is some other process's address, inherited, and is not a
+    choice of transport (openQSE/QFw#187).
+    """
+    transport = env.get(qfw_config.DEFW2_ADDRESS_ENV)
+    if transport and not qfw_config.defw2_address_names_endpoint(transport):
+        return transport
+    return f"ofi+tcp://{host}:{port}"
+
+
+def _start_defw_owned_process(name, env, role, pid_file, ready_file,
+                              timeout, background, dry_run, ready_payload,
+                              ready_probe):
     if dry_run or env.get("QFW_STARTUP_DRY_RUN") == "1":
         pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
         _write_ready(ready_file, ready_payload)
@@ -340,13 +383,13 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
     _require_free_defw_ports(name, env)
     qfw_process_state.stop_request_path(pid_file).unlink(missing_ok=True)
     qfw_process_state.exit_status_path(pid_file).unlink(missing_ok=True)
-    defw_python = _command_path("defw-python", env=env)
+    command = _defw_command(env, role)
     stdout_log = _open_process_log(env, name, "stdout")
     stderr_log = _open_process_log(env, name, "stderr")
     stderr_path = Path(stderr_log.name)
     try:
         process = subprocess.Popen(
-            [str(defw_python), "-d", "-x"],
+            command,
             env=env,
             start_new_session=True,
             stdout=stdout_log,
@@ -371,17 +414,15 @@ def _start_defw_owned_process(name, env, pid_file, ready_file, timeout,
 
 
 def _require_free_defw_ports(name, env):
-    # A service left over from an earlier run still holds its ports, and a
+    # A service left over from an earlier run still holds its port, and a
     # new DEFw process would only exit during startup. Name the port instead.
-    for variable, label in (
-            ("DEFW_LISTEN_PORT", "listen"),
-            ("DEFW_TELNET_PORT", "telnet")):
-        port = int(env.get(variable) or 0)
-        if port > 0 and not _tcp_port_free(port):
-            raise RuntimeError(
-                f"{name} cannot start: {label} port {port} is already in use "
-                f"on {socket.gethostname()}, possibly by a service left over "
-                "from an earlier run")
+    # DEFw has no telnet shell, so only the listen port matters.
+    port = int(env.get("DEFW_LISTEN_PORT") or 0)
+    if port > 0 and not _tcp_port_free(port):
+        raise RuntimeError(
+            f"{name} cannot start: listen port {port} is already in use "
+            f"on {socket.gethostname()}, possibly by a service left over "
+            "from an earlier run")
 
 
 def _unused_tcp_port(taken):

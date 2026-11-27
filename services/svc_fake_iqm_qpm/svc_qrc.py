@@ -1,8 +1,51 @@
+import cmath
+import math
 import os
 import threading
 import time
 
 from util import instrumentation
+from util.qpm.statevector import QFwStatevector
+
+try:
+	import numpy as _np
+except ImportError:
+	_np = None
+
+# The golden ratio's fractional part. Its multiples are spread as evenly as
+# any sequence can be, so the phases below never repeat in a pattern that
+# zlib could find.
+_PHI = (math.sqrt(5.0) - 1.0) / 2.0
+_STATEVECTORS = {}
+_STATEVECTORS_LOCK = threading.Lock()
+
+
+def fake_statevector(num_qubits):
+	"""The statevector the fake QPM returns for a run that asks for one.
+
+	Amplitude k is exp(2 pi i frac(k phi)) / sqrt(2^n): normalized, the
+	same in every process, and given in closed form, so a caller can
+	recompute and check any amplitude it received. The phases make it
+	compress about as badly as a simulator's statevector does, rather than
+	like the vector of zeros the fake's counts would suggest, so its cost
+	as base64+zlib text is a fair one. Made once per qubit count.
+	"""
+	with _STATEVECTORS_LOCK:
+		amplitudes = _STATEVECTORS.get(num_qubits)
+		if amplitudes is not None:
+			return amplitudes
+		count = 1 << num_qubits
+		norm = 1.0 / math.sqrt(count)
+		if _np is not None and hasattr(_np, "arange"):
+			phase = (_np.arange(count, dtype=_np.float64) * _PHI) % 1.0
+			amplitudes = _np.exp(2j * _np.pi * phase) * norm
+		else:
+			amplitudes = [
+				cmath.exp(2j * math.pi * ((k * _PHI) % 1.0)) * norm
+				for k in range(count)
+			]
+		_STATEVECTORS[num_qubits] = amplitudes
+		return amplitudes
 
 
 class QRC:
@@ -157,7 +200,7 @@ class QRC:
 			"cq_dequeue_time": -1,
 			"outcome": "FAILED" if cancelled else "COMPLETED",
 			"rc": 1 if cancelled else 0,
-			"result": {} if cancelled else {state: shots},
+			"result": self._measurement(info, state, shots, cancelled),
 			"provider": "fake-iqm",
 			"target_id": self.target_id,
 			"estimated_device_ns": (
@@ -180,6 +223,22 @@ class QRC:
 		if cancelled:
 			result["reason"] = "provider-cancelled"
 		return result
+
+	def _measurement(self, info, state, shots, cancelled):
+		"""Counts alone, as the fake always answered, or with the
+		statevector as well when the run asked for one."""
+		if cancelled:
+			return {}
+		if not info.get("return_statevector"):
+			return {state: shots}
+		num_qubits = int(info.get("num_qubits", 1))
+		statevector = QFwStatevector.from_complex_sequence(
+			fake_statevector(num_qubits), num_qubits=num_qubits,
+			source="fake-iqm")
+		return {
+			"counts": {state: shots},
+			"statevector": statevector.to_dict(),
+		}
 
 	def _remember_result_metadata(self, result):
 		cid = result.get("cid")

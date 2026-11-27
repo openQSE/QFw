@@ -4307,7 +4307,37 @@ def _completion_record_size_bytes(record):
 		for key, value in record.items()
 		if not str(key).startswith("_qpm_")
 	}
-	return len(repr(public).encode("utf-8", errors="replace"))
+	binary = []
+	text = repr(_set_aside_binary(public, binary))
+	return len(text.encode("utf-8", errors="replace")) + sum(binary)
+
+
+def _set_aside_binary(value, sizes):
+	"""value with every bytes-like object in it replaced by None, and its
+	length added to sizes.
+
+	A record is counted as the text repr gives it, but repr spells a byte
+	as up to four characters. On DEFw v2 a statevector travels raw, 16 MiB
+	at 20 qubits, and building its text took over 200 ms under the
+	controller's lock, holding every read_cq behind it. It also counted
+	the statevector about three times against max-bytes-per-reservation.
+	Containers are walked only when they are plain, so a record without
+	binary data is counted exactly as before.
+	"""
+	if isinstance(value, (bytes, bytearray)):
+		sizes.append(len(value))
+		return None
+	if isinstance(value, memoryview):
+		sizes.append(value.nbytes)
+		return None
+	if type(value) is dict:
+		return {key: _set_aside_binary(item, sizes)
+			for key, item in value.items()}
+	if type(value) is list:
+		return [_set_aside_binary(item, sizes) for item in value]
+	if type(value) is tuple:
+		return tuple(_set_aside_binary(item, sizes) for item in value)
+	return value
 
 
 def _completion_selectors(reservation_id=None, cid=None, qtask_id=None):
