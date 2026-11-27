@@ -34,6 +34,12 @@ this environment when they are not supplied by the site or container image.
 
 ## 3. Build and install QFw and bundled DEFw
 
+`--with-defw` builds DEFw v2, which QFw runs on. It needs Margo and Argobots
+1.2 or later, found through pkg-config, so put their `lib/pkgconfig`
+directories on `PKG_CONFIG_PATH` first when they are not in a system
+location. Appendix B of `DEFw/docs/design_v2.md` lists the versions QFw is
+tested with.
+
 ```bash
 cd "${QFW_SRC}"
 git submodule update --init --recursive

@@ -65,7 +65,11 @@ uv pip install -r setup/build-requirements.txt -r setup/requirements.txt --overr
 ```
 
 Install QFw with the CMake-backed installer. Use `--with-defw` when this
-install prefix should also build and install the bundled DEFw tree:
+install prefix should also build and install the bundled DEFw tree. That
+builds DEFw v2, which QFw runs on, and it needs Margo and Argobots 1.2 or
+later, found through pkg-config. Appendix B of `DEFw/docs/design_v2.md`
+lists the versions QFw is tested with. Without one of them the configure
+step stops and names the missing package:
 
 ```bash
 ./setup/qfw_install.sh --prefix /path/to/qfw-install --with-defw
