@@ -51,6 +51,11 @@ for candidate in \
 		break
 	fi
 done
+# A build tree has no bin directory, and its activation puts the launcher
+# on PATH.
+if [[ ! -x "${launcher}" ]]; then
+	launcher="$(command -v defw2-python || true)"
+fi
 if [[ ! -x "${launcher}" ]]; then
 	echo "Unable to find the DEFw launcher, defw2-python, under ${defw_prefix}" >&2
 	exit 127

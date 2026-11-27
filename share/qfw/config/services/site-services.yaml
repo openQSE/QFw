@@ -2,7 +2,6 @@ services:
   - name: nwqsim
     credential-mode: no-secret
     module: svc_nwqsim_qpm
-    load-modules: svc_nwqsim_qpm,api_launcher
     environment-modules:
       - libfabric
       - openmpi
@@ -13,7 +12,6 @@ services:
     assigned-hosts: ${QFW_SIMULATOR_NODES}
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     listen-port: 8490
-    telnet-port: 8491
     provider-launch:
       type: mpi
       wrapper: null
@@ -21,25 +19,21 @@ services:
   - name: fake-iqm
     credential-mode: no-secret
     module: svc_fake_iqm_qpm
-    load-modules: svc_fake_iqm_qpm,api_launcher
     agent-prefix: qpm_fake_iqm
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     device-id: fake-iqm-20q
     listen-port: 8590
-    telnet-port: 8591
     provider-launch:
       type: internal
 
   - name: aer
     credential-mode: no-secret
     module: svc_aer_qpm
-    load-modules: svc_aer_qpm,api_launcher
     agent-prefix: qpm_aer
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     listen-port: 8790
-    telnet-port: 8791
     aer:
       mode: ideal
       device: CPU
@@ -50,13 +44,11 @@ services:
   - name: backline-local
     credential-mode: no-secret
     module: svc_backline_qpm
-    load-modules: svc_backline_qpm,api_launcher
     agent-prefix: qpm_backline
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     device-id: backline-local
     listen-port: 8690
-    telnet-port: 8691
     provider-launch:
       type: internal
 
@@ -64,12 +56,10 @@ services:
   - name: qblox-dummy
     credential-mode: no-secret
     module: svc_qblox_qpm
-    load-modules: svc_qblox_qpm,api_launcher
     agent-prefix: qpm_qblox_dummy
     assigned-hosts: group1
     assigned-hosts-env: QFW_QPM_ASSIGNED_HOSTS
     listen-port: 9190
-    telnet-port: 9191
     provider-launch:
       type: internal
 
@@ -78,32 +68,26 @@ services:
     credential-mode: no-secret
     operation-mode: long-running
     module: svc_qblox_qpm
-    load-modules: svc_qblox_qpm,api_launcher
     agent-prefix: qpm_qblox_cluster
     device-id: qblox-cluster
     listen-port: 9290
-    telnet-port: 9291
     provider-launch:
       type: internal
 
   - name: iqm-ornl-20q
     credential-mode: required
     module: svc_iqm_qpm
-    load-modules: svc_iqm_qpm,api_launcher
     agent-prefix: qpm_iqm
     device-id: ornl-iqm-20q
     listen-port: 8290
-    telnet-port: 8291
     provider-launch:
       type: remote-api
 
   - name: shim-ornl-20q
     credential-mode: required
     module: svc_lib_qpm
-    load-modules: svc_lib_qpm,api_launcher
     agent-prefix: qpm_shim
     device-id: ornl-iqm-20q
     listen-port: 8390
-    telnet-port: 8391
     provider-launch:
       type: qrmi-qdmi

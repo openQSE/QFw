@@ -373,19 +373,6 @@ qfw_example_srun_with_backend_reservation() {
 		-- "$@"
 }
 
-qfw_example_srun_with_modules() {
-	if [[ $# -lt 2 ]]; then
-		echo "ERROR: qfw_example_srun_with_modules requires modules and application" >&2
-		return 2
-	fi
-	local modules="$1"
-	shift
-	(
-		export DEFW_ONLY_LOAD_MODULE="${modules}"
-		qfw_example_srun "$@"
-	)
-}
-
 qfw_example_archive_runtime_logs() {
 	local archive_dir="${QFW_EXAMPLE_LOG_ARCHIVE_DIR:-}"
 	local run_dir="${QFW_RUN_TMP_PATH:-}"

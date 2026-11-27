@@ -500,24 +500,6 @@ def _is_defw_service_endpoint(endpoint):
 	return endpoint is not None and hasattr(endpoint, "get_id")
 
 
-def _install_defw_directory_lifecycle_hook():
-	try:
-		import defw_directory as directory_module
-	except Exception:
-		return False
-	add_listener = getattr(
-		directory_module, "add_lifecycle_listener", None)
-	if add_listener is None:
-		return False
-	try:
-		add_listener(_record_defw_directory_lifecycle_event)
-	except Exception:
-		logging.exception(
-			"failed to install DEFw directory lifecycle telemetry hook")
-		return False
-	return True
-
-
 def _record_defw_directory_lifecycle_event(
 		event_type, service_record=None, peer_event=None, reason=None,
 		details=None):
@@ -699,7 +681,6 @@ def initialize_qpm_service(defw_module, message):
 	if uq.qpm_initialized:
 		return "already-initialized"
 
-	_install_defw_directory_lifecycle_hook()
 	_install_defw_peer_lifecycle_hook(defw_module)
 	_start_registration_monitor(defw_module)
 	timeout = startup_timeout()

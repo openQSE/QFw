@@ -31,9 +31,11 @@ from qfw_runtime import config as qfw_config
 from qfw_runtime import _process_launcher as process_launcher
 
 
-# What importing DEFw left in a Prefect worker's environment, as recorded in
-# openQSE/QFw#187, plus the installation paths and log levels that
-# qfw-activate and the job script set.
+# What importing DEFw v1 left in a Prefect worker's environment, as recorded
+# in openQSE/QFw#187, less the three variables DEFw no longer has
+# (DEFW_PARENT_NAME, DEFW_SHELL_TYPE and DEFW_TELNET_PORT), plus the
+# installation paths and log levels that qfw-activate and the job script
+# set.
 DEFW_IMPORT_PLACEHOLDERS = {
     "DEFW_AGENT_NAME": "defw_python_58dccf81",
     "DEFW_AGENT_TYPE": "agent",
@@ -42,17 +44,13 @@ DEFW_IMPORT_PLACEHOLDERS = {
     "DEFW_LOG_DIR": "/tmp/defw_python_58dccf81",
     "DEFW_PARENT_ADDR": "0.0.0.0",
     "DEFW_PARENT_HOSTNAME": "None",
-    "DEFW_PARENT_NAME": "None",
     "DEFW_PARENT_PORT": "0",
-    "DEFW_SHELL_TYPE": "cmdline",
-    "DEFW_TELNET_PORT": "0",
 }
 CALLER_SETTINGS = {
     "DEFW_LOG_LEVEL": "error",
     "DEFW_PY_LOGLEVEL": "critical",
     "DEFW_EXTERNAL_SERVICES_PATH": "/opt/openqse/qfw/lib/qfw/services",
     "DEFW_EXTERNAL_SERVICE_APIS_PATH": "/opt/openqse/qfw/lib/qfw/service-apis",
-    "DEFW_LOAD_NO_INIT": "api_qpm_common",
     "QFW_SITE_CONFIG": "/etc/openqse/qfw/site.yaml",
     "QFW_RESERVATIONS": '[["nwqsim","5"]]',
 }
@@ -140,15 +138,13 @@ def test_qfw_srun_ignores_defw_placeholders_from_an_importer(
 
     assert env["DEFW_PARENT_HOSTNAME"] == "slurmctld"
     assert env["DEFW_PARENT_PORT"] == "8090"
-    assert env["DEFW_PARENT_NAME"] == "qfw-site-dirsvc"
     assert env["DEFW_PARENT_ADDR"] == "10.0.0.4"
     assert env["DEFW_DISABLE_DIRSVC"] == "no"
     assert env["DEFW_LISTEN_PORT"] == "45680"
     assert env["DEFW_LOG_DIR"] == str(run_dir / "application" / "logs")
     # DEFw names the application itself instead of reusing the submitter's
-    # agent name, and no inherited port reaches it.
+    # agent name.
     assert "DEFW_AGENT_NAME" not in env
-    assert "DEFW_TELNET_PORT" not in env
     for name, value in CALLER_SETTINGS.items():
         assert env[name] == value
 
@@ -270,7 +266,6 @@ def test_qfw_srun_keeps_the_directory_of_a_job_local_run(
             "QFW_LOCAL_DIRSVC_NAME": "qfw-local-dirsvc",
             "DEFW_PARENT_HOSTNAME": "c2",
             "DEFW_PARENT_PORT": "41000",
-            "DEFW_PARENT_NAME": "qfw-local-dirsvc",
             "DEFW_DISABLE_DIRSVC": "no",
         },
     })
@@ -281,7 +276,6 @@ def test_qfw_srun_keeps_the_directory_of_a_job_local_run(
 
     assert env["DEFW_PARENT_HOSTNAME"] == "c2"
     assert env["DEFW_PARENT_PORT"] == "41000"
-    assert env["DEFW_PARENT_NAME"] == "qfw-local-dirsvc"
     assert env["QFW_LOCAL_DIRSVC_ENDPOINT"] == "c2:41000"
 
 

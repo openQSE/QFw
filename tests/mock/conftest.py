@@ -1,4 +1,5 @@
 import importlib.machinery
+import importlib.util
 import pathlib
 import subprocess
 import sys
@@ -13,6 +14,11 @@ import pytest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+# DEFw v1's directory, which DEFw keeps as a reference beside its own
+# compatibility test. The resolver tests register QPM records in one and
+# resolve them, under v1's module name.
+REFERENCE_DIRECTORY = (
+	REPO_ROOT / "DEFw" / "src2" / "tests" / "compat" / "v1_directory.py")
 
 
 def _add_repo_paths():
@@ -27,6 +33,16 @@ def _add_repo_paths():
 		path_str = str(path)
 		if path_str not in sys.path:
 			sys.path.insert(0, path_str)
+
+
+def _install_reference_directory():
+	if "defw_directory" in sys.modules or not REFERENCE_DIRECTORY.is_file():
+		return
+	spec = importlib.util.spec_from_file_location(
+		"defw_directory", REFERENCE_DIRECTORY)
+	module = importlib.util.module_from_spec(spec)
+	sys.modules["defw_directory"] = module
+	spec.loader.exec_module(module)
 
 
 def _install_qfw_package_stub():
@@ -805,6 +821,7 @@ _install_qfw_package_stub()
 _install_numpy_stub()
 _install_yaml_stub()
 _install_defw_stubs()
+_install_reference_directory()
 _install_qiskit_stubs()
 
 if not hasattr(logging, "defw_app"):

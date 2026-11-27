@@ -23,3 +23,9 @@ defw_app_util = types.ModuleType("defw_app_util")
 defw_app_util.SYSTEM_UP_TIMEOUT = 1
 defw_app_util.defw_get_directory_service = lambda timeout=None: None
 sys.modules.setdefault("defw_app_util", defw_app_util)
+# DEFw's remote objects run on its C library, which a checkout does not
+# build, so the base class the API modules derive from is stood in for.
+defw_remote = types.ModuleType("defw_remote")
+defw_remote.BaseRemote = type(
+	"BaseRemote", (), {"__init__": lambda self, *args, **kwargs: None})
+sys.modules.setdefault("defw_remote", defw_remote)

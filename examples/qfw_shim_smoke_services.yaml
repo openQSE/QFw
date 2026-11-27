@@ -1,7 +1,6 @@
 services:
   - name: shim-ornl-20q
     module: svc_lib_qpm
-    load-modules: svc_lib_qpm,api_launcher
     # This control-plane smoke does not submit provider work.
     credential-mode: no-secret
     agent-prefix: qpm_shim

@@ -541,7 +541,6 @@ def _adopt_managed_directory(state, directory_state):
         "name": directory["name"],
         "host": host,
         "port": port,
-        "telnet_port": directory["telnet_port"],
         "endpoint": endpoint,
         "connection_file": connection_file,
     })
@@ -552,7 +551,6 @@ def _adopt_managed_directory(state, directory_state):
         "QFW_LOCAL_DIRSVC_NAME": directory["name"],
         "DEFW_PARENT_HOSTNAME": host,
         "DEFW_PARENT_PORT": str(port),
-        "DEFW_PARENT_NAME": directory["name"],
         "DEFW_DISABLE_DIRSVC": "no",
     })
     for requirement in state.get("directory_requirements") or []:
@@ -592,13 +590,11 @@ def _configure_application_defw_environment(env, state=None):
     parent = _application_directory_parent(env)
     if parent is None:
         return
-    parent_host, parent_port, parent_name = parent
+    parent_host, parent_port = parent
     env["DEFW_DISABLE_DIRSVC"] = "no"
     env["DEFW_AGENT_TYPE"] = "agent"
-    env["DEFW_SHELL_TYPE"] = "cmdline"
     env["DEFW_PARENT_HOSTNAME"] = parent_host
     env["DEFW_PARENT_PORT"] = str(parent_port)
-    env["DEFW_PARENT_NAME"] = parent_name
     if parent_host:
         env["DEFW_PARENT_ADDR"] = _resolve_host_address(parent_host)
     if _int_value(env.get("DEFW_LISTEN_PORT"), 0) <= 0:
@@ -627,20 +623,13 @@ def _application_directory_parent(env):
         return (
             env.get("DEFW_PARENT_HOSTNAME") or host,
             env.get("DEFW_PARENT_PORT") or port,
-            env.get("DEFW_PARENT_NAME") or
-            env.get("QFW_LOCAL_DIRSVC_NAME", "qfw-local-dirsvc"),
         )
 
     site_endpoints = _split_configured_endpoints(
         env.get("QFW_SITE_DIRSVC_ENDPOINTS", ""))
     if not site_endpoints:
         return None
-    host, port = _split_endpoint(site_endpoints[0])
-    return (
-        host,
-        port,
-        env.get("QFW_SITE_DIRSVC_NAME", "qfw-site-dirsvc"),
-    )
+    return _split_endpoint(site_endpoints[0])
 
 
 def _split_configured_endpoints(value):
