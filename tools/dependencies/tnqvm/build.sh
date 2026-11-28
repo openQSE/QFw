@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../fetch-source.sh"
 XACC_REPOSITORY="https://github.com/eclipse/xacc.git"
 EXATN_REPOSITORY="https://github.com/ornl-qci/exatn.git"
 TNQVM_REPOSITORY="https://github.com/ornl-qci/tnqvm.git"
@@ -44,9 +45,9 @@ Options:
   --fc PATH             Fortran compiler (default: ${FC_BIN})
   --rocm auto|on|off    ROCm selection (default: auto)
   --rocm-root PATH      ROCm installation root
-  --xacc-ref REF        XACC revision (default: ${XACC_REF})
-  --exatn-ref REF       ExaTN revision (default: ${EXATN_REF})
-  --tnqvm-ref REF       TNQVM revision (default: ${TNQVM_REF})
+  --xacc-ref REF        XACC commit, branch or tag (default: ${XACC_REF})
+  --exatn-ref REF       ExaTN commit, branch or tag (default: ${EXATN_REF})
+  --tnqvm-ref REF       TNQVM commit, branch or tag (default: ${TNQVM_REF})
   -h, --help            Show this help
 EOF
 }
@@ -127,14 +128,9 @@ for source in "${XACC_SOURCE}" "${EXATN_SOURCE}" "${TNQVM_SOURCE}"; do
 done
 
 mkdir -p "${SOURCE_ROOT}" "${BUILD_ROOT}" "${INSTALL_PREFIX}/bin"
-git clone --recursive "${XACC_REPOSITORY}" "${XACC_SOURCE}"
-git -C "${XACC_SOURCE}" checkout --detach "${XACC_REF}"
-git -C "${XACC_SOURCE}" submodule update --init --recursive
-git clone --recursive "${EXATN_REPOSITORY}" "${EXATN_SOURCE}"
-git -C "${EXATN_SOURCE}" checkout --detach "${EXATN_REF}"
-git -C "${EXATN_SOURCE}" submodule update --init --recursive
-git clone "${TNQVM_REPOSITORY}" "${TNQVM_SOURCE}"
-git -C "${TNQVM_SOURCE}" checkout --detach "${TNQVM_REF}"
+fetch_source "${XACC_REPOSITORY}" "${XACC_REF}" "${XACC_SOURCE}"
+fetch_source "${EXATN_REPOSITORY}" "${EXATN_REF}" "${EXATN_SOURCE}"
+fetch_source "${TNQVM_REPOSITORY}" "${TNQVM_REF}" "${TNQVM_SOURCE}"
 
 # The pinned ExaTN pybind11 revision predates Python 3.11. Replace only that
 # vendored dependency with the validated release used by the prior builder.
